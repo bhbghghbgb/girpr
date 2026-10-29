@@ -386,6 +386,17 @@ digests dropped, and a size difference settles the pair for free, so nothing eve
 rehashes it. `--no-trust-size` is the repair. The row looks healthy — right size,
 right mtime — which is what makes it worth stating.
 
+**Host coverage of the link cases.** Some end-to-end cases need primitives a
+regular user cannot always create: Windows without developer mode refuses
+`symlink_file`/`symlink_dir` (directory junctions via `mklink /J` still work
+without elevation), and hard-link fixtures need link creation too. `tests/symlink.rs`
+and `tests/sync.rs` self-skip those cases with a `skip:` line saying why, so a
+locked-down host runs the junction- and unit-level halves while the file-symlink
+bodies do not. A green local run is therefore not full link coverage — that gap
+is closed on a host that can create links, not by weakening or removing the
+cases. The skip reason sits beside each case; there is no separate document to
+keep in step with them.
+
 ---
 
 ## Two things that are one

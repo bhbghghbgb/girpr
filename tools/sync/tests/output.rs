@@ -515,9 +515,7 @@ fn the_environment_sets_the_log_files_level() {
 /// `RUST_LOG` adds to the console; it cannot silence the program, and it
 /// cannot change the program's own level either.
 ///
-/// A `RUST_LOG` naming an unrelated crate used to replace the console's whole
-/// spec, and the program then said nothing at all. The program's own level is
-/// `--log-level`, and `RUST_LOG` only adds to it.
+/// The program's own level is `--log-level`, and `RUST_LOG` only adds to it.
 #[test]
 fn an_unrelated_rust_log_adds_to_the_console_without_silencing_it() {
     let t = temp_root("out_rust_log");

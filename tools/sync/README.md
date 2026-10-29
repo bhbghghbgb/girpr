@@ -1164,8 +1164,7 @@ by what the planner asked for.
 | a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
 
-Two places that used to cost far more than their output was worth, and now cost
-one pass each. Both are index-shaped rather than nested-loop-shaped, which is the
+Two places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
 
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`

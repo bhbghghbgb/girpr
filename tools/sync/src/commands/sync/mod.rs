@@ -448,9 +448,8 @@ fn validate_inputs(src: &Path, dst: &Path) -> Result<CanonicalRoots> {
     // A mirror may not contain its own source. With `dst` inside `src` the walk
     // of src sees dst as part of the source, and the copy plan writes a parent's
     // namesake over the child's file; with `src` inside `dst` the delete pass
-    // removes the source files before the copy that needed them. Both used to
-    // exit 0 (or 3 after data loss). Canonical paths, so a `..` or a case-only
-    // spelling cannot hide the overlap. Component-wise and case-insensitive on
+    // removes the source files before the copy that needed them. Canonical
+    // paths, so a `..` or a case-only spelling cannot hide the overlap. Component-wise and case-insensitive on
     // Windows, via `path_within`.
     //
     // A link *inside* a root is not visible to this check; `validate_src_links`

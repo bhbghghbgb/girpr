@@ -416,9 +416,8 @@ fn guard_removal_outside_src(src_canonical: &Path, dst: &Path, rel: &str) -> Res
 
 /// Remove a link itself, treating "already gone" as success.
 ///
-/// A removal error used to be swallowed when the path no longer existed, which
-/// also hid a failed unlink of a dangling link. `NotFound` is the one error that
-/// means there is nothing left to remove; everything else aborts the run.
+/// `NotFound` is the one error that means there is nothing left to remove;
+/// everything else aborts the run.
 fn remove_link(p: &std::path::Path) -> Result<()> {
     match crate::link::remove(p) {
         Ok(()) => Ok(()),

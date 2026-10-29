@@ -305,9 +305,8 @@ fn run_sync_rejects_bad_inputs() {
 
 /// `FIX-DIR` must run before `MKDIR`: a src directory nested under a path where
 /// dst holds a blocking file cannot be created until the file is replaced. The
-/// dry run used to print this valid plan while the real run aborted on
-/// `AlreadyExists` (os error 183), so the two modes disagreed about a plan that
-/// `fix_dirs` could satisfy.
+/// dry run must print the same plan as the real run, so `fix_dirs` can satisfy
+/// it before `AlreadyExists` (os error 183) can abort anything.
 #[test]
 fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
     let t = temp_root("nestedfix");
@@ -344,9 +343,9 @@ fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
-/// **P6-1.** A dst file hidden by `--include` still blocks the `MKDIR` the plan
-/// derives from src's retained ancestor directory. Both modes must refuse it
-/// before the first filesystem change — including the case-only rename.
+/// A dst file hidden by `--include` still blocks the `MKDIR` the plan derives
+/// from src's retained ancestor directory. Both modes must refuse it before the
+/// first filesystem change — including the case-only rename.
 #[test]
 fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
     let t = temp_root("filtered_blocker");
@@ -396,9 +395,9 @@ fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
     );
 }
 
-/// **P6-2.** `dst/a.txt` is a hard link to `src/b.txt`, so truncating it writes
-/// through to a source file. Both hash modes must refuse before `File::create`,
-/// leaving the shared bytes and the link in place.
+/// `dst/a.txt` is a hard link to `src/b.txt`, so truncating it writes through
+/// to a source file. Both hash modes must refuse before `File::create`, leaving
+/// the shared bytes and the link in place.
 #[test]
 fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
     let t = temp_root("hardlink_guard");
@@ -442,14 +441,13 @@ fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
     );
 }
 
-/// **P7-4.** The hard-link refusal is a plan-time decision both modes take.
-///
-/// `copy_one` runs only in a real run, so a dry run used to report `COPY` and
-/// exit 0 for this tree while the real run exited 3. With `--keep-extra` the
-/// second name survives, so both modes refuse before any action record.
-/// Without it, the delete phase removes the second name first and both modes
-/// succeed — the preflight credits the planned delete instead of refusing every
-/// count above one.
+/// The hard-link refusal is a plan-time decision both modes take. `copy_one`
+/// runs only in a real run, so the dry run must not report `COPY` for a tree
+/// the real run refuses with exit 3. With `--keep-extra` the second name
+/// survives, so both modes refuse before any action record. Without it, the
+/// delete phase removes the second name first and both modes succeed — the
+/// preflight credits the planned delete instead of refusing every count above
+/// one.
 #[test]
 fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
     let t = temp_root("hardlink_parity");
@@ -500,14 +498,12 @@ fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
-/// **P8-3.** A case-only dst hard link is judged at plan time in both modes.
+/// A case-only dst hard link is judged at plan time in both modes.
 ///
-/// The rename pass re-keys `dm` in a dry run but moves nothing on disk, so the
-/// hard-link preflight used to stat the src-cased name the rename would create
-/// and find nothing: the dry run planned a `COPY` and exited 0, while the real
-/// run renamed first and then refused with exit 3. Both modes now stat the
-/// spelling still on disk. `--keep-extra` makes the second name survive, which
-/// is what leaves the inode with two names at copy time.
+/// The rename pass re-keys `dm` in a dry run but moves nothing on disk, so both
+/// modes stat the spelling still on disk: the dry run plans the same refusal
+/// the real run reaches after renaming. `--keep-extra` makes the second name
+/// survive, which is what leaves the inode with two names at copy time.
 #[test]
 fn a_case_only_hard_link_is_the_same_decision_in_both_modes() {
     let t = temp_root("hardlink_case_parity");
@@ -620,16 +616,14 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
 
-/// **P7-1, P8-4.** The two-step case rename must not reuse a predictable
-/// sibling path.
+/// The two-step case rename must not reuse a predictable sibling path.
 ///
-/// The temporary used to be `from.with_extension("girsync_case_tmp")`, a name in
-/// the user's namespace: a file there was replaced by step1 (silent loss, exit
-/// 0) and a directory made the pass abort. It is now a **fixed short** name,
-/// `.girsync_case_tmp.<n>`, claimed before use, so an occupied candidate is
-/// stepped over and left exactly as it was. The fixed name is also what keeps a
-/// source whose own name is near `NAME_MAX` renameable (P8-4): the earlier
-/// full-name suffix pushed the temporary past the limit.
+/// The temporary is a **fixed short** name, `.girsync_case_tmp.<n>`, claimed
+/// before use, so an occupied candidate is stepped over and left exactly as it
+/// was. A name in the user's namespace would be replaced by step1 (silent
+/// loss) or make the pass abort on a directory. The fixed name also keeps a
+/// source near `NAME_MAX` renameable: a full-name suffix would push the
+/// temporary past the limit.
 #[test]
 fn run_sync_case_rename_steps_over_occupied_temporaries() {
     let t = temp_root("case_tmp_collision");
@@ -699,13 +693,12 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     );
 }
 
-/// **P8-4.** A case-only rename of a name that is already near the platform's
-/// component limit must not fail because of the temporary's name.
+/// A case-only rename of a name that is already near the platform's component
+/// limit must not fail because of the temporary's name.
 ///
-/// The temporary used to append `.girsync_case_tmp.<n>` to the full source name,
-/// so a 244-character name produced a 262-character sibling and step1 failed
-/// with `ENAMETOOLONG` (Windows: `os error 123`) after the case fix had already
-/// claimed the record order. The fixed short name has no such dependency.
+/// Appending `.girsync_case_tmp.<n>` to the full source name made a 244-byte
+/// name into a 262-byte sibling and step1 failed with `ENAMETOOLONG` (Windows:
+/// `os error 123`). The fixed short name has no such dependency.
 #[test]
 fn a_case_rename_of_a_very_long_name_succeeds() {
     let t = temp_root("case_tmp_long_name");
@@ -734,12 +727,10 @@ fn a_case_rename_of_a_very_long_name_succeeds() {
     );
 }
 
-/// **P7-3.** A failed rename must publish no `RENAME` record.
-///
-/// The record used to be emitted before the two `fs::rename` calls, so an
-/// interrupted case fix left a line claiming an action that did not happen. The
-/// injected failure names the step, because a real rename failure (a lock, a
-/// volume that went away) cannot be arranged portably.
+/// A failed rename must publish no `RENAME` record: an interrupted case fix
+/// must not leave a line claiming an action that did not happen. The injected
+/// failure names the step, because a real rename failure (a lock, a volume that
+/// went away) cannot be arranged portably.
 #[test]
 fn a_failed_case_rename_leaves_no_record() {
     let t = temp_root("case_rename_fail");
@@ -782,10 +773,9 @@ fn a_failed_case_rename_leaves_no_record() {
     assert_eq!(rfile(&dst, "data.txt"), b"payload");
 }
 
-/// **P8-5, P8-6.** A step-1 failure happens after the temporary was claimed.
-///
-/// The file claim creates an empty placeholder that step 1 replaces only on
-/// success, so this is the branch that must remove the tool's own residue. The
+/// A step-1 failure happens after the temporary was claimed: the file claim
+/// creates an empty placeholder that step 1 replaces only on success, so this
+/// branch must remove the tool's own residue. The
 /// failure is injected between the claim and the rename because a real one (a
 /// lock, a volume that went away) cannot be arranged portably; the cleanup is
 /// the production code's.
@@ -835,8 +825,8 @@ fn a_failed_case_rename_step1_removes_the_placeholder() {
     assert_eq!(rfile(&dst, "data.txt"), b"payload");
 }
 
-/// **P8-6.** A step-2 failure happens after step 1 moved the entry into the
-/// temporary, so the pass has to put it back where it was.
+/// A step-2 failure happens after step 1 moved the entry into the temporary,
+/// so the pass has to put it back where it was.
 ///
 /// The rename is injected between the two real moves, which is the only way to
 /// reach the rollback portably. Without it a failed second rename would leave
@@ -887,11 +877,11 @@ fn a_failed_case_rename_step2_rolls_back() {
     assert_eq!(rfile(&dst, "data.txt"), b"payload", "and its content");
 }
 
-/// **P7-2.** A dst **file link** standing where src has a directory is a type
-/// conflict: `fix_dirs` unlinks it and creates the directory before the nested
-/// `mkdir`/`copy`, so the link guard must not refuse the descendants the plan
-/// already made applicable. This needs a file link, which Windows without
-/// developer mode refuses; the case reports the skip rather than passing.
+/// A dst **file link** standing where src has a directory is a type conflict:
+/// `fix_dirs` unlinks it and creates the directory before the nested `mkdir`/
+/// `copy`, so the link guard must not refuse the descendants the plan already
+/// made applicable. This needs a file link, which Windows without developer
+/// mode refuses; the case reports the skip rather than passing.
 #[test]
 fn a_dst_file_link_at_a_src_directory_is_replaced_not_refused() {
     let t = temp_root("file_link_fixdir");
@@ -1468,12 +1458,9 @@ fn run_sync_refuses_nested_roots_before_touching_anything() {
 }
 
 /// A failed flush is a failed copy: the run exits 3 and caches no row for the
-/// file.
-///
-/// `sync_all` used to be `.ok()`, so the verify re-read the same page cache the
-/// flush never wrote through, cached the digest, and the run exited 0 claiming
-/// durability it did not obtain. The injector is the only portable way to make
-/// the flush fail; the row is what a rerun would otherwise trust.
+/// file. The verify re-reads what the flush wrote through, so a flush that
+/// never completed must not leave a digest the rerun would trust. The injector
+/// is the only portable way to make the flush fail.
 #[test]
 fn a_failed_flush_aborts_before_the_copy_is_cached() {
     let t = temp_root("flush_fail");
@@ -1521,12 +1508,9 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 }
 
 /// A case-only rename of a directory must move the subtree once, not try to
-/// rename its children at the old path.
-///
-/// The old pass renamed the parent and then called `fs::rename` on
-/// `dir/file.txt`; on a case-sensitive host that path no longer exists, so the
-/// run exited 3 after printing renames it did not perform. Here the child's
-/// leaf casing is already src's, so the parent move is the whole job.
+/// rename its children at the old path: on a case-sensitive host that path no
+/// longer exists after the parent move. Here the child's leaf casing is already
+/// src's, so the parent move is the whole job.
 #[test]
 fn run_sync_renames_a_case_only_directory_before_its_children() {
     let t = temp_root("casedir_rename");
@@ -1553,11 +1537,9 @@ fn run_sync_renames_a_case_only_directory_before_its_children() {
 
 /// Two spellings of one root that differ only by case are the same cache.
 ///
-/// The pre-open identity check used to canonicalize the cache *file*, which does
-/// not exist on a fresh tree, and then fall back to the raw path: `root` and
-/// `ROOT` compared unequal, the src side created the cache, and the dst open
-/// failed with "Database already open … use --ignore-cache". The advice was
-/// wrong and `--ignore-cache` would delete the cache the src side just made.
+/// The pre-open identity check compares roots canonically: `root` and `ROOT`
+/// are one folder before either cache is opened, so a stale "--ignore-cache"
+/// hint cannot delete the cache the src side just made.
 #[cfg(windows)]
 #[test]
 fn run_sync_refuses_case_only_spellings_of_one_root() {
@@ -1588,16 +1570,10 @@ fn run_sync_refuses_case_only_spellings_of_one_root() {
     );
 }
 
-/// **R11-1.** On Windows a case-only rename of `girpr-cache` is the same live
-/// file, so the walk must keep excluding it.
-///
-/// The prefix used to be compared byte-for-byte: after `girpr-cache` was
-/// renamed to `GIRPR-CACHE`, the walk yielded it as content and the plan copied
-/// it over the destination's live cache. The real run then failed with
-/// `os error 33` (or panicked inside redb), and a later `update --dir dst`
-/// could not open that cache until its pre-run backup was restored. Folding the
-/// prefix on Windows makes the renamed cache tool state again, so both the dry
-/// run and the real run leave it alone.
+/// On Windows a case-only rename of `girpr-cache` is the same live file, so
+/// the walk must keep excluding it: the prefix is folded case-insensitively, so
+/// the renamed cache is tool state again and both the dry run and the real run
+/// leave it alone.
 #[cfg(windows)]
 #[test]
 fn run_sync_excludes_a_case_renamed_cache_directory() {

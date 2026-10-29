@@ -284,7 +284,7 @@ fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 ///
 /// On Windows the filesystem matches names case-insensitively, so a link text
 /// may say `real\X.BIN` while the walk — and therefore `sm`/`dm`, the spare and
-/// the R9-3 grouping — reports `real/x.bin`. The final component of a target is
+/// the shared-storage grouping — reports `real/x.bin`. The final component of a target is
 /// deliberately not resolved (it may be the chain's next hop), so its spelling
 /// has to come from the directory listing: an exact entry wins, otherwise the
 /// unique case-insensitive match is the one the OS would open.
@@ -292,8 +292,7 @@ fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
 /// no lookup is needed; case folding stays Windows-only, as in
 /// [`util::same_path`](crate::util::same_path). `None` means the directory holds
-/// no entry the OS would match; the caller keeps the lexical spelling, as it did
-/// before this lookup existed.
+/// no entry the OS would match; the caller keeps the lexical spelling.
 #[cfg(windows)]
 fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
     let mut folded = None;
@@ -567,7 +566,7 @@ pub(super) fn spare_link_storage(
             if target_is_link {
                 // An intermediate link is part of the chain the kept link
                 // resolves through; removing it would break the kept link. Its
-                // ancestors must be spared too (R9-2).
+                // ancestors must be spared too.
                 if let Some(tr) = &canonical_rel {
                     storage.keep_path(tr);
                 }
@@ -774,7 +773,7 @@ pub(super) fn build_plan(
             // stop - so they stay. A default run refuses to call that a mirror
             // (`shared_link_extras`); `--keep-extra`/`--missing-only` accept it.
             if let Some(link) = link_ancestor(r, dm) {
-                // A type conflict *at* the link replaces it (F-2), which takes
+                // A type conflict *at* the link replaces it, which takes
                 // the followed subtree with it: those extras are not left
                 // behind, so this is not the non-convergence case below.
                 let replaced = diff.type_conflict.iter().any(|t| t.as_str() == link);
@@ -875,8 +874,7 @@ pub(super) fn build_plan(
 /// type-conflict fixes under a link are a different question: a shared link
 /// (one `src` also has) is deliberately left in place, and `mkdir`/`fix_dirs`/
 /// `copy` would then resolve the link as an intermediate path component. That
-/// writes into the link target — possibly outside `dst` — and used to delete
-/// external data while reporting success. The same applies to a rename, which
+/// writes into the link target — possibly outside `dst`. The same applies to a rename, which
 /// `rename_to_src_casing` guards before its first filesystem call.
 ///
 /// This is a **fail-fast** policy: remove the link from `dst`, or exclude it
@@ -896,7 +894,7 @@ pub(super) fn ensure_link_safe(
 ) -> Result<()> {
     let fixed: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
     // A dry run names the link with its pre-rename spelling while `fix_dirs`
-    // is keyed by src's casing, so the P7-2 carve-out has to compare cases too.
+    // is keyed by src's casing, so the carve-out has to compare cases too.
     let fixed_lower: HashSet<String> = if on_disk.is_some() {
         plan.fix_dirs.iter().map(|f| f.to_lowercase()).collect()
     } else {
@@ -995,10 +993,9 @@ pub(super) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// hard-linked when the copy phase truncates it.
 ///
 /// [`copy_one`](super::apply) refuses a destination with more than one name, but
-/// that check lives in the apply phase: a dry run used to report `COPY` and exit
-/// 0 for a tree the real run refused with exit 3. This is the plan-time
-/// counterpart, reading the same disk state both modes read, so the two agree
-/// before either prints an action.
+/// that check lives in the apply phase. This is the plan-time counterpart,
+/// reading the same disk state both modes read, so the two agree before either
+/// prints an action.
 ///
 /// **Only a regular file is judged.** A directory at a copy destination is a
 /// type conflict that the copy phase removes before writing, so its inode is
@@ -1391,8 +1388,8 @@ mod tests {
         ensure_dirs_applicable(&p, &dm).expect("fix-dirs runs before mkdir and copy");
     }
 
-    /// **The P6-1 shape.** `foo` is absent from `dm` because `--include` hid the
-    /// dst file, so the map-based guard cannot see the blocker. The disk can.
+    /// `foo` is absent from `dm` because `--include` hid the dst file, so the
+    /// map-based guard cannot see the blocker. The disk can.
     #[test]
     fn a_filtered_file_at_a_mkdir_path_is_refused_from_disk() {
         let t = girpr_tempdir::TempDir::new("girsync_plan", "filtered_blocker");
@@ -1483,10 +1480,10 @@ mod tests {
             .expect("fix-dirs replaces `a` before the nested mkdir");
     }
 
-    /// **P8-1.** A directory at a copy destination is a planned type conflict:
-    /// the copy phase removes it, so its inode is never truncated. On Unix its
-    /// `nlink` is `2 + subdirectories` (the fixture here makes it 2), which the
-    /// old guard read as a hard link and refused with a bogus message.
+    /// A directory at a copy destination is a planned type conflict: the copy
+    /// phase removes it, so its inode is never truncated. On Unix its `nlink` is
+    /// `2 + subdirectories` (the fixture here makes it 2), which the old guard
+    /// read as a hard link and refused with a bogus message.
     #[test]
     fn a_directory_copy_destination_is_not_a_hard_link_hazard() {
         let t = girpr_tempdir::TempDir::new("girsync_plan", "hardlink_dir");
@@ -1602,7 +1599,7 @@ mod tests {
             .expect_err("one surviving name still shares the inode");
     }
 
-    /// **P7-2.** A strict link ancestor that is itself a planned `fix_dirs`
+    /// A strict link ancestor that is itself a planned `fix_dirs`
     /// entry is removed before the nested action, so the link guard must skip it
     /// exactly as the two mkdir guards skip a blocking file. The same link
     /// without the fix is still a write-through and is refused.
@@ -1664,10 +1661,10 @@ mod tests {
         ))
     }
 
-    /// **P8-2.** A kept link's content is not an extra path. Sparing it has to
-    /// drop the `EXTRA` record, the planned delete, and the `rmdir` of every
-    /// directory above it — otherwise the delete phase removes the file the
-    /// write-through is about to need.
+    /// A kept link's content is not an extra path. Sparing it has to drop the
+    /// `EXTRA` record, the planned delete, and the `rmdir` of every directory
+    /// above it — otherwise the delete phase removes the file the write-through
+    /// is about to need.
     #[test]
     fn sparing_a_links_content_drops_it_from_every_removal_list() {
         let mut diff = Diff {
@@ -1741,10 +1738,9 @@ mod tests {
         );
     }
 
-    /// **R9-1.** `dst/a -> link/x.bin` with `link` a directory link. The parent
-    /// canonicalization names only `real/x.bin`, so the alias `link` the walk
-    /// reported used to stay in `delete_files`; the run unlinked it and left `a`
-    /// dangling. Both spellings, and every link prefix, are spared.
+    /// `dst/a -> link/x.bin` with `link` a directory link. The parent
+    /// canonicalization names only `real/x.bin`, so the walk's alias `link` is
+    /// spared with the target: both spellings and every link prefix are spared.
     #[cfg(any(unix, windows))]
     #[test]
     fn a_kept_link_through_a_directory_link_spares_the_alias_and_the_target() {
@@ -1809,9 +1805,9 @@ mod tests {
         );
     }
 
-    /// **R9-2.** A spared **intermediate** link used to skip `keep_ancestors`, so
-    /// its dst-only directory stayed in `plan.rmdir` and `remove_dir_all` took
-    /// the link with it. `keep_path` is the single insertion point now.
+    /// A spared **intermediate** link keeps its ancestors through `keep_path`,
+    /// the single insertion point, so `remove_dir_all` cannot take the link
+    /// with a dst-only directory.
     #[test]
     fn a_spared_intermediate_link_keeps_its_ancestor_directories() {
         let mut dm = HashMap::new();
@@ -1999,10 +1995,11 @@ mod tests {
         );
     }
 
-    /// **R10-1.** The final component came back in the link text's spelling, so
-    /// on a case-insensitive filesystem `REAL/X.BIN` missed the walk's
-    /// `real/x.bin` key in `sm`/`dm`, in the spare's `delete_files` match and in
-    /// the R9-3 grouping. The resolver must name the entry the walk reported.
+    /// The final component comes back in the link text's spelling, so on a
+    /// case-insensitive filesystem `REAL/X.BIN` must name the walk's `real/x.bin`
+    /// key in `sm`/`dm`, the spare's `delete_files` match and the shared-storage
+    /// grouping.
+    /// The resolver names the entry the walk reported.
     #[test]
     fn a_case_differing_final_component_names_the_walk_entry() {
         let t = girpr_tempdir::TempDir::new("girsync_plan", "target_case");
@@ -2027,10 +2024,10 @@ mod tests {
         );
     }
 
-    /// **R10-1, dry-run parity.** A case-only rename of the target is routine
-    /// for a mirror. A real run moves the entry to src's casing before the plan,
+    /// Dry-run parity: a case-only rename of the target is routine for a mirror. A real run moves the entry to src's casing before the plan,
     /// while a dry run leaves it on disk and maps the spelling forward. Both
-    /// must hand `sm`/`dm`, the spare and the R9-3 grouping the same key.
+    /// must hand `sm`/`dm`, the spare and the shared-storage grouping the same
+    /// key.
     #[test]
     fn a_case_only_rename_of_the_target_is_one_spare_in_both_modes() {
         let t = girpr_tempdir::TempDir::new("girsync_plan", "target_case_rename");
@@ -2063,9 +2060,10 @@ mod tests {
         assert_eq!(real, dry, "the two modes agree on the spare's key");
     }
 
-    /// **R10-1, R9-1's half.** A target whose intermediate link is spelled with
-    /// another case (`LINK` on disk is `link`) spared the link-text spelling, so
-    /// the walk's `link` stayed in `delete_files` and the run unlinked it.
+    /// A target whose intermediate link is spelled with another case (`LINK`
+    /// on disk is `link`) must spare the walk's spelling — sparing the link
+    /// text's spelling would leave `link` in `delete_files` for the run to
+    /// unlink.
     #[cfg(any(unix, windows))]
     #[test]
     fn a_case_differing_link_component_is_spared_under_the_walk_spelling() {
@@ -2098,10 +2096,10 @@ mod tests {
         );
     }
 
-    /// **R10-1, the mirrored-target refusal.** The same spelling feeds the
-    /// `sm.get` key, so a case-differing target used to look absent and the
-    /// plan copied through the link instead of refusing it. The terminal's map
-    /// record is the guard's input; the junction stands in for the file link.
+    /// The same spelling feeds the `sm.get` key, so a case-differing target
+    /// names the walk's record and the mirrored-target guard refuses it. The
+    /// terminal's map record is the guard's input; the junction stands in for
+    /// the file link.
     #[cfg(any(unix, windows))]
     #[test]
     fn a_case_differing_mirrored_target_is_refused() {
@@ -2131,7 +2129,7 @@ mod tests {
         assert!(msg.contains("`real`"), "names the target's walk key: {msg}");
     }
 
-    /// **R10-1, the alias half.** A link text can spell a chain component with
+    /// The alias half: a link text can spell a chain component with
     /// another case. The alias spare must then name the walk's key, not the link
     /// text's spelling, or `diff.extra` keeps a path the plan deliberately keeps.
     #[cfg(windows)]
@@ -2158,11 +2156,11 @@ mod tests {
         );
     }
 
-    /// **R10-1 through the full spare pass.** A junction's `read_link` target
-    /// keeps the spelling it was created with, so a case-differing terminal
-    /// (`REAL` on disk is `real`) spared a key no removal list holds: the
-    /// directory stayed in `rmdir` and `remove_dir_all` took the link's storage.
-    /// The junction stands in for the file link this host refuses.
+    /// A junction's `read_link` target keeps the spelling it was created with,
+    /// so a case-differing terminal (`REAL` on disk is `real`) must spare the
+    /// key the removal lists hold: the directory stays out of `rmdir` and
+    /// `remove_dir_all` cannot take the link's storage. The junction stands in
+    /// for the file link this host refuses.
     #[cfg(any(unix, windows))]
     #[test]
     fn a_case_differing_terminal_is_spared_by_the_full_pass() {
@@ -2200,8 +2198,8 @@ mod tests {
         assert!(diff.extra.is_empty(), "{:?}", diff.extra);
     }
 
-    /// **R9-3.** Two kept links share one dst-only file. Neither terminal target
-    /// is mirrored by src, so the per-link check never fires; copying both wrote
+    /// Two kept links share one dst-only file. Neither terminal target is
+    /// mirrored by src, so the per-link check never fires; copying both wrote
     /// two contents through one inode and one mirrored path ended wrong at exit
     /// 0. The set is judged as a whole, including the chained shape.
     #[test]

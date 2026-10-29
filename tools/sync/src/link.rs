@@ -148,10 +148,9 @@ fn remove_file_or_dir(path: &Path) -> io::Result<()> {
 /// The shortest ancestor of `rel` under `root` that is a link, or `None`.
 ///
 /// The entry itself counts: a link that is itself extra is the path to remove.
-/// This is the runtime counterpart of the planner's map-based lookup, and it is
-/// the belt-and-braces half of the F-1 guard: a plan is computed before the run
-/// changes anything, so the apply phases re-check before reaching through a
-/// path component.
+/// This is the runtime counterpart of the planner's map-based lookup: a plan is
+/// computed before the run changes anything, so the apply phases re-check
+/// before reaching through a path component.
 ///
 /// One `symlink_metadata` per component, so it costs depth stats per removal and
 /// only on paths the plan already decided to remove.

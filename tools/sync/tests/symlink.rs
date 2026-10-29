@@ -4,8 +4,8 @@
 //! points at. That is the documented comparison behaviour and it is what makes
 //! the *deletion* side dangerous: a relative path under the link resolves
 //! through it, so `DELETE`/`RMDIR` can reach a file that is not in `dst` at all.
-//! These cases pin the walk (F-3), the copy-side type conflict (F-2) and the
-//! no-reach-through guarantee (F-1).
+//! These cases pin the walk behaviour, the copy-side type conflict and the
+//! no-reach-through guarantee.
 //!
 //! ## Skipping
 //!
@@ -28,9 +28,9 @@ use serde_json::Value;
 
 /// Run the real binary and hand back its whole output.
 ///
-/// The in-process `cmd_sync` cannot show what was *reported* - stdout belongs to
-/// the binary - and the F-1 case has to name the path a `DELETE` removed. The
-/// refusal cases also need stderr, because that is where the error goes.
+/// The in-process `cmd_sync` cannot show what was *reported* — stdout belongs to
+/// the binary. The refusal cases also need stderr, because that is where the
+/// error goes.
 fn sync_bin_raw(src: &Path, dst: &Path, extra: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
         .arg("sync")
@@ -63,7 +63,7 @@ fn paths<'a>(recs: &'a [Value], name: &str) -> Vec<&'a str> {
 }
 
 // ---------------------------------------------------------------------------
-// The walk (F-3)
+// The walk
 // ---------------------------------------------------------------------------
 
 /// A link to a file is walked as the file it names: its stat is the target's,
@@ -192,7 +192,7 @@ fn sync_materializes_a_src_directory_link() {
 
 /// A `dst` link to a *file* is written through, by design: `File::create`
 /// truncates the target. This is the documented write-through, and it must keep
-/// working when a `dst` link to a *directory* is unlinked instead (F-2).
+/// working when a `dst` link to a *directory* is unlinked instead.
 #[test]
 fn sync_writes_through_a_dst_file_link() {
     let t = temp_root("sync_dst_file_link");
@@ -220,10 +220,10 @@ fn sync_writes_through_a_dst_file_link() {
     );
 }
 
-/// **P8-2.** The target of a kept dst file link is that link's content, not an
-/// extra path. With no copy planned the delete phase used to remove the target
-/// and exit 0, leaving `a.bin` dangling — and the next run aborted in the walk.
-/// The target is spared in both runs, so the pair is stable.
+/// The target of a kept dst file link is that link's content, not an extra
+/// path: with no copy planned the delete phase must not remove the target and
+/// leave `a.bin` dangling. The target is spared in both runs, so the pair is
+/// stable.
 #[test]
 fn sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed() {
     let t = temp_root("sync_dst_file_link_equal");
@@ -255,10 +255,10 @@ fn sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed() {
     }
 }
 
-/// **P8-2.** The target can sit under a dst-only directory. Both the target and
-/// that directory are in the removal plan; the `rmdir` pass runs *after* the
-/// copy, so leaving either in the plan removes the content the write-through
-/// landed in.
+/// The target can sit under a dst-only directory. Both the target and that
+/// directory are in the removal plan; the `rmdir` pass runs *after* the copy,
+/// so leaving either in the plan removes the content the write-through landed
+/// in.
 #[test]
 fn sync_spares_a_link_target_inside_a_dst_only_directory() {
     let t = temp_root("sync_dst_file_link_dir");
@@ -283,9 +283,9 @@ fn sync_spares_a_link_target_inside_a_dst_only_directory() {
     assert!(is_link(&dst.join("a.bin")), "the link is still a link");
 }
 
-/// **P8-2.** When src also mirrors the target, the link and the target are one
-/// file that cannot hold two contents. A copy at either end would change the
-/// other path, so the run refuses before touching the tree.
+/// When src also mirrors the target, the link and the target are one file that
+/// cannot hold two contents: a copy at either end would change the other path,
+/// so the run refuses before touching the tree.
 #[test]
 fn sync_refuses_a_dst_file_link_whose_target_is_also_mirrored() {
     let t = temp_root("sync_dst_file_link_mirrored");
@@ -314,12 +314,11 @@ fn sync_refuses_a_dst_file_link_whose_target_is_also_mirrored() {
 }
 
 // ---------------------------------------------------------------------------
-// F-2: src file, dst link-to-directory
+// A dst directory link blocking a file copy is unlinked
 // ---------------------------------------------------------------------------
 
 /// A `dst` directory link blocking a file copy is unlinked, and its target is
-/// left intact. Before the fix the guard skipped the link (`is_dir() &&
-/// !is_symlink()`), then `File::create` failed and aborted the whole run.
+/// left intact.
 #[test]
 fn sync_replaces_a_dst_directory_link_at_a_file_path() {
     let t = temp_root("dst_dir_link_conflict");
@@ -347,7 +346,7 @@ fn sync_replaces_a_dst_directory_link_at_a_file_path() {
 }
 
 // ---------------------------------------------------------------------------
-// F-1: a dst directory link must never be deleted through
+// A dst directory link must never be deleted through
 // ---------------------------------------------------------------------------
 
 /// The link points into `dst` itself. `link/x` is extra, and removing it
@@ -433,7 +432,7 @@ fn keep_extra_spares_a_dst_directory_link_and_its_target() {
 }
 
 // ---------------------------------------------------------------------------
-// Fourth pass: a link inside src that reaches dst is the same self-overlap
+// A link inside src that reaches dst is the same self-overlap
 // ---------------------------------------------------------------------------
 
 /// Assert a run refused the src-link/dst overlap before changing the mirror,
@@ -458,8 +457,8 @@ fn assert_refused_src_link_into_dst(out: &std::process::Output, dst: &Path, rel:
 }
 
 /// `src/link` resolves to `dst` itself. The walk exposes every dst file under
-/// `link/...`; they used to plan as extras and be deleted before the copy that
-/// needed them failed. The run must refuse before touching the mirror.
+/// `link/...`; planning them as extras would delete the content the copy needs.
+/// The run must refuse before touching the mirror.
 #[test]
 fn sync_refuses_a_src_directory_link_to_dst() {
     let t = temp_root("src_link_to_dst");
@@ -560,14 +559,13 @@ fn a_src_link_does_not_mirror_a_nested_cache() {
 }
 
 // ---------------------------------------------------------------------------
-// Fifth pass: a dst link into src is the same self-overlap
+// A dst link into src is the same self-overlap
 // ---------------------------------------------------------------------------
 
 /// A `dst` file link whose target is a *different* source file. `File::create`
-/// follows the final component, so the copy used to truncate `src/b.bin`, verify
-/// against the truncated target through the same link, and exit 0 when `b.bin`
-/// was excluded from the copy set. The run must refuse before touching either
-/// tree. This host refuses `symlink_file` without developer mode, so the case
+/// follows the final component, so copying through the link would verify
+/// against the truncated target and exit 0 when `b.bin` was excluded from the
+/// copy set. The run must refuse before touching either tree. This host refuses `symlink_file` without developer mode, so the case
 /// may skip; the junction case below runs here.
 #[test]
 fn sync_refuses_a_dst_file_link_into_src() {
@@ -605,9 +603,9 @@ fn sync_refuses_a_dst_file_link_into_src() {
 
 /// The same overlap through a directory link, which this host can create as a
 /// junction without elevation. `dst/a.bin` resolves to `src`, so the dst walk
-/// sees a directory where src has a file; the run used to unlink the link and
-/// write the file (safe for the target, but still a write through a path that
-/// belongs to the source tree). The pre-flight refuses it before any change.
+/// sees a directory where src has a file; unlinking the link and writing the
+/// file would be a write through a path that belongs to the source tree. The
+/// pre-flight refuses it before any change.
 #[test]
 fn sync_refuses_a_dst_directory_link_into_src() {
     let t = temp_root("dst_dir_link_to_src");
@@ -637,13 +635,13 @@ fn sync_refuses_a_dst_directory_link_into_src() {
 }
 
 // ---------------------------------------------------------------------------
-// N-1: a shared link is never a write-through path
+// A shared link is never a write-through path
 // ---------------------------------------------------------------------------
 
 /// The `fix_dirs` shape: `src/link/x` is a directory, the shared `dst/link`
 /// junction resolves `x` to an external **file**, and the planner asks to
-/// replace it with a directory. Before the guard this removed the external file
-/// and exited 0; now the run refuses before touching it.
+/// replace it with a directory. Removing it would delete external data, so the
+/// run refuses before touching it.
 #[test]
 fn sync_refuses_to_fix_a_directory_through_a_shared_dst_link() {
     let t = temp_root("shared_link_fix_dir");
@@ -672,8 +670,7 @@ fn sync_refuses_to_fix_a_directory_through_a_shared_dst_link() {
 
 /// The `copy_one` shape: `src/link/x` is a file, the shared `dst/link` junction
 /// resolves `x` to an external **directory**, and a recursive removal would
-/// delete its subtree. Before the guard that subtree was gone and the run exited
-/// 0; now it refuses before the first filesystem change.
+/// delete its subtree. The run refuses before the first filesystem change.
 #[test]
 fn sync_refuses_to_copy_through_a_shared_dst_link() {
     let t = temp_root("shared_link_copy");
@@ -697,7 +694,7 @@ fn sync_refuses_to_copy_through_a_shared_dst_link() {
 }
 
 // ---------------------------------------------------------------------------
-// N-4: a shared link with extras is not a converged sync
+// A shared link with extras is not a converged sync
 // ---------------------------------------------------------------------------
 
 /// A default run must not exit 0 with extras it deliberately left under a
@@ -735,7 +732,7 @@ fn a_shared_link_with_extras_fails_unless_keep_extra() {
 }
 
 // ---------------------------------------------------------------------------
-// N-5: a case-only rename is not a way through a shared link
+// A case-only rename is not a way through a shared link
 // ---------------------------------------------------------------------------
 
 /// `rename_to_src_casing` would otherwise move the target's `x.txt` to
@@ -767,14 +764,12 @@ fn sync_refuses_to_rename_through_a_shared_dst_link() {
 }
 
 // ---------------------------------------------------------------------------
-// P8-3: a case-only rename is not a way past the plan-time link guard
+// A case-only rename is not a way past the plan-time link guard
 // ---------------------------------------------------------------------------
 
-/// **P8-3.** A dst directory link at a case-only spelling is refused in both
-/// modes. The rename pass only re-keys `dm` in a dry run, so the plan guard used
-/// to stat `l`, which does not exist on disk yet: the dry run printed the
-/// `RENAME` and `COPY` and exited 0, while the real run renamed `L` -> `l` and
-/// then refused. The guard now stats the pre-rename spelling in a dry run.
+/// A dst directory link at a case-only spelling is refused in both modes. The
+/// rename pass only re-keys `dm` in a dry run, so the plan guard stats the
+/// pre-rename spelling — the one still on disk — in both modes.
 ///
 /// Runs only where the filesystem keeps `L` and `l` apart; on an insensitive one
 /// the two names are the same entry and the divergence cannot be observed.
@@ -822,12 +817,12 @@ fn a_case_only_dst_link_is_refused_in_both_modes() {
 }
 
 // ---------------------------------------------------------------------------
-// N-2: a successful sync leaves the cache in step
+// A successful sync leaves the cache in step
 // ---------------------------------------------------------------------------
 
-/// Removing a link removes the followed descendants too. Their cache rows used
-/// to survive, so `compare-self` reported the link's target paths as missing
-/// immediately after a successful sync.
+/// Removing a link removes the followed descendants too, so their cache rows
+/// must be pruned with them — otherwise `compare-self` reports the link's
+/// target paths as missing immediately after a successful sync.
 #[test]
 fn a_sync_that_removes_a_link_leaves_compare_self_clean() {
     let t = temp_root("link_cache_prune");
@@ -851,9 +846,9 @@ fn a_sync_that_removes_a_link_leaves_compare_self_clean() {
     );
 }
 
-/// `fix_dirs` creates a directory but used to leave no row for it, so
-/// `compare-self` reported the directory the sync just created as extra. This
-/// is the non-link half of the same cache-drift bug.
+/// `fix_dirs` creates a directory but must leave a row for it, so
+/// `compare-self` does not report the directory the sync just created as extra.
+/// This is the non-link half of the same cache-drift bug.
 #[test]
 fn a_type_conflict_fix_leaves_compare_self_clean() {
     let t = temp_root("fix_dir_cache_row");
@@ -876,7 +871,7 @@ fn a_type_conflict_fix_leaves_compare_self_clean() {
 }
 
 // ---------------------------------------------------------------------------
-// N-3: an excluded link is left alone, and the dry run says so
+// An excluded link is left alone, and the dry run says so
 // ---------------------------------------------------------------------------
 
 /// The exclude is a subtree, so neither the link nor its followed descendants
@@ -914,15 +909,15 @@ fn excluding_a_dst_link_leaves_it_and_its_target_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// Ninth pass: R9-1, R9-2, R9-3 — the whole chain, and shared storage
+// The whole link chain, and shared storage
 // ---------------------------------------------------------------------------
 
-/// **R9-1.** A kept dst file link whose target passes through a dst **directory
-/// link**: `dst/a.bin -> link/x.bin`, `dst/link -> dst/real`. Canonicalizing
-/// the target's parent named only `real/x.bin`, so `link` stayed in the delete
-/// plan; the run unlinked it and left `a.bin` dangling (exit 0). Both spellings
-/// and the intermediate link are storage now. This host refuses file symlinks
-/// without developer mode, so the case may skip; the resolver is unit-covered.
+/// A kept dst file link whose target passes through a dst **directory link**:
+/// `dst/a.bin -> link/x.bin`, `dst/link -> dst/real`. Canonicalizing the
+/// target's parent names only `real/x.bin`, so both spellings and every link
+/// component are spared — the alias and the intermediate link are storage now,
+/// and the target survives. This host refuses file symlinks without developer
+/// mode, so the case may skip; the resolver is unit-covered.
 #[test]
 fn sync_spares_a_kept_link_through_a_dst_directory_link() {
     let t = temp_root("kept_link_via_dir_link");
@@ -960,11 +955,11 @@ fn sync_spares_a_kept_link_through_a_dst_directory_link() {
     }
 }
 
-/// **R9-2.** A kept link whose chain passes through an intermediate dst file
-/// link under a dst-only directory: `dst/a.bin -> extra/b`, `dst/extra/b ->
-/// outside/real.bin`. The intermediate link was spared by exact path, but
-/// `extra` stayed in `plan.rmdir`, and `remove_dir_all` took `b` with it. Every
-/// kept path now carries its ancestors. File symlinks skip here as above.
+/// A kept link whose chain passes through an intermediate dst file link under
+/// a dst-only directory: `dst/a.bin -> extra/b`, `dst/extra/b ->
+/// outside/real.bin`. Every kept path carries its ancestors, so `remove_dir_all`
+/// cannot take the chain with a dst-only directory. File symlinks skip here as
+/// above.
 #[test]
 fn sync_spares_an_intermediate_file_links_ancestor_directory() {
     let t = temp_root("kept_link_intermediate");
@@ -999,11 +994,11 @@ fn sync_spares_an_intermediate_file_links_ancestor_directory() {
     }
 }
 
-/// **R9-3.** Two kept links to one dst-only file, `dst/a -> c` and `dst/b -> c`,
-/// with different src files at `a` and `b`. The per-link check never saw the
-/// second name, so both copies wrote through the one inode and one mirrored path
-/// ended wrong at exit 0. The plan now refuses before any mutation, in both
-/// modes. File symlinks skip here.
+/// Two kept links to one dst-only file, `dst/a -> c` and `dst/b -> c`, with
+/// different src files at `a` and `b`. The per-link check never saw the second
+/// name, so both copies wrote through the one inode and one mirrored path ended
+/// wrong at exit 0. The plan refuses before any mutation, in both modes. File
+/// symlinks skip here.
 #[test]
 fn sync_refuses_two_kept_links_that_share_one_dst_file() {
     let t = temp_root("kept_links_shared");
@@ -1033,10 +1028,10 @@ fn sync_refuses_two_kept_links_that_share_one_dst_file() {
     }
 }
 
-/// **R9-3, chained.** `dst/a -> b -> c` with `src/a` and `src/b` both regular
-/// files. `b` is an intermediate link *and* a kept link; copying `a` rewrites
-/// the file `b` mirrors. The terminal storage groups both and refuses. File
-/// symlinks skip here.
+/// Chained: `dst/a -> b -> c` with `src/a` and `src/b` both regular files. `b`
+/// is an intermediate link *and* a kept link; copying `a` rewrites the file `b`
+/// mirrors. The terminal storage groups both and refuses. File symlinks skip
+/// here.
 #[test]
 fn sync_refuses_a_chained_pair_of_kept_links_sharing_storage() {
     let t = temp_root("kept_links_chained");

@@ -350,11 +350,11 @@ fn a_tag_names_the_algorithms_that_disagreed() {
 /// as above with the two `--hash` flags the other way round: the pair still
 /// disagrees on both algorithms, and the tag is unchanged.
 ///
-/// This is the one deliberate change to what a run prints. `--hash-all-of
-/// sha256 md5` used to report `digest-differs:sha256+md5`; it now reports
-/// `digest-differs:md5+sha256`. A tag that depends on how two flags were ordered
-/// is a tag a parser has to normalise before it can compare it with anything, and
-/// the disagreement itself has no order to depend on.
+/// A tag that depends on how two flags were ordered is a tag a parser has to
+/// normalise before it can compare it with anything, and the disagreement itself
+/// has no order to depend on. The tag order is canonical (`md5` before
+/// `sha256`), so `--hash-all-of sha256 md5` prints `digest-differs:md5+sha256`
+/// like any other run.
 #[test]
 fn a_tag_names_the_algorithms_in_a_fixed_order_not_the_flag_order() {
     let t = temp_root("why_algo_fixed_order");

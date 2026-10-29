@@ -14,8 +14,8 @@ use crate::report::{Record, Report};
 
 /// The point of a case-fix step a test hook asks to fail at.
 ///
-/// `GIRSYNC_TEST_FAIL_RENAME` keeps its P7-3 meaning: fail before the temporary
-/// is claimed. `GIRSYNC_TEST_FAIL_RENAME_STEP1` fails after the claim (so the
+/// `GIRSYNC_TEST_FAIL_RENAME` fails before the temporary is claimed.
+/// `GIRSYNC_TEST_FAIL_RENAME_STEP1` fails after the claim (so the
 /// file placeholder exists) and `GIRSYNC_TEST_FAIL_RENAME_STEP2` after step 1
 /// (so the entry is in the temporary). The three are separately named because
 /// they exercise three different cleanup paths: nothing to clean, placeholder
@@ -180,7 +180,7 @@ fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, Stri
 /// The candidate is a **fixed short** name, `.girsync_case_tmp.<n>`, in the
 /// source's parent. It is deliberately not derived from the source name: the
 /// first version replaced the extension (`data.girsync_case_tmp`, silently
-/// overwriting a user file) and P7-1's full-name suffix
+/// overwriting a user file) and the full-name suffix
 /// (`<name>.girsync_case_tmp.<n>`) grew past `NAME_MAX` for a source whose own
 /// name was already close to the limit, so a legal case-only rename failed with
 /// `ENAMETOOLONG`. A fixed name cannot do that, whatever the source is called.
@@ -426,10 +426,9 @@ pub(super) fn rename_to_src_casing(
                 .with_context(|| format!("mkdir {}", parent.display()))?;
         }
         // Two-step for the Windows case-only rename. The temporary is a unique
-        // sibling claimed before use: the old fixed `with_extension(...)` name was
-        // a path in the user's namespace, so a file there was replaced by step1
-        // (silent loss) and a directory made step1 fail after the record had
-        // already been published.
+        // sibling claimed before use: a path in the user's namespace would be
+        // replaced by step1 (silent loss), and a directory there makes step1
+        // fail after the record had already been published.
         let tmp = claim_case_tmp(&from, step.is_dir)?;
         if test_fail_rename(&step.from, Stage::Step1) {
             return Err(fail_step1(
