@@ -841,9 +841,21 @@ successful `2xx` with an empty body is not a failed fetch: the empty file is
 renamed into place and measured, so its row carries `stored_path`, `bytes: 0`,
 `partial: false`, no `fetch_error` and a `decode_error` saying there was no
 frame. `is_usable` — and therefore A6 and assembly — requires `partial == false`,
-so a partial row is kept and never assembled from. A blob only falls through to
-the next source when the attempt produced **no** bytes *and failed*; the first
-source that produces any ends the loop.
+so a partial row is kept and never assembled from.
+
+**A partial body does not end the source loop.** The store parks the prefix as a
+candidate and tries the remaining sources, newest first. If any later source
+completes, the **complete body wins regardless of byte count**: it replaces the
+prefix, is published at `chunks/blobs/<id>.zst`, and is the only attempt whose
+`stored_as` names that path. If no source completes, the **longest** candidate
+(largest `bytes`) is published as the `partial` row with that attempt's
+`fetch_error`; a strictly larger later prefix replaces it, while an equal or
+shorter one is discarded, so a tie keeps the newest source. Losing prefixes never
+occupy the final path and are deleted, and `stored_path` points only at the
+winner. A fetch failure that writes **no** bytes still falls through to the next
+source, and if nothing was produced the last error is what the row and the run's
+error list carry. A body that arrived **whole** but would not decode is not a
+partial and is still not retried.
 
 `measurement_error` is set when the post-rename measurement did not return — an
 I/O error, a panic or cancellation. The blob is kept and `stored_path` stays set,

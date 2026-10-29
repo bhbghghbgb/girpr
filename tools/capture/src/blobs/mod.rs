@@ -276,19 +276,33 @@ pub struct Store {
 /// rather than inferred from `decode_error`, which version 3 reserves for a body
 /// that arrived whole and would not decode.
 enum Attempt {
-    /// The body arrived complete and was measured.
+    /// The body arrived complete and was measured. Its bytes are already at the
+    /// final path.
     Complete {
         props: BlobProps,
         rel: String,
         seq: u64,
     },
-    /// The fetch failed after writing some bytes; the bytes were published.
+    /// The fetch failed after writing some bytes. The prefix is measured but
+    /// **not published**: it waits at `path` until the source loop decides it is
+    /// the longest one available.
     Partial {
         props: BlobProps,
         rel: String,
         seq: u64,
         error: FetchError,
+        path: PathBuf,
     },
+}
+
+/// The longest prefix seen so far, waiting for the loop to decide whether a
+/// later source can do better.
+struct PartialCandidate {
+    props: BlobProps,
+    rel: String,
+    seq: u64,
+    error: FetchError,
+    path: PathBuf,
 }
 
 impl Store {
@@ -429,10 +443,14 @@ impl Store {
     /// from one that never reported, so it recorded the failure as an error *and*
     /// as a missing chunk, and the index row could only say "not stored".
     ///
-    /// **A partial body ends the source loop.** The bytes are evidence about the
-    /// source that was actually reached; trying a later source would either
-    /// overwrite them or leave the index naming bytes it no longer holds. A
-    /// failure that produced nothing moves on to the next source, as before.
+    /// **A partial body does not end the source loop.** A prefix is only the
+    /// best evidence *so far*; a later source may serve the chunk whole. The
+    /// attempt is kept as a candidate (its bytes renamed aside, measured and not
+    /// yet published) and the remaining sources are tried. A complete body wins
+    /// outright, however short the prefix was. If none completes, the candidate
+    /// with the **largest** `props.bytes` is published as the partial row; a tie
+    /// keeps the first, so the newest source wins. A failure that produced
+    /// nothing moves on to the next source, as before.
     async fn one(
         this: Store,
         slot: usize,
@@ -441,12 +459,18 @@ impl Store {
     ) -> (usize, Result<(IndexedBlob, Vec<Set>), FetchError>) {
         let self_ = &this;
         let mut last: Option<FetchError> = None;
+        let mut candidate: Option<PartialCandidate> = None;
         // Sources are ordered newest-first, so the new build's CDN is asked
         // before the old one's, which is the one that may have stopped serving.
         for src in &want.sources {
             let url = match self_.sources.url(&src.tag, &want.chunk.id) {
                 Ok(u) => u,
-                Err(e) => return (slot, Err(FetchError::local(e.to_string()))),
+                Err(e) => {
+                    // A source with no registered base is a zero-byte failure
+                    // like any other: remember it and give the rest a chance.
+                    last = Some(FetchError::local(e.to_string()));
+                    continue;
+                }
             };
             match self_
                 .stream_from(&fetcher, &url, &want, &src.tag, slot)
@@ -457,6 +481,12 @@ impl Store {
                     rel,
                     seq,
                 }) => {
+                    // A complete body always wins over any prefix, regardless of
+                    // byte count. The candidate was never published, so removing
+                    // its file is all that is left of it.
+                    if let Some(loser) = candidate.take() {
+                        Self::discard_tmp(&loser.path);
+                    }
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
                     fetcher.log().set_stored_as(seq, rel);
@@ -465,16 +495,31 @@ impl Store {
                     return (slot, Ok(indexed_from(props, &want)));
                 }
                 Ok(Attempt::Partial {
-                    mut props,
+                    props,
                     rel,
                     seq,
                     error,
+                    path,
                 }) => {
-                    props.set_stored(rel.clone());
-                    fetcher.log().set_stored_as(seq, rel);
-                    self_.warn_conflicts(&want);
-                    props.mark_partial(error);
-                    return (slot, Ok(indexed_from(props, &want)));
+                    // Strictly larger replaces the candidate; equal keeps the
+                    // one already seen, which is the newest source. Either way
+                    // the loser's bytes are removed now rather than at the end.
+                    let replace = candidate
+                        .as_ref()
+                        .is_none_or(|kept| props.bytes > kept.props.bytes);
+                    if replace {
+                        if let Some(loser) = candidate.replace(PartialCandidate {
+                            props,
+                            rel,
+                            seq,
+                            error,
+                            path,
+                        }) {
+                            Self::discard_tmp(&loser.path);
+                        }
+                    } else {
+                        Self::discard_tmp(&path);
+                    }
                 }
                 Err(e) => {
                     tracing::debug!(chunk = %want.chunk.id, source = %src.tag, error = %e.detail, "chunk fetch failed");
@@ -482,6 +527,31 @@ impl Store {
                 }
             }
         }
+
+        if let Some(winner) = candidate {
+            // Publish only now, so no losing prefix ever occupied the final path
+            // and a complete body from a later source could not collide with it.
+            let final_path = self_.root.join(&winner.rel);
+            if let Err(e) = std::fs::rename(&winner.path, &final_path) {
+                Self::discard_tmp(&winner.path);
+                return (
+                    slot,
+                    Err(FetchError::local(format!(
+                        "{}: {} -> {}: {e}",
+                        want.chunk.id,
+                        winner.path.display(),
+                        final_path.display()
+                    ))),
+                );
+            }
+            let mut props = winner.props;
+            props.set_stored(winner.rel.clone());
+            fetcher.log().set_stored_as(winner.seq, winner.rel);
+            self_.warn_conflicts(&want);
+            props.mark_partial(winner.error);
+            return (slot, Ok(indexed_from(props, &want)));
+        }
+
         (
             slot,
             Err(last.unwrap_or_else(|| {
@@ -531,14 +601,18 @@ impl Store {
     /// 1. stream into `chunks/blobs/.<name>.<slot>.tmp`, hashing as it writes —
     ///    nothing is ever whole in memory;
     /// 2. take the digests from the write itself;
-    /// 3. **rename** the tmp file into place, the atomic step, and the reason a
-    ///    reader never sees a half-written blob;
+    /// 3. **rename** out of the tmp name, the atomic step: a complete body goes
+    ///    straight to its final path, while a partial goes to a hidden candidate
+    ///    path (`.<name>.<slot>.<seq>.partial`) that the source loop may publish
+    ///    later or discard;
     /// 4. measure **from the file**, through a 16 KB window, for the decompressed
     ///    length and md5.
     ///
     /// Measuring happens after the rename so that a blob is on disk even if the
     /// decode task is cancelled, and so a decode failure is recorded on a row whose
-    /// bytes a reader can actually check.
+    /// bytes a reader can actually check. A partial is measured from its candidate
+    /// file for the same reason: the bytes are final, and only the name is waiting
+    /// on the source loop.
     ///
     /// **An undecodable body is kept, not dropped.** The bytes are on disk before
     /// they are ever measured, so a body that is not a zstd frame becomes a row
@@ -548,7 +622,10 @@ impl Store {
     /// `decode_error` says there was no frame.
     ///
     /// **A fetch that stopped after writing bytes keeps them too.** Version 3
-    /// publishes the prefix as a `partial` row with `fetch_error`; only a *failed*
+    /// measures the prefix and parks it at a candidate path instead of the final
+    /// one: a later source may complete the chunk, in which case the complete body
+    /// wins and this prefix is removed. If nothing completes, the longest prefix
+    /// is published as a `partial` row with its `fetch_error`. Only a *failed*
     /// fetch's zero-byte temp is removed, because a row with no bytes and no path
     /// is the only case where there is nothing to preserve. The cap
     /// (`--max-response-bytes`) still bounds how much arrives.
@@ -556,13 +633,17 @@ impl Store {
     /// **A failed flush or rename removes the temp.** Those are local I/O
     /// failures before publication: there are no trustworthy digests to index and
     /// no complete path to point at. The fetch failure itself is still carried.
+    /// The source loop removes every losing candidate and publishes only the
+    /// winner, so on a normal return the blob directory holds published blobs and
+    /// nothing named `.tmp` or `.partial`.
     ///
-    /// A *panic* unwinds past the temp cleanup, so a `.tmp` can survive a
+    /// A *panic* unwinds past that cleanup, so a `.tmp` or `.partial` can survive a
     /// panicking task; the hole-fill records the panic in the index, and a sweep
-    /// for old `.*.tmp` files remains a possible follow-up. The slot is part of
-    /// the name, so a leftover would only be reused if the same chunk id landed in
-    /// the same slot — a different chunk set, `--files`, or the budget can move
-    /// it, and nothing sweeps `chunks/blobs/`.
+    /// for old `.*.{tmp,partial}` files remains a possible follow-up. The slot
+    /// (and, for a candidate, the request's `seq`) is part of the name, so a
+    /// leftover would only be reused by the same chunk id in the same slot — a
+    /// different chunk set, `--files`, or the budget can move it, and nothing
+    /// sweeps `chunks/blobs/`.
     ///
     /// Measuring is synchronous CPU on a zstd decode, milliseconds on the largest
     /// chunk, so it goes to `spawn_blocking`: inline this would block a tokio
@@ -620,25 +701,33 @@ impl Store {
             }
         }
 
+        // A partial waits at a path the source loop controls; only a complete
+        // body goes to the final one. The candidate name carries the `seq`
+        // because the fixed tmp path is reused by every attempt for this slot.
+        let publish_path = match &failure {
+            None => final_path.clone(),
+            Some(_) => self.candidate_path_for(&rel, slot, seq),
+        };
+
         // The atomic step: until this, nothing outside this function looks at the
-        // path; after it, the bytes are published.
-        if let Err(e) = std::fs::rename(&tmp_path, &final_path) {
+        // path. A complete body is now published; a partial is only parked.
+        if let Err(e) = std::fs::rename(&tmp_path, &publish_path) {
             Self::discard_tmp(&tmp_path);
             return Err(FetchError::local(format!(
                 "{id}: {} -> {}: {e}",
                 tmp_path.display(),
-                final_path.display()
+                publish_path.display()
             )));
         }
 
-        let path = final_path.clone();
+        let path = publish_path.clone();
         let measure_chunk = chunk.clone();
         let measure_digests = digests.clone();
         // A measurement that fails does not remove the blob: the row keeps
         // `stored_path` and records `measurement_error`, so a reader can tell
         // "measurement failed" from "no bytes". The bytes are still evidence.
         let ceiling = self.max_decompressed_bytes;
-        let props = Self::measure_published(&final_path, &id, digests, &chunk, move || {
+        let props = Self::measure_published(&publish_path, &id, digests, &chunk, move || {
             BlobProps::measure_file(&path, &measure_chunk, measure_digests, ceiling)
         })
         .await;
@@ -650,6 +739,7 @@ impl Store {
                 rel,
                 seq,
                 error,
+                path: publish_path,
             }),
         }
     }
@@ -746,6 +836,24 @@ impl Store {
             final_path.file_name().unwrap_or_default().to_string_lossy()
         ));
         (final_path, tmp)
+    }
+
+    /// Where a partial attempt's bytes wait until the source loop decides whether
+    /// they win.
+    ///
+    /// **Distinct per attempt, unlike the tmp path.** The tmp name is deliberately
+    /// reused by every source tried for one slot, so a candidate cannot stay there
+    /// while the next source fetches. The request's `seq` makes this name unique,
+    /// so a longer prefix from a later source never overwrites the candidate it is
+    /// being compared against. Only the winner is renamed to `rel`; every losing
+    /// candidate is removed by [`Store::one`].
+    fn candidate_path_for(&self, rel: &str, slot: usize, seq: u64) -> PathBuf {
+        let final_path = self.root.join(rel);
+        let dir = final_path.parent().unwrap_or(&self.root);
+        dir.join(format!(
+            ".{}.{slot}.{seq}.partial",
+            final_path.file_name().unwrap_or_default().to_string_lossy()
+        ))
     }
 
     /// The one directory blobs live in, created once per store.
@@ -998,6 +1106,86 @@ mod tests {
             size,
             md5: "ff".repeat(16),
         }
+    }
+
+    /// Serve one HTTP response over loopback and close the connection.
+    ///
+    /// `declared` is the `Content-Length` promised; `body` is what is actually
+    /// written. A body shorter than the declaration is a truncated CDN read.
+    fn serve_blob_once(declared: usize, body: Vec<u8>) -> (u16, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).expect("nonblocking accept");
+        let handle = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (mut stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        if std::time::Instant::now() >= deadline {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("accept: {e}"),
+                }
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).ok();
+            loop {
+                let mut h = String::new();
+                if reader.read_line(&mut h).unwrap_or(0) == 0 || h.trim().is_empty() {
+                    break;
+                }
+            }
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&body).unwrap();
+            stream.flush().unwrap();
+        });
+        (port, handle)
+    }
+
+    /// The two builds' files declaring the same chunk, which gives the want its
+    /// newest-first sources: `7.1.0` then `7.0.0`.
+    fn pair_declared_by_both(c: &SophonChunk, capture_id: &str) -> FilePair {
+        FilePair {
+            capture_id: capture_id.into(),
+            path: "dll".into(),
+            old: Some(chunks::OldFile {
+                tag: "7.0.0".into(),
+                build_id: "3XnPviMfoILi".into(),
+                entry: entry("dll", vec![c.clone()]),
+            }),
+            new: Some(chunks::NewFile {
+                tag: "7.1.0".into(),
+                build_id: "sMXGW2ll3Fuu".into(),
+                entry: entry("dll", vec![c.clone()]),
+            }),
+        }
+    }
+
+    /// Every file under `chunks/blobs/`, sorted, so a leftover temp or losing
+    /// candidate fails the test by name.
+    fn blob_dir_names(root: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(root.join("chunks/blobs"))
+            .expect("the blob dir was created by the first attempt")
+            .map(|entry| {
+                entry
+                    .expect("read a dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
     }
 
     /// `blobs` is documented as ordered by id, which is what makes the lookup a
@@ -1838,6 +2026,350 @@ mod tests {
         let on_disk = std::fs::read(root.join(BlobProps::stored_path_for(&c.id)))
             .expect("the indexed path exists");
         assert_eq!(on_disk, prefix, "the bytes are exactly what arrived");
+    }
+
+    /// **A truncated newest source does not end the loop.** The older source is
+    /// asked; its complete body wins outright, replaces the parked prefix and is
+    /// the only attempt that claims `stored_as`. The losing prefix leaves no file.
+    #[tokio::test]
+    async fn a_complete_older_source_wins_over_a_truncated_newer_one() {
+        let payload = b"a chunk the newest CDN truncates but the older one serves".repeat(64);
+        let full = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        let prefix_len = full.len() / 2;
+        let prefix = full[..prefix_len].to_vec();
+        let (new_port, new_server) = serve_blob_once(full.len(), prefix);
+        let (old_port, old_server) = serve_blob_once(full.len(), full.clone());
+
+        let c = chunk(&payload, 0, 0xca11);
+        let p = pair_declared_by_both(&c, "complete_fallback");
+        let w = chunks::wants(&[p]);
+        assert_eq!(
+            w[0].sources
+                .iter()
+                .map(|s| s.tag.as_str())
+                .collect::<Vec<_>>(),
+            vec!["7.1.0", "7.0.0"],
+            "the newest source is tried first"
+        );
+        let root = girpr_tempdir::TempDir::new("gircap-f11", "complete_fallback");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([
+                (
+                    "7.1.0".to_string(),
+                    format!("http://127.0.0.1:{new_port}/cdn"),
+                ),
+                (
+                    "7.0.0".to_string(),
+                    format!("http://127.0.0.1:{old_port}/cdn"),
+                ),
+            ]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        new_server
+            .join()
+            .expect("the newest server served its prefix");
+        old_server
+            .join()
+            .expect("the older server served the whole body");
+
+        assert!(
+            errors.is_empty(),
+            "a complete fallback is a success, not a failed fetch: {errors:?}"
+        );
+        let props = &entries[0].0.props;
+        let rel = BlobProps::stored_path_for(&c.id);
+        assert!(!props.partial, "the complete body is not a prefix");
+        assert!(
+            props.fetch_error.is_none(),
+            "nothing failed after the older source completed: {:?}",
+            props.fetch_error
+        );
+        assert_eq!(props.stored_path.as_deref(), Some(rel.as_str()));
+        assert!(
+            props.is_usable(),
+            "the whole chunk arrived and measured green"
+        );
+        assert_eq!(
+            std::fs::read(root.join(&rel)).expect("the published blob"),
+            full,
+            "the complete body replaced the prefix"
+        );
+
+        let rows = fetcher.log().records();
+        assert_eq!(rows.len(), 2, "both sources were asked: {rows:?}");
+        let newer = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{new_port}/")))
+            .expect("the newest request is logged");
+        let older = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{old_port}/")))
+            .expect("the older request is logged");
+        assert_eq!(
+            older.stored_as.as_deref(),
+            Some(rel.as_str()),
+            "only the complete winner claims the published blob"
+        );
+        assert_eq!(
+            newer.stored_as, None,
+            "the losing prefix must not claim the path"
+        );
+        assert_eq!(
+            blob_dir_names(&root),
+            vec![format!("{}.zst", c.id)],
+            "no temp or candidate file survives"
+        );
+    }
+
+    /// A partial is retried, and the longest prefix wins even when it came from
+    /// the older source. The row carries that attempt's `fetch_error` and bytes.
+    #[tokio::test]
+    async fn the_longest_prefix_wins_when_no_source_completes() {
+        let payload = b"both CDNs truncate this chunk at different points".repeat(64);
+        let full = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        let newer_len = full.len() / 3;
+        let older_len = full.len() * 2 / 3;
+        let newer_prefix = full[..newer_len].to_vec();
+        let older_prefix = full[..older_len].to_vec();
+        let (new_port, new_server) = serve_blob_once(full.len(), newer_prefix);
+        let (old_port, old_server) = serve_blob_once(full.len(), older_prefix.clone());
+
+        let c = chunk(&payload, 0, 0xca12);
+        let p = pair_declared_by_both(&c, "longest_older");
+        let w = chunks::wants(&[p]);
+        let root = girpr_tempdir::TempDir::new("gircap-f11", "longest_older");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([
+                (
+                    "7.1.0".to_string(),
+                    format!("http://127.0.0.1:{new_port}/cdn"),
+                ),
+                (
+                    "7.0.0".to_string(),
+                    format!("http://127.0.0.1:{old_port}/cdn"),
+                ),
+            ]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        new_server
+            .join()
+            .expect("the newest server served its prefix");
+        old_server
+            .join()
+            .expect("the older server served its prefix");
+
+        assert_eq!(errors.len(), 1, "only the published failure is reported");
+        let props = &entries[0].0.props;
+        let rel = BlobProps::stored_path_for(&c.id);
+        assert!(props.partial);
+        assert_eq!(
+            props.bytes, older_len as u64,
+            "the longest prefix is the one published"
+        );
+        assert_eq!(props.stored_path.as_deref(), Some(rel.as_str()));
+        let failure = props.fetch_error.as_ref().expect("and why it stopped");
+        assert!(
+            failure.detail.contains("via 7.0.0"),
+            "the row names the source whose prefix won: {}",
+            failure.detail
+        );
+        assert_eq!(
+            std::fs::read(root.join(&rel)).expect("the published blob"),
+            older_prefix,
+            "the file is exactly the winning prefix"
+        );
+
+        let rows = fetcher.log().records();
+        let newer = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{new_port}/")))
+            .expect("the newest request is logged");
+        let older = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{old_port}/")))
+            .expect("the older request is logged");
+        assert_eq!(
+            older.stored_as.as_deref(),
+            Some(rel.as_str()),
+            "only the winning prefix claims the published blob"
+        );
+        assert_eq!(
+            newer.stored_as, None,
+            "the shorter prefix must not claim the path"
+        );
+        assert_eq!(
+            blob_dir_names(&root),
+            vec![format!("{}.zst", c.id)],
+            "no temp or candidate file survives"
+        );
+    }
+
+    /// The mirror image: the newer source's prefix is longer, so a shorter later
+    /// prefix is discarded and the newest one keeps the row and the file.
+    #[tokio::test]
+    async fn a_shorter_later_prefix_keeps_the_newest_candidate() {
+        let payload = b"the newest CDN gets further before it truncates".repeat(64);
+        let full = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        let newer_len = full.len() * 2 / 3;
+        let older_len = full.len() / 3;
+        let newer_prefix = full[..newer_len].to_vec();
+        let older_prefix = full[..older_len].to_vec();
+        let (new_port, new_server) = serve_blob_once(full.len(), newer_prefix.clone());
+        let (old_port, old_server) = serve_blob_once(full.len(), older_prefix);
+
+        let c = chunk(&payload, 0, 0xca13);
+        let p = pair_declared_by_both(&c, "longest_newer");
+        let w = chunks::wants(&[p]);
+        let root = girpr_tempdir::TempDir::new("gircap-f11", "longest_newer");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([
+                (
+                    "7.1.0".to_string(),
+                    format!("http://127.0.0.1:{new_port}/cdn"),
+                ),
+                (
+                    "7.0.0".to_string(),
+                    format!("http://127.0.0.1:{old_port}/cdn"),
+                ),
+            ]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        new_server
+            .join()
+            .expect("the newest server served its prefix");
+        old_server
+            .join()
+            .expect("the older server served its prefix");
+
+        assert_eq!(errors.len(), 1, "only the published failure is reported");
+        let props = &entries[0].0.props;
+        let rel = BlobProps::stored_path_for(&c.id);
+        assert!(props.partial);
+        assert_eq!(
+            props.bytes, newer_len as u64,
+            "the newest, longer prefix is kept"
+        );
+        assert_eq!(props.stored_path.as_deref(), Some(rel.as_str()));
+        let failure = props.fetch_error.as_ref().expect("and why it stopped");
+        assert!(
+            failure.detail.contains("via 7.1.0"),
+            "the row names the source whose prefix won: {}",
+            failure.detail
+        );
+        assert_eq!(
+            std::fs::read(root.join(&rel)).expect("the published blob"),
+            newer_prefix,
+            "the file is exactly the winning prefix"
+        );
+
+        let rows = fetcher.log().records();
+        let newer = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{new_port}/")))
+            .expect("the newest request is logged");
+        let older = rows
+            .iter()
+            .find(|r| r.url.contains(&format!(":{old_port}/")))
+            .expect("the older request is logged");
+        assert_eq!(
+            newer.stored_as.as_deref(),
+            Some(rel.as_str()),
+            "only the winning prefix claims the published blob"
+        );
+        assert_eq!(
+            older.stored_as, None,
+            "the shorter prefix must not claim the path"
+        );
+        assert_eq!(
+            blob_dir_names(&root),
+            vec![format!("{}.zst", c.id)],
+            "no temp or candidate file survives"
+        );
+    }
+
+    /// A later source that fails without writing anything leaves the first
+    /// prefix as the row; its temp must not displace the candidate.
+    #[tokio::test]
+    async fn a_zero_byte_failure_after_a_prefix_keeps_the_prefix() {
+        let payload = b"the older CDN refuses this chunk entirely".repeat(64);
+        let full = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+        let prefix_len = full.len() / 2;
+        let prefix = full[..prefix_len].to_vec();
+        let (new_port, new_server) = serve_blob_once(full.len(), prefix.clone());
+
+        let c = chunk(&payload, 0, 0xca14);
+        let p = pair_declared_by_both(&c, "zero_after_prefix");
+        let w = chunks::wants(&[p]);
+        let root = girpr_tempdir::TempDir::new("gircap-f11", "zero_after_prefix");
+        let store = Store::new(
+            &root,
+            Sources::from_pairs([
+                (
+                    "7.1.0".to_string(),
+                    format!("http://127.0.0.1:{new_port}/cdn"),
+                ),
+                // Port 0 is never bound: an immediate refusal that writes nothing.
+                ("7.0.0".to_string(), "http://127.0.0.1:0".to_string()),
+            ]),
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
+        let fetcher = crate::http::Fetcher::new(
+            crate::http::Transport::local(),
+            crate::http::RequestLog::new(),
+        )
+        .expect("a fetcher with no configured headers to reject");
+
+        let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+        new_server
+            .join()
+            .expect("the newest server served its prefix");
+
+        assert_eq!(errors.len(), 1, "only the published failure is reported");
+        let props = &entries[0].0.props;
+        let rel = BlobProps::stored_path_for(&c.id);
+        assert!(props.partial);
+        assert_eq!(props.bytes, prefix_len as u64);
+        assert_eq!(props.stored_path.as_deref(), Some(rel.as_str()));
+        let failure = props.fetch_error.as_ref().expect("and why it stopped");
+        assert!(
+            failure.detail.contains("via 7.1.0"),
+            "the row keeps the prefix's failure: {}",
+            failure.detail
+        );
+        assert_eq!(
+            std::fs::read(root.join(&rel)).expect("the published blob"),
+            prefix,
+            "the zero-byte attempt did not replace the prefix"
+        );
+        assert_eq!(
+            blob_dir_names(&root),
+            vec![format!("{}.zst", c.id)],
+            "no temp or candidate file survives"
+        );
     }
 
     /// **N1/K2.** A measurement that does not return loses neither its cause nor

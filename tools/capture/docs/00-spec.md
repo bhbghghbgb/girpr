@@ -487,14 +487,20 @@ zero-byte file is published and measured, so the row has `stored_path`,
 `bytes: 0` and a `decode_error`, and is not counted among the failed fetches.
 Only a *failed* fetch's zero-byte temp file is removed.
 
-**That row is the outcome of a successful fetch, so it is not retried from
-another source.** The first body's bytes are already the evidence; asking the
-next source and renaming a good body over them would silently destroy what
-actually arrived. The store therefore stops at that source and records the
+**A truncated body is retried, because a prefix is not the whole answer.** The
+store keeps the prefix as a candidate and asks the remaining sources; a complete
+body replaces it outright, and if none completes the longest prefix is published
+with that attempt's `fetch_error`. Losing prefixes are removed, so only the winner
+sits at `chunks/blobs/<id>.zst`.
+
+**An undecodable complete body is the outcome of a successful fetch, so it is not
+retried from another source.** The first body's bytes are already the evidence;
+asking the next source and renaming a good body over them would silently destroy
+what actually arrived. The store therefore stops at that source and records the
 undecodable row, rather than treating it as a failed fetch and falling through.
-Only a real error — a refused connection, a failed write, or an I/O error while
-measuring — moves on to the next source, and then the published blob is removed
-so disk and index agree.
+Only a real error — a refused connection, a truncated read, a failed write, or an
+I/O error while measuring — moves on to the next source; a prefix that loses to a
+complete body or to a longer prefix is removed, so disk and index agree.
 
 **A chunk that never arrived is a row too, and it says why.** A refused source, a
 failed write or a panicked task leaves `stored_path` null and carries the fetch
