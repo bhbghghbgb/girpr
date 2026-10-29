@@ -20,9 +20,9 @@ traffic, no release profile and no Linux/macOS host.
    membership, an incomplete delete plan behind a ceiling, the empty-directory
    sweep); see the resolved decisions log at the end. These acted on the
    irreversible half and had concrete failure modes.
-2. **What a read-only run promises** — §2 (`--dry-run`/`--check-only` skip the
-   range validation). This decides exit `2` vs `3` and whether a printed plan
-   can be trusted.
+2. **What a read-only run promises** — §2 is resolved: `build_plan` validates
+   chunk ranges, so a malformed range is exit `2` before any mode runs and a
+   printed plan is always runnable; see the resolved decisions log at the end.
 3. **Exit-code strictness of local state** — §4 (R-2, T-1/E-1, V-2, T-2/E-3,
    U-1). These share the "an explicit configuration must not degrade silently"
    rule and are what a user sees at exit `1`/`4`; decide them together.
@@ -44,70 +44,11 @@ traffic, no release profile and no Linux/macOS host.
 
 ## 2. Read-only runs and the plan boundary
 
-### 2.1 `validate_chunk_ranges` is only called on the write path
-
-**Current.** `validate_chunk_ranges` (`src/repair/file/mod.rs:314-345`) rejects
-a negative file size, a negative chunk offset/size, an `offset + size` overflow
-and an end past `file.size`. It is called only in `repair_one_file` and only
-when `!ctx.dry_run` (`file/mod.rs:412-414`). `--check-only` has its own loop
-(size + MD5, `src/repair/phases/check.rs:61-118`) and never calls it;
-`--print-plan` returns at `src/repair/mod.rs:346` before the repair loop. All
-three read-only modes therefore accept a manifest the write path would refuse
-per file, and `--print-plan` can print a plan that cannot run. A file whose
-size and MD5 happen to match but whose chunk arithmetic is corrupt is reported
-**clean** by `--check-only`, for the wrong reason.
-
-**History.** `a3e5caf` added the validation together with the panicked-file
-accounting; before it the end was computed as `c.offset + c.uncompressed_size`
-in `i64`, which panicked a debug build and left `files_failed == 0`. The helper's
-doc states the deliberate choice: "Both are per-file failures (exit `3`), not
-plan failures: the rest of the install can still be repaired"
-(`file/mod.rs:308-313`). No commit ever put the check in `build_plan`.
-
-**Usage and dependents.** The write path and
-`a_manifest_offset_overflow_fails_the_file_instead_of_panicking`
-(`tests/repair_offline.rs:641`, asserts exit `3`, one failed file, no
-`config.ini` bump). `--check-only` and `--dry-run` are documented as writing
-nothing and keeping the counters at `0` (`README.md:220-221`).
-
-**Options.**
-- **(a) Keep per-file only** — no code change; the manifest is data, and one
-  corrupt file should not block the other 100k. Cost: read-only modes give a
-  false green, and `--print-plan` can show an unrunnable plan.
-- **(b) Validate in `build_plan` (exit `2`) before any mode** — one gate, all
-  modes agree, matches the containment/F-2 rule that a plan that cannot be
-  executed is a metadata error. Cost: one corrupt range refuses the whole run
-  and the helper's stated per-file rationale/test would change.
-- **(c) Add the check to `check.rs` only (exit `4`)** — keeps per-file
-  semantics and makes `--check-only` honest; `--print-plan` is still a preview
-  and `--dry-run` would still not validate.
-
-Failure mode for (b): a single hostile/corrupt manifest entry blocks every
-repair, including the files that are fine. Failure mode for (c): a user who
-trusts `--print-plan` still sees an unrunnable plan.
-
-**Code/tests/docs.** `src/repair/file/mod.rs:314-345, 412-414`,
-`src/repair/phases/check.rs:61-118`, `src/repair/mod.rs:305-346`. A (b) change
-also moves/duplicates the `a_manifest_offset_overflow…` expectation to exit
-`2`; a (c) change needs a check-only case with a hostile range.
-
-**Recommendation.** **No recommendation on the exit code**; both contracts are
-defensible, and the helper's comment makes (a) the current deliberate choice.
-Whichever is chosen, add the same range check to the `check.rs` loop so
-`--check-only` cannot call a corrupt-range file "intact" for the wrong reason,
-and state the chosen exit in `README.md:220-221`. If the plan must be
-executable before it is printed, (b) is the coherent choice.
-
-**Verification limits.** No read-only run was driven against a hostile range;
-the claim that `--check-only` reports it clean is source-reasoned from the
-absence of a call in `check.rs`.
-
-**Cross-project impact.** `docs/02-repair-chunk-spec.md` is the repair contract
-the artifact bridge replays; a plan-time refusal changes the documented exit
-for a malformed manifest, so `docs/02` and the bridge's expectation would need
-the same statement. `gircap` captures the manifest, not the refusal, so no
-`tools/capture` code changes. `crates/log`, `crates/tempdir`, workspace
-`Cargo.toml`/`Cargo.lock` and `.config/nextest*` are unaffected.
+**Resolved (2026-10-30).** `build_plan` now validates every non-folder entry's
+chunk ranges after the blacklist/scope/dedup filters, so a malformed range is a
+plan/metadata error (exit `2`) before any mode runs and `--print-plan` cannot
+print an unrunnable plan. See the [`Resolved decisions`](#resolved-decisions)
+log at the end of this file.
 
 ---
 
@@ -626,3 +567,4 @@ workspace `Cargo.toml`/`Cargo.lock` do not change, and no `tools/capture` or
 - **N-5** — option (b), fold case on Windows in the purge: mirrors the plan's dedup and the case-insensitive scope, so `--purge-*` cannot delete a just-verified file under a differently-cased on-disk name. (2026-10-30)
 - **N-19** — option (b), refuse the delete pass when a ceiling is set and the plan is incomplete: a lower bound cannot enforce an exact-set ceiling, so exit `5` names `purge_errors` instead of deleting against it; a real counted walk failure is driven through both checks in `purge::tests`. (2026-10-30)
 - **S-1** — keep (a), document the directory-sweep consequence: the keep rule is the safer irreversible outcome, and a content glob does not hide its directory. (2026-10-30)
+- **2.1** — option (b), plan-time chunk-range validation (exit `2`) so every read-only mode agrees; docs/02 copies on the tool branches need the same statement at merge. (2026-10-30)

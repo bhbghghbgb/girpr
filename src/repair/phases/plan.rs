@@ -180,6 +180,52 @@ pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i
         })
 }
 
+/// Reject a chunk range a corrupt manifest can carry before it reaches a seek.
+///
+/// `offset` and `size` are `i64` values from the server, and the old end
+/// computation added them as `i64`, which panicked on an overflow. A negative
+/// value is not a range at all, and a range that ends past the file's declared
+/// size cannot produce the file the manifest describes.
+///
+/// This is **plan-time** validation: [`build_plan`] runs it for every file that
+/// survives the blacklist/scope/dedup filters, so a malformed range is a
+/// metadata error (exit `2`) before any mode runs. `repair_one_file` also calls
+/// it as a defensive second gate for a plan that was not built by
+/// [`build_plan`], so the write path cannot seek on a bad range either.
+pub(crate) fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
+    if file.size < 0 {
+        anyhow::bail!("file has an invalid size: {}", file.size);
+    }
+    let file_size = file.size as u64;
+    for c in &file.chunks {
+        if c.offset < 0 {
+            anyhow::bail!("chunk {} has a negative offset: {}", c.id, c.offset);
+        }
+        if c.uncompressed_size < 0 {
+            anyhow::bail!(
+                "chunk {} has a negative size: {}",
+                c.id,
+                c.uncompressed_size
+            );
+        }
+        let end = c.offset.checked_add(c.uncompressed_size).ok_or_else(|| {
+            anyhow::anyhow!(
+                "chunk {} range overflows: {} + {}",
+                c.id,
+                c.offset,
+                c.uncompressed_size
+            )
+        })?;
+        if end as u64 > file_size {
+            anyhow::bail!(
+                "chunk {} ends at {end}, past the file's size {file_size}",
+                c.id
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The key the plan dedups on.
 ///
 /// On Windows two paths that differ only in case are the same file, so they
@@ -247,21 +293,32 @@ pub fn build_plan(
             // the manifest's relative order.
             let mut chunks = f.chunks;
             chunks.sort_by_key(|c| c.offset);
-            // A chunk with no content is a no-op at best and a hole in the
-            // coverage at worst: it claims an offset and covers nothing.
-            // Dropped defensively — a manifest that says so is not a manifest
-            // to trust, but the file can still be repaired without it.
-            let empty = chunks.iter().filter(|c| c.uncompressed_size <= 0).count();
-            if empty > 0 {
-                tracing::warn!(rel = %rel, empty, "dropped empty chunk(s) from the plan");
-                chunks.retain(|c| c.uncompressed_size > 0);
-            }
-            let file = PlannedFile {
+            let mut file = PlannedFile {
                 rel,
                 size: f.size,
                 md5: f.md5.clone(),
                 chunks,
             };
+            // Validate **before** the empty-chunk drop: a zero-size chunk is an
+            // allowed no-op that is removed below, but a negative size is a
+            // malformed range and must be refused, not quietly discarded. The
+            // filters above have already run, so a corrupt entry the run
+            // excludes cannot block the rest of the plan.
+            validate_chunk_ranges(&file)
+                .with_context(|| format!("validate chunk ranges for {:?}", file.rel))?;
+            // A chunk with no content is a no-op at best and a hole in the
+            // coverage at worst: it claims an offset and covers nothing.
+            // Dropped defensively — a zero-size chunk is allowed, but the file
+            // can be repaired without it.
+            let empty = file
+                .chunks
+                .iter()
+                .filter(|c| c.uncompressed_size == 0)
+                .count();
+            if empty > 0 {
+                tracing::warn!(rel = %file.rel, empty, "dropped empty chunk(s) from the plan");
+                file.chunks.retain(|c| c.uncompressed_size > 0);
+            }
             // The layout is checked **at plan time**, before anything is
             // written: a hole in the coverage is a thing the writer has to
             // zero-fill, and an overlap is a thing it has to resolve, and
@@ -312,6 +369,26 @@ mod tests {
             size,
             md5: "m".into(),
             chunks,
+        }
+    }
+
+    /// A manifest entry with the given path, declared size and chunks.
+    fn manifest_file(rel: &str, size: i64, chunks: Vec<SophonChunk>) -> SophonChunkFile {
+        SophonChunkFile {
+            file: rel.into(),
+            chunks,
+            is_folder: false,
+            size,
+            md5: "m".into(),
+        }
+    }
+
+    /// Build a plan from one manifest, returning the error text if it refuses.
+    fn plan_error(file: SophonChunkFile) -> String {
+        let per = vec![("http://x".to_string(), vec![file])];
+        match build_plan(per, &HashSet::new(), "5.0", &PathScope::default()) {
+            Ok(_) => panic!("a malformed range must be a plan error"),
+            Err(err) => format!("{err:#}"),
         }
     }
 
@@ -627,5 +704,80 @@ mod tests {
             !plan.url_prefix_by_file.contains_key("game/bar.dat"),
             "a dropped path must not keep a prefix entry either"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // plan-time chunk-range validation
+    // -----------------------------------------------------------------------
+
+    /// Every malformed shape a corrupt manifest can carry is a plan error
+    /// (exit `2`), named with the file's rel. This is the same gate for every
+    /// mode, so `--check-only`, `--dry-run` and `--print-plan` cannot disagree
+    /// with the write path.
+    #[test]
+    fn malformed_chunk_ranges_are_refused_at_plan_time() {
+        let cases = [
+            (
+                "negative file size",
+                manifest_file("bad.dat", -1, vec![]),
+                "invalid size",
+            ),
+            (
+                "negative chunk offset",
+                manifest_file("bad.dat", 64, vec![chunk("c", -1, 32)]),
+                "negative offset",
+            ),
+            // A negative size must be refused *before* the empty-chunk drop:
+            // `uncompressed_size <= 0` used to be warn-and-drop, which would
+            // turn this corrupt range into a missing chunk instead of a
+            // refusal.
+            (
+                "negative chunk size",
+                manifest_file("bad.dat", 64, vec![chunk("c", 0, -1)]),
+                "negative size",
+            ),
+            (
+                "offset plus size overflow",
+                manifest_file("bad.dat", i64::MAX, vec![chunk("c", i64::MAX, 1)]),
+                "overflows",
+            ),
+            (
+                "range past the file size",
+                manifest_file("bad.dat", 64, vec![chunk("c", 32, 64)]),
+                "past the file's size",
+            ),
+        ];
+        for (name, file, needle) in cases {
+            let msg = plan_error(file);
+            assert!(msg.contains("bad.dat"), "{name}: rel missing from {msg}");
+            assert!(msg.contains(needle), "{name}: expected {needle:?} in {msg}");
+        }
+    }
+
+    /// The range gate runs *after* the blacklist/scope/dedup filters, so an
+    /// entry the run would not touch cannot block the rest of the plan — even
+    /// when its range is corrupt.
+    #[test]
+    fn a_corrupt_entry_the_plan_excludes_does_not_block_the_rest() {
+        let blacklisted = manifest_file("keep/blacklisted.dat", 64, vec![chunk("b", -1, 32)]);
+        let out_of_scope = manifest_file("keep/out.dat", 64, vec![chunk("o", -1, 32)]);
+        // The good spelling comes first, so the corrupt duplicate is dropped by
+        // the dedup key before it can be validated.
+        let good_dup = manifest_file("keep/dup.dat", 32, vec![chunk("d", 0, 32)]);
+        let corrupt_dup = manifest_file("keep/dup.dat", 64, vec![chunk("d2", -1, 32)]);
+        let good = manifest_file("keep/good.dat", 32, vec![chunk("g", 0, 32)]);
+        let per = vec![
+            (
+                "http://x".to_string(),
+                vec![blacklisted, out_of_scope, good_dup, good],
+            ),
+            ("http://y".to_string(), vec![corrupt_dup]),
+        ];
+        let blacklist: HashSet<String> = ["keep/blacklisted.dat".to_string()].into_iter().collect();
+        let exclude = vec!["keep/out.dat".to_string()];
+        let scope = PathScope::new(&[], &exclude).unwrap();
+        let plan = build_plan(per, &blacklist, "5.0", &scope).unwrap();
+        let rels: Vec<&str> = plan.files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, vec!["keep/dup.dat", "keep/good.dat"]);
     }
 }

@@ -199,7 +199,9 @@ flowchart TD
   a `--max-download-bytes` ceiling is measured against the same empty map, so it
   moves. Check this key before comparing byte totals.
 - exit codes: `0` ok (check-only: intact) · `1` usage/config (including a
-  refusal because another `girpr` run holds the lock) · `2` metadata/network ·
+  refusal because another `girpr` run holds the lock) · `2` metadata/network
+  (including a malformed manifest path or chunk range, refused at plan time
+  before any mode runs) ·
   `3` write/verify (per-file `Ok(summary,3)` with `SUMMARY`, or fatal `Err` with `FATAL` only) ·
   `4` check-only found damage · `5` a manually requested enforcement limit was
   exceeded. A **refusal** writes nothing at all; a **runtime hard stop** writes
@@ -219,6 +221,9 @@ flowchart TD
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0; purge lists are only logged).
+  A malformed manifest chunk range is a **plan** error (exit `2`) in every
+  mode, including these read-only ones, so `--check-only` cannot report such a
+  file intact and `--print-plan` cannot print a plan that cannot run.
   `--purge-only` is read-only *in the repair sense* — it does the cleanup half
   and skips the repair loop. It does **not** bump `config.ini`: a cleanup puts no
   bytes in place, so claiming the newer version would desync the launcher
@@ -293,7 +298,7 @@ cargo build --release
 | `--repair-mode <auto\|inplace\|temp\|discard>` | `auto` | How each file is written. `auto`/`inplace`: write only the wrong bytes, in place (no `_tmp`, and the peak extra disk is the file's growth). `temp`: assemble the repair in `{path}_tmp` and rename it over the target — **the target file is never modified** and the swap is atomic, at the cost of the whole file existing twice. `discard`: delete the target and write it from scratch (no second copy: 0 extra disk when the target is already full size, its growth when it is truncated, and a full download). A target that cannot be opened for writing is written the `temp` way, loudly |
 | `--max-ram-bytes <N>` | (no limit) | Cap the RAM the in-place repair may stage the bytes it has to move *inside* a file. A file that cannot get its reservation is written in the other direction instead — the same file, with less reuse. `0` means "stage nothing at all" |
 | `--scan` | off | Read the whole install once, in the plan phase, so the plan's numbers are exact: the bytes the repair will really download, the chunks that are damaged, and the bytes the scan read. Costs a full read of every planned file |
-| `--check-only` | off | Verify size+MD5; writes nothing |
+| `--check-only` | off | Verify size+MD5; writes nothing. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
 | `--dry-run` | off | Log actions; writes nothing |

@@ -31,7 +31,8 @@ values and `io_threads = 0` are also exit 1 (clap-level errors included); `--hel
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
-`1` usage/config error, `2` metadata/network error, `3` write/verify error,
+`1` usage/config error, `2` metadata/network error (including a malformed manifest
+path or chunk range, refused at plan time), `3` write/verify error,
 `4` check-only found damage; a begin `REPORT` line (versions + API-sourced
 fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
 both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
@@ -127,6 +128,14 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 
 ### Step 4 — Build work list
 For each latest file `F{path,size,md5,chunks[]}`:
+- Once the blacklist/scope/dedup filters have run, every surviving non-folder
+  entry is range-validated: a negative `size`, a
+  negative chunk `offset` or `uncompressed_size`, an
+  `offset + uncompressed_size` overflow, or a chunk end past `size` is a plan
+  error (exit `2`) **before any mode runs**, including `--check-only`,
+  `--dry-run` and `--print-plan`. A zero-size chunk is still allowed and is
+  dropped from the work list; a negative one is refused, not dropped. An entry
+  the filters exclude cannot block the rest of the plan.
 - `local_F` = same `path` in local build manifest (may be absent/different).
 - Build `chunk_plan[]`: for each chunk `C{offset,uncompressed_size,uncompressed_md5}`:
   `reuse = (local_F contains chunk with same (uncompressed_md5, uncompressed_size))`

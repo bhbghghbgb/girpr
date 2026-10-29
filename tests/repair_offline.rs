@@ -681,16 +681,16 @@ async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
 }
 
 #[tokio::test]
-async fn a_manifest_offset_overflow_fails_the_file_instead_of_panicking() {
+async fn a_manifest_offset_overflow_refuses_the_plan_instead_of_panicking() {
     // The old code computed a chunk's end as `c.offset + c.uncompressed_size`
     // in `i64`, so an offset near `i64::MAX` panicked the file task in a debug
     // build. A panicked task used to be dropped with `let _ = h.await`, which
     // left `files_failed == 0`: the run reached the post phase, bumped
     // `config.ini`, and exited `0` with the file unrepaired.
     //
-    // Both halves are pinned here: the range is refused (no panic, no seek to
-    // `i64::MAX`), the file is counted as failed, exit is `3`, and the
-    // post-phase does not run.
+    // A malformed range is now a **plan** error (metadata, exit `2`) before any
+    // mode runs, so there is no unrunnable plan to print and no file task to
+    // panic or seek to `i64::MAX`.
     let fx = build_fixture_spec(
         &FixtureSpec::new(vec![FileSpec::new(
             "game/foo.dat",
@@ -703,23 +703,38 @@ async fn a_manifest_offset_overflow_fails_the_file_instead_of_panicking() {
     );
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("huge_offset");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = RepairMode::Temp;
-    ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx)
-        .await
-        .expect("a per-file failure is not a run error");
-    assert_eq!(code, 3, "a corrupt chunk range is a failed file");
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (0, 1));
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 2, "a corrupt chunk range is metadata: {stderr}");
     assert!(
-        !dir.join("config.ini").exists(),
-        "the version must not be bumped with a failed file"
+        !game.exists(),
+        "the plan refusal must not create the game dir"
     );
     assert!(
-        read_game_file(&dir, "game/foo.dat").is_none(),
-        "the target must not be created"
+        !dir.join("config.ini").exists(),
+        "the version must not be bumped for a refused plan"
+    );
+    assert!(
+        !stdout.contains("PLAN "),
+        "an unrunnable plan must not be printed: {stdout}"
     );
 
     mock.stop();
@@ -3861,6 +3876,77 @@ async fn a_read_only_run_issues_no_deprecated_file_call() {
             "--{mode} must not fetch the deprecated list it would discard"
         );
         assert!(read_game_file(&dir, "old/legacy.dll").is_some());
+        mock.stop();
+    }
+}
+
+#[tokio::test]
+async fn a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs() {
+    // Option (b): the range gate is in `build_plan`, so `--check-only`,
+    // `--dry-run` and `--print-plan` all refuse the manifest at exit `2`
+    // instead of one of them reporting a false clean or printing an unrunnable
+    // plan. Nothing is written in any mode.
+    for mode in ["--check-only", "--dry-run", "--print-plan"] {
+        let fx = build_fixture_spec(
+            &FixtureSpec::new(vec![FileSpec::new(
+                "game/foo.dat",
+                vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
+            )])
+            .with_lies(Lies {
+                huge_offset: vec!["chunk_foo0".into()],
+                ..Default::default()
+            }),
+        );
+        // The file on disk is the one the manifest's size and MD5 describe, so
+        // without the plan gate `--check-only` would call it intact and exit
+        // `0` for the wrong reason.
+        let expected = fx.files[0].data.clone();
+        let mock = MockServer::start(fx, MockOpts::default()).await;
+        let dir = temp_dir("readonly_hostile_range");
+        let game = dir.join("install");
+        write_game_file(&game, "game/foo.dat", &expected);
+        let game_arg = game.to_string_lossy().into_owned();
+
+        let (code, stdout, stderr) = run_binary(
+            &[
+                "--game-path",
+                &game_arg,
+                "--biz",
+                "hk4e_global",
+                "--io-threads",
+                "1",
+                mode,
+                "--hyp-base",
+                &mock.hyp_base,
+                "--sophon-base",
+                &mock.sophon_base,
+            ],
+            &[],
+        )
+        .await;
+        assert_eq!(code, 2, "{mode}: a hostile range is metadata: {stderr}");
+        assert_eq!(
+            read_game_file(&game, "game/foo.dat").as_deref(),
+            Some(expected.as_slice()),
+            "{mode}: the read-only run must not touch the target"
+        );
+        assert!(
+            !dir.join("config.ini").exists(),
+            "{mode}: config.ini must not be written"
+        );
+        assert!(
+            !stdout.contains("PLAN "),
+            "{mode}: no plan may be printed: {stdout}"
+        );
+        assert!(
+            !stdout.contains("CHECK"),
+            "{mode}: no CHECK line may call the file clean: {stdout}"
+        );
+        assert!(
+            mock.chunk_hits().is_empty(),
+            "{mode}: no chunk may be fetched"
+        );
+
         mock.stop();
     }
 }

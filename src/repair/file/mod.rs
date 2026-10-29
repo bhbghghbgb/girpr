@@ -73,7 +73,7 @@ use crate::sophon::SophonChunk;
 use crate::util;
 
 use crate::repair::phases::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan};
+use crate::repair::phases::plan::{PlannedFile, RepairPlan, validate_chunk_ranges};
 
 mod inplace;
 mod mode;
@@ -303,45 +303,6 @@ pub async fn repair_all(
         .unwrap_or_else(|a| a.snapshot())
 }
 
-/// Reject a chunk range a corrupt manifest can carry before it reaches a seek.
-///
-/// `offset` and `size` are `i64` values from the server, and the old end
-/// computation added them as `i64`, which panicked on an overflow. A negative
-/// value is not a range at all, and a range that ends past the file's declared
-/// size cannot produce the file the manifest describes. Both are per-file
-/// failures (exit `3`), not plan failures: the rest of the install can still be
-/// repaired.
-fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
-    let file_size = u64::try_from(file.size)
-        .map_err(|_| anyhow::anyhow!("file has an invalid size: {}", file.size))?;
-    for c in &file.chunks {
-        let offset = u64::try_from(c.offset)
-            .map_err(|_| anyhow::anyhow!("chunk {} has a negative offset: {}", c.id, c.offset))?;
-        let len = u64::try_from(c.uncompressed_size).map_err(|_| {
-            anyhow::anyhow!(
-                "chunk {} has a negative size: {}",
-                c.id,
-                c.uncompressed_size
-            )
-        })?;
-        let end = offset.checked_add(len).ok_or_else(|| {
-            anyhow::anyhow!(
-                "chunk {} range overflows: {} + {}",
-                c.id,
-                c.offset,
-                c.uncompressed_size
-            )
-        })?;
-        if end > file_size {
-            anyhow::bail!(
-                "chunk {} ends at {end}, past the file's size {file_size}",
-                c.id
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Await every spawned file task and charge each join error to `files_failed`.
 ///
 /// A file task returns `()`, so its only `Err` is a panic or a cancellation —
@@ -409,6 +370,10 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if file.rel == TEST_PANIC_REL {
         panic!("injected panic in the file task");
     }
+    // `build_plan` already validated every range (exit `2`), so this is the
+    // defensive second gate for a plan built by hand: a write path must never
+    // seek on a bad range. Dry-run does not seek, so it keeps the old
+    // read-only behaviour here.
     if !ctx.dry_run {
         validate_chunk_ranges(file)?;
     }
@@ -875,38 +840,5 @@ mod tests {
             "the panic must be observed before the slower task finishes"
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
-    }
-
-    /// F-1: a corrupt chunk range fails the file without panicking or seeking
-    /// to it. `i64::MAX` is the value the old `i64` addition overflowed on.
-    #[test]
-    fn a_chunk_past_the_files_end_is_refused() {
-        let chunk = SophonChunk {
-            id: "c".into(),
-            uncompressed_md5: "m".into(),
-            offset: i64::MAX,
-            compressed_size: 8,
-            uncompressed_size: 64,
-            unknown: 0,
-            compressed_md5: String::new(),
-        };
-        let file = PlannedFile {
-            rel: "f.bin".into(),
-            size: 64,
-            md5: "m".into(),
-            chunks: vec![chunk.clone()],
-        };
-        assert!(validate_chunk_ranges(&file).is_err());
-
-        // A negative offset is not a range either.
-        let mut negative = chunk;
-        negative.offset = -1;
-        assert!(
-            validate_chunk_ranges(&PlannedFile {
-                chunks: vec![negative],
-                ..file
-            })
-            .is_err()
-        );
     }
 }
