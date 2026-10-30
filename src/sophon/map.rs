@@ -12,6 +12,7 @@
 //! that cannot be cleaned is skipped with a warning rather than failing the
 //! run, because this map only ever saves downloads.
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
 use crate::util;
@@ -42,7 +43,14 @@ impl ReuseEntry {
     /// lookup all agree with it, so "the same chunk" cannot mean different
     /// things there.
     pub fn matches(&self, c: &SophonChunk) -> bool {
-        self.size == c.uncompressed_size && self.md5.eq_ignore_ascii_case(&c.uncompressed_md5)
+        self.matches_identity(&c.uncompressed_md5, c.uncompressed_size)
+    }
+
+    /// The same predicate without a chunk to point at, for the index's insert
+    /// path: an entry is a duplicate when its digest and size name the same
+    /// chunk, regardless of spelling.
+    fn matches_identity(&self, md5: &str, size: i64) -> bool {
+        self.size == size && self.md5.eq_ignore_ascii_case(md5)
     }
 }
 
@@ -50,15 +58,20 @@ impl ReuseEntry {
 /// identity for the hot lookup path.
 ///
 /// The vector is the deterministic source of truth: [`Self::get`] answers from
-/// `by_key`, which points at the **first** entry for a `(md5, size)` key, so
-/// the index cannot change which entry wins. The key is normalized to lowercase
-/// here, which keeps lookups case-insensitive even for an entry built by hand.
+/// `by_key`, which keeps the indices of every entry whose `(md5, size)` key
+/// hashes alike, in first-insertion order. Each candidate is confirmed with
+/// [`ReuseEntry::matches`], so a hash collision cannot change which entry wins,
+/// and the first matching entry is the same one the old linear scan chose. The
+/// key is computed over the ASCII-lowercased digest without allocating, which
+/// keeps lookups case-insensitive even for an entry built by hand.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileReuse {
     /// Every distinct chunk identity, in the order it first appeared.
     entries: Vec<ReuseEntry>,
-    /// `(lowercase md5, size) -> index into `entries`, first insertion wins.
-    by_key: HashMap<(String, i64), usize>,
+    /// `(hash of the ASCII-lowercased md5, size) -> indices into `entries`,
+    /// in insertion order. The hash only selects candidates; `get` confirms
+    /// them, so a collision can never pick a wrong entry.
+    by_key: HashMap<(u64, i64), Vec<usize>>,
 }
 
 impl FileReuse {
@@ -74,21 +87,26 @@ impl FileReuse {
     /// Add `entry` unless its chunk identity is already present.
     fn insert(&mut self, entry: ReuseEntry) {
         let key = Self::key(&entry.md5, entry.size);
-        if !self.by_key.contains_key(&key) {
-            self.by_key.insert(key, self.entries.len());
-            self.entries.push(entry);
+        let duplicate = self.by_key.get(&key).is_some_and(|candidates| {
+            candidates
+                .iter()
+                .any(|&i| self.entries[i].matches_identity(&entry.md5, entry.size))
+        });
+        if duplicate {
+            return;
         }
+        self.by_key.entry(key).or_default().push(self.entries.len());
+        self.entries.push(entry);
     }
 
     /// The entry holding `c`'s bytes, or `None` when the chunk must download.
     pub fn get(&self, c: &SophonChunk) -> Option<&ReuseEntry> {
         let key = Self::key(&c.uncompressed_md5, c.uncompressed_size);
-        let entry = self.by_key.get(&key).map(|&i| &self.entries[i])?;
-        debug_assert!(
-            entry.matches(c),
-            "reuse index disagrees with the chunk-identity predicate"
-        );
-        Some(entry)
+        self.by_key
+            .get(&key)?
+            .iter()
+            .map(|&i| &self.entries[i])
+            .find(|entry| entry.matches(c))
     }
 
     /// Does any entry hold `c`'s bytes?
@@ -101,8 +119,20 @@ impl FileReuse {
         &self.entries
     }
 
-    fn key(md5: &str, size: i64) -> (String, i64) {
-        (md5.to_ascii_lowercase(), size)
+    /// The lookup key: a streaming hash of the ASCII-lowercased digest, plus
+    /// the size.
+    ///
+    /// Deliberately **not** a `String`: the old key allocated a lowercased copy
+    /// on every lookup, on the hot path (`sources_for` asks once per chunk).
+    /// Hashing the bytes one at a time matches `to_ascii_lowercase`'s rule for
+    /// non-ASCII input too, and `size` is returned separately so the digest
+    /// hash never has to encode it.
+    fn key(md5: &str, size: i64) -> (u64, i64) {
+        let mut hasher = DefaultHasher::new();
+        for byte in md5.bytes() {
+            hasher.write_u8(byte.to_ascii_lowercase());
+        }
+        (hasher.finish(), size)
     }
 }
 
@@ -217,6 +247,48 @@ mod tests {
         );
         // folders never enter the reuse map
         assert!(!map.contains_key("dir/"));
+    }
+
+    /// A2: the hot key must fold case and keep size distinct without building a
+    /// lowercased `String` per lookup.
+    #[test]
+    fn the_lookup_key_is_case_insensitive_and_size_sensitive() {
+        assert_eq!(
+            FileReuse::key("D41D8CD98F00B204E9800998ECF8427E", 20),
+            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 20)
+        );
+        assert_ne!(
+            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 20),
+            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 21)
+        );
+    }
+
+    /// A2: the index is only a bucket. Even if two entries land under the same
+    /// `(hash, size)` key, `get` must confirm each candidate with the chunk
+    /// identity predicate instead of trusting the first index.
+    #[test]
+    fn a_hash_collision_falls_through_to_the_matching_entry() {
+        let asked = chunk("asked", "d41d8cd98f00b204e9800998ecf8427e", 0, 20);
+        let wrong = ReuseEntry {
+            md5: "0cc175b9c0f1b6a831c399e269772661".into(),
+            size: 20,
+            offset: 1,
+        };
+        let right = ReuseEntry {
+            md5: "D41D8CD98F00B204E9800998ECF8427E".into(),
+            size: 20,
+            offset: 2,
+        };
+        let key = FileReuse::key(&asked.uncompressed_md5, asked.uncompressed_size);
+        let reuse = FileReuse {
+            entries: vec![wrong, right.clone()],
+            by_key: std::collections::HashMap::from([(key, vec![0, 1])]),
+        };
+        assert_eq!(
+            reuse.get(&asked),
+            Some(&right),
+            "the bucket's first entry is not a match; the collision must fall through"
+        );
     }
 
     /// The map's dedup and the consumers' lookup share one predicate, so a
