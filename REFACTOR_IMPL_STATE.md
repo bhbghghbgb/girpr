@@ -22,7 +22,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ### Phase 1 — low-risk performance
 
-- [ ] B1 — `Arc<RepairPlan>` + index in `scan_plan`.
+- [x] B1 — `Arc<RepairPlan>` + index in `scan_plan`. (`5474064`)
 - [ ] C1 — per-file scratch buffers.
 - [ ] C2 — one source handle in `try_reuse_slice`.
 - [ ] B2 / C4 — borrowed chunks in `salvage_order`.
@@ -53,7 +53,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-_None yet._
+- [ ] B1 — `Arc<RepairPlan>` + index in `scan_plan` (`5474064`).
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
