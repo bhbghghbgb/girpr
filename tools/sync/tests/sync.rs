@@ -1147,6 +1147,10 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
     let t = temp_root("prune_create_then_rmdir");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
+    // The other spelling of src's `Sub`: on a case-insensitive filesystem the
+    // two names are one directory, so `mkdir Sub` is a no-op and the planned
+    // `rmdir sub` removes the tree the copies just landed in.
+    t.subdir("dst/sub");
     wfile(&src, "Sub/One.txt", b"one");
     wfile(&src, "Sub/Two.txt", b"two");
     // Only reachable on a case-insensitive filesystem; skip elsewhere rather
