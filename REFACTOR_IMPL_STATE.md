@@ -14,7 +14,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] G7 — remove dead imports / dead `min`; add `read_range` bounds. (`5fe3a99`)
 - [x] C3 — extract the in-place success block. (`8d3e4c1`)
 - [x] C7 — extract the reserved-write helper. (`0fd4ae1`)
-- [ ] G3 — `OnceLock` the version regex.
+- [x] G3 — `OnceLock` the version regex. (`ef47fb9`)
 - [ ] G4 — direct `writeln!` into the config buffer.
 - [ ] F3 — allocation-free record rendering.
 - [ ] A3 — count-then-materialize salvage order.
@@ -58,6 +58,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - G7 — `5fe3a99` · `read_range` now `usize::try_from` + `try_reserve_exact` with a new refusal test; `md5_file_slice` buffer is plain `MD5_BUF` and its inner imports are gone. Reviewer note: `md5_file_slice` still does `remaining as usize` (truncation on 32-bit), left out of scope.
 - C3 — `8d3e4c1` · `repaired_in_place` helper used by both success paths in `src/repair/file/inplace.rs`; check the seven log fields and their order match the old inline blocks exactly.
 - C7 — `0fd4ae1` · `write_reserved` shared by `write_at` / `copy_within` / `zero_fill`; verify reservation granularity and `note_write` order are unchanged (note: `zero_fill` now seeks per piece).
+- G3 — `ef47fb9` · `OnceLock<Regex>` in `src/util/ini.rs` via `game_version_re()`, plus a new anchored-shape test; verify last-match-wins and the absent-vs-unreadable split are untouched.
 
 ## Skipped
 
