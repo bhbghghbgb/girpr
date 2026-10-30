@@ -42,7 +42,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] G6 — single-pass `clean_rel`. (`80a2d5b`)
 - [x] G5 — `PathRoot` cached base resolution. (`d5a8f2a`)
 - [x] C5 — `OsString` `_tmp` path. (`a6bb886`)
-- [ ] C6 — bounded `JoinSet` in `repair_all`.
+- [x] C6 — bounded `JoinSet` in `repair_all`. (`a7e9703`)
 - [ ] H2 — `apply_run_flags`.
 
 ### Phase 3 — structural / broad API
@@ -77,6 +77,14 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   Purge never joined a rel.
 - [ ] C5 — `OsString` `_tmp` path (`a6bb886`). No test change (no non-UTF-8
   harness); `_tmp` suffix and purge rule unchanged.
+- [ ] C6 — bounded `JoinSet` in `repair_all` (`a7e9703`; +1 unit test, 225).
+  Semaphore removed (window is the bound); `join_file_tasks` now owns the
+  spawn-and-join loop. Review concerns: (1) the `file` span is now built in
+  the driver, so its `task = ?tokio::task::try_id()` names the driver task,
+  not the file task — the field no longer distinguishes files; (2) the
+  fail-fast warning may now fire deterministically where the old spawn-all
+  loop had already spawned everything; (3) a cancelled `repair_all` now aborts
+  the in-flight tasks instead of detaching them.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
