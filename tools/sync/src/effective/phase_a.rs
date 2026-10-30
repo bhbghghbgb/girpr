@@ -84,11 +84,30 @@ pub fn scan_stat_only(
     // would be a second full copy of the tree's path set alive for the whole
     // phase — one allocation per file, for a lookup the answer to.
     let mut live_set: HashSet<&str> = HashSet::new();
+    // Every live directory, so an included descendant can pull its ancestors
+    // back in. `--include '*.txt'` matches files and not the directories above
+    // them; without this, a `dst` link on that path would be missing from the
+    // map and the planner could schedule a path *through* it. The directory
+    // entry is what carries `is_link`, so keeping it is what makes the guard
+    // possible.
+    let dirs: HashSet<&str> = live
+        .iter()
+        .filter(|e| e.is_dir)
+        .map(|e| e.rel.as_str())
+        .collect();
     for e in &live {
         if is_excluded(&e.rel, includes, excludes, case_sensitive) {
             continue; // treated as not existing at all
         }
         live_set.insert(e.rel.as_str());
+        let mut end = 0;
+        while let Some(i) = e.rel[end..].find('/') {
+            let prefix = &e.rel[..end + i];
+            if dirs.contains(prefix) {
+                live_set.insert(prefix);
+            }
+            end += i + 1;
+        }
     }
     info!(
         root = %root.display(),
@@ -133,7 +152,7 @@ pub fn scan_stat_only(
             continue;
         }
         if e.is_dir {
-            map.insert(e.rel.clone(), SideEntry::dir());
+            map.insert(e.rel.clone(), SideEntry::dir(e.is_link));
             if let Some(w) = batch.as_mut() {
                 put_dir_row(w, &e.rel)?;
             }
@@ -185,6 +204,7 @@ pub fn scan_stat_only(
                     _ => DigestSet::default(),
                 },
                 fresh,
+                is_link: e.is_link,
             },
         );
         // The two cases where phase A owes a write regardless of any plan: the

@@ -138,14 +138,14 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
     marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs:232-319`) as `Unused`, deleted in
     `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
 - **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
-  `{latest chunk-manifest paths} ∪ {config.ini}` plus filename-pattern keeps for
-  `audio_lang_*` + `Audio_*_pkg_version` (Collapse `GenshinInstall.cs:232-241` parity).
-  Everything else not in the live manifest purges into the single `deleted_extra_bytes` counter —
-  including temps (`*_tmp`, `*.hdiff`, `chunk/`, `ldiff/`, `staging/`, legacy `*.diff`,
-  `*deletefiles*`), unselected audio, `ScreenShot/`, logs, and server
-  bookkeeping files (the exe / `pkg_version` / `Persistent/` / `ctable.dat` purge only when
-  absent from the live manifest — the exe is normally kept via rule 1). `--purge-before` and `--purge-after` run this same cleanup;
-  only the timing differs.
+  `{latest chunk-manifest paths} ∪ {config.ini} ∪ {the single-writer lock} ∪ {cleaned blacklist paths}`
+  plus filename-pattern keeps for `audio_lang_*` + `Audio_*_pkg_version` (Collapse
+  `GenshinInstall.cs:232-241` parity). Everything not kept by rules 0-4 purges into the
+  single `deleted_extra_bytes` counter — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
+  `ldiff/`, `staging/`, legacy `*.diff`, `*deletefiles*`), unselected audio, `ScreenShot/`,
+  logs, and server bookkeeping files (the exe / `pkg_version` / `Persistent/` / `ctable.dat`
+  purge only when absent from the live manifest — the exe is normally kept via rule 1).
+  `--purge-before` and `--purge-after` run this same cleanup; only the timing differs.
 
 ## 4. Verdict
 

@@ -208,6 +208,11 @@ fn fixtures_classify_as_folders() {
     let dir = t.subdir("w");
     assert!(matches!(classify(&dir), Side::Folder(_)));
     assert!(matches!(classify(&dir.join(CACHE_PREFIX)), Side::Record(_)));
+    #[cfg(windows)]
+    assert!(
+        matches!(classify(&dir.join("GIRPR-CACHE")), Side::Record(_)),
+        "a case-only spelling of a record is still a record on Windows"
+    );
 }
 
 /// A folder side still corrects its own cache before the planner ever sees it:

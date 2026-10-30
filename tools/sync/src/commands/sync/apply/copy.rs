@@ -3,13 +3,13 @@
 //! `test_no_fsync` hook, plus their unit tests.
 
 use anyhow::{Context, Result, bail};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use tracing::{error, trace};
 
 use crate::cache::FileRec;
 use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, HashAlg, hash_file};
-use crate::util::mtime_ns_of;
+use crate::util::{mtime_ns_of, path_within};
 
 /// Copy `src` over `dst`, digesting the bytes as they pass, and return the
 /// digest of what was **read**.
@@ -66,6 +66,53 @@ fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestS
     Ok(())
 }
 
+/// Whether the test-only `GIRSYNC_TEST_FAIL_COPY` hook names `rel`, i.e. this
+/// copy must fail before it writes anything.
+///
+/// Default **off**: an unset variable matches nothing. A test that needs a
+/// mid-copy failure - to observe what the cache committed before the abort -
+/// names one relative path and gets a deterministic failure in that copy only.
+/// The failure is raised before the dst file is opened, so the fixture asserts
+/// the cache's durability without also having to reason about a truncated file.
+fn test_fail_copy(rel: &str) -> bool {
+    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAIL_REL
+        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_COPY").ok())
+        .as_deref()
+        == Some(rel)
+}
+
+/// Whether the test-only `GIRSYNC_TEST_FAIL_FLUSH` hook names `rel`, i.e. the
+/// flush after this copy must fail.
+///
+/// Default **off**, and read once per process like [`test_fail_copy`]. A test
+/// needs it because a real `sync_all` failure (disk full, quota, a network
+/// volume that went away) cannot be arranged portably; naming one relative path
+/// exercises the same error path the production call takes.
+fn test_fail_flush(rel: &str) -> bool {
+    static FAIL_REL: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FAIL_REL
+        .get_or_init(|| std::env::var("GIRSYNC_TEST_FAIL_FLUSH").ok())
+        .as_deref()
+        == Some(rel)
+}
+
+/// Flush one copied file, or return the injected test failure.
+///
+/// The result is **not** discarded: a failed flush must not be allowed to pass
+/// the verify below (which would re-read the same OS cache), cache a digest, and
+/// let the run exit 0 claiming durability. The caller turns this into the run
+/// error (exit 3), and the pre-drop has already removed the row, so a rerun
+/// recopies.
+fn flush_file(fout: &std::fs::File, rel: &str) -> io::Result<()> {
+    if test_fail_flush(rel) {
+        return Err(io::Error::other(format!(
+            "test: injected flush failure for {rel}"
+        )));
+    }
+    fout.sync_all()
+}
+
 /// Whether the test-only `GIRSYNC_TEST_NO_FSYNC` hook is on.
 ///
 /// Default **off**: an unset variable, or any value other than an unambiguous
@@ -101,6 +148,28 @@ fn test_no_fsync() -> bool {
 /// dropped), it also hashes the bytes that actually reached the disk, which is
 /// the only way this catches silent corruption on the way down.
 ///
+/// **A failed flush is a failed copy.** `sync_all` is propagated, not ignored:
+/// otherwise the verify below could re-read the same page cache the flush never
+/// wrote through, cache the digest, and let the run exit 0 claiming durability
+/// it did not obtain.
+///
+/// **A destination link into `src` is refused before anything is unlinked or
+/// created.** `src_canonical` is the resolved source root; a link at the final
+/// component that resolves inside it (or contains it) would otherwise be written
+/// through by `File::create`, truncating a source file while the verify read the
+/// same file back through the link. `validate_dst_links` refuses that shape at
+/// plan time; this is the per-copy re-check, so a plan and a disk that disagree
+/// still cannot reach the source.
+///
+/// **A destination with more than one hard link is refused for the same reason.**
+/// The other name is the same file, so `File::create` would truncate it too, and
+/// the verify would read the changed inode back and agree with itself. The link
+/// count is the complete check: comparing `d`'s identity with this copy's source
+/// misses a dst hard link to a *different* src file, which is exactly the
+/// reported shape (`dst/a.txt` linked to `src/b.txt` while copying `src/a.txt`).
+/// Refusing every count above one is conservative — a shared inode is outside a
+/// mirror's write contract wherever it lives.
+///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
 /// dst is a faithful copy of a src that no longer exists, and the pair looks
@@ -109,19 +178,94 @@ fn test_no_fsync() -> bool {
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 pub(super) fn copy_one(
     src_root: &Path,
+    src_canonical: &Path,
     dst_root: &Path,
     rel: &str,
     algos: &[HashAlg],
 ) -> Result<FileRec> {
     trace!("copy_one start");
+    if test_fail_copy(rel) {
+        bail!("test: injected copy failure for {rel}");
+    }
+    // A link *above* the destination is not ours to write through: the OS would
+    // resolve it as an intermediate component, so `File::create` would truncate
+    // a file in the target - possibly outside `dst`. The final component is
+    // handled below, because a link *at* the path is the type conflict this copy
+    // resolves.
+    if let Some(link) = crate::link::link_ancestor_above(dst_root, rel)
+        .with_context(|| format!("check link ancestors for {rel}"))?
+    {
+        bail!(
+            "refusing to copy `{rel}` through dst link `{link}`: \
+             remove the link, or exclude it with --exclude"
+        );
+    }
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
-    // dst dir that is in the way of a file copy: remove first
-    if d.is_dir() && !d.is_symlink() {
-        std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;
+    // Belt and braces for the final component, symmetric with the ancestor check
+    // above and with `validate_dst_links` at plan time. A link *at* this path is
+    // normally replaceable (a directory link) or written through (a file link),
+    // but not when it resolves into src: a file link there would make
+    // `File::create` truncate a source file. Ask the disk again, because the
+    // plan was computed before this run changed anything. A missing path is not
+    // a link, and a dangling one fails to resolve rather than being written
+    // through.
+    if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
+        let target =
+            std::fs::canonicalize(&d).with_context(|| format!("resolve dst link `{rel}`"))?;
+        if path_within(&target, src_canonical) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which is inside src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+        if path_within(src_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which contains src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+    }
+    // dst dir that is in the way of a file copy: remove first.
+    //
+    // A link to a directory is *not* a directory to recurse into. Unlinking the
+    // link is what resolves the type conflict toward src's kind (a file); the
+    // target is somebody else's tree and is left alone. `is_dir` follows the
+    // link, so it is true for a Unix directory symlink and for a Windows
+    // junction, and `is_link` covers both plus a directory symlink.
+    if d.is_dir() {
+        if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
+            crate::link::remove(&d).with_context(|| format!("unlink {}", d.display()))?;
+        } else {
+            std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;
+        }
     }
     if let Some(parent) = d.parent() {
         std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    // A hard link is a second name for this file, not a link this crate can
+    // classify: `try_is_link` is false and the walk reports it as ordinary
+    // content. `File::create` below truncates the shared inode, so writing here
+    // would change the other name too — which may be outside `dst`, and in the
+    // reported shape is a source file the run is reading. Refuse conservatively
+    // rather than silently break the mirror's "never touch src" promise; the
+    // user can remove the extra link and rerun.
+    match crate::hardlink::count(&d) {
+        Ok(1) => {}
+        Ok(links) => bail!(
+            "refusing to copy `{rel}`: dst `{}` has {links} hard links, so truncating \
+             it would change another path that shares the file (possibly one inside \
+             src); remove the extra link or replace the file, then rerun",
+            d.display()
+        ),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e).with_context(|| format!("hard-link count {}", d.display())),
     }
     let smeta = std::fs::metadata(&s).with_context(|| format!("stat {}", s.display()))?;
     let ssize = smeta.len();
@@ -129,6 +273,9 @@ pub(super) fn copy_one(
     let smtime_ns = mtime_ns_of(&smeta);
     // stream copy (truncate + write in place), digesting src as it goes
     let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
+    // A dst symlink to a *file* is followed and written through here, by design
+    // (the README documents write-through). Only a directory link is unlinked
+    // above, because `File::create` cannot truncate one.
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
     // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
@@ -140,10 +287,18 @@ pub(super) fn copy_one(
     let sh = copy_and_digest(&mut fin, &mut fout, &set)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     if !test_no_fsync() {
-        fout.sync_all().ok();
+        flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
     }
     drop(fout);
     // preserve mtime
+    //
+    // **This is load-bearing, and its failure aborts the copy.** The bytes are
+    // already durable at this point, so a `set_modified` failure leaves a correct
+    // file with the wrong stamp: the run exits 3, and a rerun sees the mtime
+    // difference and copies the file again. Fail-fast rather than a silent
+    // mismatch, but "aborts an otherwise-good copy" is the documented shape
+    // (README, `copy` step) - a test needs a platform-specific read-only/ACL
+    // setup, so none injects this failure.
     if let Some(st) = smtime_sys {
         let f = std::fs::OpenOptions::new().write(true).open(&d)?;
         f.set_modified(st)

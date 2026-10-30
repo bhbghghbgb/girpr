@@ -372,7 +372,19 @@ pub async fn capture(
     build: &GetBuild,
     tag: &str,
     matching_field: &str,
+    max_decompressed_bytes: u64,
+    rejections: &crate::rejections::Rejections,
 ) -> Result<CapturedManifest, ApiError> {
+    // `matching_field` becomes `manifests/<tag>/<field>.manifest…` and travels
+    // into the meta document, so it has to be one file-name component. The flag
+    // validates its own values; this is the check every other caller (and a
+    // future one) passes through.
+    if let Some(problem) = crate::paths::field_component_problem(matching_field) {
+        return Err(ApiError::shape(
+            "matching_field",
+            format!("manifest field {problem}"),
+        ));
+    }
     let declared = build.manifest_for(matching_field)?;
     // Storage is asserted before a byte is fetched, not after: `zstd::decode` on
     // an unencrypted raw blob does not reliably fail, it returns garbage.
@@ -394,12 +406,21 @@ pub async fn capture(
             ),
         ));
     }
-    let decompressed =
-        hash::zstd_decompress(&fetched.body, &url).map_err(|e| ApiError::shape(&url, e))?;
-
     // The declared sizes, as strings, beside what was actually fetched.
     let declared_compressed = size_of(declared.manifest.compressed_size.as_ref());
     let declared_uncompressed = size_of(declared.manifest.uncompressed_size.as_ref());
+    // **The declared size bounds the decode, not just the later comparison.**
+    // `zstd::decode_all` expanded the whole frame before this check, so a small
+    // compressed bomb could abort the process (O4). The limit is the declaration
+    // plus one byte (enough to detect an over-long frame) and is itself capped
+    // by the run's `--max-decompressed-bytes`; an absent declaration gets that
+    // ceiling. The effective value is recorded in `MANIFEST.json`.
+    let decompressed = hash::zstd_decompress(
+        &fetched.body,
+        &url,
+        hash::decompression_limit(declared_uncompressed, max_decompressed_bytes),
+    )
+    .map_err(|e| ApiError::shape(&url, e))?;
     if let Some(want) = declared_compressed
         && want != fetched.body.len() as u64
     {
@@ -444,6 +465,23 @@ pub async fn capture(
         // enters the crate — makes every later comparison agree with the tool
         // by construction. See `proto::SophonChunk::normalise`.
         m.normalise();
+        // **The one boundary every manifest path crosses.** `chuncks[].file`
+        // becomes `<artifact>/game/<file>` and `expected/<file>`, and
+        // `chunks[].id` becomes both a CDN URL segment and
+        // `chunks/blobs/<id>.zst`. A decode that admitted `..\..\x` would let a
+        // hostile or compromised CDN write outside `--out`; no later check
+        // exists on either sink, so refuse the document here, before the tree is
+        // created or a chunk is fetched.
+        validate_entry_paths(&format!("{tag}/{matching_field}"), &m.chuncks, rejections)?;
+        // The same boundary, for the numbers: `offset`, `compressed_size` and
+        // `uncompressed_size` are raw `int64`s on the wire. A negative cost or
+        // an offset that cannot be added is refused here, before a selection or
+        // an assembly can carry it into the artifact.
+        for entry in &m.chuncks {
+            entry
+                .validate_arithmetic()
+                .map_err(|why| ApiError::shape(&url, format!("{}: {why}", entry.file)))?;
+        }
         m.chuncks
     };
     let decoded = decode_counts(&entries);
@@ -512,6 +550,91 @@ pub async fn capture(
     })
 }
 
+/// Refuse a decoded manifest entry whose path or chunk id cannot be joined onto
+/// the bundle without leaving it.
+///
+/// **This is not one of §3.6's structural counters.** A non-gapless chunk list
+/// is a fact worth recording and still captureable; a path that escapes `--out`
+/// is an arbitrary write, so it is a shape error and stops the run before the
+/// artifact directory exists. The rule and its rationale live in
+/// [`crate::paths`], shared with `--files`, the bundle reader and the launcher's
+/// scan directory.
+fn validate_entry_paths(
+    context: &str,
+    entries: &[SophonChunkFile],
+    rejections: &crate::rejections::Rejections,
+) -> Result<(), ApiError> {
+    // **Every offending name, not the first.** H3: a manifest with two
+    // Windows-folded paths says more about the API than one with a single path,
+    // and stopping at the first would make the second discoverable only by
+    // editing the first out. Each one is recorded in the rejection document as
+    // it is found; the message lists them so an operator does not have to open
+    // the bundle to learn what was wrong.
+    let mut problems: Vec<String> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some((rule, problem)) = crate::paths::logical_path_rule(&entry.file) {
+            let row = rejections.record(
+                format!("manifest {context} entry {i} file"),
+                &entry.file,
+                rule,
+            );
+            problems.push(format!(
+                "entry {i} {:?}: {}",
+                row.value,
+                brief(&problem, 240)
+            ));
+        }
+        for (j, chunk) in entry.chunks.iter().enumerate() {
+            if let Some((rule, problem)) = crate::paths::chunk_id_rule(&chunk.id) {
+                rejections.record(
+                    format!("manifest {context} entry {i} chunk {j} id"),
+                    &chunk.id,
+                    rule,
+                );
+                problems.push(format!(
+                    "entry {i} {:?} chunk {j}: {}",
+                    brief(&entry.file, 120),
+                    brief(&problem, 240)
+                ));
+            }
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    // The message is for an operator, not an archive: name enough to act on and
+    // count the rest. The full list, up to the document's own cap, is in the
+    // rejection document.
+    const SHOWN: usize = 8;
+    let mut message = problems
+        .iter()
+        .take(SHOWN)
+        .map(|p| brief(p, 240))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if problems.len() > SHOWN {
+        message.push_str(&format!("; and {} more", problems.len() - SHOWN));
+    }
+    Err(ApiError::shape(
+        context,
+        format!(
+            "{} refused name{}: {message}",
+            problems.len(),
+            if problems.len() == 1 { "" } else { "s" }
+        ),
+    ))
+}
+
+/// A bounded rendering of an untrusted string for a one-line failure.
+fn brief(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(max).collect();
+    out.push('…');
+    out
+}
+
 async fn fetch_archive(fetcher: &Fetcher, url: &str) -> Result<Fetched, ApiError> {
     fetcher.get(url, Kind::Manifest, None).await
 }
@@ -533,13 +656,13 @@ fn render_size(v: Option<&crate::hyp::IntOrStr>) -> String {
 /// Count the decode: totals, the largest chunk, and the six structural counters.
 ///
 /// **One pass, and an O(1) duplicate test.** Every number this returns is
-/// accumulated in the loop below. It used to re-walk the same entries five more
-/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`, and
-/// to call `chunk_bytes()` for a sixth — a sum the chunk loop had already
-/// computed as its `cursor`, whenever the chunks happened to tile. And the
-/// duplicate check was `Vec::contains`, which is 2 744² / 2 ≈ 3.8 M string
-/// comparisons for the `game` field alone, on a value this module's own `diff`
-/// says must never be quadratic.
+/// accumulated in the loop below. Re-walking the same entries five more
+/// times for `entries`/`files`/`folders`/`total_chunks`/`total_file_bytes`,
+/// and calling `chunk_bytes()` for a sixth — a sum the chunk loop had already
+/// computed as its `cursor` — would repeat work already done. And the
+/// duplicate check is a `HashSet`, not `Vec::contains`, which is 2 744² / 2 ≈
+/// 3.8 M string comparisons for the `game` field alone, on a value this
+/// module's own `diff` says must never be quadratic.
 pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
     let mut s = Structure::default();
     let mut seen: std::collections::HashSet<&str> =
@@ -1146,6 +1269,83 @@ mod tests {
             chunk_count: None,
         };
         assert!(reconcile(&d, Some(&stats)).is_empty());
+    }
+
+    /// A manifest entry is data from the wire, and the guard runs before `--out`
+    /// is created. `a/b.` and `a/b` are one file on Windows — and `a/./b` is a
+    /// third spelling of it — so accepting the shapes would make the last write
+    /// win wherever the tree is materialised. This pins that `manifest::capture`
+    /// consults the shared rule, not only `--files`.
+    ///
+    /// **And that it collects every offending name before refusing.** Stopping at
+    /// the first would make a second bad path discoverable only by editing the
+    /// first out of a downloaded manifest.
+    #[test]
+    fn a_manifest_entry_windows_folds_onto_another_is_a_shape_error() {
+        for (bad, rule) in [
+            ("a/b.", "path.windows-fold"),
+            ("a/b ", "path.windows-fold"),
+            ("a/./b", "path.dot-component"),
+        ] {
+            let entries = vec![file(bad, vec![], 10)];
+            let rejections = crate::rejections::Rejections::new();
+            let err = validate_entry_paths("7.1.0/game", &entries, &rejections)
+                .expect_err("a folded name must stop the run");
+            let ApiError::Shape { subject, detail } = err else {
+                panic!("{bad:?} must be a shape error");
+            };
+            assert_eq!(subject, "7.1.0/game");
+            assert!(detail.contains("1 refused name"), "{bad:?}: {detail}");
+            let rows = rejections.snapshot();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].value, bad);
+            assert_eq!(rows[0].rule, rule);
+            assert_eq!(rows[0].source, "manifest 7.1.0/game entry 0 file");
+        }
+        // An ordinary dotted name is still legal.
+        assert!(
+            validate_entry_paths(
+                "u",
+                &[file("a/b.c", vec![], 10)],
+                &crate::rejections::Rejections::new()
+            )
+            .is_ok(),
+            "a dot inside a name is not a folded trailing dot"
+        );
+    }
+
+    /// One refusal does not hide the next: every offending entry and chunk id is
+    /// named in the failure and recorded in the rejection document. A device
+    /// name is **not** one of them — it is accepted and escaped on disk.
+    #[test]
+    fn every_hostile_name_in_one_manifest_is_reported_together() {
+        let mut bad_chunk = chunk(0, 1);
+        bad_chunk.id = "not-a-chunk-id".into();
+        let entries = vec![
+            file("a/b.", vec![], 1),
+            file("CON", vec![], 1),
+            file("ok/file", vec![bad_chunk], 1),
+        ];
+        let rejections = crate::rejections::Rejections::new();
+        let err = validate_entry_paths("7.1.0/game", &entries, &rejections)
+            .expect_err("two bad names must stop the run");
+        let ApiError::Shape { detail, .. } = err else {
+            panic!("a shape error");
+        };
+        assert!(detail.contains("2 refused names"), "{detail}");
+        let rows = rejections.snapshot();
+        let rules: Vec<&str> = rows.iter().map(|r| r.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            vec!["path.windows-fold", "chunk-id.shape"],
+            "one row per offending name, with its own rule"
+        );
+        let values: Vec<&str> = rows.iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(values, vec!["a/b.", "not-a-chunk-id"]);
+        assert!(
+            !rows.iter().any(|r| r.value == "CON"),
+            "a device name is kept, not refused; the writer escapes it"
+        );
     }
 
     // ------------------------------------------------------------ A4

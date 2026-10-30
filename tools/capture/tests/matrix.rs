@@ -13,7 +13,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{DEGENERATE_PATH, Mock, World};
 use girpr_tempdir::TempDir;
 
 fn bin() -> PathBuf {
@@ -239,6 +239,13 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
     );
 
     let bytes_admitted = s["capture_bytes_admitted"].parse::<u64>().expect("a size");
+    let matrix_budget = json(&c.bundle.join("diff/matrix.json"))["budget"]["spent"]
+        .as_u64()
+        .expect("a spent total");
+    assert_eq!(
+        matrix_budget, bytes_admitted,
+        "the matrix's charged ledger and the summary's admitted sum are one fact"
+    );
     // The admission total is the sum of what the admitted captures cost, and a
     // reader can recompute it from `diff/candidates.json`.
     // candidates.json is columnar: a columns header and one object per row.
@@ -685,6 +692,83 @@ fn an_explicit_file_is_captured_and_the_matrix_is_unchanged() {
     }
 }
 
+/// Two distinct forced paths that answer one primary class get two patchmaps.
+///
+/// This is the end-to-end half of the identity rule: before phase 0 numbered
+/// forced admissions per class, both paths were `added`, the run wrote
+/// `patchmaps/added.json` twice, and `verify` rebuilt one capture from a bundle
+/// whose `totals.files_captured` said two. The assertions are on the files,
+/// because that is the artifact the caller paid for.
+#[test]
+fn two_forced_paths_of_one_class_keep_distinct_patchmaps() {
+    let first = "GenshinImpact_Data/Plugins/libNew.dll";
+    let second = World::SECOND_ADDED;
+    let c = captured(
+        "explicit-same-class",
+        World::with_two_added_files(),
+        &["--files", first, "--files", second],
+    );
+    assert_eq!(
+        c.summary["exit_code"], "0",
+        "two paths of one class are not an error"
+    );
+
+    let mut ids: Vec<String> = std::fs::read_dir(c.bundle.join("patchmaps"))
+        .expect("patchmaps/")
+        .flatten()
+        .map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "added",
+            "added+1",
+            "identical",
+            "no_reuse",
+            "removed",
+            "reuse_in_place",
+            "reuse_moved",
+        ],
+        "the second forced path is numbered instead of replacing the first"
+    );
+    // Each file describes the path its id was minted for, so the matrix row and
+    // the patchmap cannot disagree about which capture `added` is.
+    assert_eq!(json(&c.bundle.join("patchmaps/added.json"))["path"], first);
+    assert_eq!(
+        json(&c.bundle.join("patchmaps/added+1.json"))["path"],
+        second
+    );
+
+    // The three documents agree on how many captures exist.
+    assert_eq!(c.summary["captures_admitted"], "7");
+    assert_eq!(c.summary["patchmaps_written"], "7");
+    assert_eq!(
+        c.manifest()["totals"]["files_captured"],
+        7,
+        "MANIFEST totals count admitted captures"
+    );
+
+    // And the bundle's own verify rebuilds every one of them, which is the
+    // check an overwritten patchmap would defeat: it would see six.
+    let (code, stdout, stderr) = run(&["verify", "--artifact", &c.bundle.to_string_lossy()]);
+    assert_eq!(code, 0, "verify failed:\n{stdout}\n{stderr}");
+    let summary = stdout
+        .lines()
+        .find(|l| l.starts_with("SUMMARY "))
+        .map(parse_summary)
+        .expect("verify prints a summary");
+    assert_eq!(
+        summary["captures_rebuilt"], "7",
+        "every admitted capture has its own patchmap to rebuild"
+    );
+}
+
 /// A path neither manifest carries is skipped, recorded, and **not** fatal.
 ///
 /// The caller may be naming a file for a future version, so refusing the run
@@ -704,4 +788,50 @@ fn a_named_path_the_manifests_do_not_carry_is_skipped_and_reported() {
     );
     assert_eq!(c.summary["forced_files_requested"], "1");
     assert_eq!(c.summary["forced_files_skipped"], "1");
+    assert_eq!(
+        c.summary["forced_files_unscored"], "0",
+        "absent from the manifests is not the same as present but unscored"
+    );
+}
+
+/// A forced path the manifests carry but no matrix class claims is reported as
+/// **unscored**, end to end: selection → summary → matrix document.
+///
+/// `measured_fixture.rs` covers the selector against the frozen corpus and this
+/// test covers the wiring the selector's value has to travel through. It is the
+/// third "requested but invisible" branch, beside a missing path (above) and a
+/// budget refusal.
+#[test]
+fn a_named_path_that_answers_no_class_is_reported_as_unscored() {
+    let c = captured(
+        "explicit-unscored",
+        World::with_degenerate_file(),
+        &["--files", DEGENERATE_PATH],
+    );
+    assert_eq!(c.summary["exit_code"], "0", "it is recorded, not fatal");
+    assert_eq!(c.summary["forced_files_requested"], "1");
+    assert_eq!(
+        c.summary["forced_files_skipped"], "0",
+        "the manifests carry it, so it is not skipped"
+    );
+    assert_eq!(
+        c.summary["forced_files_unscored"], "1",
+        "present but answers no class"
+    );
+    assert_eq!(
+        c.summary["captures_admitted"], "6",
+        "a capture with no class would make the matrix claim something false"
+    );
+
+    let matrix = json(&c.bundle.join("diff/matrix.json"));
+    let admitted: Vec<&str> = matrix["admitted"]
+        .as_array()
+        .expect("admitted rows")
+        .iter()
+        .map(|a| a["path"].as_str().expect("a path"))
+        .collect();
+    assert!(
+        !admitted.contains(&DEGENERATE_PATH),
+        "the unscored path is not an admission: {admitted:?}"
+    );
 }

@@ -409,7 +409,9 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
     let mut compressed_bytes = 0_u64;
     for c in &e.chunks {
         sources.entry(c.identity()).or_insert(c.offset);
-        compressed_bytes += c.compressed_size.max(0) as u64;
+        // A total, so saturation is the meaning-preserving choice: a hostile
+        // `compressed_size` must not abort a diff that is only measuring it.
+        compressed_bytes = compressed_bytes.saturating_add(c.compressed_size.max(0) as u64);
     }
     OldFileIndex {
         sources,
@@ -439,9 +441,9 @@ fn build_md5_path_index(entries: &[SophonChunkFile]) -> HashSet<&str> {
 /// when the *source* it would be copied from does not sit at its destination —
 /// and the source is the **first** old chunk with that identity, which is what
 /// `girpr` reads (`repair::reuse::sources_for`) and what this crate's own
-/// patch flow records (`assemble::patch_flow`). It used to be "the new offset
-/// is not among *any* of the old file's offsets for that identity", which
-/// disagrees with the patchmap's own `source_range` whenever an identity occurs
+/// patch flow records (`assemble::patch_flow`). Counting "the new offset
+/// is not among *any* of the old file's offsets for that identity" as moved
+/// disagrees with the patchmap's own `source_range` whenever an identity
 /// more than once in the old file — and a class is a statement about the
 /// content, so the two have to be the same statement.
 pub fn score(
@@ -457,14 +459,14 @@ pub fn score(
     let mut patch_bytes = 0_u64;
     let mut new_bytes = 0_u64;
     for c in &new.chunks {
-        new_bytes += c.compressed_size.max(0) as u64;
+        new_bytes = new_bytes.saturating_add(c.compressed_size.max(0) as u64);
         match old_index.sources.get(&c.identity()) {
             Some(&src) => {
                 reused += 1;
                 // The source's end: the input to the trim test. Only the
                 // *sources* count, because only a source the trim would delete
                 // is a source that is gone.
-                let end = src.max(0) as u64 + c.uncompressed_size.max(0) as u64;
+                let end = (src.max(0) as u64).saturating_add(c.uncompressed_size.max(0) as u64);
                 if end > old_max_end {
                     old_max_end = end;
                 }
@@ -480,7 +482,7 @@ pub fn score(
                     }
                 }
             }
-            None => patch_bytes += c.compressed_size.max(0) as u64,
+            None => patch_bytes = patch_bytes.saturating_add(c.compressed_size.max(0) as u64),
         }
     }
     // Taken from the index build rather than walked again. `old` is still named
@@ -500,7 +502,7 @@ pub fn score(
         old_bytes,
         new_bytes,
         patch_bytes,
-        total_cost: old_bytes + new_bytes,
+        total_cost: old_bytes.saturating_add(new_bytes),
     }
 }
 
@@ -548,7 +550,9 @@ fn reuse_pool<'a>(
                 file_index.is_some_and(|idx| idx.sources.contains_key(&c.identity()));
             if in_manifest && !in_same_file {
                 pool.cross_file_only_chunks += 1;
-                pool.cross_file_only_bytes_forgone += c.compressed_size.max(0) as u64;
+                pool.cross_file_only_bytes_forgone = pool
+                    .cross_file_only_bytes_forgone
+                    .saturating_add(c.compressed_size.max(0) as u64);
                 file_has_cross = true;
             }
         }
@@ -572,12 +576,13 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
             match row.state {
                 State::Added => {
                     counts.added += 1;
-                    byte_counts.added += row.size.max(0) as u64;
+                    byte_counts.added = byte_counts.added.saturating_add(row.size.max(0) as u64);
                     added.push(format!("{}:{}", f.field, row.path));
                 }
                 State::Removed => {
                     counts.removed += 1;
-                    byte_counts.removed += row.size.max(0) as u64;
+                    byte_counts.removed =
+                        byte_counts.removed.saturating_add(row.size.max(0) as u64);
                     removed.push(format!("{}:{}", f.field, row.path));
                 }
                 State::Identical | State::Changed => {}
@@ -586,7 +591,9 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
         counts.common += f.counts.common;
         counts.identical += f.counts.identical;
         counts.changed += f.counts.changed();
-        byte_counts.patch += f.scores.iter().map(|s| s.patch_bytes).sum::<u64>();
+        byte_counts.patch = f.scores.iter().fold(byte_counts.patch, |total, s| {
+            total.saturating_add(s.patch_bytes)
+        });
         by_field.insert(
             f.field.clone(),
             FieldCounts {
@@ -610,10 +617,9 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
         added,
         removed,
         by_field,
-        new_chunks_reusable_at_all: fields
-            .iter()
-            .map(|f| f.pool.new_chunks_md5_present_in_old_manifest)
-            .sum(),
+        new_chunks_reusable_at_all: fields.iter().fold(0_u64, |total, f| {
+            total.saturating_add(f.pool.new_chunks_md5_present_in_old_manifest)
+        }),
     }
 }
 
@@ -1289,5 +1295,71 @@ mod tests {
         );
         let d = diff_field(&same, &same).unwrap();
         assert!(!aggregate("7.0.0", "7.1.0", &[d]).is_a_real_upgrade());
+    }
+
+    /// **K1.** Sizes in a manifest are untrusted totals. Two `i64::MAX` costs
+    /// saturate a score's `u64` arithmetic instead of aborting in debug or
+    /// wrapping to a small, plausible patch size in release.
+    #[test]
+    fn extreme_manifest_costs_saturate_in_a_score() {
+        let old = file(
+            "blk",
+            "m-old",
+            vec![
+                chunk("a", "aa", 0, 10, i64::MAX),
+                chunk("b", "bb", 10, 10, i64::MAX),
+                chunk("c", "cc", 20, 10, i64::MAX),
+            ],
+        );
+        let new = file("blk", "m-new", vec![chunk("z", "zz", 0, 10, i64::MAX)]);
+        let s = score_pair(&old, &new);
+        assert_eq!(s.patch_bytes, i64::MAX as u64);
+        assert_eq!(
+            s.old_bytes,
+            u64::MAX,
+            "the old file's three maxima saturate their total"
+        );
+        assert_eq!(
+            s.total_cost,
+            u64::MAX,
+            "patch + an already-saturated old cost saturates"
+        );
+    }
+
+    /// **K1.** The aggregate byte totals are sums over those same documents, so
+    /// two maximum-size one-sided fields saturate rather than abort.
+    #[test]
+    fn extreme_one_sided_sizes_saturate_in_an_aggregate() {
+        let big = |tag: &str, field: &str| {
+            let mut m = manifest(
+                tag,
+                vec![file(
+                    "fresh",
+                    "m-fresh",
+                    vec![chunk("x", "xx", 0, i64::MAX, 1)],
+                )],
+            );
+            m.matching_field = field.into();
+            m.meta.matching_field = field.into();
+            m
+        };
+        let empty = |field: &str| {
+            let mut m = manifest("7.0.0", Vec::new());
+            m.matching_field = field.into();
+            m.meta.matching_field = field.into();
+            m
+        };
+        let mut game = diff_field(&empty("game"), &big("7.1.0", "game")).unwrap();
+        game.field = "game".into();
+        let mut audio = diff_field(&empty("en-us"), &big("7.1.0", "en-us")).unwrap();
+        audio.field = "en-us".into();
+        let mut zh = diff_field(&empty("zh-cn"), &big("7.1.0", "zh-cn")).unwrap();
+        zh.field = "zh-cn".into();
+        let d = aggregate("7.0.0", "7.1.0", &[game, audio, zh]);
+        assert_eq!(
+            d.byte_counts.added,
+            u64::MAX,
+            "three i64::MAX additions cannot be represented, so the total saturates"
+        );
     }
 }

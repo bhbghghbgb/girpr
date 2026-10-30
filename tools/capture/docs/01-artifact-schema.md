@@ -2,7 +2,7 @@
 
 Byte-level layout and every field of every machine-readable file.
 
-**Every document below carries `"schema_version": 2`.** A reader should reject an
+**Every document below carries `"schema_version": 3`.** A reader should reject an
 unknown `schema_version` rather than guess. JSON is UTF-8, LF, 2-space indent,
 keys in the order written here. `*.ndjson` is newline-delimited, one object per
 line, no enclosing array, so it streams.
@@ -21,7 +21,7 @@ it; every gzipped document ships a plain-text sidecar (`*.tsv`) so an agent can
 `grep` it without decompressing.
 
 The worked values throughout are from the reference capture of `hk4e_global`
-7.0.0 → 7.1.0: 78 files, 6 captures, 25 chunk blobs, 43 request rows, 93
+7.0.0 → 7.1.0: 81 files, 6 captures, 25 chunk blobs, 43 request rows, 93
 selfcheck rows, `result: "pass"`.
 
 ---
@@ -41,6 +41,8 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   ├── getBuild.<old_tag>.json
 │   ├── tag_probe.json
 │   ├── error_shapes.json
+│   ├── error_responses.json
+│   ├── error_bodies/<seq:06>.body           # the retained bytes, one file per response
 │   └── requests.ndjson
 ├── manifests/<tag>/
 │   ├── <field>.manifest.zst                  # raw blob, byte-exact
@@ -64,6 +66,9 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 │   └── index.json
 ├── patchmaps/
 │   └── <capture_id>.json
+├── diagnostics/
+│   ├── rejections.json                       # refused manifest paths and chunk ids
+│   └── path_map.json                         # every logical→on-disk escaped name
 └── verify/
     ├── checksums.json
     └── selfcheck.json
@@ -72,18 +77,37 @@ artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/
 `capture_id` is `<class>` or `<class>+<n>` (e.g. `reuse_in_place`,
 `reuse_moved+2`). It appears in `patchmaps/` and in `MANIFEST.json`.
 
-Nothing under `chunks/` or `manifests/` is ever deleted by the tool.
+An API tag directory or capture path that names a Windows device —
+`manifests/CON/`, `game/…/NUL` — is written under an escaped component (`%CON`,
+`%NUL`); the documents keep the game's spelling and
+`diagnostics/path_map.json` (§5c) records the pair. The directory that holds the
+bundle, `artifacts/<biz>/<old>__<new>/`, is escaped as a single component for the
+same reason; the tags it was built from stay in `MANIFEST.json → versions`. A
+manifest field name or `audio_pkg_scan_dir` is not escaped at all: it is a value
+the run can refuse, so a device there is refused rather than renamed, and a
+device-named tag from a flag is refused for the same reason (§5c).
+`MANIFEST.json → files[]` and `checksums.json` name the on-disk form, because
+that is what exists.
+
+Nothing published under `chunks/` or `manifests/` is ever deleted by the tool.
+The `.tmp` file that a chunk fetch writes is not an exception: it is removed,
+best-effort, on every error between creating it and renaming it into place. It
+was never a blob, and the slot in its name means a later run would not
+necessarily reuse the path.
 
 **Atomicity is not uniform, and this is deliberate.** Chunk blobs are the only
-artifacts written through a `tmp/` file that is then renamed into place, and a
-blob's `stored_path` points at a name that does not exist until the rename
-happens. That step is what lets `verify` trust a blob: a crash mid-write would
-otherwise leave a truncated file at the final path, which nothing could tell from
-a good one. The metadata documents, the assembled `game/` and `expected/` files
-and `manifests/*` are written with a plain create-and-write: each is small enough
+artifacts written through a temporary file — `.<file name>.<slot>.tmp`, beside
+the blob's final path — that is then renamed into place, and a blob's
+`stored_path` points at a name that does not exist until the rename happens.
+That step is what lets `verify` trust a blob: a crash mid-write would otherwise
+leave a truncated file at the final path, which nothing could tell from a good
+one. The metadata documents, the assembled `game/` and `expected/` files and
+`manifests/*` are written with a plain create-and-write: each is small enough
 that a torn write is a small, reproducible failure, and routing them through the
 same dance would only hide *which* step failed. A reader must therefore not
-assume any document in a bundle was renamed into position.
+assume any document in a bundle was renamed into position. An interrupted run
+can leave a truncated metadata document; `verify/checksums.json`, written last,
+is the completion proof.
 
 ---
 
@@ -91,13 +115,14 @@ assume any document in a bundle was renamed into position.
 
 ```jsonc
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "tool":   { "name": "gircap", "version": "0.1.0" },
   "capture": {
     "id": "20261021T141336Z",
     "captured_at": "2026-10-20T15:48:10Z",
     "host_os": "windows",
     "tool_argv": ["target\\release\\gircap.exe", "capture", "--biz", "hk4e_global", …],
+    "tool_argv_raw": [[116,0,97,0,…], …],   // exact host bytes per argument, see below
     "complete": true            // false only if interrupted; selfcheck then explains why
   },
   "biz":      { "id": "hk4e_global", "launcher_id": "VYTpXlbWo8", "game_id": "gopR6Cufr3",
@@ -111,6 +136,7 @@ assume any document in a bundle was renamed into position.
   "field": "game",                       // matching_field the captures were drawn from
   "audio": ["en-us"],                    // codes written into game/…/audio_lang_14
   "gzip_threshold": 1048576,             // --gzip-threshold this run used
+  "max_decompressed_bytes": 268435456,   // --max-decompressed-bytes this run used
   "selection_pool": {                    // matching_fields scored and diffed
     "fields": ["game", "en-us"],
     "manifest_entries": { "game": 2744, "en-us": 177 },
@@ -148,13 +174,18 @@ refusal is `--require-class`'s job. The row's optional keys
 (`capture_id`, `path`, `matching_field`, `covered_by`, `also_satisfies`,
 `reason`, `candidates_considered`) are omitted rather than written `null`.
 
-**A version-1 bundle is refused.** `gircap verify` reads `MANIFEST.json`
-first, and a `schema_version` it does not know is an error rather than a
-guess: the version-1 patchmap carried a `repair` block and an
+**A bundle from an older schema is refused.** `gircap verify` reads
+`MANIFEST.json` first, and a `schema_version` it does not know is an error rather
+than a guess. Version 1 carried a `repair` block and an
 `expectations.summary` block, and its class ids named a repair tool's internal
-decisions. A reader that understood the current shape would ignore all three
-and report a bundle as consistent when it is not. The refusal names the
-command that produces a current bundle.
+decisions; version 2's blob rows could not say why a fetch failed, whether a body
+was partial, or why a measurement did not return. Version 3 makes those fields
+required and adds the documents that keep the rest of what a run sees: retained
+error bodies, the manifest paths and chunk ids a shape rule refused, the
+logical→on-disk mapping for device names, and the exact argv bytes. A reader
+that understood the current shape would ignore all of that and report a bundle
+as consistent when it is not. The refusal names the command that produces a
+current bundle.
 
 `files[]` lists every file that existed **before the close-out began** — the
 fixture, the blobs, the manifests, the diff, the patchmaps and `api/`. The four
@@ -164,8 +195,8 @@ before they are written: `MANIFEST.json` (it is being written), `README.md` and
 (its own). A document that hashes itself has no fixed point, and here the
 dependency runs both ways.
 
-`verify/checksums.json` is the complete inventory: `file_count: 77` for a
-78-file bundle, and it covers all four.
+`verify/checksums.json` is the complete inventory: `file_count: 80` for an
+81-file bundle, and it covers all four.
 
 `totals.bytes_on_disk` sums `files[].bytes`, so for a gzipped document it counts
 the **decompressed** length — the same rule as §15. It is therefore larger than
@@ -173,12 +204,27 @@ what `du` reports (≈167 MB against ≈98 MB on disk for the reference bundle);
 that is the correct answer, because it is the number a reader would need to hold
 the document in memory.
 
-`gzip_threshold` is **required**, like every other field in this document. It
-used to default on read, so a bundle with no recorded threshold would read back
-as having used the flag's default — a claim about a run nobody wrote down, on the
+`gzip_threshold` is **required**, like every other field in this document. A
+`default` on read would let a bundle with no recorded threshold read back as
+having used the flag's default — a claim about a run nobody wrote down, on the
 one field whose purpose is to say why one document is gzipped and the next is
 not. A field that defaults to a constant is worse than one that is required,
 because the default is indistinguishable from the real value.
+
+`max_decompressed_bytes` is required for the same reason. Every zstd decode in
+the bundle — a manifest archive, a chunk blob, or a measurement — is bounded by
+this ceiling, so a reader reproducing a decode needs the number the capture
+actually used. Substituting the flag's default would turn a run with a raised
+ceiling into a bundle that cannot be read back, and would do so silently.
+
+`tool_argv_raw` is the exact argv the host carried: one array of byte values per
+argument, in the same order as `tool_argv`. On Windows each byte is a UTF-16LE
+code unit, so an unpaired surrogate survives; on Unix the bytes are the argument
+as `execve` saw them. It is required because `tool_argv` is a `to_string_lossy`
+rendering and U+FFFD cannot be reversed: a path that was not valid Unicode is
+recorded truthfully by the raw form and only approximately by the readable one.
+No replay command reads it yet; the point is that the evidence cannot be
+reconstructed later.
 
 ---
 
@@ -190,6 +236,8 @@ records how they were obtained.
 
 The two exceptions are generated, and both are this tool's own measurements
 rather than the API's words: `tag_probe.json` (§5) and `error_shapes.json` (§5a).
+Two more are generated for the same reason: `error_responses.json` (§5b) and its
+byte-exact `error_bodies/` files, and the two `diagnostics/` documents (§5c).
 
 ## 4. `api/requests.ndjson`
 
@@ -236,6 +284,9 @@ digest in the bundle would become a digest of compressed JSON.
 `bytes_in` is the number of body bytes the run actually transferred, **on every
 row including the non-2xx ones**. It is the only way to price a request without
 re-downloading it, so a throttled or errored attempt is counted like any other.
+A non-2xx body refused on its declared length before any read counts `0` (the
+status line and headers are not body bytes); one that crosses the ceiling
+mid-read counts what arrived, including the chunk that crossed it.
 
 `stored_as` is the path, relative to the artifact root, the body was written to,
 or `null` when it was not kept. Per kind:
@@ -252,7 +303,7 @@ or `null` when it was not kept. Per kind:
 Which tags the API actually serves, with no blob downloads.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "requested": ["7.1.0", "7.0.0", "6.7.0"],
   "results": [
     { "tag": "7.0.0", "in_diff_tags": true, "http": 200, "retcode": 0,
@@ -280,7 +331,7 @@ to invent them, and its claim that "the API 404s things" would be unfounded —
 a bundle recorded only successes contains no not-found evidence at all.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "shapes": [
     { "id": "chunk_missing", "family": "blob",
       "request": "a chunk id under the new build's prefix that the build does not have",
@@ -351,12 +402,158 @@ present and unusable fails at open, by name, rather than at some later consumer.
 
 ---
 
+## 5b. `api/error_responses.json` and `api/error_bodies/`
+
+The **incidental** non-2xx responses the run saw — a throttled chunk, a missing
+blob, a retried `503` — with the body bytes that were actually received. This is
+the other half of §5a: that document records the *deliberate* negative probes,
+this one records what the origin said when it refused something the run wanted.
+
+```jsonc
+{ "schema_version": 3,
+  "budget_bytes": 8388608,                 // the run-wide retention budget
+  "total_retained_bytes": 734,
+  "responses": [
+    { "seq": 31,                           // this attempt's row in requests.ndjson
+      "url": "https://autopatchhk.yuanshen.com/…/chunks/…/000…",
+      "final_url": "https://autopatchhk.yuanshen.com/…",
+      "status": 404, "attempts": 1,
+      "content_type": "application/xml",
+      "bytes_received": 367,
+      "retained_bytes": 367,
+      "truncated": false,
+      "stored_path": "api/error_bodies/000031.body" }
+  ] }
+```
+
+`api/error_bodies/<seq:06>.body` holds the retained bytes **verbatim**, with no
+JSON escaping and no re-encoding: the file is `retained_bytes` long and is the
+origin's body. `stored_path` is `null` only when zero bytes were retained.
+
+Two budgets keep an error body from becoming the artifact:
+
+- `--max-response-bytes` bounds **reading**, exactly as it does for a success.
+- `budget_bytes` (8 MiB) bounds **retention** for the whole run. A throttled run
+  can fail thousands of chunk requests, and keeping every `429` page would make
+  the bundle larger than the data it exists to describe.
+
+A response that crossed either bound is still a row, with `truncated: true` and
+the bytes that were kept. `seq` is reserved per HTTP attempt, not per logical
+fetch, and every non-2xx attempt gets its own row: `seq` joins that row to the
+same attempt's row in `api/requests.ndjson`, and `attempts` is that attempt's
+retry index — `1` for the first try, `2` for the second, and so on. A `503` that
+is retried therefore appears as several rows, one per failed attempt, each with
+its own `seq`, `attempts` and `stored_path`.
+
+The document is required, and an empty `responses` list is a fact: this run met
+no refusal. Deleting the document would make "this bundle recorded the origin's
+failures" true of some bundles and not others, with nothing to say which.
+
+---
+
+## 5c. `diagnostics/`
+
+Two documents that keep what a capture refused or had to rename. Both are
+written on every run, including a run that writes no other diagnostics: an empty
+list says "nothing was refused/escaped", which is a measurement, not a gap.
+
+### `diagnostics/rejections.json`
+
+Every manifest entry path and chunk id a shape rule refused, with where it came
+from and which rule it failed. The store is filled by `validate_entry_paths`
+while a manifest is decoded: `source` names the place as
+`manifest <tag>/<field> entry N file` for an entry's `file` path and
+`manifest <tag>/<field> entry N chunk M id` for one of its chunk ids.
+The write rules are strict; throwing the value away would also throw away the
+most interesting fact a capture can learn about the API.
+
+Other shape refusals — a flag, a flag-supplied tag or an audio field — are not
+recorded. They abort before a bundle exists and their only trace is the error
+text.
+
+```jsonc
+{ "schema_version": 3,
+  "cap_bytes": 512,                        // per-value cap this run used
+  "total": 1,
+  "omitted": 0,                            // rows after the 4096-row cap
+  "rejections": [
+    { "source": "manifest 7.1.0/game entry 42 file",
+      "value": "GenshinImpact_Data/Resources/aux.dll",
+      "rule": "path.device",
+      "truncated": false }
+  ] }
+```
+
+`rule` is a stable identifier — `path.device`, `path.windows-fold`,
+`chunk-id.shape`, `chunk-id.empty`, … — and is the thing to assert on. `value` is
+JSON-escaped and capped at `cap_bytes` (512); `truncated` says whether it was
+cut. `value` is text, never joined to a filesystem path. `omitted` counts
+refusals that happened after the 4096-row cap, so a hostile manifest cannot make
+the document unbounded and the loss is still visible.
+
+A manifest refusal that stops the run before a bundle directory exists writes
+this document into the would-be bundle directory: the refusal is evidence even
+when there is no capture to attach it to.
+
+### `diagnostics/path_map.json`
+
+Every path written under a name other than the one the documents spell. A
+Windows device component (`CON`, `NUL`, `COM1`, with or without an extension)
+cannot be a file name, but a live manifest may legitimately contain one. The
+value is **kept** in every document — `entries[].file`, `patchmaps/*.json`'s
+`path`, the index's `referenced_by[].path` — and only the on-disk name is
+escaped.
+
+```jsonc
+{ "schema_version": 3,
+  "entries": [
+    { "logical": "game/GenshinImpact_Data/Resources/CON",
+      "on_disk": "game/GenshinImpact_Data/Resources/%CON" }
+  ] }
+```
+
+The escape is one component at a time: a component whose stem is a reserved
+device name gets a leading `%` (`CON` → `%CON`, `CON.txt` → `%CON.txt`), and
+every literal `%` is doubled (`%CON` → `%%CON`), so a device name and an
+ordinary name containing `%` cannot collide. Entries are sorted by `logical`, and
+the list is empty when nothing needed escaping. `verify` re-derives the escape
+and refuses a mapping that disagrees with it, so the document cannot redirect a
+read.
+
+`MANIFEST.json → files[]` and `verify/checksums.json` name the **on-disk** path,
+because those are the files that exist; the mapping is how a reader gets back to
+the logical path.
+
+**The boundary of the keep-and-escape policy.** Escaping applies to values the
+game or API supplied, and `path_map.json` covers every such bundle path that
+changed name:
+
+- **Escaped and recorded** — a manifest tag directory (`manifests/<tag>/`) and
+  each `game/`/`expected/` path. A Windows device component gets a leading `%`;
+  every literal `%` is doubled, so the device form and the literal form cannot
+  collide; each logical→on-disk pair is listed here when the two differ. That is
+  why the document is complete for renames.
+- **Refused, not escaped** — a manifest field name (`game` or an audio code) and
+  `audio_pkg_scan_dir` are checked by the non-device-allowing path rule and then
+  written literally. A device name there aborts the capture with a `path.device`
+  refusal; a literal `%` stays a single `%` and has no entry here, because
+  nothing was renamed. The same is true of `game/<scan_dir>` and the field
+  component of `manifests/<tag>/<field>.manifest…`.
+
+Escaping exists to preserve evidence the run cannot refuse: the game's own
+paths, the API's tag. A field name or scan dir is a naming/config value the run
+can refuse safely, so it stays strict and every read site keeps using the
+literal spelling. The same holds for a device-named tag from a flag; only a
+device-named tag the API supplied is escaped instead.
+
+---
+
 ## 6. `manifests/<tag>/<field>.manifest.meta.json`
 
 Everything known about one archive blob.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu", "matching_field": "game",
   "category_id": "10016", "category_name": "…",   // the API's own name for the category
   "manifest": { "id": "manifest_671e1a92a6cf53ff_8d4dfb34d2ee2cf64aae45a9b1ecf58d",
@@ -418,7 +615,7 @@ The whole protobuf, verbatim, so no consumer has to re-download to inspect it.
 
 ```jsonc
 {
-  "schema_version": 2, "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
+  "schema_version": 3, "tag": "7.1.0", "build_id": "sMXGW2ll3Fuu",
   "matching_field": "game", "entries": [
     { "file": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
       "is_folder": false, "size": 2340264, "md5": "d992a789…",
@@ -461,7 +658,7 @@ This is the sidecar that makes the gzipped JSON greppable without decompression.
 ## 9. `diff/paths.diff.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "old_tag": "7.0.0", "new_tag": "7.1.0",
   "fields": ["game", "en-us"],
   "counts": { "common": 2837, "identical": 1733, "changed": 1104,
@@ -499,7 +696,7 @@ The scoring table, for **every** common path, not just the winners — 2 837 row
 for the reference pool. Lets a later run ask "why did it pick that?"
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
               "moved_later","moved_earlier","old_max_end","same_md5","old_bytes","new_bytes",
               "patch_bytes","total_cost","classes","rank"],
@@ -539,7 +736,7 @@ Quantifies same-file-only reuse. Recorded because it bounds a deliberate
 simplification in the main tool; `gircap` never acts on it.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "new_chunks_total": 113610,
   "new_chunks_md5_present_in_old_manifest": 98910,
   "files_with_a_cross_file_only_chunk": 2,
@@ -557,7 +754,7 @@ when several files or both builds reference it. 25 blobs for the reference
 capture.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "blobs": [
     { "chunk_id": "096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4",
       "stored_path": "chunks/blobs/096e224c175242e1_60215d50041d92c36dab0fa5dd7609b4.zst",
@@ -570,6 +767,9 @@ capture.
       "verified": { "raw_size_matches": true, "md5_compressed_matches": true,
                     "md5_decompressed_matches": true, "decoded_size_matches": true },
       "decode_error": null,
+      "fetch_error": null,
+      "partial": false,
+      "measurement_error": null,
       "referenced_by": [
         { "tag": "7.0.0", "build_id": "3XnPviMfoILi",
           "capture_id": "reuse_moved",
@@ -609,15 +809,98 @@ the compression the build declared. **The blob is still written and still listed
 A truncated or mis-served response is the evidence this tool exists to keep, so it
 is recorded with its bytes and a truthful `decode_error` rather than discarded and
 backfilled with a "the fetch failed" story — with the two decode-dependent
-`verified` keys `false` and the two that need no decode still decided.
+`verified` keys `false` and the two that need no decode still decided. Because the
+fetch itself succeeded, the store does not ask a second source for that chunk: the
+bytes that arrived are not replaced, and the row's `stored_path` points at them.
+A successful `2xx` that carries no bytes at all follows the same rule: the empty
+file is published and measured, and the row records `bytes: 0` with a
+`decode_error` (`not a zstd frame (0 bytes, magic [])`) rather than a
+`fetch_error`.
 
 It is `Option<String>`, so a reader must treat it as optional: a blob that was
 never fetched at all has a null `stored_path`, a null-ish row body and no
 `verified` verdict.
 
-A `stored_path` that is `null` has three causes that cannot all be described the
-same way — a source that refused, a write that failed, and a fetch task that
-panicked mid-measure — and the row records which.
+### `fetch_error`, `partial` and `measurement_error` — why a row is unusable
+
+Version 3 added three fields so that "this blob cannot be used" always has a
+machine-readable cause and is never inferred from a null path alone.
+
+`fetch_error` is an object — `source`, `url`, `status`, `transport`, `attempts`,
+`detail` — and is non-null when a fetch did not complete. `source` is the tag that
+was tried, `status` the HTTP status when there was one, `transport` the error
+kind when the failure was not an HTTP answer, and `detail` the same text the run's
+error list carries. `decode_error` stays reserved for a body that **arrived
+whole and would not decode**: conflating the two made "the bytes are here and are
+wrong" indistinguishable from "the bytes are missing".
+
+`partial` is `true` when a fetch stopped after writing some bytes but before the
+body completed. Those bytes are published at `stored_path` and indexed, because a
+prefix is evidence; only a **failed** fetch's zero-byte temp file is removed. A
+successful `2xx` with an empty body is not a failed fetch: the empty file is
+renamed into place and measured, so its row carries `stored_path`, `bytes: 0`,
+`partial: false`, no `fetch_error` and a `decode_error` saying there was no
+frame. `is_usable` — and therefore A6 and assembly — requires `partial == false`,
+so a partial row is kept and never assembled from.
+
+**A partial body does not end the source loop.** The store parks the prefix as a
+candidate and tries the remaining sources, newest first. If any later source
+completes, the **complete body wins regardless of byte count**: it replaces the
+prefix, is published at `chunks/blobs/<id>.zst`, and is the only attempt whose
+`stored_as` names that path. If no source completes, the **longest** candidate
+(largest `bytes`) is published as the `partial` row with that attempt's
+`fetch_error`; a strictly larger later prefix replaces it, while an equal or
+shorter one is discarded, so a tie keeps the newest source. Losing prefixes never
+occupy the final path and are deleted, and `stored_path` points only at the
+winner. A fetch failure that writes **no** bytes still falls through to the next
+source, and if nothing was produced the last error is what the row and the run's
+error list carry. A body that arrived **whole** but would not decode is not a
+partial and is still not retried.
+
+`measurement_error` is set when the post-rename measurement did not return — an
+I/O error, a panic or cancellation. The blob is kept and `stored_path` stays set,
+so this is distinguishable from "no bytes arrived"; the row is unusable until a
+measurement succeeds.
+
+A `stored_path` that is `null` has three causes:
+
+- **A fetch was attempted and failed without producing bytes** — a source that
+  refused, a transport failure, a write that failed, or a fetch task that
+  panicked. The row records the structured `fetch_error`, `partial` is `false`,
+  and the chunk is counted once among the failed fetches. A *successful* response
+  with an empty body is **not** this case: the empty file is published and
+  measured, so its row has a `stored_path` and a `decode_error` instead.
+- **A write or rename failed after the body was fetched** — also a
+  `fetch_error`, with `detail` naming the local path and `transport` null. The
+  temp file is removed: there are no trustworthy digests and no complete path to
+  publish.
+- **No fetch was attempted** — a `--no-chunk-blobs` row. It means "not
+  measured", not "failed": `stored_path`, `verified`, `decode_error` and
+  `fetch_error` are `null`, `partial` is `false`, `bytes` is `0`, and the two
+  compressed digests (`md5_compressed`, `sha256_compressed`) are `""`.
+  `md5_decompressed` and `uncompressed_size` are **not** empty: they carry the
+  manifest's declared digest and length, so a reader can tell which bytes are
+  missing. They are claims, not measurements — `verified` is `null` precisely
+  because nothing was measured. The flag also skips A6–A12, A19 and A21–A23
+  (see §16).
+
+### Negative and extreme declared sizes
+
+A manifest is the API's document, not a trusted one. A file entry can declare
+`size: -1`, two chunk sizes can sum past `i64::MAX`, and a file's declaration can
+disagree with its chunks. The decode keeps what can be true and records the
+saturation rather than wrapping or aborting:
+
+- a negative per-file size contributes `0` to `total_file_bytes`;
+- a negative per-chunk size contributes `0` to the chunk and file byte sums;
+- offsets and byte totals use saturating arithmetic, so an overflowing sum stops
+  at the type's maximum rather than wrapping to a small positive number.
+
+The individual entry still appears with its declared values in
+`manifests/<tag>/<field>.manifest.json.gz`; the counters in
+`meta.json → decoded` and the index are the clamped view. A reader comparing a
+negative declaration with a zero contribution is seeing the rule working, not a
+lossy dump.
 
 ### `build_id` — part of the chunk's address
 
@@ -645,7 +928,7 @@ manifests survived but whose index is incomplete fails here, and should.
 Per target chunk: where its bytes come from.
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "capture_id": "reuse_in_place",
   "path": "GenshinImpact_Data/Plugins/HoYoChannel.dll",
   "matching_field": "game",
@@ -801,7 +1084,7 @@ whose two sides are deliberately byte-identical.
 ## 15. `verify/checksums.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "algorithm": "sha256",
   "entries": [
     { "path": "expected/GenshinImpact_Data/Plugins/HoYoChannel.dll",
@@ -813,7 +1096,7 @@ whose two sides are deliberately byte-identical.
       "md5": "8c718562f39f91f7e399b02de591f3bd",
       "sha256": "…", "encoding": "gzip" }
   ],
-  "file_count": 77, "total_bytes": 175623337 }
+  "file_count": 80, "total_bytes": 175623265 }
 ```
 
 This is the **complete** inventory of the bundle: every file except
@@ -854,7 +1137,7 @@ The count is safe, because no file appears or disappears between the two passes.
 ## 16. `verify/selfcheck.json`
 
 ```jsonc
-{ "schema_version": 2,
+{ "schema_version": 3,
   "result": "pass",                                  // pass | fail | incomplete
   "counts": { "total": 93, "passed": 93, "failed": 0 },
   "assertions": [

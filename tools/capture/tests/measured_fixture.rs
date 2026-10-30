@@ -74,8 +74,8 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
         //
         // `reused` is 2 of 3, not 3 of 3: a file whose every chunk is reused
         // and none of them moved is the shape the removed
-        // `full_reuse_reordered` class used to claim, and it is not a class of
-        // its own — there is no decision behind it.
+        // `full_reuse_reordered` class claimed, and it is not a class of its own
+        // — there is no decision behind it.
         file(
             "GenshinImpact_Data/StreamingAssets/AssetBundles/blocks/00/09801749.blk",
             "eeee-old",
@@ -195,7 +195,7 @@ fn fixture() -> (Vec<SophonChunkFile>, Vec<SophonChunkFile>) {
             "iiii-new",
             // A different chunk entirely. Reusing `iiii` here would make this a
             // file whose every chunk is reused and none of them moved — the
-            // shape the removed `full_reuse_reordered` class used to claim —
+            // shape the removed `full_reuse_reordered` class claimed —
             // rather than the single fresh download the class is about.
             vec![chunk("qqqq", 0, 42, 42)],
         ),
@@ -828,6 +828,25 @@ mod m5_matrix {
             s.admitted.iter().filter(|a| a.path == dll).count(),
             1,
             "the forced capture and the class pick must be the same admission"
+        );
+    }
+
+    /// The frozen corpus has a real degenerate path: a one-chunk file with no
+    /// reuse answers no class. Naming it with `--files` must record that fact,
+    /// not drop it between `requested` and `skipped`.
+    #[test]
+    fn a_named_degenerate_path_is_recorded_as_unscored() {
+        let degenerate = "GenshinImpact_Data/AssetBundles/data_revision";
+        let pool = select::candidates(&[game()]);
+        let s = select::select(&pool, 1, Budget::unlimited(), &[degenerate.to_string()]);
+        assert!(
+            s.admitted.iter().all(|a| a.path != degenerate),
+            "a capture with no class would make the matrix claim something false"
+        );
+        assert_eq!(s.forced_unscored, vec![degenerate.to_string()]);
+        assert!(
+            s.forced_skipped.is_empty(),
+            "the manifests carry it, so it is not `skipped`"
         );
     }
 

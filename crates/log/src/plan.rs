@@ -288,9 +288,8 @@ impl LogPlan {
 /// A **debug** build is what a developer runs and what the test suite runs,
 /// and there the file is pure cost: a file per run, in a directory nobody
 /// reads, growing by one file per run for as long as the checkout is used.
-/// That directory is what three tests used to have to *scan* to find the file
-/// their own run had written, and the cost of those tests was the history of
-/// the machine rather than the code.
+/// Tests find the file their own run wrote at a fixed path instead of
+/// scanning a directory for it.
 ///
 /// `cargo test` and `cargo nextest` build the dev profile, so `debug_assertions`
 /// is on and the suite writes nothing by default. `--release` turns it off, and

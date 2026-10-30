@@ -78,6 +78,161 @@ pub fn wfile(root: &Path, rel: &str, bytes: &[u8]) {
     std::fs::write(&p, bytes).unwrap();
 }
 
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+//
+// Tests that need a link call these; a platform that refuses the creation
+// (Windows without developer mode refuses `symlink_file` and `symlink_dir`) gets
+// an `Err` and the test skips with the OS message. A directory link has a
+// fallback that needs no privilege - a junction - because that is the shape a
+// game tree on Windows is most likely to contain anyway.
+
+/// Create a link to a file.
+pub fn file_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no link API",
+        ))
+    }
+}
+
+/// Create a link to a directory, falling back to a junction on Windows.
+///
+/// `cmd /c mklink /J` creates a directory reparse point without elevation, and
+/// the walk and the deletion guard treat it as a link either way
+/// (`girsync::link::try_is_link`). If both calls fail, the original error is
+/// returned so the caller can report why it skipped.
+pub fn dir_link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        let first = match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
+        // a target like `dst/sub` would fail with "Invalid switch". std accepts
+        // either separator on Windows, so hand the command native ones.
+        let native = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
+        let created = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(native(link))
+            .arg(native(target))
+            .output();
+        match created {
+            Ok(out) if out.status.success() => Ok(()),
+            Ok(out) => Err(std::io::Error::new(
+                first.kind(),
+                format!(
+                    "{first}; junction fallback failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ),
+            )),
+            Err(e) => Err(std::io::Error::new(
+                first.kind(),
+                format!("{first}; junction fallback failed: {e}"),
+            )),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no link API",
+        ))
+    }
+}
+
+/// Skip the calling test, with the reason, when the platform refused the link.
+///
+/// A macro rather than a helper so the `return` belongs to the test. A silent
+/// skip is not acceptable: the point of the link cases is to pin behaviour, and
+/// a run that quietly covered nothing would read as coverage.
+#[macro_export]
+macro_rules! skip_if_no_link {
+    ($what:expr, $res:expr) => {
+        match $res {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("skip: this platform refused a {} link: {e}", $what);
+                return;
+            }
+        }
+    };
+}
+
+/// True when `dir`'s filesystem tells `CaseProbe` and `caseprobe` apart.
+///
+/// The probe is created and removed, so the answer describes the scratch tree
+/// the caller is about to use rather than the platform in the abstract: a
+/// Windows host may be case-sensitive per directory, and a mounted volume may
+/// differ from the system drive.
+pub fn is_case_sensitive(dir: &Path) -> bool {
+    let probe = dir.join("CaseProbe");
+    std::fs::write(&probe, b"x").unwrap();
+    let insensitive = dir.join("caseprobe").exists();
+    std::fs::remove_file(&probe).unwrap();
+    !insensitive
+}
+
+/// Skip the calling test when the filesystem pairs `CaseProbe` with
+/// `caseprobe`.
+///
+/// A case-only rename is a different question on an insensitive filesystem: the
+/// old spelling still resolves after the rename was planned, so the parity this
+/// pins cannot be observed. Like `skip_if_no_link!`, the skip says why, because
+/// a silent pass would read as coverage it never had.
+#[macro_export]
+macro_rules! skip_if_case_insensitive {
+    ($dir:expr) => {
+        if !$crate::common::is_case_sensitive($dir) {
+            eprintln!("skip: this filesystem pairs `CaseProbe` with `caseprobe`");
+            return;
+        }
+    };
+}
+
+/// True when `path` is itself a link or junction: the test-side mirror of
+/// `girsync::link::try_is_link`. The reparse attribute alone is not enough on
+/// Windows (cloud placeholders and other non-redirecting tags carry it), so the
+/// tag is confirmed through std's name-surrogate test or `read_link`; this form
+/// is infallible because every caller is an assertion, not a destructive guard.
+pub fn is_link(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        match std::fs::symlink_metadata(path) {
+            Ok(md) => {
+                md.file_type().is_symlink()
+                    || (md.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                        && std::fs::read_link(path).is_ok())
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        path.is_symlink()
+    }
+}
+
 pub fn rfile(root: &Path, rel: &str) -> Vec<u8> {
     std::fs::read(root.join(rel)).unwrap()
 }

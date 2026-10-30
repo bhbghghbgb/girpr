@@ -482,7 +482,33 @@ streams every fetched body to disk, digests it on the way past and records the
 row. If the bytes are not a zstd frame the row carries `decode_error` with the
 real reason and the two decode-dependent `verified` keys false, instead of being
 discarded. A truncated or mis-served response is the evidence this tool exists
-to keep.
+to keep. A successful response with an empty body is kept the same way: the
+zero-byte file is published and measured, so the row has `stored_path`,
+`bytes: 0` and a `decode_error`, and is not counted among the failed fetches.
+Only a *failed* fetch's zero-byte temp file is removed.
+
+**A truncated body is retried, because a prefix is not the whole answer.** The
+store keeps the prefix as a candidate and asks the remaining sources; a complete
+body replaces it outright, and if none completes the longest prefix is published
+with that attempt's `fetch_error`. Losing prefixes are removed, so only the winner
+sits at `chunks/blobs/<id>.zst`.
+
+**An undecodable complete body is the outcome of a successful fetch, so it is not
+retried from another source.** The first body's bytes are already the evidence;
+asking the next source and renaming a good body over them would silently destroy
+what actually arrived. The store therefore stops at that source and records the
+undecodable row, rather than treating it as a failed fetch and falling through.
+Only a real fetch error — a refused connection, a truncated read or a failed
+write — moves on to the next source; a prefix that loses to a complete body or to
+a longer prefix is removed, so disk and index agree. A failed or panicked
+**measurement** is not a fetch error: the blob stays published and the row carries
+`measurement_error`, so the source loop does not retry it.
+
+**A chunk that never arrived is a row too, and it says why.** A refused source, a
+failed write or a panicked task leaves `stored_path` null and carries the fetch
+failure in `fetch_error`; `decode_error` stays null because no bytes arrived to
+decode. The run counts that chunk **once** among the failed fetches, so the
+summary and the index cannot disagree about how many chunks are missing.
 
 Corollaries that must hold and are asserted:
 
@@ -575,6 +601,12 @@ taken until the budget is exhausted; the rest are recorded as
 `status="over_budget"`. A single file that cannot fit is reported, not silently
 swallowed — and because the run's own assertions decide the exit code, a
 deliberate exclusion is a recorded status, not a failure.
+
+The same flag also caps the chunk store's **projected wire cost** before a blob
+is fetched (`Σ compressed_size` over the distinct chunks the plan would request).
+That second ceiling is about bytes crossing the network, so it does not apply to
+`--no-chunk-blobs`: the run fetches nothing, and refusing it would price a store
+that is never written. The projection is still recorded.
 
 ---
 
@@ -874,6 +906,13 @@ condition with a known fix) is named on stderr with the reason and counted in
 the summary's `bundles_unreadable`. An operator whose inventory quietly omits a
 bundle has an inventory that is wrong.
 
+A walk that cannot **see** a directory or a bundle manifest — `read_dir` fails,
+one of its entries fails, an entry cannot be stat'ed, or a `MANIFEST.json` that
+is there cannot be read — is not a shorter listing: `list` stops with a usage
+error naming the directory, entry or manifest it could not read. A subtree it
+never saw may hold a bundle, so `bundles_unreadable` alone cannot make the
+inventory honest.
+
 ---
 
 ## 8. Consuming the bundle with `girpr`
@@ -1138,7 +1177,7 @@ makes it **2 290 529 B**.
 | `--audio` default | **`en-us`** — launchable default, and it widens the selection pool | §4.3 |
 | `--per-class` default | **1** | §4.1 |
 | per-class variants | **no individual flags** — the matrix is the interface | §4.1 |
-| `schema_version` | **stays `2`** unless the bundle's byte layout changes incompatibly | [`01-artifact-schema.md`](01-artifact-schema.md) |
+| `schema_version` | **`3`**; a bump is a deliberate decision, not a default, and version 3 requires the added evidence | [`01-artifact-schema.md`](01-artifact-schema.md) |
 | commit discipline | **one commit per change, each with its own gate result in the message** | [`02-plan.md`](02-plan.md) §0 |
 
 ---

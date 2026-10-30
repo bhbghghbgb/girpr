@@ -187,7 +187,11 @@ impl Case {
 /// The apply phases run in that order. `rename` is **not** among them: it is a
 /// separate pass that must finish before the diff can be taken at all (the diff
 /// compares exact keys), so it reports before the plan rather than within it.
-const APPLY_ORDER: &[&str] = &["mkdir", "fix-dir", "delete", "copy", "rmdir"];
+///
+/// `fix-dir` precedes `mkdir` because a directory can be nested under a dst file:
+/// the fix replaces the blocking file, and only then can the nested directory be
+/// created.
+const APPLY_ORDER: &[&str] = &["fix-dir", "mkdir", "delete", "copy", "rmdir"];
 
 /// Which segment a record belongs to.
 ///
@@ -433,6 +437,24 @@ fn cases() -> Vec<Case> {
             src: File(b"f"),
             dst: Absent,
             expect: &[("copy", "fixdir/inner.txt")],
+        },
+        // A directory nested under the blocking file. `fixdir` must be replaced
+        // before `fixdir/sub` can be created, so these two rows pin the apply
+        // order as well as the plan: with `mkdir` first the real run aborts with
+        // `AlreadyExists` after the dry run has printed this same plan.
+        Case {
+            src_rel: "fixdir/sub",
+            dst_rel: None,
+            src: Dir,
+            dst: Absent,
+            expect: &[("mkdir", "fixdir/sub")],
+        },
+        Case {
+            src_rel: "fixdir/sub/x.txt",
+            dst_rel: None,
+            src: File(b"nested"),
+            dst: Absent,
+            expect: &[("copy", "fixdir/sub/x.txt")],
         },
         // The same conflict resolved the other way: src has the file, so dst's
         // directory is simply overwritten by the copy.

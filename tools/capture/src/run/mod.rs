@@ -163,8 +163,50 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         .map_err(|e| apierr("re-read the captured new build", &e))?;
     let manifest_wants =
         manifest::fetch::wants(&fields, &old_tag, &new_tag, &old_build, &new_build);
-    let mut manifests =
-        manifest::fetch::fetch_all(&fetcher, &manifest_wants, fields.len(), plan.jobs).await?;
+    // Every value a shape rule refuses during the run lands here. The store is
+    // created before the manifests are fetched because that is the first place
+    // an untrusted value reaches a write decision; the document is written with
+    // the rest of the tree below.
+    let rejections = std::sync::Arc::new(crate::rejections::Rejections::new());
+    // The logical→on-disk names for device components. Every writer records
+    // into it, and the document is written once the fixture has been assembled
+    // (a game/expected path is only known then).
+    let path_map = crate::pathmap::PathMap::new();
+    let mut manifests = match manifest::fetch::fetch_all(
+        &fetcher,
+        &manifest_wants,
+        fields.len(),
+        plan.jobs,
+        plan.max_decompressed_bytes,
+        rejections.clone(),
+    )
+    .await
+    {
+        Ok(m) => m,
+        Err(e) => {
+            // **The refusal is also evidence.** A hostile manifest path stops
+            // the run before a bundle exists, so there is no `MANIFEST.json` to
+            // carry the rejection document. Write what was refused into the
+            // directory the bundle would have occupied anyway: the run's verdict
+            // is unchanged, and the values are not left only in a scrollback.
+            if !rejections.is_empty() {
+                let dir = artifact_dir(&plan.out, plan.biz, &old_tag, &new_tag, started);
+                match emit::write_rejections(&dir, &rejections) {
+                    Ok(paths) => tracing::warn!(
+                        dir = %dir.display(),
+                        documents = ?paths,
+                        "the run refused manifest input; the rejected values are recorded"
+                    ),
+                    Err(io) => tracing::warn!(
+                        dir = %dir.display(),
+                        error = %io,
+                        "could not record the rejected values"
+                    ),
+                }
+            }
+            return Err(e);
+        }
+    };
 
     // 6a. What the API does with a request it will not serve.
     //
@@ -226,6 +268,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &old_tag,
         &new_tag,
         plan.max_download_bytes,
+        plan.no_chunk_blobs,
     )?;
     let pairs = chunk_plan.pairs;
     let wants = chunk_plan.wants;
@@ -250,9 +293,19 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         diffs: &diffs,
         selection: &selection,
         per_class: plan.per_class as usize,
+        path_map: &path_map,
     })?;
     let mut written = tree.written;
-    let api_documents = tree.api_documents;
+    let mut api_documents = tree.api_documents;
+
+    // 7a-ii. What the run refused, beside what it kept.
+    //
+    //     Written after the tree so it joins `files[]` and the checksum list,
+    //     and before the chunk fetches because every shape refusal happens at
+    //     the manifest boundary or earlier. An empty document is still written:
+    //     "no hostile value was seen" is a fact, and leaving the file out would
+    //     make it indistinguishable from "this run did not look".
+    written.extend(emit::write_rejections(&dir, &rejections).map_err(|e| write_err(&dir, e))?);
 
     // 7b. The chunk blobs themselves, then `chunks/index.json`.
     //
@@ -264,6 +317,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let store = blobs::Store::new(
         &dir,
         blobs::Sources::from_manifests(manifests.iter().flatten()),
+        plan.max_decompressed_bytes,
     );
     let filled = blobs::fill::fill_or_plan(
         &store,
@@ -278,6 +332,20 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let index = blobs::ChunkIndex::build(filled.entries);
     tracing::info!(detail = %blobs::describe(&wants, &index), "chunk store done");
     written.push(emit::write_chunk_index(&dir, &index).map_err(|e| write_err(&dir, e))?);
+
+    // 7b-ii. The bodies of the non-2xx responses the run paid for.
+    //
+    //     Written here, not with the other `api/` documents, because chunk
+    //     fetches happen after those: a `404` on one blob and a `429` on another
+    //     are only known now. `write_requests_log` below is later still, so every
+    //     `stored_path` these rows name is already on disk and in `written`.
+    {
+        let bodies = fetcher.error_bodies();
+        let paths = emit::write_error_responses(&dir, &bodies.snapshot(), bodies.budget())
+            .map_err(|e| write_err(&dir, e))?;
+        api_documents += paths.len() as u64;
+        written.extend(paths);
+    }
 
     // 7c. The fixture: assemble every admitted capture and write both sides,
     //     plus the launcher metadata that is not a chunk at all.
@@ -298,6 +366,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         old_tag: &old_tag,
         audio: plan.audio.codes(),
         no_chunk_blobs: plan.no_chunk_blobs,
+        max_decompressed_bytes: plan.max_decompressed_bytes,
+        path_map: &path_map,
     })?;
     let scan_dir = fixture.scan_dir;
     let rows = fixture.rows;
@@ -309,6 +379,12 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let assembly_failures = fixture.failures;
     written.extend(fixture.written);
 
+    // 7c-ii. The logical→on-disk names, now that the fixture has written both
+    //        sides. Written after `game/`/`expected/` because their mappings are
+    //        the ones a materializing reader needs, and before the close-out so
+    //        it joins `files[]` and the checksum list.
+    written.extend(emit::write_path_map(&dir, &path_map).map_err(|e| write_err(&dir, e))?);
+
     // On the blocking pool. Serialising every record and writing them is both
     // CPU-bound and synchronous `std::fs`, so doing it inline inside
     // `async fn capture` holds a worker unavailable to *fetch* anything for the
@@ -317,11 +393,11 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     {
         let for_the_pool = log.clone();
         let dir_for_the_pool = dir.clone();
-        tokio::task::spawn_blocking(move || {
+        write_requests_log_on_the_pool(move || {
             emit::write_requests_log(&dir_for_the_pool, &for_the_pool)
         })
         .await
-        .map_err(|e| write_err(&dir, std::io::Error::other(format!("{e}"))))?
+        .map_err(|e| write_err(&dir, std::io::Error::other(e)))?
         .map_err(|e| write_err(&dir, e))?;
     }
 
@@ -344,6 +420,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             audio: plan.audio.codes(),
             fields: &fields,
             gzip_threshold: plan.gzip_threshold,
+            max_decompressed_bytes: plan.max_decompressed_bytes,
             diffs: &diffs,
             selection: &selection,
             index: &index,
@@ -395,6 +472,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
             captures_over_budget: selection.rejected.len() as u64,
             forced_files_requested: plan.files.len() as u64,
             forced_files_skipped: selection.forced_skipped.len() as u64,
+            forced_files_unscored: selection.forced_unscored.len() as u64,
             capture_bytes_admitted: selection.bytes_admitted,
             budget_unlimited: selection.budget.limit().is_none(),
             budget_limit: selection.budget.limit().unwrap_or(0),
@@ -643,12 +721,27 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
         for (side, tree) in [(&pair.old, "game"), (&pair.new, "expected")] {
             let Some(s) = side else { continue };
             let rel = format!("{tree}/{}", s.path);
-            let dest = out.join(&rel);
+            // `Bundle::open` refuses a patchmap path that leaves the bundle, so
+            // this is defence in depth for a caller that builds a report itself.
+            // The check belongs at the join: `out.join("game/../../x")` is the
+            // write, and `out.starts_with(&plan.artifact)` above tests the chosen
+            // directory, not this destination.
+            //
+            // A device component is legal in the *logical* path and is escaped
+            // for the write, exactly as the capture wrote it: the rebuild must
+            // reproduce the bundle's own tree, not the game's unescaped one.
+            if let Some(problem) = crate::paths::logical_path_problem(&rel) {
+                return Err(Failure::usage(format!(
+                    "materialize: the rebuilt path {problem}"
+                )));
+            }
+            let on_disk = crate::paths::escape_path(&rel);
+            let dest = out.join(&on_disk);
             if let Some(parent) = dest.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| write_err(&plan.artifact, e))?;
             }
             std::fs::write(&dest, &s.bytes).map_err(|e| write_err(&dest, e))?;
-            written.push(rel);
+            written.push(on_disk);
             bytes += s.bytes.len() as u64;
         }
     }
@@ -699,9 +792,23 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// `gircap list` — index every capture under a root.
 ///
 /// The only command that takes a root rather than a bundle, because its
-/// job is to find bundles. A directory that looks like one and does not open is
-/// listed as a skip rather than aborting the walk: `list` exists to be run over a
-/// tree that may contain a half-finished capture.
+/// job is to find bundles. It is meant to be run over a tree that may contain
+/// a half-finished capture, so a directory that is not a bundle is not an
+/// error. There are three arms, and they differ:
+///
+/// 1. A directory that is not a bundle at all — no `MANIFEST.json`, or a
+///    manifest that declares no schema version this build can read — is
+///    stepped over silently. A half-written capture is a normal transient.
+/// 2. A directory that *is* a bundle this build refuses — an older schema, a
+///    permanent condition with a known fix — is named on stderr with the reason
+///    and counted in the summary's `bundles_unreadable`. It is still not a
+///    `BUNDLE` record: there is no bundle to describe, so a record would have
+///    to carry the failure instead of the facts, and a caller asking "which
+///    bundles are here" would get an entry that is not one.
+/// 3. A directory, entry or `MANIFEST.json` the walk **cannot read** stops the
+///    command with a usage error naming what could not be read — exit `1`,
+///    `result=error`. An inventory that quietly omits a subtree it never saw is
+///    wrong, and a bundle behind a share lock or an ACL denial is exactly that.
 ///
 /// One `BUNDLE` record per **valid** bundle on stdout, then one `SUMMARY`. The
 /// per-bundle facts are on the data plane so a machine can consume this command
@@ -709,15 +816,11 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
 /// two a caller needs to decide which bundle to verify, and neither is on the
 /// summary.
 ///
-/// A directory that does not open stays stderr-only, as before: there is no
-/// bundle to describe, so a `BUNDLE` record would have to carry the failure
-/// instead of the facts, and a caller asking "which bundles are here" would get
-/// an entry that is not one.
-///
-/// **The summary still counts them.** A bundle this build refuses — an older
-/// schema — is a permanent condition with a known fix, and an operator whose
-/// inventory quietly omits one has an inventory that is wrong. So the count is
-/// on the summary and the path and the reason are on stderr.
+/// **The summary still counts the ones that are bundles.** A bundle this build
+/// refuses — an older schema — is a permanent condition with a known fix, and
+/// an operator whose inventory quietly omits one has an inventory that is
+/// wrong. So the count is on the summary and the path and the reason are on
+/// stderr.
 pub async fn list(root: PathBuf, output: OutputFormat) -> Result<Outcome, Failure> {
     let index = crate::verify::list(&root).map_err(|e| Failure::usage(e.to_string()))?;
     let found = index.bundles;
@@ -799,6 +902,20 @@ fn selfcheck_slug(s: &Selfcheck) -> String {
         .to_string()
 }
 
+/// Write the request log on the blocking pool, keeping the cause if it fails.
+///
+/// The closure is a parameter rather than the write itself so a test can drive
+/// the panic arm; the rule is [`crate::tasks::join_blocking`], shared with the
+/// blob measurement. A cancellation is named as a cancellation, and a panic
+/// keeps the message the writer gave — the failure the operator needs instead
+/// of `task <id> panicked`.
+async fn write_requests_log_on_the_pool<F>(work: F) -> Result<std::io::Result<usize>, String>
+where
+    F: FnOnce() -> std::io::Result<usize> + Send + 'static,
+{
+    crate::tasks::join_blocking("request log write", work).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -870,5 +987,33 @@ mod tests {
             "a spaced detail would break tokenisation: {line}"
         );
         assert!(line.contains("retcode%20-202"), "{line}");
+    }
+
+    /// **N1.** A panic inside the request-log write keeps its payload and is
+    /// routed through the shared `JoinError` rule, not formatted with `Display`.
+    #[tokio::test]
+    async fn a_panicking_request_log_task_reports_its_payload() {
+        let why = write_requests_log_on_the_pool(|| panic!("request log exploded"))
+            .await
+            .expect_err("the blocking task panicked");
+        assert!(
+            why.contains("the request log write task panicked"),
+            "the site keeps its label: {why}"
+        );
+        assert!(
+            why.contains("request log exploded"),
+            "the payload is the part worth reporting: {why}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_request_log_task_still_returns_the_write_count() {
+        assert_eq!(
+            write_requests_log_on_the_pool(|| Ok(7))
+                .await
+                .expect("the task returned")
+                .expect("the write succeeded"),
+            7
+        );
     }
 }

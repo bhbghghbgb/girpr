@@ -36,10 +36,10 @@
 //! | D8 resume | the in-place path re-verifies and continues |
 //! | D9 a malformed manifest | a hole in the coverage, a body that is not a zstd frame, a digest no payload can match, a size that lies |
 //!
-//! and the four facts the artifact driver used to assert on every capture:
-//! the live and the settled figures agree, `local_manifest` says `ok` or
-//! `unavailable`, the scope contains the run, and the trace log's download
-//! records agree with the server's request log.
+//! The four facts the artifact driver asserts on every capture: the live and
+//! the settled figures agree, `local_manifest` says `ok` or `unavailable`,
+//! the scope contains the run, and the trace log's download records agree
+//! with the server's request log.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -1075,7 +1075,7 @@ async fn a_manifest_that_lies_about_the_size_is_still_repaired() {
 }
 
 // ---------------------------------------------------------------------------
-// the facts the artifact driver used to assert on every capture
+// the live and the settled figures
 // ---------------------------------------------------------------------------
 
 /// The **pair**: the live figure (what the run spent) and the settled one

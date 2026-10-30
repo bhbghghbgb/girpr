@@ -7,8 +7,8 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, compare_mem, entry_names, has_backup_sibling, log, parse_ndjson, recs_of, rfile, sync,
-    sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+    compare, compare_mem, entry_names, has_backup_sibling, is_case_sensitive, log, parse_ndjson,
+    recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
 use girsync::{cmd_compare, cmd_sync, cmd_update};
@@ -49,6 +49,31 @@ fn run_binary(src: &Path, dst: &Path, extra: &[&str], envs: &[(&str, &str)]) -> 
         String::from_utf8_lossy(&out.stdout)
     );
     parse_ndjson(&out.stdout)
+}
+
+/// Run the real binary and return its records, without asserting success.
+///
+/// `run_binary` above is the happy-path form; a case whose point is the exit
+/// code needs the raw output, because the assertion is on stderr and on what was
+/// *not* written.
+fn run_binary_raw(
+    src: &Path,
+    dst: &Path,
+    extra: &[&str],
+    envs: &[(&str, &str)],
+) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(src)
+        .arg("--dst")
+        .arg(dst)
+        .arg("--output")
+        .arg("json")
+        .args(extra)
+        .envs(envs.iter().copied())
+        .output()
+        .expect("spawn girsync")
 }
 
 /// The `path` of every record with `event` `name`, in order.
@@ -278,6 +303,250 @@ fn run_sync_rejects_bad_inputs() {
     // through the real binary.
 }
 
+/// `FIX-DIR` must run before `MKDIR`: a src directory nested under a path where
+/// dst holds a blocking file cannot be created until the file is replaced. The
+/// dry run must print the same plan as the real run, so `fix_dirs` can satisfy
+/// it before `AlreadyExists` (os error 183) can abort anything.
+#[test]
+fn a_type_conflict_nested_directory_is_planned_and_applied_in_order() {
+    let t = temp_root("nestedfix");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a/b/x.txt", b"x");
+    wfile(&dst, "a", b"blocking file");
+
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let order: Vec<&str> = dry
+        .iter()
+        .filter_map(|r| r["event"].as_str())
+        .filter(|e| matches!(*e, "fix-dir" | "mkdir"))
+        .collect();
+    assert_eq!(
+        order,
+        ["fix-dir", "mkdir"],
+        "the dry run reports the phases in apply order: {dry:?}"
+    );
+    assert_eq!(paths(&dry, "fix-dir"), ["a"], "{dry:?}");
+    assert_eq!(paths(&dry, "mkdir"), ["a/b"], "{dry:?}");
+    assert!(
+        dst.join("a").is_file(),
+        "the dry run changes nothing: {dry:?}"
+    );
+
+    let real = run_binary(&src, &dst, &[], &[]);
+    assert!(
+        dst.join("a").is_dir(),
+        "the blocking file became a directory: {real:?}"
+    );
+    assert_eq!(rfile(&dst, "a/b/x.txt"), b"x");
+    assert_eq!(common::summary_of(&real)["mkdir"], 1, "{real:?}");
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
+}
+
+/// A dst file hidden by `--include` still blocks the `MKDIR` the plan derives
+/// from src's retained ancestor directory. Both modes must refuse it before the
+/// first filesystem change — including the case-only rename.
+#[test]
+fn a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename() {
+    let t = temp_root("filtered_blocker");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "foo/bar.txt", b"new");
+    wfile(&dst, "foo", b"blocker");
+    // A case-only pair the insensitive rename pass would move first if the
+    // refusal were still taken after it. Same bytes and mtime, so casing is the
+    // only difference.
+    wfile(&src, "Other.txt", b"same");
+    wfile(&dst, "other.txt", b"same");
+    sync_mtime(&src.join("Other.txt"), &dst.join("other.txt"));
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [
+        &["--include", "*.txt", "--dry-run"][..],
+        &["--include", "*.txt"][..],
+    ] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a mkdir blocked by a filtered dst file must be a plan-time refusal: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("`foo`"), "names the blocker: {err}");
+        assert!(
+            err.contains("cannot create `foo`"),
+            "names the mkdir: {err}"
+        );
+        assert!(err.contains("as a file"), "says what is in the way: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        for action in ["mkdir", "copy", "rename", "fix-dir"] {
+            assert!(
+                !recs.iter().any(|r| r["event"] == action),
+                "no `{action}` runs before the refusal: {recs:?}"
+            );
+        }
+    }
+    assert_eq!(rfile(&dst, "foo"), b"blocker", "the blocker is untouched");
+    assert_eq!(
+        entry_names(&dst),
+        vec!["foo".to_string(), "other.txt".to_string()],
+        "the refusal precedes the case-only rename"
+    );
+}
+
+/// `dst/a.txt` is a hard link to `src/b.txt`, so truncating it writes through
+/// to a source file. Both hash modes must refuse before `File::create`, leaving
+/// the shared bytes and the link in place.
+#[test]
+fn a_dst_hard_link_is_refused_without_touching_the_shared_inode() {
+    let t = temp_root("hardlink_guard");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"AAAA");
+    wfile(&src, "b.txt", b"BBBBBBBBBB");
+    std::fs::hard_link(src.join("b.txt"), dst.join("a.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [
+        &["--exclude", "b.txt"][..],
+        &["--exclude", "b.txt", "--hash-all-of", "none"][..],
+    ] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a shared destination inode must be refused: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the destination: {err}");
+        assert_eq!(
+            rfile(&src, "b.txt"),
+            b"BBBBBBBBBB",
+            "the source the hard link shares must be unchanged"
+        );
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"BBBBBBBBBB",
+            "the destination must not be truncated or replaced"
+        );
+    }
+    assert_eq!(
+        rfile(&src, "a.txt"),
+        b"AAAA",
+        "the copied source is untouched"
+    );
+}
+
+/// The hard-link refusal is a plan-time decision both modes take. `copy_one`
+/// runs only in a real run, so the dry run must not report `COPY` for a tree
+/// the real run refuses with exit 3. With `--keep-extra` the second name
+/// survives, so both modes refuse before any action record. Without it, the
+/// delete phase removes the second name first and both modes succeed — the
+/// preflight credits the planned delete instead of refusing every count above
+/// one.
+#[test]
+fn the_hard_link_refusal_is_the_same_decision_in_both_modes() {
+    let t = temp_root("hardlink_parity");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"NEW");
+    wfile(&dst, "a.txt", b"OLD");
+    std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "the kept second name makes the copy unsafe: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the copy: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        assert!(
+            !recs.iter().any(|r| r["event"] == "copy"),
+            "no COPY is reported for a copy that cannot run: {recs:?}"
+        );
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"OLD",
+            "the shared inode is untouched"
+        );
+        assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+    }
+
+    // The default plan deletes the extra name before the copy, which reduces the
+    // count to one. The dry run must reach that decision too.
+    let dry = run_binary(&src, &dst, &["--dry-run"], &envs);
+    assert_eq!(paths(&dry, "delete"), ["shared.txt"], "{dry:?}");
+    assert_eq!(paths(&dry, "copy"), ["a.txt"], "{dry:?}");
+    assert_eq!(rfile(&dst, "a.txt"), b"OLD", "the dry run changed nothing");
+
+    let real = run_binary(&src, &dst, &[], &envs);
+    assert_eq!(paths(&real, "delete"), ["shared.txt"], "{real:?}");
+    assert_eq!(paths(&real, "copy"), ["a.txt"], "{real:?}");
+    assert_eq!(rfile(&dst, "a.txt"), b"NEW");
+    assert!(!dst.join("shared.txt").exists());
+    assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
+}
+
+/// A case-only dst hard link is judged at plan time in both modes.
+///
+/// The rename pass re-keys `dm` in a dry run but moves nothing on disk, so both
+/// modes stat the spelling still on disk: the dry run plans the same refusal
+/// the real run reaches after renaming. `--keep-extra` makes the second name
+/// survive, which is what leaves the inode with two names at copy time.
+#[test]
+fn a_case_only_hard_link_is_the_same_decision_in_both_modes() {
+    let t = temp_root("hardlink_case_parity");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    skip_if_case_insensitive!(&dst);
+    wfile(&src, "a.txt", b"NEW");
+    wfile(&dst, "A.txt", b"OLD");
+    std::fs::hard_link(dst.join("A.txt"), dst.join("shared.txt"))
+        .expect("hard links need no privilege on this host");
+
+    let envs = [("GIRSYNC_TEST_CACHE", "memory")];
+    for extra in [&["--keep-extra", "--dry-run"][..], &["--keep-extra"][..]] {
+        let out = run_binary_raw(&src, &dst, extra, &envs);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "a case-only hard link must be refused in both modes: {extra:?}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains("hard links"), "names the hazard: {err}");
+        assert!(err.contains("a.txt"), "names the copy: {err}");
+        let recs = parse_ndjson(&out.stdout);
+        assert!(
+            !recs.iter().any(|r| r["event"] == "copy"),
+            "no COPY is reported for a copy that cannot run: {recs:?}"
+        );
+    }
+
+    assert_eq!(
+        entry_names(&dst),
+        ["a.txt", "shared.txt"],
+        "the real run renamed A.txt to src's casing before the refusal"
+    );
+    assert_eq!(
+        rfile(&dst, "a.txt"),
+        b"OLD",
+        "the shared inode is untouched"
+    );
+    assert_eq!(rfile(&dst, "shared.txt"), b"OLD");
+}
+
 #[test]
 fn run_sync_resolves_type_conflicts() {
     let t = temp_root("typeconf");
@@ -345,6 +614,299 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     same.common.case_sensitive = false;
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
+}
+
+/// The two-step case rename must not reuse a predictable sibling path.
+///
+/// The temporary is a **fixed short** name, `.girsync_case_tmp.<n>`, claimed
+/// before use, so an occupied candidate is stepped over and left exactly as it
+/// was. A name in the user's namespace would be replaced by step1 (silent
+/// loss) or make the pass abort on a directory. The fixed name also keeps a
+/// source near `NAME_MAX` renameable: a full-name suffix would push the
+/// temporary past the limit.
+#[test]
+fn run_sync_case_rename_steps_over_occupied_temporaries() {
+    let t = temp_root("case_tmp_collision");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+    // The directory form takes the other claim branch (create_dir, not
+    // create_new), so the same candidates are exercised twice, in sequence.
+    wfile(&src, "Dir/nested.txt", b"nested");
+    wfile(&dst, "dir/nested.txt", b"nested");
+    sync_mtime(&src.join("Dir/nested.txt"), &dst.join("dir/nested.txt"));
+    // The name the first implementation used, then the first three candidates:
+    // a file, a directory, and another file. None is the tool's to overwrite.
+    wfile(&dst, "data.girsync_case_tmp", b"OLD-NAME");
+    wfile(&dst, ".girsync_case_tmp.0", b"PRECIOUS");
+    wfile(&dst, ".girsync_case_tmp.1/keep.txt", b"KEEP");
+    wfile(&dst, ".girsync_case_tmp.2", b"PRECIOUS-DIR");
+
+    let recs = run_binary(
+        &src,
+        &dst,
+        &["--keep-extra"],
+        &[("GIRSYNC_TEST_CACHE", "memory")],
+    );
+
+    let renames: Vec<&str> = recs
+        .iter()
+        .filter(|r| r["event"] == "rename")
+        .map(|r| r["from"].as_str().expect("a rename names its source"))
+        .collect();
+    assert_eq!(renames, ["data.txt", "dir"], "{recs:?}");
+    assert_eq!(rfile(&dst, "Data.txt"), b"payload", "the rename happened");
+    assert_eq!(rfile(&dst, "Dir/nested.txt"), b"nested");
+    // The filesystem is case-insensitive here, so `dst.join("dir").exists()`
+    // cannot tell the two spellings apart; the directory entries can.
+    let names = entry_names(&dst);
+    assert!(
+        names.iter().any(|n| n == "Dir") && !names.iter().any(|n| n == "dir"),
+        "the directory moved to src's casing, leaving no old spelling: {names:?}"
+    );
+    assert_eq!(
+        rfile(&dst, "data.girsync_case_tmp"),
+        b"OLD-NAME",
+        "the abandoned first temporary name is not a path this code writes"
+    );
+    assert_eq!(
+        rfile(&dst, ".girsync_case_tmp.0"),
+        b"PRECIOUS",
+        "an occupied candidate is stepped over, not replaced"
+    );
+    assert_eq!(
+        rfile(&dst, ".girsync_case_tmp.1/keep.txt"),
+        b"KEEP",
+        "a directory at a candidate is stepped over too"
+    );
+    assert_eq!(
+        rfile(&dst, ".girsync_case_tmp.2"),
+        b"PRECIOUS-DIR",
+        "the third candidate is stepped over as well"
+    );
+    assert!(
+        !dst.join(".girsync_case_tmp.3").exists(),
+        "the claimed temporary is consumed by the rename: {:?}",
+        entry_names(&dst)
+    );
+}
+
+/// A case-only rename of a name that is already near the platform's component
+/// limit must not fail because of the temporary's name.
+///
+/// Appending `.girsync_case_tmp.<n>` to the full source name made a 244-byte
+/// name into a 262-byte sibling and step1 failed with `ENAMETOOLONG` (Windows:
+/// `os error 123`). The fixed short name has no such dependency.
+#[test]
+fn a_case_rename_of_a_very_long_name_succeeds() {
+    let t = temp_root("case_tmp_long_name");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    // 244 bytes: long enough that the old suffix would pass a 255-byte
+    // NAME_MAX, short enough to be legal itself on every host we run on.
+    let lower = format!("{}.txt", "a".repeat(240));
+    let upper = format!("{}.txt", "A".repeat(240));
+    wfile(&src, &upper, b"payload");
+    wfile(&dst, &lower, b"payload");
+    sync_mtime(&src.join(&upper), &dst.join(&lower));
+
+    let recs = run_binary(&src, &dst, &[], &[("GIRSYNC_TEST_CACHE", "memory")]);
+    let renames: Vec<&str> = recs
+        .iter()
+        .filter(|r| r["event"] == "rename")
+        .map(|r| r["from"].as_str().expect("a rename names its source"))
+        .collect();
+    assert_eq!(renames, [lower.as_str()], "{recs:?}");
+    assert_eq!(rfile(&dst, &upper), b"payload");
+    assert!(
+        !dst.join(".girsync_case_tmp.0").exists(),
+        "the claimed temporary is consumed: {:?}",
+        entry_names(&dst)
+    );
+}
+
+/// A failed rename must publish no `RENAME` record: an interrupted case fix
+/// must not leave a line claiming an action that did not happen. The injected
+/// failure names the step, because a real rename failure (a lock, a volume that
+/// went away) cannot be arranged portably.
+#[test]
+fn a_failed_case_rename_leaves_no_record() {
+    let t = temp_root("case_rename_fail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected rename failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected rename failure"),
+        "the error names the failure: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "dst is left exactly as it was, with no tool temporary"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload");
+}
+
+/// A step-1 failure happens after the temporary was claimed: the file claim
+/// creates an empty placeholder that step 1 replaces only on success, so this
+/// branch must remove the tool's own residue. The
+/// failure is injected between the claim and the rename because a real one (a
+/// lock, a volume that went away) cannot be arranged portably; the cleanup is
+/// the production code's.
+#[test]
+fn a_failed_case_rename_step1_removes_the_placeholder() {
+    let t = temp_root("case_rename_fail_step1");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME_STEP1", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected step-1 failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected"),
+        "the error names the failure: {err}"
+    );
+    assert!(
+        err.contains("case fix step1"),
+        "and the step it failed at: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "the claimed placeholder is removed again"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload");
+}
+
+/// A step-2 failure happens after step 1 moved the entry into the temporary,
+/// so the pass has to put it back where it was.
+///
+/// The rename is injected between the two real moves, which is the only way to
+/// reach the rollback portably. Without it a failed second rename would leave
+/// dst holding `.girsync_case_tmp.<n>` under the wrong name.
+#[test]
+fn a_failed_case_rename_step2_rolls_back() {
+    let t = temp_root("case_rename_fail_step2");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Data.txt", b"payload");
+    wfile(&dst, "data.txt", b"payload");
+    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_CACHE", "memory"),
+            ("GIRSYNC_TEST_FAIL_RENAME_STEP2", "data.txt"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "the injected step-2 failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("injected"),
+        "the error names the failure: {err}"
+    );
+    assert!(
+        err.contains("case fix step2"),
+        "and the step it failed at: {err}"
+    );
+    let recs = parse_ndjson(&out.stdout);
+    assert!(
+        !recs.iter().any(|r| r["event"] == "rename"),
+        "no record for a rename that did not happen: {recs:?}"
+    );
+    assert_eq!(
+        entry_names(&dst),
+        vec!["data.txt".to_string()],
+        "the entry is rolled back to its old name, leaving no temporary"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload", "and its content");
+}
+
+/// A dst **file link** standing where src has a directory is a type conflict:
+/// `fix_dirs` unlinks it and creates the directory before the nested `mkdir`/
+/// `copy`, so the link guard must not refuse the descendants the plan already
+/// made applicable. This needs a file link, which Windows without developer
+/// mode refuses; the case reports the skip rather than passing.
+#[test]
+fn a_dst_file_link_at_a_src_directory_is_replaced_not_refused() {
+    let t = temp_root("file_link_fixdir");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&outside, "target.txt", b"not ours");
+    wfile(&src, "a/b/c.txt", b"under the fixed link");
+    skip_if_no_link!(
+        "file",
+        common::file_link(&outside.join("target.txt"), &dst.join("a"))
+    );
+
+    let recs = run_binary(&src, &dst, &[], &[]);
+
+    assert_eq!(paths(&recs, "fix-dir"), ["a"], "{recs:?}");
+    assert_eq!(paths(&recs, "mkdir"), ["a/b"], "{recs:?}");
+    assert_eq!(paths(&recs, "copy"), ["a/b/c.txt"], "{recs:?}");
+    assert!(dst.join("a").is_dir(), "the link became a directory");
+    assert_eq!(rfile(&dst, "a/b/c.txt"), b"under the fixed link");
+    assert_eq!(
+        rfile(&outside, "target.txt"),
+        b"not ours",
+        "unlinking the link left its target alone"
+    );
 }
 
 /// A case-only pair whose **content** also differs must be renamed *and* copied.
@@ -693,4 +1255,393 @@ fn the_copy_phase_commits_its_cache_rows_while_it_copies() {
         "no batch commit before `copy done` (index {done}): commits were at {commits:?}, \
          so the copy phase still hoards its rows until every file is on disk"
     );
+}
+
+/// **`--max-depth` silently skips deeper files, and `sync` calls that success.**
+///
+/// The walk is unit-tested at a small cap; this is the end-to-end half, and the
+/// half that matters: a real game tree deeper than the default 10 gets a green
+/// run and an incomplete mirror, with nothing on stdout saying a file was
+/// skipped. The shallow file is asserted present in the same fixture so "the
+/// deep file is absent" cannot pass because the run did nothing at all.
+#[test]
+fn run_sync_max_depth_skips_deeper_files() {
+    let t = temp_root("maxdepth");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "top.txt", b"top");
+    // Depth 11 (ten directories, then the file); the default cap is 10.
+    let deep = "d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/deep.txt";
+    wfile(&src, deep, b"deep");
+
+    assert_eq!(
+        cmd_sync(sync_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0,
+        "a file beyond the cap is not a run failure"
+    );
+    assert_eq!(rfile(&dst, "top.txt"), b"top", "the shallow file is copied");
+    assert!(
+        !dst.join(deep).exists(),
+        "the depth-11 file is beyond the default cap and is not mirrored"
+    );
+}
+
+/// **A failed copy discards only the cache tail since the last commit.**
+///
+/// `copy_files` writes each verified copy's row as it completes, and
+/// `CommitLimits` commits periodically. The final partial batch is committed
+/// only after every copy succeeded, so an abort returns before that commit and
+/// the in-flight batch is dropped with its transaction.
+///
+/// The fixture is exactly that shape: four copies, one injected failure, and an
+/// op threshold of two. Three copies reach `put`; the threshold commits after
+/// the second, the third stays in the dropped batch. The counts - two rows, not
+/// zero and not three - are the assertion: zero means the phase hoarded its rows
+/// until the end, three means every `put` was durable and there was no tail.
+///
+/// Which two rows survive depends on completion order, so the case asserts the
+/// count and the membership, never the names. The rerun then converges, which is
+/// the property a user actually cares about ("No resume" in the README).
+#[test]
+fn a_failed_copy_discards_only_the_uncommitted_cache_tail() {
+    let t = temp_root("copy_fail_tail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    for i in 0..4 {
+        wfile(
+            &src,
+            &format!("f{i}.bin"),
+            format!("content {i}").as_bytes(),
+        );
+    }
+
+    // A file-cache run: the rows have to outlive the process that wrote them.
+    let run = |fail: Option<&str>| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"));
+        cmd.arg("sync")
+            .arg("--src")
+            .arg(&src)
+            .arg("--dst")
+            .arg(&dst)
+            .arg("--output")
+            .arg("json")
+            .env("GIRSYNC_TEST_COMMIT_OPS", "2")
+            // Keep the time trigger out of it: the op count is the only commit
+            // this fixture may observe during the copy phase.
+            .env("GIRSYNC_TEST_COMMIT_INTERVAL_MS", "60000");
+        if let Some(rel) = fail {
+            cmd.env("GIRSYNC_TEST_FAIL_COPY", rel);
+        }
+        cmd.output().expect("spawn girsync")
+    };
+
+    let out = run(Some("f2.bin"));
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an injected copy failure is a run failure: stderr {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The three copies that did not fail landed on disk.
+    let copied = ["f0.bin", "f1.bin", "f3.bin"];
+    for rel in copied {
+        assert!(
+            dst.join(rel).is_file(),
+            "{rel} should have been copied before the abort"
+        );
+    }
+    assert!(
+        !dst.join("f2.bin").exists(),
+        "the failing copy wrote nothing"
+    );
+
+    let rows = recs(&dst);
+    let cached: Vec<&str> = copied
+        .iter()
+        .copied()
+        .filter(|rel| rows.contains_key(*rel))
+        .collect();
+    assert_eq!(
+        cached.len(),
+        2,
+        "two rows committed, the third discarded with the batch; rows are {:?}",
+        rows.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !rows.contains_key("f2.bin"),
+        "a cache row must never claim content the dst does not have"
+    );
+
+    // And the rerun converges: no resume, but no missing copy either.
+    let out = run(None);
+    assert!(
+        out.status.success(),
+        "the rerun failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rows = recs(&dst);
+    for i in 0..4 {
+        let rel = format!("f{i}.bin");
+        assert!(rows.contains_key(&rel), "rerun left no row for {rel}");
+    }
+    assert_eq!(
+        cmd_compare(compare_mem(src.clone(), dst.clone()), &log()).unwrap(),
+        0,
+        "the rerun produces a clean mirror"
+    );
+}
+
+/// A mirror may not contain its own source, in either direction.
+///
+/// With `dst` inside `src`, the walk of src includes dst, so the copy plan
+/// writes a parent's namesake over the child's file and creates a nested copy;
+/// with `src` inside `dst`, the delete pass removes the source files before the
+/// copy that needed them. Both are refused before the first mutation, in dry
+/// run too. A sibling that merely shares a textual prefix is not nested.
+#[test]
+fn run_sync_refuses_nested_roots_before_touching_anything() {
+    let t = temp_root("nested_roots");
+    let root = t.subdir("root");
+    let sub = t.subdir("root/sub");
+    wfile(&root, "y.txt", b"SRC-Y");
+    wfile(&sub, "y.txt", b"SRC-SUB-Y");
+    wfile(&sub, "x.txt", b"SRC-SUB-X");
+
+    for extra in [&[][..], &["--dry-run"][..]] {
+        let out = run_binary_raw(&root, &sub, extra, &[]);
+        assert_eq!(
+            out.status.code(),
+            Some(3),
+            "dst inside src must be refused; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("disjoint"),
+            "the error names the overlap: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let out = run_binary_raw(&sub, &root, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "src inside dst must be refused; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("disjoint"),
+        "the error names the overlap: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Neither direction changed a byte, made a nested copy, or opened a cache.
+    // Neither direction changed a byte, made a nested copy, or opened a cache.
+    assert_eq!(rfile(&root, "y.txt"), b"SRC-Y");
+    assert_eq!(rfile(&sub, "y.txt"), b"SRC-SUB-Y");
+    assert_eq!(rfile(&sub, "x.txt"), b"SRC-SUB-X");
+    assert!(!sub.join("sub").exists(), "no nested copy was made");
+    assert!(!root.join(CACHE_PREFIX).exists(), "no src cache was made");
+    assert!(!sub.join(CACHE_PREFIX).exists(), "no dst cache was made");
+
+    // Component-wise containment, not a string prefix: `root2` is a sibling.
+    let sibling = t.subdir("root2");
+    let out = run_binary_raw(&root, &sibling, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a shared prefix is not nesting; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&sibling, "y.txt"), b"SRC-Y");
+}
+
+/// A failed flush is a failed copy: the run exits 3 and caches no row for the
+/// file. The verify re-reads what the flush wrote through, so a flush that
+/// never completed must not leave a digest the rerun would trust. The injector
+/// is the only portable way to make the flush fail.
+#[test]
+fn a_failed_flush_aborts_before_the_copy_is_cached() {
+    let t = temp_root("flush_fail");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.bin", b"payload");
+
+    // `GIRSYNC_TEST_NO_FSYNC=0` because the workspace's nextest setup turns the
+    // flush off for speed; this case is about the flush itself.
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &[],
+        &[
+            ("GIRSYNC_TEST_FAIL_FLUSH", "a.bin"),
+            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an injected flush failure is a run failure; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("injected flush failure"),
+        "the error names the flush: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !recs(&dst).contains_key("a.bin"),
+        "a cache row must not claim a copy whose flush failed"
+    );
+
+    // No resume: the rerun copies it and caches it.
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_NO_FSYNC", "0")]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the rerun converges; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&dst, "a.bin"), b"payload");
+    assert!(recs(&dst).contains_key("a.bin"));
+}
+
+/// A case-only rename of a directory must move the subtree once, not try to
+/// rename its children at the old path: on a case-sensitive host that path no
+/// longer exists after the parent move. Here the child's leaf casing is already
+/// src's, so the parent move is the whole job.
+#[test]
+fn run_sync_renames_a_case_only_directory_before_its_children() {
+    let t = temp_root("casedir_rename");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Dir/file.txt", b"payload");
+    wfile(&dst, "dir/file.txt", b"payload");
+    sync_mtime(&src.join("Dir/file.txt"), &dst.join("dir/file.txt"));
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.test_cache = TestCacheBackend::Memory;
+    o.common.case_sensitive = false;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(entry_names(&dst), vec!["Dir".to_string()]);
+    assert_eq!(rfile(&dst, "Dir/file.txt"), b"payload");
+    // The subtree was moved, not duplicated under the new parent.
+    assert!(!dst.join("Dir/Dir").exists());
+
+    let mut same = compare_mem(src, dst);
+    same.common.case_sensitive = false;
+    assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
+}
+
+/// Two spellings of one root that differ only by case are the same cache.
+///
+/// The pre-open identity check compares roots canonically: `root` and `ROOT`
+/// are one folder before either cache is opened, so a stale "--ignore-cache"
+/// hint cannot delete the cache the src side just made.
+#[cfg(windows)]
+#[test]
+fn run_sync_refuses_case_only_spellings_of_one_root() {
+    let t = temp_root("case_roots");
+    let root = t.subdir("root");
+    wfile(&root, "a.txt", b"payload");
+    let upper = t.subdir("ROOT");
+
+    let out = run_binary_raw(&root, &upper, &[], &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "case-only roots are one folder; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("resolve to the same cache"),
+        "the error names the collision: {stderr}"
+    );
+    assert!(
+        !stderr.contains("--ignore-cache"),
+        "a lock is not corruption: {stderr}"
+    );
+    assert!(
+        !root.join(CACHE_PREFIX).exists(),
+        "the refusal happens before either cache is opened"
+    );
+}
+
+/// On Windows a case-only rename of `girpr-cache` is the same live file, so
+/// the walk must keep excluding it: the prefix is folded case-insensitively, so
+/// the renamed cache is tool state again and both the dry run and the real run
+/// leave it alone.
+#[cfg(windows)]
+#[test]
+fn run_sync_excludes_a_case_renamed_cache_directory() {
+    let t = temp_root("case_cache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    if is_case_sensitive(&src) {
+        eprintln!("skip: this filesystem keeps `GIRPR-CACHE` distinct from `girpr-cache`");
+        return;
+    }
+    wfile(&src, "a.txt", b"payload");
+    wfile(&dst, "a.txt", b"payload");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+
+    // Real file caches: with the in-memory backend there is no `girpr-cache`
+    // entry on disk to rename.
+    let out = run_binary_raw(&src, &dst, &[], &[]);
+    assert!(
+        out.status.success(),
+        "initial sync failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(src.join(CACHE_PREFIX).is_file(), "src cache was created");
+    assert!(dst.join(CACHE_PREFIX).is_file(), "dst cache was created");
+
+    // Case-only through a temporary, as `tests/helpers.rs` does: the two
+    // spellings name the same entry on this filesystem, so the rename has to
+    // leave and come back.
+    let tmp = src.join("girsync_case_cache_tmp");
+    std::fs::rename(src.join(CACHE_PREFIX), &tmp).unwrap();
+    std::fs::rename(&tmp, src.join("GIRPR-CACHE")).unwrap();
+    let cache_name = std::fs::read_dir(&src)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.eq_ignore_ascii_case(CACHE_PREFIX))
+        .expect("the live cache is still on disk");
+    assert_eq!(cache_name, "GIRPR-CACHE", "the fixture renamed the cache");
+
+    // Dry run: the cache is tool state, so nothing is planned for it.
+    let out = run_binary_raw(&src, &dst, &["--dry-run"], &[]);
+    assert!(
+        out.status.success(),
+        "dry run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let recs = parse_ndjson(&out.stdout);
+    for rec in &recs {
+        if let Some(p) = rec["path"].as_str() {
+            assert!(
+                !p.to_ascii_lowercase().starts_with(CACHE_PREFIX),
+                "a case-renamed cache is not mirror content: {rec}"
+            );
+        }
+    }
+    let summary = common::summary_of(&recs);
+    assert_eq!(summary["copied"], 0, "the cache is not copied: {summary}");
+    assert_eq!(summary["deleted"], 0, "the cache is not deleted: {summary}");
+
+    // A real run neither copies the cache nor damages dst's live cache.
+    let out = run_binary_raw(&src, &dst, &[], &[]);
+    assert!(
+        out.status.success(),
+        "sync after the rename failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rfile(&dst, "a.txt"), b"payload");
+    // Both caches still open; before the fix the dst one could be unreadable.
+    assert_eq!(cmd_update(update(src.clone()), &log()).unwrap(), 0);
+    assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
 }

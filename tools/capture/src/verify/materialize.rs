@@ -182,8 +182,8 @@ impl<'i> ChunksByFile<'i> {
 /// The layout is checked before any byte is placed (A11), so a closure set with
 /// a hole produces an error naming the hole rather than a short file.
 ///
-/// `root` is not a parameter: where the blobs live is already inside `src`, and
-/// this function used to take one and discard it.
+/// `root` is not a parameter: where the blobs live is already inside `src`,
+/// and taking it would only discard it.
 pub fn rebuild(
     by_file: &ChunksByFile<'_>,
     src: &ChunkSource<'_>,
@@ -198,18 +198,43 @@ pub fn rebuild(
             "{tag} {path} ({role}): the index references no chunks for it"
         ));
     }
-    let parts: Vec<(i64, i64)> = chunks
-        .iter()
-        .map(|(id, o)| (*o, by_file.size(id)))
-        .collect();
-    let declared_size: i64 = parts.iter().map(|(_, l)| *l).sum();
-    // `parts` is still needed for `declared_size`; `Layout::of` takes it by
-    // value so the one-vector-holds-both property holds at the call site too.
+    // Every offset and length here came out of `chunks/index.json`. `rebuild` is
+    // public and some callers (tests, the offline commands' own seams) do not go
+    // through `Bundle::open`'s validation, so the arithmetic is checked here as
+    // well: a crafted `offset: i64::MAX` must be a typed error naming the values,
+    // never an abort in the layout check.
+    let label = format!("{tag} {path} ({role})");
+    let mut parts: Vec<(i64, i64)> = Vec::with_capacity(chunks.len());
+    let mut declared_size: i64 = 0;
+    for (id, offset) in &chunks {
+        let len = by_file.size(id);
+        if *offset < 0 {
+            return Err(format!(
+                "{label}: chunk {id} declares offset {offset}, which is negative"
+            ));
+        }
+        if len < 0 {
+            return Err(format!(
+                "{label}: chunk {id} declares length {len}, which does not fit i64"
+            ));
+        }
+        if offset.checked_add(len).is_none() {
+            return Err(format!(
+                "{label}: chunk {id} at offset {offset} + length {len} overflows i64"
+            ));
+        }
+        declared_size = declared_size.checked_add(len).ok_or_else(|| {
+            format!(
+                "{label}: the chunk lengths overflow i64 at chunk {id} \
+                 (length {len}, running total {declared_size} B)"
+            )
+        })?;
+        parts.push((*offset, len));
+    }
     let layout = Layout::of(parts.iter().copied(), declared_size);
     // The label is the only thing that distinguishes this rebuild from the
     // capture's own: the tiling, and every message it can produce, is one
     // function. See `assemble::tile`.
-    let label = format!("{tag} {path} ({role})");
     let ids: Vec<&str> = chunks.iter().map(|(id, _)| *id).collect();
     let bytes = crate::assemble::tile(&label, &layout, declared_size, &ids, |id| src.decoded(id))?;
     Ok(Rebuilt {
@@ -247,9 +272,10 @@ pub fn rebuild_all(
     root: &std::path::Path,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
+    max_decompressed_bytes: u64,
 ) -> Result<Vec<Pair>, String> {
     let by_file = ChunksByFile::build(index);
-    let src = ChunkSource::from_index(root, index).memoizing();
+    let src = ChunkSource::from_index(root, index, max_decompressed_bytes).memoizing();
     let mut names: Vec<&String> = patchmaps.keys().collect();
     names.sort();
     let mut out = Vec::new();
@@ -470,7 +496,11 @@ mod tests {
         }
 
         fn source(&self) -> ChunkSource<'_> {
-            ChunkSource::from_index(&self.root, &self.index)
+            ChunkSource::from_index(
+                &self.root,
+                &self.index,
+                crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+            )
         }
 
         fn by_file(&self) -> ChunksByFile<'_> {
@@ -824,7 +854,13 @@ mod tests {
             "c".to_string(),
             side_map(Some(("7.0.0", 224, 3)), Some(("7.1.0", 224, 3))),
         );
-        let pairs = rebuild_all(&f.root, &f.index, &maps).expect("rebuilds");
+        let pairs = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .expect("rebuilds");
         assert_eq!(pairs.len(), 1);
         assert_eq!(pairs[0].old.as_ref().unwrap().bytes.len(), 224);
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
@@ -834,7 +870,13 @@ mod tests {
         wrong.old.as_mut().unwrap().nchunks = 2;
         let mut wrong_maps = BTreeMap::new();
         wrong_maps.insert("c".to_string(), wrong);
-        let e = rebuild_all(&f.root, &f.index, &wrong_maps).unwrap_err();
+        let e = rebuild_all(
+            &f.root,
+            &f.index,
+            &wrong_maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
         assert!(
             e.contains("the index names 3 materialize_old chunks"),
             "{e}"
@@ -856,7 +898,13 @@ mod tests {
         renamed.capture_id = "not-in-the-index".into();
         let mut renamed_maps = BTreeMap::new();
         renamed_maps.insert("not-in-the-index".to_string(), renamed);
-        let e = rebuild_all(&f.root, &f.index, &renamed_maps).unwrap_err();
+        let e = rebuild_all(
+            &f.root,
+            &f.index,
+            &renamed_maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
         assert!(e.contains("references no chunks"), "{e}");
     }
 
@@ -865,7 +913,13 @@ mod tests {
         let f = Fixture::build("onesidedok");
         let mut maps = BTreeMap::new();
         maps.insert("c".to_string(), side_map(None, Some(("7.1.0", 224, 3))));
-        let pairs = rebuild_all(&f.root, &f.index, &maps).expect("rebuilds");
+        let pairs = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .expect("rebuilds");
         assert!(pairs[0].old.is_none(), "no old side to rebuild");
         assert_eq!(pairs[0].new.as_ref().unwrap().bytes.len(), 224);
     }
@@ -882,5 +936,47 @@ mod tests {
         }
         assert_eq!(f.index.blobs.len(), 4);
         let _ = Store::plan_only(&[]);
+    }
+
+    /// **K1.** `rebuild` is public and not every caller has been through
+    /// `Bundle::open`'s index validation, so it checks the offsets it was handed.
+    /// A crafted `offset: i64::MAX` is a typed error naming the chunk and the
+    /// arithmetic, not an abort in `Layout::of`.
+    #[test]
+    fn a_crafted_index_offset_is_a_typed_error_not_a_layout_panic() {
+        let mut f = Fixture::build("crafted-offset");
+        for b in &mut f.index.blobs {
+            for r in &mut b.referenced_by {
+                if r.role == Set::MaterializeNew {
+                    r.offset = i64::MAX;
+                }
+            }
+        }
+        let src = f.source();
+        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        assert!(
+            e.contains("overflows i64") && e.contains(&i64::MAX.to_string()),
+            "names the arithmetic and the value: {e}"
+        );
+        assert!(e.contains("dll"), "names the file: {e}");
+    }
+
+    /// **K1.** A decompressed size above `i64::MAX` becomes negative when the
+    /// index's `u64` is cast for the layout; the rebuild names it rather than
+    /// handing a negative length to the tiling check.
+    #[test]
+    fn a_crafted_index_size_that_does_not_fit_i64_is_a_typed_error() {
+        let mut f = Fixture::build("crafted-size");
+        for b in &mut f.index.blobs {
+            if b.sets.contains(&Set::MaterializeNew) {
+                b.props.uncompressed_size = u64::MAX;
+            }
+        }
+        let src = f.source();
+        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        assert!(
+            e.contains("length -1") && e.contains("does not fit i64"),
+            "names the cast and the value: {e}"
+        );
     }
 }

@@ -18,6 +18,7 @@ fn rec(hashes: &[&str]) -> EffRec {
         size: 10,
         mtime_ns: 100,
         hashes: digests_of_len(hashes),
+        is_link: false,
     }
 }
 

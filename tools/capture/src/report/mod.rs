@@ -470,6 +470,8 @@ pub struct SelectionStats {
     pub forced_files_requested: u64,
     /// Of those, the manifests do not carry.
     pub forced_files_skipped: u64,
+    /// Of those, present in the manifests but answering no matrix class.
+    pub forced_files_unscored: u64,
     /// What admission charged.
     pub capture_bytes_admitted: u64,
     /// Whether `--budget` capped the run at all.
@@ -578,11 +580,12 @@ pub struct ProbeStats {
 
 /// The `stage` a `capture` summary carries.
 ///
-/// **A named constant, because it is part of the data plane.** It used to spell a
-/// milestone — `m8-artifact` — which told a reader about the order the crate was
-/// built in and nothing about the run in front of them. It names the stage now:
-/// every record this builder emits is written after the artifact, so the value is
-/// the same on every capture and its job is to identify *which* record this is.
+/// **A named constant, because it is part of the data plane.** Spelling it as
+/// a milestone — `m8-artifact` — would tell a reader about the order the crate
+/// was built in and nothing about the run in front of them. It names the stage
+/// now: every record this builder emits is written after the artifact, so the
+/// value is the same on every capture and its job is to identify *which*
+/// record this is.
 pub const STAGE_CAPTURE: &str = "artifact";
 
 /// Build the `capture` summary record.
@@ -640,6 +643,10 @@ pub fn capture_summary(s: &CaptureSummary<'_>) -> Record {
         (
             "forced_files_skipped",
             Val::from(s.selection.forced_files_skipped),
+        ),
+        (
+            "forced_files_unscored",
+            Val::from(s.selection.forced_files_unscored),
         ),
         // Chunks.
         ("chunk_blobs_wanted", Val::from(s.chunks.wanted)),
@@ -1096,6 +1103,7 @@ mod tests {
                 captures_over_budget: 0,
                 forced_files_requested: 0,
                 forced_files_skipped: 0,
+                forced_files_unscored: 0,
                 capture_bytes_admitted: 0,
                 budget_unlimited: false,
                 budget_limit: 0,
@@ -1185,6 +1193,7 @@ mod tests {
             "captures_over_budget",
             "forced_files_requested",
             "forced_files_skipped",
+            "forced_files_unscored",
             "chunk_blobs_wanted",
             "chunk_blobs_stored",
             "chunk_bytes_projected",
@@ -1246,11 +1255,10 @@ mod tests {
 
     #[test]
     fn the_stage_names_the_stage_not_a_milestone() {
-        // The value used to be `m8-artifact`, which told a reader about the order
-        // the crate was built in and nothing about the run in front of them. It
-        // is pinned here because it is on the data plane: a caller matching on
-        // `stage=artifact` has to break loudly if it changes, and the pin also
-        // keeps a milestone label from creeping back in.
+        // `m8-artifact` told a reader about the order the crate was built in and
+        // nothing about the run in front of them, so a milestone label must not
+        // creep back in. It is pinned here because it is on the data plane: a
+        // caller matching on `stage=artifact` has to break loudly if it changes.
         let r = capture_summary(&zeroed());
         assert_eq!(
             r.get("stage"),

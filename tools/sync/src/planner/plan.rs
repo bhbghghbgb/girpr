@@ -210,6 +210,7 @@ mod tests {
                 d
             },
             fresh: !cached.is_empty(),
+            is_link: false,
         }
     }
 
@@ -220,6 +221,7 @@ mod tests {
             mtime_ns: 0,
             cached: DigestSet::default(),
             fresh: true,
+            is_link: false,
         }
     }
 

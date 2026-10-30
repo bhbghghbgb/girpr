@@ -31,7 +31,8 @@ values and `io_threads = 0` are also exit 1 (clap-level errors included); `--hel
 `io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
-`1` usage/config error, `2` metadata/network error, `3` write/verify error,
+`1` usage/config error, `2` metadata/network error (including a malformed manifest
+path or chunk range, refused at plan time), `3` write/verify error,
 `4` check-only found damage; a begin `REPORT` line (versions + API-sourced
 fields, Step 2.5) and a machine-readable final summary line (counts + bytes),
 both mirrored to the log, plus structured logs (per-file start/skip/repair/fail
@@ -49,17 +50,32 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    paths (Steps 3–4), so `--purge-before` executes as Step 5.
 
 ### Step 1 — Read local state
-1. Parse `game_dir/config.ini` for `game_version=` (last match wins); absent/unparseable → `none`.
+1. Parse `game_dir/config.ini` for `game_version=` (last match wins); a missing
+   file or no match → `none`. A file that exists but cannot be read is an error
+   (exit 1), not a fresh install: treating it as one would let the post-phase
+   overwrite the version record.
 2. Read `res_category_dir` ignore list if game config names it (see step 2): file of JSON lines
-   `{"category":"<matching_field>","is_delete":true}` → ignore set.
+   `{"category":"<matching_field>","is_delete":true}` → ignore set. An absent file is an
+   empty set; an unreadable one is an error. Same rule for the blacklist file.
   3. Determine effective audio langs: explicit flag wins, including `--audio none`
    (explicit empty = game-only, scan file overwritten with an empty list); else read
    audio scan file (`AudioPackageScanDir`, e.g. list of `Chinese|English(US)|Japanese|Korean`
-   → map to `zh-cn|en-us|ja-jp|ko-kr`); else default `{en-us}` (girpr-specific default for
-   automation so the game launches — Starward/ Collapse use game-only when the scan file
+   → map to `zh-cn|en-us|ja-jp|ko-kr`). A **missing** scan file defaults to `{en-us}`
+   automation so the game launches — Starward/Collapse use game-only when the scan file
    is missing, and `none` opts into that behavior explicitly).
+   A **readable empty** file is the game-only selection written by `--audio none` and is
+   kept as-is. An **unreadable** file is an error, not a default. A non-empty file
+   whose lines name none of the four display names is also an error (exit 1) naming
+   the file and the first unrecognized line — an empty result would read as game-only
+   and hide the selected language from the purge keep set. An unrecognized line beside
+   a recognized one is warned and ignored; a leading UTF-8 BOM is stripped before
+   parsing. A file whose only content is a BOM is non-empty and is refused; genuinely
+   blank lines are game-only.
    Write the scan file back when an explicit selection was given (including `none`),
-   except in `--dry-run` / `--check-only` (no writes) or when the scan dir is unconfigured.
+   except in `--dry-run` / `--check-only` / `--print-plan` (no writes) or when the scan
+   dir is unconfigured. The write happens in the execution phase, after every refusal
+   in the plan half, so a refused run leaves the install untouched. It is atomic
+   (temp + rename in the same directory).
 
 ### Step 2 — Fetch server metadata
 1. `GET getGameConfigs?launcher_id=&language=&game_ids[]=` → pick entry for game id. Keep:
@@ -112,13 +128,23 @@ For each wanted manifest in latest build (filter: drop `matching_field ∈ ignor
 
 ### Step 4 — Build work list
 For each latest file `F{path,size,md5,chunks[]}`:
+- Once the blacklist/scope/dedup filters have run, every surviving non-folder
+  entry is range-validated: a negative `size`, a
+  negative chunk `offset` or `uncompressed_size`, an
+  `offset + uncompressed_size` overflow, or a chunk end past `size` is a plan
+  error (exit `2`) **before any mode runs**, including `--check-only`,
+  `--dry-run` and `--print-plan`. A zero-size chunk is still allowed and is
+  dropped from the work list; a negative one is refused, not dropped. An entry
+  the filters exclude cannot block the rest of the plan.
 - `local_F` = same `path` in local build manifest (may be absent/different).
 - Build `chunk_plan[]`: for each chunk `C{offset,uncompressed_size,uncompressed_md5}`:
   `reuse = (local_F contains chunk with same (uncompressed_md5, uncompressed_size))`
   → record `(reuse_path=game_dir/local_F.path, reuse_offset)`, else `reuse=null`.
   (Cross-file dedup by md5 is allowed but optional; same-file covers ~all Genshin wins.)
 - If blacklist enabled and `game_dir/{blacklist_dir}` exists (JSON-lines `{fileName}`),
-  drop listed paths from the work list.
+  drop listed paths from the work list. They stay part of the expected install:
+  the files-cleanup keeps them (Step 7), so a blacklist entry excludes repair,
+  never the file itself.
 
 ### Step 5 — Files-cleanup before (reclaim space before repairing)
 Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parity
@@ -327,9 +353,11 @@ optimization).
 **Files-cleanup** (optional `--purge-after`, same function as Step 5 —
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
-1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}`.
-   `config.ini` is the ONLY metadata keep: it lives inside `game_dir` but never
-   appears in chunk manifests. The exe needs no keep (the game flags unknown
+1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
+   `{the single-writer lock}` ∪ `{blacklisted paths}`. `config.ini` and the
+   single-writer lock are the only metadata keeps: neither appears in a chunk
+   manifest, and `config.ini` lives inside `game_dir` but the tool rewrites it
+   after patching. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
    `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
@@ -372,14 +400,16 @@ The per-mode model, with `S` = target size, `O` = current on-disk size (0 if abs
 |---|---|---|---|
 | `inplace` (default) | only the chunks that are wrong *or moved* | `max(0, S − min(O, S))` | a mixed file, re-verified next run |
 | `temp` | `S` — the whole file | `S`, so `jobs × S_max` across a run | the old file untouched + a partial `*_tmp` |
-| `discard` | `S` | `0` | a partial file |
+| `discard` | `S` | `max(0, S − min(O, S))` | a partial file |
 
 The rows are two ways to spend disk, not two rungs of a safety ladder: `inplace` spends the
 least and writes the least, and `temp` spends the whole file in exchange for the target
 never being modified. For a corrupt-but-right-sized file — the common repair case —
 `inplace` needs **zero** extra space and writes only the corrupt bytes. For a file that
 grows by `Δ`, `inplace` needs `Δ`, not `S`. For a fresh install nothing is saved because
-nothing is on disk to save.
+nothing is on disk to save. `discard` is `inplace` with the target deleted first: it never
+holds a second copy, but a truncated target still needs its growth, so its peak extra
+space is the same as `inplace` (0 only when the target is already full size).
 
 **The bytes the repair did not have to touch.** `SUMMARY kept_bytes` is the run's disk
 claim in one number: the bytes that were already correct where they belonged and did not

@@ -21,7 +21,7 @@ bundle's own integrity (`gircap verify`). The fourth does not: **run `girpr
 
 Pointed at such a fixture, `girpr` does exactly what it is specified to do:
 
-- `plan::build_plan` builds the work list from the **whole live `game` manifest**
+- `repair::phases::plan::build_plan` builds the work list from the **whole live `game` manifest**
   — 2 662 common paths measured for 7.0.0→7.1.0, several thousand more across
   the audio fields;
 - `file::repair_all` spawns one task per planned file and downloads whatever is
@@ -90,15 +90,19 @@ touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
+| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
-| `repair::check::verify_plan` | already narrowed |
-| `repair::plan::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
-| `repair::plan::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
-| `repair::post::delete_deprecated` | skip any hidden path |
-| `repair::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
-| `util::write_config_ini` (from `repair::post::run`) | **not bumped** — see below |
-| `repair::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
+| `repair::phases::check::verify_plan` | already narrowed |
+| `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
+| `repair::purge::remove_emptied_dirs` | a directory whose only contents were filtered away must not be swept |
+| `repair::phases::post::delete_deprecated` | skip any hidden path |
+| `repair::phases::post::move_audio_cache` | gate; a scoped dev run should not relocate audio |
+| `util::write_config_ini` (from `repair::phases::post::run`) | **not bumped** — see below |
+| `repair::phases::metadata` → `audio::write_scan_file` | refused under a scope — see §3 A1 guard 2 |
+
+A content glob such as `mods/*` hides the files under `mods` but not `mods`
+itself, so an empty `mods` directory is still visible and may be swept; a
+directory is hidden only when the glob matches the directory path itself.
 
 There are two ways to make a path invisible to the purge: filter inside the
 purge walk (`classify_purge_path` gains a scope argument and returns `Keep`
@@ -165,7 +169,7 @@ Two enforcement points exist and are not interchangeable:
 | shape | when | suits |
 |---|---|---|
 | **pre-flight refusal** | after the plan exists, before any mutation | anything predictable from the plan: file count, download bytes, delete bytes |
-| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into `*_tmp`, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
+| **runtime hard stop** | mid-flight, when a counter crosses the line | anything not predictable from the plan: bytes written into the install, and the **verified** figures — the bytes the repair was allowed to spend, which are only known as the run goes |
 
 Both produce exit `5`.
 
@@ -189,8 +193,8 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
-the same string `plan::build_plan` stores and `util::normalize_rel` converts at
-the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
+the same string `phases::plan::build_plan` stores; `util::contained_rel` validates it
+at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The semantics are `girsync`'s, including
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
 false, case_sensitive: false }`.
@@ -218,10 +222,12 @@ misused:
    `--purge-only --include <that path>` is precisely the request that deletes it.
    (`--exclude` matching zero is fine and unremarkable.)
 2. **Explicit `--audio` under an active path scope → exit `1`,** unless the audio
-   scan file is itself in scope. `metadata` writes `audio_pkg_scan_dir` on any
-   explicit `--audio`; under a scope that write is a mutation of a path the scope
-   may not have admitted, so the combination is refused outright. Two flags
-   asking for opposite scopes is a contradiction, not a merge. The escape hatch
+   scan file is itself in scope. The run writes `audio_pkg_scan_dir` on any
+   explicit `--audio` — in the execution phase, after every plan-half refusal,
+   so a refused run leaves the install untouched. Under a scope that write is a
+   mutation of a path the scope may not have admitted, so the combination is
+   refused outright. Two flags asking for opposite scopes is a contradiction,
+   not a merge. The escape hatch
    is to include the scan file's own rel path (`GenshinImpact_Data/Persistent/
    audio_lang_14` for a global install) — it comes from `getGameConfigs`, so it
    is never hardcoded.
@@ -243,7 +249,7 @@ does not refuse; the boundary is the point. `0` is a valid ceiling.
 This is the ceiling the `gircap` byte assertion is written against, so its
 accuracy matters.
 
-**The estimate is exactly computable up front.** `manifest::local_reuse_map` has
+**The plan estimate is computable up front.** `manifest::local_reuse_map` has
 already built `local_map: path -> [(uncompressed_md5, size, offset)]` by the time
 the plan exists, and per planned file:
 
@@ -256,19 +262,35 @@ est_download_bytes(rel) = Σ c.compressed_size
 
 That is character-for-character the capture's `patch_fetch` definition and
 therefore its `totals.download_bytes`. Because capture invariant **A6** asserts
-`len(raw blob) == compressed_size` while `file.rs` counts
+`len(raw blob) == compressed_size` while `file/mod.rs` counts
 `stats.download_bytes += blob.len()`, the estimate and the runner's counter are
-the same quantity by construction.
+the same quantity by construction. This is the figure without `--scan`, and
+there it is an upper bound: the map describes the local *old* build, so a chunk
+already correct in a partially updated target is counted even though the
+in-place path keeps it.
+
+**`--scan` replaces that formula with the path the run will really take.** Per
+file it resolves the mode at plan time — temp when requested or the target is
+not a regular file, discard (delete first, so every chunk downloads), in place
+otherwise — and models the ordered salvage tier with the writer's own
+`salvage_order` liveness. A chunk whose source the chosen direction overwrites
+is counted even if the scan found the source intact. In place uses the ordered
+tier's (larger) figure, which is also the staged tier's over-approximation,
+because the RAM budget that chooses between the tiers is a runtime decision.
+The scan cannot predict an in-place open that fails and falls back to temp; that
+file fetches its correct chunks too, and only the runtime hard stop bounds it.
 
 **Both mechanisms are needed, and the second is the one that actually enforces.**
 
 - **Refusal (deterministic, pre-flight).** `Σ est_download_bytes over the
   filtered plan > N` → exit `5`, nothing written, no `_tmp` created. Its value is
   that it fails *before* the expensive part.
-- **Hard stop (the enforcement).** The estimate is a **lower bound, not a
-  promise**: `try_reuse_slice` falls back to a download whenever the local slice
-  fails its MD5, so a file estimated at 0 bytes can still download its whole
-  body. Refusing on the estimate alone would therefore not bound anything. A
+- **Hard stop (the enforcement).** The estimate is **not a promise**:
+  `try_reuse_slice` falls back to a download whenever the local slice fails its
+  MD5, so a file estimated at 0 bytes can still download its whole body. Even
+  under `--scan`, an in-place open that falls back to temp, or a source that
+  changes after the scan, downloads more than predicted. Refusing on the
+  estimate alone would therefore not bound anything. A
   live reservation on `Summary` trips at the real ceiling; in-flight and
   remaining files are dropped, their `*_tmp` left in place — S3 resume-by-length
   means an aborted run is not a corrupt run, it is a run that did less — and the
@@ -276,19 +298,24 @@ the same quantity by construction.
 
 The reservation is a compare-and-swap taken **before** each fetch, not a
 check-then-add: under `--io-threads N` a check overshoots by up to N−1 chunks,
-and a ceiling is not a guideline. The counter is incremented with the real
-`blob.len()`, and the reservation is handed back when the fetch delivered
-nothing at all. `SUMMARY download_bytes` counts the bytes of the files that
-were actually **promoted**, so a failed-and-retried attempt does not inflate
-the reported total; the bytes that attempt did fetch are still counted against
-the ceiling, because they crossed the wire.
+and a ceiling is not a guideline. Once the fetch ends, the reservation is
+reconciled with the bytes the attempt really delivered — a failed attempt's
+partial body is charged, not refunded — and a settle that carries the live
+figure past the limit trips the hard stop right there, including on the run's
+last chunk. The overrun is therefore bounded by the body already in flight (the
+piece that crossed the line), not by a whole reservation. `SUMMARY
+download_bytes` counts the bytes of the files that were actually **promoted**,
+so a failed-and-retried attempt does not inflate the reported total; the bytes
+that attempt did fetch are still counted against the ceiling, because they
+crossed the wire.
 
 ### B3 · `--max-write-bytes <N>` — **P1** — runtime hard stop
 
 The only ceiling that *cannot* be a refusal, and the reason it exists:
 **`download_bytes` does not count most of the disk the run touches.** Every
 reuse-copy (`out.write_all(&buf[..n])` in `try_reuse_slice`) and every
-downloaded-chunk write goes into `*_tmp`, and none of it appears in
+downloaded-chunk write lands in the install — the target itself on the
+in-place path, `{path}_tmp` on the temp path — and none of it appears in
 `SUMMARY.download_bytes`. A zero-reuse run writes its entire payload to disk
 while reporting a network cost only.
 
@@ -394,13 +421,16 @@ PLAN files=8 est_download_bytes=2373385 est_write_bytes=… est_extra_bytes=… 
 ```
 
 `--plan-out <FILE>` writes the per-file detail as **JSON** —
-`{"repair": [{rel, size, chunks_total, est_download_bytes}], "purge": [{rel,
+`{"repair": [{rel, size, chunks_total, est_download_bytes, mode, extra_bytes}], "purge": [{rel,
 size}]}` — for the `--per-class`-sized cases where diffing eight lines beats
-eight `--include` flags. JSON because `girsync --output json` and the whole
-artifact side of this repo (`gircap`'s bundle, `patchmaps/<id>.json`) are JSON,
-and a parser that has to read `SUMMARY` *and* the plan wants one reader, not two
-vocabularies. The `key=value` plane stays single-purpose: one line per fact,
-greppable, no nesting.
+eight `--include` flags. It works with or without `--print-plan`: on its own it
+writes the plan of the run that then does the work, before the first mutation,
+so a write failure is exit `3` with nothing changed. JSON because
+`girsync --output json` and the whole artifact side of this repo (`gircap`'s
+bundle, `patchmaps/<id>.json`) are JSON, and a parser that has to read
+`SUMMARY` *and* the plan wants one reader, not two vocabularies. The
+`key=value` plane stays single-purpose: one line per fact, greppable, no
+nesting.
 
 The purge half needs the purge plan built unconditionally whenever a purge
 flag, `--print-plan` or `--purge-only` asks for it — which is why
@@ -481,12 +511,9 @@ One job left, and it is real:
   *deliberately* exercise the largest-chunk branch, which no small synthetic
   fixture reaches.
 
-**The memory half is gone.** It used to be the flag's reason to exist: S1
-buffered whole chunks (fetch → decode → write), so the peak RAM per active
-chunk was roughly `compressed + uncompressed` — at `--io-threads 8`, a real
-number. The chunk path is **streamed** now: the body is decoded as it arrives
-and the decoded bytes are written into the target as they are produced, so the
-peak per active chunk is one read window, not the chunk. Skipping files whose
+The chunk path is **streamed**: the body is decoded as it arrives and the
+decoded bytes are written into the target as they are produced, so the peak
+per active chunk is one read window, not the chunk. Skipping files whose
 largest chunk exceeds `N` bounds nothing about RAM any more.
 
 `PLAN max_chunk_bytes=` reports this number today without enforcing it — it is
@@ -672,9 +699,10 @@ log (§1.2).
 ## 7. Module layout
 
 ```
-src/repair/plan/
-  mod.rs        RepairPlan, PlannedFile, est_download_bytes, build_plan
-  purge.rs      PurgePlan, PurgeCandidate, plan_purge, apply_purge
+src/repair/phases/plan.rs
+                RepairPlan, PlannedFile, est_download_bytes, build_plan
+src/repair/purge.rs
+                PurgePlan, PurgeCandidate, plan_purge, apply_purge
 src/repair/scope/
   mod.rs      re-exports; the assertion that turns a plan into pass/refuse
   filter.rs   PathScope, is_visible, compile_patterns     (pure)
@@ -693,11 +721,16 @@ pure config, `gate.rs` counting) and `girsync`'s `planner/` → `apply` split.
 per-directory kept-count map, deepest-first, `game_dir` excluded), so
 `remove_emptied_dirs` does not re-walk. Equivalent to "try `remove_dir` on every
 directory" — a dir with kept content fails `remove_dir` harmlessly — but decided
-up front, which is the property the scope work needs.
+up front, which is the property the scope work needs. A directory the active
+scope hides is not added to the sweep set at all (it has no file to mark its
+ancestors), and is counted in `PurgePlan::hidden` so the scope warning names it.
+A content glob such as `mods/*` hides the files under `mods` but not `mods`
+itself, so an empty `mods` directory is still visible and may be swept; a
+directory is hidden only when the glob matches the directory path itself.
 
 The pure modules unit-test without a filesystem, exactly like
-`plan::purge::classify_purge_path` and `plan::build_plan` do. The impure part is
-the ledger and the gate calls in `file.rs`.
+`purge::classify_purge_path` and `phases::plan::build_plan` do. The impure part is
+the ledger and the gate calls in `file/mod.rs`.
 
 Touch points outside the two directories, all one-line insertions at an existing
 branch:
@@ -707,8 +740,8 @@ branch:
 | `src/cli.rs` | flags + `into_ctx` |
 | `src/config.rs` | `PathScope` + `Limits` on `RunCtx` |
 | `src/repair/mod.rs` | build both plans → filter → assert → execute; `PLAN` emit; gate `config.ini` |
-| `src/repair/post.rs` | scope gate on deprecated deletes and audio move |
-| `src/repair/file.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
+| `src/repair/phases/post.rs` | scope gate on deprecated deletes and audio move |
+| `src/repair/file/mod.rs` | write-bytes ledger + download-bytes hard stop + fail-fast |
 | `src/report.rs` | the conditional `SUMMARY` keys |
 | `README.md` | flag table, machine-contract table, exit-code table |
 

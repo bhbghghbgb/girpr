@@ -41,11 +41,9 @@
 //! what keeps the other ~55 files, including every blob and every assembled
 //! `game/` file, under a byte-exact comparison.
 //!
-//! `verify/selfcheck.json` used to be the fourth, blanking A16's "N files, M B".
-//! It no longer states a byte total at all — the row lives inside one of the
-//! counted documents, so any total written there describes an earlier, smaller
-//! tree — and with nothing volatile left in it the whole document is compared
-//! byte-for-byte.
+//! `verify/selfcheck.json` is not in the list: A16 no longer states a byte
+//! total, so nothing in it moves between two captures of one binary and it is
+//! compared byte-for-byte.
 //!
 //! Two properties keep the remaining exemption honest:
 //!
@@ -441,18 +439,19 @@ fn tree(bundle: &Path, v: &Volatile<'_>) -> BTreeMap<String, Vec<u8>> {
 /// a refactor that renamed a field fails the harness loudly instead of quietly
 /// turning an exemption into "compare nothing".
 ///
-/// `verify/selfcheck.json` appears nowhere above, on purpose. It used to blank
-/// A16's "N files, M B", and that blank was hiding a number rather than removing
-/// one: A16's byte total was the total of the *previous* pass, because the row
-/// lives inside one of the counted documents. A16 no longer states a byte total,
-/// so nothing in that document is volatile and it is compared byte-for-byte.
+/// `verify/selfcheck.json` appears nowhere above, on purpose. Blanking A16's
+/// "N files, M B" once hid a number rather than removing one: A16's byte
+/// total was the total of the *previous* pass, because the row lives inside
+/// one of the counted documents. A16 no longer states a byte total, so
+/// nothing in that document is volatile and it is compared byte-for-byte.
 fn normalize_doc(rel: &str, body: &[u8], v: &Volatile<'_>) -> Vec<u8> {
     let n = normalize(body, v);
     let s = String::from_utf8_lossy(&n).into_owned();
     let out = match rel {
         // The requests.ndjson row, plus the `files[]` sum it feeds.
         "MANIFEST.json" => {
-            let m = blank_derived_rows(&s, &["api/requests.ndjson"]);
+            let m = blank_raw_argv_out_root(&s, v.out_root);
+            let m = blank_derived_rows(&m, &["api/requests.ndjson"]);
             blank_number(&m, "bytes_on_disk", 1)
         }
         // "N B downloaded, M B on disk".
@@ -465,6 +464,83 @@ fn normalize_doc(rel: &str, body: &[u8], v: &Volatile<'_>) -> Vec<u8> {
         _ => return n,
     };
     out.into_bytes()
+}
+
+/// The host's own encoding of a string as argv bytes, matching what
+/// `gircap::cli::recorded_argv` writes into `capture.tool_argv_raw`.
+fn host_arg_bytes(s: &str) -> Vec<u8> {
+    #[cfg(windows)]
+    {
+        s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        s.as_bytes().to_vec()
+    }
+}
+
+/// Empty the `tool_argv_raw` entries that carry this run's `--out` root.
+///
+/// `normalize` replaces the out root in the lossy `tool_argv` strings, but the
+/// raw form is a list of byte *numbers*, so the same path is there in the host's
+/// encoding — UTF-16LE on Windows — and a plain byte replace cannot see it. Each
+/// inner array that decodes to a value containing the out root is replaced with
+/// `[]`; every other argument is still compared number for number, and the outer
+/// length still has to match.
+///
+/// The outer array holds only numbers, so bracket counting cannot be confused by
+/// a `[` inside a string. A missing `tool_argv_raw` returns the document
+/// unchanged rather than panicking: `schema.rs` is where that field is pinned.
+fn blank_raw_argv_out_root(s: &str, out_root: &str) -> String {
+    const KEY: &str = "\"tool_argv_raw\"";
+    let Some(key) = s.find(KEY) else {
+        return s.to_string();
+    };
+    let Some(outer) = s[key..].find('[').map(|i| key + i) else {
+        return s.to_string();
+    };
+    let needle = host_arg_bytes(out_root);
+    let hits = |bytes: &[u8]| {
+        !needle.is_empty() && bytes.windows(needle.len()).any(|w| w == needle.as_slice())
+    };
+    let b = s.as_bytes();
+    let mut depth = 0usize;
+    let mut span_start = None;
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0usize;
+    for (i, byte) in b.iter().enumerate().skip(outer) {
+        match byte {
+            b'[' => {
+                depth += 1;
+                if depth == 2 {
+                    span_start = Some(i);
+                }
+            }
+            b']' => {
+                if depth == 2
+                    && let Some(start) = span_start.take()
+                {
+                    let bytes: Vec<u8> = s[start + 1..i]
+                        .split(|c: char| !c.is_ascii_digit())
+                        .filter(|t| !t.is_empty())
+                        .map(|t| t.parse::<u8>().expect("a recorded argument byte"))
+                        .collect();
+                    if hits(&bytes) {
+                        out.push_str(&s[last..start]);
+                        out.push_str("[]");
+                        last = i + 1;
+                    }
+                }
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    out.push_str(&s[last..]);
+    out
 }
 
 /// A readable description of the differences between two normalised files.
@@ -654,6 +730,47 @@ fn the_out_root_is_scrubbed_in_both_spellings() {
         norm("20261016T180534Z"),
         "<CAPTURE_ID>",
         "the bundle directory's own name is the capture id"
+    );
+}
+
+#[test]
+fn the_raw_argv_out_root_is_blanked_but_other_arguments_are_not() {
+    // `normalize` replaces the out root in the lossy strings; the raw form is
+    // numbers, so it needs its own pass. The argument that *is* the scratch path
+    // becomes `[]`, and `gircap` beside it is still compared number for number.
+    let root = host_arg_bytes(volatile().out_root);
+    let nums = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(u8::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let doc = format!(
+        r#"{{"tool_argv_raw":[[103,105,114,99,97,112],[{}]],"after":[1]}}"#,
+        nums(&root)
+    );
+    assert_eq!(
+        blank_raw_argv_out_root(&doc, volatile().out_root),
+        r#"{"tool_argv_raw":[[103,105,114,99,97,112],[]],"after":[1]}"#
+    );
+
+    // An argument from *another* run's root is not this run's volatile value, so
+    // it stays; blanking anything that looked path-like would hide a regression.
+    let other = format!(
+        r#"{{"tool_argv_raw":[[{}]]}}"#,
+        nums(&host_arg_bytes(r"C:\Users\x\gircap\b"))
+    );
+    assert_eq!(
+        blank_raw_argv_out_root(&other, volatile().out_root),
+        other,
+        "only the recorded root is blanked"
+    );
+
+    // A document without the field is returned untouched rather than panicking.
+    assert_eq!(
+        blank_raw_argv_out_root(r#"{"capture":{}}"#, volatile().out_root),
+        r#"{"capture":{}}"#
     );
 }
 

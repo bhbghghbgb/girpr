@@ -62,6 +62,10 @@ pub struct FixtureInput<'a> {
     /// `--no-chunk-blobs`, which suppresses the chunk blobs but **not** the
     /// prelude.
     pub no_chunk_blobs: bool,
+    /// The run's `--max-decompressed-bytes`, for every chunk decode.
+    pub max_decompressed_bytes: u64,
+    /// Where a device-name path is recorded under its escaped on-disk name.
+    pub path_map: &'a crate::pathmap::PathMap,
 }
 
 /// What the fixture build produced.
@@ -117,7 +121,7 @@ pub struct BuiltFixture {
 /// prints each one, so the operator sees which comparison failed rather than
 /// only that something did — and the run then fails as `assertion`.
 pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
-    let chunk_source = ChunkSource::from_index(i.dir, i.index);
+    let chunk_source = ChunkSource::from_index(i.dir, i.index, i.max_decompressed_bytes);
     // Where the game puts the audio scan file. Never hardcoded: it is the
     // launcher's path, and the fixture has to write it where the tool under
     // test looks for it.
@@ -176,6 +180,7 @@ pub fn build(i: FixtureInput<'_>) -> Result<BuiltFixture, Failure> {
                     )
                 })?,
                 &mut out,
+                i.path_map,
             )?;
         }
     }
@@ -222,7 +227,27 @@ fn record(
     a: &crate::select::Admission,
     got: assemble::Assembled,
     out: &mut BuiltFixture,
+    path_map: &crate::pathmap::PathMap,
 ) -> Result<(), Failure> {
+    // **No artifact may be replaced by a later one.** `patchmaps/<id>.json` is
+    // named from the capture id, so two admissions with one id would silently
+    // lose the first capture while the counts still said two. Selection now
+    // numbers forced paths per class; this is the writer's own refusal, so a
+    // caller that built a `Selection` itself gets the same failure instead of a
+    // bundle whose documents disagree. It runs before the first write.
+    if out.assembled_ids.contains(&a.capture_id) {
+        return Err(assertion(
+            &format!("assemble {}", a.path),
+            &ApiError::shape(
+                "capture ids",
+                format!(
+                    "capture id {:?} was already assembled; a second write would \
+                     replace the first capture's patchmap",
+                    a.capture_id
+                ),
+            ),
+        ));
+    }
     let p = got.patch.as_ref();
     tracing::info!(
         capture_id = %a.capture_id,
@@ -269,6 +294,7 @@ fn record(
                     bytes: &o.bytes,
                     capture_id: &a.capture_id,
                 },
+                path_map,
             )
             .map_err(|e| write_err(dir, e))?,
         );
@@ -283,6 +309,7 @@ fn record(
                     bytes: &n.bytes,
                     capture_id: &a.capture_id,
                 },
+                path_map,
             )
             .map_err(|e| write_err(dir, e))?,
         );

@@ -148,13 +148,16 @@ pub struct Transport {
     /// for ten minutes never trips one, so the ceiling is the only bound on the
     /// path between a socket and this tool's buffers.
     ///
-    /// Checked in two places, because one is not enough: against the declared
-    /// `Content-Length` before a byte is read (so a server claiming 10 GiB is
-    /// refused immediately), and against the running total as bytes arrive (so a
-    /// server that lies about or omits the header is still stopped).
+    /// Checked on every body, successful or not, in two places: against the
+    /// declared `Content-Length` before a byte is read (so a server claiming
+    /// 10 GiB is refused immediately), and against the running total as bytes
+    /// arrive (so a server that lies about or omits the header is still stopped).
     ///
-    /// Exceeding it is a [`super::ApiError::Shape`], so it is **not** retried: an origin
-    /// that sent too much will send too much again.
+    /// What exceeding it *means* depends on the response. A successful body over
+    /// the ceiling is a [`super::ApiError::Shape`], so it is **not** retried: an
+    /// origin that sent too much will send too much again. An error body is only
+    /// counted: the `4xx`/`5xx` status is still the failure reported, because the
+    /// body is not worth reading and the status is what the caller needs.
     pub max_response_bytes: u64,
 }
 

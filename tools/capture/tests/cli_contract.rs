@@ -112,6 +112,30 @@ fn help_and_version_are_zero() {
     }
 }
 
+/// The two `capture` help strings that contradicted the code and the spec.
+///
+/// Neither was pinned anywhere. `--require-class` said "Default: all" while an
+/// empty list means nothing is required, and `--no-chunk-blobs` named three of
+/// the eleven assertions it skips. `--help` is where a reader finds out what a
+/// flag does, so it is the wrong place to be wrong.
+#[test]
+fn the_two_help_strings_that_were_stale_match_the_code() {
+    let r = assert_code(&["capture", "--help"], 0);
+    // clap wraps to the terminal width, so compare with the wrapping removed
+    // rather than betting on where a line break lands.
+    let help = r.stdout.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        help.contains("Default: none (nothing is required unless named)"),
+        "--require-class requires nothing unless named:\n{}",
+        r.stdout
+    );
+    assert!(
+        help.contains("Breaks assertions A6-A12, A19, A21-A23 by design"),
+        "--no-chunk-blobs skips eleven assertions, not three:\n{}",
+        r.stdout
+    );
+}
+
 /// Every argument-level failure is `1`, never clap's default `2` — `2` means
 /// "network or API failure" here, and a flag typo must not be indistinguishable
 /// from a CDN outage.
@@ -138,6 +162,40 @@ fn every_argument_error_is_one() {
     for args in cases {
         assert_code(args, 1);
     }
+}
+
+/// A non-Unicode `--out` is recorded, not fatal.
+///
+/// The `PathBuf`-typed flags are the realistic carriers of an argument that is
+/// not valid Unicode; `std::env::args()` panicked on it *after* clap had already
+/// parsed the same value through `args_os`, which exited `101` and printed no
+/// `SUMMARY`. The contract is the code and the line, whichever way the run ends.
+#[cfg(windows)]
+#[test]
+fn a_non_unicode_output_path_reports_instead_of_panicking() {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt as _;
+
+    let mut argv: Vec<OsString> = vec![
+        OsString::from("capture"),
+        OsString::from("--out"),
+        OsString::from_wide(&[0xD800]),
+    ];
+    argv.extend(OFFLINE.iter().map(OsString::from));
+    let out = Command::new(bin())
+        .args(&argv)
+        .output()
+        .expect("the binary spawns with a non-Unicode argument");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "an unreachable base is still exit 2:\n{stdout}"
+    );
+    assert!(
+        stdout.starts_with("SUMMARY "),
+        "the run must still report:\n{stdout:?}"
+    );
 }
 
 #[test]
@@ -420,9 +478,9 @@ fn rust_log_does_not_reach_the_log_file() {
 
 /// `RUST_LOG` adds to the console; it cannot silence the program.
 ///
-/// A `RUST_LOG` naming an unrelated crate used to replace the console's whole
-/// spec, and the program then said nothing at all. The program's own level is
-/// `--log-level`, and `RUST_LOG` only adds to it.
+/// A `RUST_LOG` naming an unrelated crate would replace the console's whole
+/// spec, and the program would then say nothing at all. The program's own
+/// level is `--log-level`, and `RUST_LOG` only adds to it.
 #[test]
 fn an_unrelated_rust_log_does_not_silence_the_capture() {
     let out = Command::new(bin())

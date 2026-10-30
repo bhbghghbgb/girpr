@@ -51,7 +51,9 @@ pub struct FileDisk {
 ///   files (that is what `--scan` is for). For the temp path it is exact.
 /// - `est_extra_bytes` — the free space the run needs **beyond** the
 ///   install: the peak extra disk of a single file, times the number of
-///   files in flight. Zero for a same-size in-place repair; `jobs × largest
+///   files in flight. Zero for a same-size in-place repair; the file's growth
+///   for an in-place or `discard` repair of a truncated file (discard deletes
+///   the target first, so it never holds a second copy); `jobs × largest
 ///   file` for the temp path.
 ///
 /// The per-file table is what the two modes really differ on, and it is what
@@ -75,8 +77,21 @@ impl DiskPlan {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
         for f in &plan.files {
-            let path = game_dir.join(util::normalize_rel(&f.rel));
-            let on_disk = std::fs::metadata(&path).ok().map(|m| m.len());
+            let path = match util::contained_join(game_dir, &f.rel) {
+                Ok(p) => p,
+                Err(e) => {
+                    // `build_plan` refused an escaping rel; defence in depth.
+                    // Omitting the file silently would understate the disk
+                    // estimate with nothing to explain it.
+                    tracing::warn!(
+                        file = %f.rel,
+                        error = %format!("{e:#}"),
+                        "disk plan: path escapes the game dir; file omitted from the estimate"
+                    );
+                    continue;
+                }
+            };
+            let on_disk = planned_on_disk(util::file_len(&path), &f.rel, &path);
             let size = f.size.max(0) as u64;
             let (mode, extra) = match resolve_mode(requested, &path) {
                 // The temp path duplicates the whole file: the target and the
@@ -84,9 +99,17 @@ impl DiskPlan {
                 Mode::Temp => (Mode::Temp, size),
                 // The in-place path only needs the file's *growth*; a file
                 // that is already the right size needs nothing at all.
-                Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk.unwrap_or(0))),
+                // `discard` is the in-place path with the target deleted first,
+                // so it never holds a second copy either: a full-size target
+                // needs 0, while a truncated one still grows by `size - on_disk`.
+                // Reporting 0 for that growth would understate the free space
+                // the run needs before it starts.
+                Mode::Inplace => (Mode::Inplace, size.saturating_sub(on_disk)),
             };
-            out.est_write_bytes += size;
+            // Manifest sizes are server data. Three files at `i64::MAX` do not
+            // fit in a `u64`; a debug-build panic (or a release wrap that makes
+            // the `PLAN` line lie) is not an answer to a corrupt manifest.
+            out.est_write_bytes = out.est_write_bytes.saturating_add(size);
             peak = peak.max(extra);
             out.per_file.insert(
                 f.rel.clone(),
@@ -111,6 +134,30 @@ impl DiskPlan {
             mode: "inplace",
             extra_bytes: 0,
         })
+    }
+}
+
+/// The on-disk length the disk plan charges for one file.
+///
+/// [`util::file_len`] keeps an absent file (`NotFound`) distinct from a stat
+/// that failed for another reason. Only absence is zero; an unreadable file is
+/// warned with its path and the I/O error and charged as absent, which is the
+/// safe overestimate (the whole file as growth) rather than pretending it is
+/// already the right size. Split from the caller so the injected error arm is
+/// testable without a deny-ACL fixture.
+fn planned_on_disk(len: util::FileLen, rel: &str, path: &Path) -> u64 {
+    match len {
+        util::FileLen::Present(n) => n,
+        util::FileLen::Absent => 0,
+        util::FileLen::Unreadable(e) => {
+            tracing::warn!(
+                file = rel,
+                path = %path.display(),
+                error = %e,
+                "disk plan: cannot stat the file; estimating it as absent"
+            );
+            0
+        }
     }
 }
 
@@ -218,8 +265,8 @@ pub struct RepairEntry<'a> {
     pub rel: &'a str,
     pub size: i64,
     pub chunks_total: u64,
-    /// Chunks the local reuse map cannot supply, by compressed size — this
-    /// file's half of the plan's `est_download_bytes`.
+    /// Chunks this run will download for this file, by compressed size — this
+    /// file's share of the plan's `est_download_bytes`.
     pub est_download_bytes: u64,
     /// How this file would be written: `inplace` or `temp`.
     pub mode: &'static str,
@@ -235,38 +282,33 @@ pub struct PurgeEntry<'a> {
 }
 
 impl<'a> PlanDocument<'a> {
+    /// `est_by_file` is the **same** per-file split the `PLAN` line's total was
+    /// folded from, parallel to `plan.files`. It is not re-derived here: a
+    /// second derivation (Σ `compressed_size`) disagrees with the scan on every
+    /// chunk the scan proved reusable, and reconciling the two in one direction
+    /// only is what made the document lie.
+    ///
+    /// A caller whose slice is short (a bug, not server data) falls back to the
+    /// over-approximation for the missing file, never to zero.
     pub fn new(
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
-        est_download_bytes: u64,
+        est_by_file: &[u64],
         disk: &DiskPlan,
     ) -> Self {
-        // The per-file estimates must sum to the plan total, or the document
-        // would disagree with the `PLAN` line. `est` is the caller-computed plan
-        // total; the split is only trusted when it adds up, and the difference
-        // is folded into the first file so the two always agree.
-        let mut per_file: Vec<u64> = plan
-            .files
-            .iter()
-            .map(|f| {
-                f.chunks
-                    .iter()
-                    .map(|c| c.compressed_size.max(0) as u64)
-                    .sum()
-            })
-            .collect();
-        let summed: u64 = per_file.iter().sum();
-        if summed != est_download_bytes
-            && let Some(first) = per_file.first_mut()
-        {
-            *first = first.saturating_add(est_download_bytes.saturating_sub(summed));
-        }
         Self {
             repair: plan
                 .files
                 .iter()
-                .zip(per_file)
-                .map(|(f, est)| {
+                .enumerate()
+                .map(|(i, f)| {
+                    let est = est_by_file.get(i).copied().unwrap_or_else(|| {
+                        // Server-controlled sizes: saturate, so a corrupt
+                        // manifest cannot overflow the fallback.
+                        f.chunks.iter().fold(0u64, |n, c| {
+                            n.saturating_add(c.compressed_size.max(0) as u64)
+                        })
+                    });
                     let d = disk.for_file(&f.rel);
                     RepairEntry {
                         rel: &f.rel,
@@ -362,6 +404,7 @@ mod tests {
             dirs: vec![],
             total_bytes: 4096,
             hidden: 3,
+            errors: 0,
         }
     }
 
@@ -483,6 +526,77 @@ mod tests {
         assert_eq!(disk.est_extra_bytes, 128 * 4);
     }
 
+    /// E-2: `discard` deletes the target before writing, so it never needs a
+    /// second copy (that is `temp`'s cost). For a target that is already the
+    /// right size, the extra disk is 0; a truncated target still has to grow by
+    /// `size - on_disk`, exactly like an in-place repair. Reporting 0 for that
+    /// growth would understate the free space the run needs before it starts.
+    #[test]
+    fn discard_needs_the_growth_but_never_a_second_copy() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "discard");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        // foo.dat is full size; bar.dat is 16 of 64 bytes.
+        std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
+        std::fs::write(dir.join("game").join("bar.dat"), vec![0u8; 16]).unwrap();
+
+        let disk = DiskPlan::new(&dir, &plan(), RepairMode::Discard, 4);
+        assert_eq!(
+            disk.for_file("game/foo.dat").extra_bytes,
+            0,
+            "a full-size target is deleted and rewritten in place: no second copy"
+        );
+        assert_eq!(
+            disk.for_file("game/bar.dat").extra_bytes,
+            64 - 16,
+            "a truncated target still grows to its manifest size"
+        );
+        assert_eq!(disk.est_extra_bytes, (64 - 16) * 4);
+        // The whole file is rewritten, so the write figure is still the plan's
+        // total size (the empty third file adds nothing).
+        assert_eq!(disk.est_write_bytes, 128 + 64);
+    }
+
+    /// E-3: a stat that failed for anything but `NotFound` is not a
+    /// zero-length file. Charging it as absent is the safe overestimate, but
+    /// it must be logged with the path and the I/O error so the plan does not
+    /// silently claim a disk requirement it never measured.
+    #[test]
+    fn an_unreadable_stat_is_charged_as_the_whole_file_and_warned() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "unreadable_stat");
+        let path = dir.join("f.dat");
+        std::fs::write(&path, b"12345").unwrap();
+        assert_eq!(planned_on_disk(util::file_len(&path), "f.dat", &path), 5);
+        let missing = dir.join("missing.dat");
+        assert_eq!(
+            planned_on_disk(util::file_len(&missing), "missing.dat", &missing),
+            0,
+            "only NotFound is an absent file"
+        );
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let mut charged = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            charged = Some(planned_on_disk(
+                util::FileLen::Unreadable(denied),
+                "f.dat",
+                &path,
+            ));
+        });
+        assert_eq!(
+            charged,
+            Some(0),
+            "an unreadable stat is charged as absent, the safe full-size estimate"
+        );
+        assert!(
+            logs.contains("disk plan: cannot stat the file"),
+            "the failed stat is logged: {logs}"
+        );
+        assert!(
+            logs.contains("f.dat") && logs.contains("denied"),
+            "the log names the file and the I/O error: {logs}"
+        );
+    }
+
     #[test]
     fn the_document_carries_the_mode_and_the_extra_bytes_of_each_file() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "document");
@@ -490,7 +604,7 @@ mod tests {
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         let plan = plan();
         let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 1);
-        let doc = PlanDocument::new(&plan, None, 60, &disk);
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &disk);
         assert_eq!(doc.repair[0].mode, "inplace");
         assert_eq!(doc.repair[0].extra_bytes, 0);
         assert_eq!(doc.repair[1].mode, "inplace");
@@ -500,7 +614,7 @@ mod tests {
     #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -515,19 +629,81 @@ mod tests {
     }
 
     #[test]
-    fn a_mismatched_estimate_is_reconciled_into_the_document() {
-        // The document is written from the same estimate the `PLAN` line
-        // reports; if they ever disagreed, the file would be a lie.
+    fn the_document_takes_the_scanned_downward_estimate_not_the_naive_sum() {
+        // The `--scan` case: one of foo.dat's two chunks is already reusable,
+        // so the plan total is 10, not the naive Σ compressed_size (60). The
+        // document must carry the same split the total was folded from — the
+        // old reconciliation only handled `summed < est`, which is the
+        // direction that never occurs under `--scan`.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 100, &DiskPlan::default());
-        let sum: u64 = doc.repair.iter().map(|e| e.est_download_bytes).sum();
-        assert_eq!(sum, 100);
+        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &DiskPlan::default());
+        assert_eq!(doc.repair[0].est_download_bytes, 10);
+        assert_eq!(doc.repair[1].est_download_bytes, 0);
+        let sum = doc
+            .repair
+            .iter()
+            .fold(0u64, |n, e| n.saturating_add(e.est_download_bytes));
+        assert_eq!(sum, 10, "the document agrees with the PLAN line");
+    }
+
+    #[test]
+    fn an_overflowing_write_estimate_saturates_instead_of_panicking() {
+        // `size` is server manifest data. Three files at `i64::MAX` do not
+        // fit in a `u64`: the debug build must not panic and a release build
+        // must not wrap a smaller "estimate" onto the PLAN line.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "overflow");
+        let plan = RepairPlan {
+            latest: "9.9".into(),
+            files: ["a.dat", "b.dat", "c.dat"]
+                .into_iter()
+                .map(|rel| PlannedFile {
+                    rel: rel.into(),
+                    size: i64::MAX,
+                    md5: "m".into(),
+                    chunks: vec![],
+                })
+                .collect(),
+            url_prefix_by_file: HashMap::new(),
+        };
+        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 3);
+        assert_eq!(disk.est_write_bytes, u64::MAX);
+        // The peak is the largest single file (`i64::MAX`); three files in
+        // flight overflow the multiplication, so that fold must saturate too.
+        assert_eq!(disk.est_extra_bytes, u64::MAX);
+    }
+
+    #[test]
+    fn a_short_estimate_slice_falls_back_to_a_saturating_per_file_estimate() {
+        // The caller supplies the same split the total was folded from. A
+        // short slice is a caller bug; the fallback over-approximates and
+        // saturates, rather than inventing a zero or overflowing.
+        let plan = RepairPlan {
+            latest: "9.9".into(),
+            files: vec![PlannedFile {
+                rel: "game/huge.dat".into(),
+                size: 192,
+                md5: "m".into(),
+                chunks: vec![
+                    chunk("c0", i64::MAX),
+                    chunk("c1", i64::MAX),
+                    chunk("c2", i64::MAX),
+                ],
+            }],
+            url_prefix_by_file: HashMap::new(),
+        };
+        let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
+        assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
+        let sum = doc
+            .repair
+            .iter()
+            .fold(0u64, |n, e| n.saturating_add(e.est_download_bytes));
+        assert_eq!(sum, u64::MAX);
     }
 
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -541,7 +717,7 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, 60, &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");

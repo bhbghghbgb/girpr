@@ -158,7 +158,8 @@ pub struct CaptureArgs {
     #[arg(long, value_name = "BYTES")]
     pub max_download_bytes: Option<u64>,
 
-    /// Fail with exit 4 unless these matrix classes are satisfied. Default: all.
+    /// Fail with exit 4 unless these matrix classes are satisfied. Default: none
+    /// (nothing is required unless named).
     #[arg(long = "require-class", value_name = "ID")]
     pub require_class: Vec<String>,
 
@@ -184,7 +185,7 @@ pub struct CaptureArgs {
     #[arg(long = "probe-tags", value_name = "TAG")]
     pub probe_tags: Vec<String>,
 
-    /// Capture metadata only. Breaks assertions A7-A10 by design.
+    /// Capture metadata only. Breaks assertions A6-A12, A19, A21-A23 by design.
     #[arg(long = "no-chunk-blobs", default_value_t = false)]
     pub no_chunk_blobs: bool,
 
@@ -206,6 +207,13 @@ pub struct CaptureArgs {
     /// archive ever approaches the default.
     #[arg(long, value_name = "BYTES", default_value_t = crate::http::DEFAULT_MAX_RESPONSE_BYTES)]
     pub max_response_bytes: u64,
+
+    /// Ceiling on one **decompressed** body, in bytes. Every zstd decode — a
+    /// manifest archive, a chunk blob, or the measurement of one — stops once
+    /// it would produce more than this, so a small compressed bomb cannot reach
+    /// the allocator as an abort. Recorded in `MANIFEST.json`.
+    #[arg(long, value_name = "BYTES", default_value_t = crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)]
+    pub max_decompressed_bytes: u64,
 
     /// Override the HoYoPlay base. Testing seam: points every endpoint at a
     /// local server. Defaults to the production base for `--biz`.
@@ -394,6 +402,76 @@ where
     Cli::try_parse_from(argv)
 }
 
+/// The `argv` a capture records: a human-readable rendering **and** the exact
+/// bytes of every argument.
+///
+/// `std::env::args()` panics on any argument that is not valid Unicode, and the
+/// realistic carriers are the `PathBuf`-typed flags (`--out`, `--log-file`) plus
+/// `argv[0]` itself. clap already parsed the same argv through `args_os`, so
+/// panicking here would be a crash *after* a successful parse — exiting `101`
+/// and printing no `SUMMARY`, which breaks the one thing every run promises.
+///
+/// A recorded path with a replacement character is a worse record than the real
+/// bytes, but it is a record; the alternative is none at all, and the flag whose
+/// value it was has already been used from the `OsString` clap parsed.
+///
+/// **The lossy form cannot be reversed, so the exact bytes are kept beside it.**
+/// `raw` is the platform's own representation: UTF-16LE code-unit bytes on
+/// Windows, the native byte string on Unix. `host_os` in the same document says
+/// which. Nothing replays it yet; the point is that a later replay could, and a
+/// run whose `--out` held an unpaired surrogate can still be described exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedArgv {
+    /// `to_string_lossy`, one entry per argument.
+    pub lossy: Vec<String>,
+    /// The exact bytes of each argument, in the same order.
+    pub raw: Vec<Vec<u8>>,
+}
+
+impl RecordedArgv {
+    /// The raw bytes of each argument, as the bundle records them.
+    pub fn raw(&self) -> &[Vec<u8>] {
+        &self.raw
+    }
+}
+
+/// Turn an `OsString` into the exact bytes this host's argv carries.
+#[cfg(windows)]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt as _;
+    arg.encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<u8>>()
+}
+
+/// Turn an `OsString` into the exact bytes this host's argv carries.
+#[cfg(unix)]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt as _;
+    arg.as_bytes().to_vec()
+}
+
+/// Fallback for a host that is neither Windows nor Unix: keep the lossy bytes
+/// rather than failing to compile. No supported target takes this arm.
+#[cfg(not(any(windows, unix)))]
+fn argv_bytes(arg: &std::ffi::OsStr) -> Vec<u8> {
+    arg.to_string_lossy().into_owned().into_bytes()
+}
+
+/// Record both forms of an argv, in one pass.
+pub fn recorded_argv<I>(args: I) -> RecordedArgv
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    let mut lossy = Vec::new();
+    let mut raw = Vec::new();
+    for arg in args {
+        lossy.push(arg.to_string_lossy().into_owned());
+        raw.push(argv_bytes(&arg));
+    }
+    RecordedArgv { lossy, raw }
+}
+
 /// Exit with `code` on a clap error, having printed clap's own message.
 ///
 /// Only `--help` and `--version` are `0`. Everything else — including a
@@ -429,6 +507,162 @@ mod tests {
     #[test]
     fn the_cli_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    /// A non-Unicode argument is recorded, not fatal — and its exact bytes are
+    /// kept beside the lossy rendering, because the lossy one cannot be reversed.
+    ///
+    /// Windows is where an unpaired surrogate can reach `argv` (a very old or
+    /// unusual filesystem path). `std::env::args()` panics on it; `args_os`
+    /// plus this helper does not, and a recorded path with U+FFFD is still a
+    /// truthful record of "the caller named a path this process could not spell
+    /// in Unicode". The raw entry is the UTF-16LE code units, so the surrogate
+    /// survives exactly.
+    #[cfg(windows)]
+    #[test]
+    fn a_non_unicode_argument_is_recorded_lossily_instead_of_panicking() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let bad = OsString::from_wide(&[0xD800]);
+        let argv = recorded_argv([OsString::from("gircap"), bad.clone()]);
+        assert_eq!(argv.lossy.len(), 2);
+        assert_eq!(argv.raw.len(), 2);
+        assert_eq!(argv.lossy[0], "gircap");
+        assert!(
+            argv.lossy[1].contains('\u{FFFD}'),
+            "the surrogate is replaced, not dropped: {:?}",
+            argv.lossy[1]
+        );
+        // The exact bytes decode back to what the caller wrote, which the lossy
+        // form cannot: that is the whole reason the field exists.
+        let units: Vec<u16> = argv.raw[1]
+            .chunks_exact(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
+        assert_eq!(OsString::from_wide(&units), bad);
+        // And it does not panic for a plain ASCII path either, so the helper is
+        // not merely tolerating the one case it was written for.
+        let ascii = recorded_argv([OsString::from("--out"), OsString::from(r"C:\a")]);
+        assert_eq!(ascii.lossy, vec!["--out".to_string(), r"C:\a".to_string()]);
+        assert_eq!(
+            ascii.raw[1],
+            r"C:\a"
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<u8>>()
+        );
+    }
+
+    /// Every flag typed `PathBuf` accepts a non-Unicode value on its own
+    /// subcommand.
+    ///
+    /// The single-flag tests above prove the helper does not panic; this proves
+    /// the *parser* does not either, for each place a path can enter. A future
+    /// `String`-typed path flag would fail here rather than at the first run on a
+    /// machine with such a path.
+    #[cfg(windows)]
+    #[test]
+    fn every_path_flag_parses_a_non_unicode_value() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let cases: &[&[&str]] = &[
+            &["capture", "--out"],
+            &["capture", "--log-file"],
+            &["verify", "--artifact"],
+            &["materialize", "--artifact", "a", "--out"],
+            &["materialize", "--artifact"],
+            &["list", "--root"],
+        ];
+        for case in cases {
+            let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
+            argv.extend(case.iter().map(OsString::from));
+            argv.push(OsString::from_wide(&[0xD800]));
+            parse_from(argv).unwrap_or_else(|e| panic!("{case:?}: {e}"));
+        }
+    }
+
+    /// The other half of [`every_path_flag_parses_a_non_unicode_value`]: every
+    /// value-taking flag, whatever its type, either accepts a non-Unicode value
+    /// or refuses it through clap — never panics — and the exact bytes reach
+    /// `tool_argv_raw` in both cases.
+    ///
+    /// The `String`-typed flags cannot *represent* an unpaired surrogate, so
+    /// clap refuses them; that refusal is the correct behaviour and is pinned
+    /// here. What must not vary is the record: a refused flag never reaches the
+    /// bundle, but the argv is recorded before parsing, so the raw bytes are
+    /// kept anyway. A future flag whose type silently accepted a lossy value
+    /// would fail this table rather than at the first replay.
+    #[cfg(windows)]
+    #[test]
+    fn every_value_flag_either_parses_or_refuses_a_non_unicode_value_but_records_its_bytes() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt as _;
+
+        let bad = OsString::from_wide(&[0xD800]);
+        // (argv before the value, whether clap's value type accepts non-Unicode)
+        let cases: &[(&[&str], bool)] = &[
+            // PathBuf: the realistic carrier, accepted.
+            (&["capture", "--out"], true),
+            (&["capture", "--log-file"], true),
+            (&["verify", "--artifact"], true),
+            (&["materialize", "--artifact", "a", "--out"], true),
+            (&["list", "--root"], true),
+            // String, enums and numbers: not representable, refused by clap.
+            (&["capture", "--new-tag"], false),
+            (&["capture", "--old-tag"], false),
+            (&["capture", "--require-class"], false),
+            (&["capture", "--files"], false),
+            (&["capture", "--audio"], false),
+            (&["capture", "--probe-tags"], false),
+            (&["capture", "--hyp-base"], false),
+            (&["capture", "--sophon-base"], false),
+            (&["capture", "--output"], false),
+            (&["capture", "--biz"], false),
+            (&["capture", "--manifest-detail"], false),
+            (&["capture", "--per-class"], false),
+            (&["capture", "--max-download-bytes"], false),
+            (&["capture", "--gzip-threshold"], false),
+            (&["capture", "--jobs"], false),
+            (&["capture", "--retries"], false),
+            (&["capture", "--timeout"], false),
+            (&["capture", "--max-response-bytes"], false),
+            (&["capture", "--max-decompressed-bytes"], false),
+        ];
+        for (prefix, accepted) in cases {
+            let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
+            argv.extend(prefix.iter().map(OsString::from));
+            argv.push(bad.clone());
+
+            // The raw record is made from the same argv the parser sees, and it
+            // survives either outcome.
+            let recorded = recorded_argv(argv.iter().cloned());
+            assert_eq!(
+                recorded.raw.last().expect("the value is last"),
+                &argv_bytes(&bad),
+                "{prefix:?}: the exact bytes were not kept"
+            );
+
+            match parse_from(argv) {
+                Ok(_) => assert!(
+                    *accepted,
+                    "{prefix:?} accepted a non-Unicode value; its type is not PathBuf"
+                ),
+                Err(e) => {
+                    assert!(
+                        !*accepted,
+                        "{prefix:?} refused a value its PathBuf type should accept: {e}"
+                    );
+                    // A refusal is still usable: it says which value was wrong.
+                    let text = e.to_string();
+                    assert!(
+                        text.to_ascii_lowercase().contains("invalid"),
+                        "{prefix:?}: the refusal does not name the cause: {text}"
+                    );
+                }
+            }
+        }
     }
 
     fn parse(args: &[&str]) -> Cli {

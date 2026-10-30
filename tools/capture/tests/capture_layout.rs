@@ -16,7 +16,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use common::{Mock, World};
+use common::{File, Mock, World};
 use girpr_tempdir::TempDir;
 
 /// The binary under test, beside this test's own executable.
@@ -151,6 +151,21 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             walk(&p, out);
         }
     }
+}
+
+/// The directory a refused capture left its rejection document in.
+///
+/// A run that refuses at the manifest boundary writes no `MANIFEST.json`, so
+/// [`bundle_in`] cannot find it. The diagnostics document is the one thing such
+/// a run does write, and it is written into the directory the bundle would have
+/// occupied.
+fn rejections_in(out: &Path) -> PathBuf {
+    let mut found = Vec::new();
+    walk(out, &mut found);
+    found
+        .into_iter()
+        .find(|p| p.join("diagnostics/rejections.json").is_file())
+        .unwrap_or_else(|| panic!("no rejection document under {}", out.display()))
 }
 
 /// A capture against a healthy mock, reused by several tests.
@@ -374,12 +389,12 @@ fn the_wrong_build_probe_asks_for_a_real_id_under_the_other_prefix() {
 
 /// A bundle without `api/error_shapes.json` does not open.
 ///
-/// The document used to be additive: "a bundle captured before it existed has no
-/// `api/error_shapes.json`, and that is still a valid bundle". That let a bundle
-/// drop the tool's only measurement of what the API does with a request it will
-/// not serve, and still verify clean — so "this bundle can tell you how the API
-/// fails" was true of some bundles and not others, with nothing in the bundle to
-/// tell a reader which is which.
+/// An additive document — "a bundle captured before it existed has no
+/// `api/error_shapes.json`, and that is still a valid bundle" — lets a bundle
+/// drop the tool's only measurement of what the API does with a request it
+/// will not serve, and still verify clean: "this bundle can tell you how the
+/// API fails" is then true of some bundles and not others, with nothing in
+/// the bundle to tell a reader which is which.
 ///
 /// The exit code is `1`, not `3`. "This directory is not a readable bundle" is
 /// already `1` for every other reason — no `MANIFEST.json`, a truncated index —
@@ -439,6 +454,85 @@ fn every_command_that_reads_a_bundle_agrees_that_the_error_shapes_are_required()
             out.stderr
         );
     }
+}
+
+/// And the same for `api/error_responses.json`, the version-3 addition.
+///
+/// A capture that saw no non-2xx still writes the document, with an empty
+/// `responses` list: absence would be indistinguishable from "this tool never
+/// looked", which is exactly the ambiguity `error_shapes.json` was made required
+/// to remove.
+#[test]
+fn a_bundle_without_the_error_responses_document_does_not_verify() {
+    let (_m, _s, r, bundle) = capture_ok("noresps");
+    assert_eq!(r.code, 0);
+    let file = bundle.join("api/error_responses.json");
+    assert!(file.is_file(), "the capture wrote it even with no failures");
+    std::fs::remove_file(&file).unwrap();
+
+    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
+    assert_ne!(
+        v.code, 0,
+        "a bundle without its error responses must not verify clean:\n{}{}",
+        v.stdout, v.stderr
+    );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("error_responses.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
+}
+
+/// And `materialize` agrees, through the same door.
+#[test]
+fn every_command_that_reads_a_bundle_agrees_that_the_error_responses_are_required() {
+    let (_m, _s, r, bundle) = capture_ok("noresps2");
+    assert_eq!(r.code, 0);
+    std::fs::remove_file(bundle.join("api/error_responses.json")).unwrap();
+    let dir = bundle.to_string_lossy().to_string();
+
+    for cmd in [
+        vec!["verify", "--artifact", &dir],
+        vec!["materialize", "--artifact", &dir],
+    ] {
+        let out = run(&cmd);
+        assert_ne!(
+            out.code, 0,
+            "{} must refuse a bundle with no error responses:\n{}{}",
+            cmd[0], out.stdout, out.stderr
+        );
+        assert!(
+            format!("{}{}", out.stdout, out.stderr).contains("error_responses.json"),
+            "{} must name the document:\n{}{}",
+            cmd[0],
+            out.stdout,
+            out.stderr
+        );
+    }
+}
+
+/// And the same for `diagnostics/rejections.json`.
+#[test]
+fn a_bundle_without_the_rejection_document_does_not_verify() {
+    let (_m, _s, r, bundle) = capture_ok("norej");
+    assert_eq!(r.code, 0);
+    let file = bundle.join("diagnostics/rejections.json");
+    assert!(file.is_file(), "the capture wrote it even with no refusals");
+    std::fs::remove_file(&file).unwrap();
+
+    let v = run(&["verify", "--artifact", &bundle.to_string_lossy()]);
+    assert_ne!(
+        v.code, 0,
+        "a bundle without its rejection document must not verify clean:\n{}{}",
+        v.stdout, v.stderr
+    );
+    assert!(
+        format!("{}{}", v.stdout, v.stderr).contains("rejections.json"),
+        "the refusal must name the document:\n{}{}",
+        v.stdout,
+        v.stderr
+    );
 }
 
 /// Every chunk id the negative probes asked for, read from the document that
@@ -599,6 +693,9 @@ fn the_bundle_has_the_shape_the_schema_documents() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "api/error_shapes.json",
+        "api/error_responses.json",
+        "diagnostics/path_map.json",
+        "diagnostics/rejections.json",
         "chunks/index.json",
         "diff/paths.diff.json",
         "diff/candidates.json",
@@ -722,7 +819,8 @@ fn split_inventory<'a>(paths: &[&'a str]) -> (Vec<&'a str>, BTreeMap<&'a str, us
 ///   world rather than with the tool, and are pinned as counts deliberately.
 /// - the scalar header fields of `MANIFEST.json`: `schema_version`, `tool`, the
 ///   non-URL half of `biz`, `field`, `audio`, `gzip_threshold`,
-///   `selection_pool`, `versions`' key set, `capture.complete`, and the two
+///   `max_decompressed_bytes`, `selection_pool`, `versions`' key set,
+///   `capture.complete`, and the two
 ///   `totals` that count things rather than bytes.
 /// - `README.md` with **every digit run blanked**, so the prose is pinned and
 ///   the sizes are not.
@@ -739,6 +837,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     let json = |p: &str| -> serde_json::Value { serde_json::from_str(&read(p)).expect(p) };
 
     const MANIFEST_DOCUMENTS: &[&str] = &[
+        "api/error_responses.json",
         "api/error_shapes.json",
         "api/getBuild.7.0.0.json",
         "api/getBuild.7.1.0.json",
@@ -749,6 +848,8 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/path_map.json",
+        "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
         "diff/paths.diff.json",
@@ -780,6 +881,7 @@ fn the_inventory_documents_describe_the_same_bundle() {
     const CHECKSUM_DOCUMENTS: &[&str] = &[
         "MANIFEST.json",
         "README.md",
+        "api/error_responses.json",
         "api/error_shapes.json",
         "api/getBuild.7.0.0.json",
         "api/getBuild.7.1.0.json",
@@ -790,6 +892,8 @@ fn the_inventory_documents_describe_the_same_bundle() {
         "api/requests.ndjson",
         "api/tag_probe.json",
         "chunks/index.json",
+        "diagnostics/path_map.json",
+        "diagnostics/rejections.json",
         "diff/candidates.json",
         "diff/matrix.json",
         "diff/paths.diff.json",
@@ -833,6 +937,10 @@ fn the_inventory_documents_describe_the_same_bundle() {
     assert_eq!(m["field"], "game");
     assert_eq!(m["audio"], serde_json::json!(["en-us"]));
     assert_eq!(m["gzip_threshold"], 1_048_576);
+    assert_eq!(
+        m["max_decompressed_bytes"],
+        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+    );
     assert_eq!(
         m["selection_pool"]["fields"],
         serde_json::json!(["game", "en-us"])
@@ -1491,6 +1599,254 @@ fn a_pool_naming_an_unpublished_field_is_refused() {
     );
 }
 
+/// A manifest path is document-supplied. It becomes
+/// `<artifact>/game/<file>` and `expected/<file>`, so an escaping value must be
+/// refused at decode rather than written four directories above `--out`.
+///
+/// The hostile file is the only game file in this world, so an ordinary
+/// selection reaches it: without the decode check the capture would assemble it
+/// and write `game/../../../../../gircap-escape`.
+#[test]
+fn a_manifest_file_path_that_escapes_the_bundle_is_refused() {
+    let hostile = "../../../../../gircap-escape";
+    let mut world = World::game_only();
+    for (build, seed) in [(&mut world.old, 501_u64), (&mut world.new, 502_u64)] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        *game = vec![File::new(hostile, &[seed], 32)];
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("manifest-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("refused name"), "{text}");
+    assert!(text.contains("escapes the bundle root"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-escape").exists(),
+        "nothing may be written outside --out"
+    );
+    // **The refusal is evidence.** The value is not written as a path — the
+    // escape target does not exist — but it is kept in the diagnostics document
+    // inside the directory the bundle would have occupied, with the rule it
+    // failed.
+    let dir = rejections_in(&scratch.out());
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("diagnostics/rejections.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["rejections"][0]["value"], hostile);
+    assert_eq!(doc["rejections"][0]["rule"], "path.parent");
+    assert_eq!(
+        doc["rejections"][0]["source"],
+        "manifest 7.0.0/game entry 0 file"
+    );
+}
+
+/// **L1: a device name is kept, not discarded.** A manifest path that names
+/// `CON` is a fact about the API. The documents keep the game's spelling, the
+/// tree is written under `%CON`, and `diagnostics/path_map.json` records the
+/// pair. `verify` and `materialize` follow the same escape, so the bundle is
+/// readable on a host where the unescaped name would open a device.
+#[test]
+fn a_device_name_manifest_path_is_kept_and_escaped_on_disk() {
+    const LOGICAL: &str = "GenshinImpact_Data/Resources/CON";
+    let mut world = World::game_only();
+    for build in [&mut world.old, &mut world.new] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        let file = game
+            .iter_mut()
+            .find(|f| f.path == "GenshinImpact_Data/Resources/browser_assets")
+            .expect("the all-shapes world has the identical file");
+        file.path = LOGICAL.to_string();
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("device-path");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+    assert_eq!(r.code, 0, "{}\n{}", r.stdout, r.stderr);
+    let bundle = bundle_in(&scratch.out());
+
+    // The tree holds the escaped name, and not the one that would open a device.
+    assert!(
+        bundle
+            .join("game/GenshinImpact_Data/Resources/%CON")
+            .is_file(),
+        "the old side is written escaped"
+    );
+    assert!(
+        bundle
+            .join("expected/GenshinImpact_Data/Resources/%CON")
+            .is_file(),
+        "the new side is written escaped"
+    );
+    assert!(
+        !bundle
+            .join("game/GenshinImpact_Data/Resources/CON")
+            .exists(),
+        "the unescaped device name must never be created"
+    );
+
+    // The documents keep the game's own spelling.
+    let patchmap: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("patchmaps/identical.json")).unwrap())
+            .unwrap();
+    assert_eq!(patchmap["path"], LOGICAL);
+    let index: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("chunks/index.json")).unwrap()).unwrap();
+    let referenced: Vec<String> = index["blobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|b| b["referenced_by"].as_array().cloned().unwrap_or_default())
+        .filter_map(|r| r["path"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        referenced.iter().any(|p| p == LOGICAL),
+        "the index keeps the logical path: {referenced:?}"
+    );
+
+    // The mapping is recorded, and `files[]` lists what was written.
+    let map: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("diagnostics/path_map.json")).unwrap())
+            .unwrap();
+    let game_map = map["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["logical"] == format!("game/{LOGICAL}"))
+        .expect("the old side is mapped");
+    assert_eq!(
+        game_map["on_disk"],
+        format!("game/GenshinImpact_Data/Resources/%CON")
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(bundle.join("MANIFEST.json")).unwrap()).unwrap();
+    let files: Vec<&str> = manifest["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|f| f["path"].as_str())
+        .collect();
+    assert!(
+        files.contains(&"game/GenshinImpact_Data/Resources/%CON"),
+        "files[] lists the on-disk name"
+    );
+
+    // `verify` reads the escaped tree and passes; `materialize` reproduces it.
+    let dir = bundle.to_string_lossy().to_string();
+    let v = run(&["verify", "--artifact", &dir]);
+    assert_eq!(v.code, 0, "{}\n{}", v.stdout, v.stderr);
+
+    let out = scratch.root.join("rebuilt");
+    let m = run(&[
+        "materialize",
+        "--artifact",
+        &dir,
+        "--out",
+        &out.to_string_lossy(),
+    ]);
+    assert_eq!(m.code, 0, "{}\n{}", m.stdout, m.stderr);
+    assert!(out.join("game/GenshinImpact_Data/Resources/%CON").is_file());
+    assert!(!out.join("game/GenshinImpact_Data/Resources/CON").exists());
+}
+
+/// A device name is only escaped where it is an **observation**. At argument
+/// resolution there is no bundle, so `--files` keeps refusing it.
+#[test]
+fn a_device_name_from_a_flag_is_still_refused() {
+    let mock = Mock::start(World::game_only());
+    let scratch = Scratch::new("device-flag");
+    let r = capture(
+        &mock,
+        &scratch,
+        &[
+            "--audio",
+            "none",
+            "--files",
+            "GenshinImpact_Data/Resources/CON",
+        ],
+    );
+    assert_eq!(r.code, 1, "{}\n{}", r.stdout, r.stderr);
+    assert!(
+        format!("{}{}", r.stdout, r.stderr).contains("device"),
+        "{}{}",
+        r.stdout,
+        r.stderr
+    );
+}
+
+/// A chunk id is both a CDN path segment and `chunks/blobs/<id>.zst`. The
+/// documented `<16 hex>_<32 hex>` shape is checked where the manifest is
+/// decoded, before the id can reach either sink.
+#[test]
+fn a_manifest_chunk_id_outside_the_documented_shape_is_refused() {
+    let hostile = "../../../../gircap-chunk";
+    let mut world = World::game_only();
+    for build in [&mut world.old, &mut world.new] {
+        let game = &mut build
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the world publishes game")
+            .1;
+        game[0].chunks[0].id = hostile.to_string();
+    }
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("chunk-id-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 2, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("not a chunk id"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-chunk").exists(),
+        "nothing may be written outside --out"
+    );
+    let dir = rejections_in(&scratch.out());
+    let doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.join("diagnostics/rejections.json")).unwrap())
+            .unwrap();
+    assert_eq!(doc["rejections"][0]["value"], hostile);
+    assert_eq!(doc["rejections"][0]["rule"], "chunk-id.shape");
+    assert_eq!(
+        doc["rejections"][0]["source"],
+        "manifest 7.0.0/game entry 0 chunk 0 id"
+    );
+}
+
+/// `getGameConfigs.audio_pkg_scan_dir` is joined under `game/`. A proxy or a
+/// compromised API can supply it, so it is checked before the tree is created.
+#[test]
+fn an_audio_scan_dir_that_escapes_the_bundle_is_refused() {
+    let mut world = World::all_shapes();
+    world.audio_pkg_scan_dir = "../../../../../gircap-scan".into();
+    let mock = Mock::start(world);
+    let scratch = Scratch::new("scan-dir-escape");
+    let r = capture(&mock, &scratch, &["--audio", "none"]);
+
+    assert_eq!(r.code, 3, "{}\n{}", r.stdout, r.stderr);
+    let text = format!("{}{}", r.stdout, r.stderr);
+    assert!(text.contains("audio_pkg_scan_dir"), "{text}");
+    assert!(text.contains("escapes the bundle root"), "{text}");
+    assert!(
+        !scratch.root.join("gircap-scan").exists(),
+        "nothing may be written outside --out"
+    );
+    assert!(
+        !scratch.out().exists(),
+        "the refusal happens before the artifact directory exists"
+    );
+}
+
 /// `--require-class` on a class the run cannot satisfy is exit `4`, and the
 /// artifact is still written.
 ///
@@ -1556,7 +1912,11 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         .flatten()
         .map(|e| format!("api/{}", e.file_name().to_string_lossy()))
         .filter(|p| p.ends_with(".json"))
-        .filter(|p| !p.ends_with("tag_probe.json") && !p.ends_with("error_shapes.json"))
+        .filter(|p| {
+            !p.ends_with("tag_probe.json")
+                && !p.ends_with("error_shapes.json")
+                && !p.ends_with("error_responses.json")
+        })
         .collect();
     on_disk.sort();
 
@@ -1570,7 +1930,7 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         "six metadata bodies are fetched; the count is the claim: {marked:?}"
     );
 
-    // And the two summary documents stayed unmarked, which is the half that
+    // And the summary documents stayed unmarked, which is the half that
     // stops a later edit from marking everything under `api/`.
     let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
     for row in &rows {
@@ -1585,9 +1945,9 @@ fn the_six_api_rows_record_where_their_body_was_written() {
         );
     }
     assert!(
-        !marked
-            .iter()
-            .any(|p| p.contains("tag_probe") || p.contains("error_shapes")),
+        !marked.iter().any(|p| p.contains("tag_probe")
+            || p.contains("error_shapes")
+            || p.contains("error_responses")),
         "a probe row is not a stored body: {marked:?}"
     );
 }

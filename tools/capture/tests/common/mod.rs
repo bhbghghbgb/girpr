@@ -42,6 +42,12 @@ use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------- the world
 
+/// A path whose patch shape answers no matrix class: one chunk, no reuse.
+///
+/// It is the same shape the frozen measured corpus carries, so a test that
+/// forces it exercises the real degenerate case rather than an invented one.
+pub const DEGENERATE_PATH: &str = "GenshinImpact_Data/AssetBundles/data_revision";
+
 /// One chunk, with the bytes a CDN would serve and everything a manifest
 /// declares about it.
 ///
@@ -65,6 +71,23 @@ pub struct Blob {
     pub uncompressed_md5: String,
     /// `len(body)`.
     pub uncompressed_size: i64,
+    /// The length the manifest declares, when it is not `len(body)`.
+    ///
+    /// `None` for every ordinary blob, so the world keeps its "declare what the
+    /// bytes say" property by default. A test overwrites it to model a manifest
+    /// whose arithmetic is hostile - a chunk at `i64::MAX`, which is the one
+    /// extreme the decoder accepts, since it refuses a negative chunk size at
+    /// its arithmetic boundary - while the bytes a CDN serves stay ordinary.
+    /// The archive stats are derived from this value with the same `.max(0)`
+    /// and saturating additions the decoder applies, so A5 still reconciles.
+    pub declared_uncompressed_size: Option<i64>,
+    /// The bytes the CDN serves, when they are not `raw`.
+    ///
+    /// `None` for every ordinary blob. A test sets it to model a server that
+    /// returns something other than the frame the manifest declares; the
+    /// declaration (`compressed_size`, `compressed_md5`) is left alone, which
+    /// is exactly the mis-served-body case the capture has to record.
+    pub served: Option<Vec<u8>>,
 }
 
 /// A chunk whose bytes are a function of `seed`, and nothing else.
@@ -94,8 +117,28 @@ pub fn blob(seed: u64, len: usize) -> Blob {
         compressed_size: raw.len() as i64,
         uncompressed_md5,
         uncompressed_size: body.len() as i64,
+        declared_uncompressed_size: None,
+        served: None,
         raw,
         body,
+    }
+}
+
+impl Blob {
+    /// Declare a length other than `len(body)` in the manifest.
+    ///
+    /// The bytes, their digests and their compressed size are untouched: only
+    /// the number the manifest says the chunk decodes to changes, which is what
+    /// makes the capture's clamping visible in `chunks/index.json`.
+    pub fn declaring_uncompressed_size(mut self, size: i64) -> Blob {
+        self.declared_uncompressed_size = Some(size);
+        self
+    }
+
+    /// The length the manifest declares for this chunk.
+    pub fn declared_uncompressed_size(&self) -> i64 {
+        self.declared_uncompressed_size
+            .unwrap_or(self.uncompressed_size)
     }
 }
 
@@ -106,6 +149,13 @@ pub struct File {
     pub path: String,
     /// Its chunks, left to right.
     pub chunks: Vec<Blob>,
+    /// The file size the manifest declares, when it is not `Σ chunk size`.
+    ///
+    /// `None` for every ordinary file. A test sets it to model a manifest whose
+    /// file-level arithmetic disagrees with its chunks - notably a negative
+    /// `size`, which the decoder clamps out of the totals but still counts as a
+    /// structural violation.
+    pub declared_size: Option<i64>,
 }
 
 impl File {
@@ -114,7 +164,14 @@ impl File {
         File {
             path: path.to_string(),
             chunks: seeds.iter().map(|s| blob(*s, len)).collect(),
+            declared_size: None,
         }
+    }
+
+    /// Declare a whole-file size other than the chunk sum.
+    pub fn declaring_size(mut self, size: i64) -> File {
+        self.declared_size = Some(size);
+        self
     }
 
     /// The bytes a reader would get back.
@@ -122,9 +179,18 @@ impl File {
         self.chunks.iter().flat_map(|c| c.body.clone()).collect()
     }
 
-    /// The declared size, which is `Σ uncompressed_size`.
+    /// The declared size, which is `Σ uncompressed_size` unless a test
+    /// overwrote it.
+    ///
+    /// Saturating, because a test may declare a chunk at `i64::MAX`; the
+    /// decoder sums file sizes the same way.
     pub fn size(&self) -> i64 {
-        self.chunks.iter().map(|c| c.uncompressed_size).sum()
+        if let Some(size) = self.declared_size {
+            return size;
+        }
+        self.chunks.iter().fold(0, |total, c| {
+            total.saturating_add(c.declared_uncompressed_size())
+        })
     }
 
     /// The declared whole-file MD5.
@@ -138,16 +204,21 @@ impl File {
         self.chunks
             .iter()
             .map(|c| {
+                let size = c.declared_uncompressed_size();
                 let chunk = gircap::manifest::proto::SophonChunk {
                     id: c.id.clone(),
                     uncompressed_md5: c.uncompressed_md5.clone(),
                     offset: cursor,
                     compressed_size: c.compressed_size,
-                    uncompressed_size: c.uncompressed_size,
+                    uncompressed_size: size,
                     unknown_field6: 0,
                     compressed_md5: c.compressed_md5.clone(),
                 };
-                cursor += c.uncompressed_size;
+                // A hostile declaration can make the next start unrepresentable.
+                // The decoder measures that as a broken tiling rather than
+                // refusing the manifest, and the mock must be able to produce
+                // the row it measures.
+                cursor = cursor.saturating_add(size);
                 chunk
             })
             .collect()
@@ -203,6 +274,9 @@ pub struct World {
     pub other_tags: Vec<String>,
     /// Whether `diff_tags` lists the old tag.
     pub old_in_diff_tags: bool,
+    /// `getGameConfigs → audio_pkg_scan_dir`, which the fixture writes under
+    /// `game/`. A test can make it hostile to exercise the API-path boundary.
+    pub audio_pkg_scan_dir: String,
 }
 
 impl World {
@@ -345,6 +419,7 @@ impl World {
             old,
             other_tags: vec!["6.7.0".into()],
             old_in_diff_tags: true,
+            audio_pkg_scan_dir: "GenshinImpact_Data/Persistent".into(),
         }
     }
 
@@ -357,6 +432,49 @@ impl World {
         let mut w = World::all_shapes();
         w.old.fields.retain(|(f, _)| f == "game");
         w.new.fields.retain(|(f, _)| f == "game");
+        w
+    }
+
+    /// [`World::all_shapes`] plus one path that answers no matrix class.
+    ///
+    /// The path is a one-chunk file whose content changes on both sides: one
+    /// new chunk, no reuse. `Class::all_satisfied_by` is legitimately empty for
+    /// that shape, so a `--files` request for it must be recorded as *unscored*
+    /// rather than dropped between `requested` and `skipped`. Nothing else in
+    /// the world changes, so the six ordinary classes are still capturable.
+    pub fn with_degenerate_file() -> World {
+        let mut w = World::all_shapes();
+        for (build, seed) in [(&mut w.old, 777), (&mut w.new, 778)] {
+            build
+                .fields
+                .iter_mut()
+                .find(|(field, _)| field == "game")
+                .expect("the all-shapes world publishes game")
+                .1
+                .push(File::new(DEGENERATE_PATH, &[seed], 256));
+        }
+        w
+    }
+
+    /// A second path that is new-only, so two forced paths share `added`.
+    pub const SECOND_ADDED: &str = "GenshinImpact_Data/Plugins/libSecond.dll";
+
+    /// [`World::all_shapes`] with a **second** file that is new-only.
+    ///
+    /// Two distinct `--files` paths then share one primary class (`added`), which
+    /// is the case where two forced paths share one primary class (`added`):
+    /// without per-class numbering the second patchmap replaces the first while
+    /// the run still reports two captures. Nothing else in the world changes, so
+    /// every other class keeps its ordinary candidate.
+    pub fn with_two_added_files() -> World {
+        let mut w = World::all_shapes();
+        w.new
+            .fields
+            .iter_mut()
+            .find(|(field, _)| field == "game")
+            .expect("the all-shapes world publishes game")
+            .1
+            .push(File::new(Self::SECOND_ADDED, &[92], 256));
         w
     }
 
@@ -411,12 +529,66 @@ impl World {
             plain_len: plain.len() as i64,
             file_count: files.len() as i64,
             chunk_count: files.iter().map(|f| f.chunks.len() as i64).sum(),
-            uncompressed_size: files.iter().map(|f| f.size()).sum(),
+            // The same arithmetic `manifest::decode_counts` applies to the same
+            // declarations: a negative file contributes zero, and the sums
+            // saturate. A5 compares these against the decoder's totals, so a
+            // mock that summed the raw signed values would fail the capture for
+            // a fixture bug rather than for a tool bug.
+            uncompressed_size: files.iter().fold(0_u64, |total, f| {
+                total.saturating_add(f.size().max(0) as u64)
+            }),
             compressed_size: files
                 .iter()
-                .map(|f| f.chunks.iter().map(|c| c.compressed_size).sum::<i64>())
-                .sum(),
+                .flat_map(|f| &f.chunks)
+                .fold(0_u64, |total, c| {
+                    total.saturating_add(c.compressed_size.max(0) as u64)
+                }),
         })
+    }
+
+    /// Every chunk's declared `(uncompressed_md5, uncompressed_size)`.
+    ///
+    /// Read from the same values the manifests encode, by id, so a test can
+    /// compare an index row against the declaration it came from rather than
+    /// restating a number. `uncompressed_size` is clamped here exactly as
+    /// `BlobProps::unmeasured` clamps it.
+    pub fn declared(&self) -> BTreeMap<String, (String, u64)> {
+        let mut out = BTreeMap::new();
+        for build in [&self.new, &self.old] {
+            for (_, files) in &build.fields {
+                for f in files {
+                    for c in &f.chunks {
+                        out.insert(
+                            c.id.clone(),
+                            (
+                                c.uncompressed_md5.clone(),
+                                c.declared_uncompressed_size().max(0) as u64,
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Replace the bytes the CDN serves for `chunk_id`, leaving the manifest
+    /// declaration alone. Returns whether any build published that id.
+    pub fn mis_serve(&mut self, chunk_id: &str, bytes: Vec<u8>) -> bool {
+        let mut found = false;
+        for build in [&mut self.new, &mut self.old] {
+            for (_, files) in &mut build.fields {
+                for f in files {
+                    for c in &mut f.chunks {
+                        if c.id == chunk_id {
+                            c.served = Some(bytes.clone());
+                            found = true;
+                        }
+                    }
+                }
+            }
+        }
+        found
     }
 }
 
@@ -436,9 +608,9 @@ pub struct Archive {
     /// `Σ chunk count`.
     pub chunk_count: i64,
     /// `Σ file size`.
-    pub uncompressed_size: i64,
+    pub uncompressed_size: u64,
     /// `Σ chunk compressed_size`.
-    pub compressed_size: i64,
+    pub compressed_size: u64,
 }
 
 // --------------------------------------------------------------- the server
@@ -780,7 +952,7 @@ fn build_table(world: &World, base: &str) -> Table {
                         ("installation_dir".into(), J::s("Genshin Impact")),
                         (
                             "audio_pkg_scan_dir".into(),
-                            J::s("GenshinImpact_Data/Persistent"),
+                            J::s(world.audio_pkg_scan_dir.clone()),
                         ),
                         (
                             "audio_pkg_res_dir".into(),
@@ -1060,13 +1232,22 @@ fn serve(mut stream: TcpStream, table: &Table, log: &Mutex<Vec<Recorded>>) -> st
         // makes the retry loop observable: `RetryPolicy` retries a `5xx`, so the
         // request succeeds on the second attempt and the row must say `2`.
         if table.take_flaky_failure(&path).is_some() {
-            return write_response(
+            // The response is complete either way, so honour its `Connection:`
+            // header: returning here would close a connection the reply just
+            // advertised as reusable. The pool would then hand the retry a dead
+            // socket, which turns the armed `503` into a transport error and
+            // makes the retry count depend on whether the socket was reused.
+            write_response(
                 &mut stream,
                 503,
                 "text/plain",
                 b"armed to fail once",
                 keep_alive,
-            );
+            )?;
+            if !keep_alive {
+                return Ok(());
+            }
+            continue;
         }
 
         let outcome = match respond(table, &path, &query, tag.as_deref()) {
@@ -1204,7 +1385,7 @@ fn respond(table: &Table, path: &str, query: &str, tag: Option<&str>) -> Option<
         ["cdn", build, "chunk", id] => table
             .chunks
             .get(&(build.to_string(), (*id).to_string()))
-            .map(|c| c.raw.clone()),
+            .map(|c| c.served.clone().unwrap_or_else(|| c.raw.clone())),
         _ => None,
     }
 }

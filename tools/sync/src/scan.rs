@@ -22,6 +22,14 @@ pub struct LiveEnt {
     /// 0 for dirs: dirs are compared by presence only.
     pub size: u64,
     pub mtime_ns: i64,
+    /// True when this entry is itself a link (a junction counts, though
+    /// `FileType::is_symlink` does not report one).
+    ///
+    /// The cmd point is deletion rather than comparison: the walk follows links,
+    /// so an entry *under* this one resolves through it, and removing that
+    /// descendant would remove a file in the target. The planner needs to know
+    /// which paths are links to stop that; see [`crate::link`].
+    pub is_link: bool,
 }
 
 /// Walk `root` up to `max_depth`, following symlinks.
@@ -72,6 +80,23 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     continue;
                 }
                 let ft = ent.file_type();
+                // `path_is_symlink` is true for a followed symlink even though
+                // `file_type()` is the target's type (walkdir remembers the
+                // original entry). Some toolchains report a Windows junction as
+                // a symlink and some do not, so a directory gets the full
+                // link test as a second check; a file link is already covered by
+                // `path_is_symlink`, and gating on `is_dir` keeps a stat per
+                // regular file out of a cold scan. The test itself excludes
+                // non-link reparse points (cloud placeholders and the like),
+                // which are ordinary entries.
+                let is_link = if ent.path_is_symlink() {
+                    true
+                } else if ft.is_dir() {
+                    crate::link::try_is_link(ent.path())
+                        .with_context(|| format!("check link {}", ent.path().display()))?
+                } else {
+                    false
+                };
                 // Progress: trace every entry (file log), debug heartbeat every 2000.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
@@ -80,6 +105,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                         is_dir: true,
                         size: 0,
                         mtime_ns: 0,
+                        is_link,
                     });
                 } else if ft.is_file() {
                     let meta = std::fs::metadata(ent.path())
@@ -89,6 +115,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                         is_dir: false,
                         size: meta.len(),
                         mtime_ns: mtime_ns_of(&meta),
+                        is_link,
                     });
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
@@ -148,12 +175,25 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("girsync_scan", "prune");
         // The live DB is a file; the backups and `old-*` snapshots are directories.
         // All three are named `girpr-cache*` and none of them is mirror content.
-        for f in ["a.txt", "keep/b.txt", "girpr-cache/rows"] {
+        for f in [
+            "a.txt",
+            "keep/b.txt",
+            "girpr-cache/rows",
+            // A nested root keeps its own cache; a followed link can expose
+            // one too. Both are tool state, not mirror content.
+            "nest/girpr-cache/rows",
+            "nest/keep.txt",
+            "link/girpr-cache",
+        ] {
             let p = root.join(f);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(&p, b"x").unwrap();
         }
-        for d in ["girpr-cache-backup-1", "girpr-cache-old-2"] {
+        for d in [
+            "girpr-cache-backup-1",
+            "girpr-cache-old-2",
+            "nest/girpr-cache-backup-3",
+        ] {
             let p = root.join(d).join("inner.bin");
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, b"x").unwrap();
@@ -166,7 +206,17 @@ mod tests {
             .collect();
         rels.sort();
 
-        assert_eq!(rels, vec!["a.txt", "keep", "keep/b.txt"]);
+        assert_eq!(
+            rels,
+            vec![
+                "a.txt",
+                "keep",
+                "keep/b.txt",
+                "link",
+                "nest",
+                "nest/keep.txt"
+            ]
+        );
     }
 
     /// `max_depth` is the walk's own bound, and the cache prune must not consume

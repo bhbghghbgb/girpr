@@ -37,15 +37,6 @@ impl Budget {
         }
     }
 
-    /// A budget with the same ceiling, already charged by `spent`.
-    ///
-    /// The forced `--files` captures' cost rides in the same ledger the class
-    /// loop draws from, so `Σ total_cost` is one number rather than two that a
-    /// reader has to add up.
-    pub fn with_spent(limit: Option<u64>, spent: u64) -> Self {
-        Budget { limit, spent }
-    }
-
     /// The configured ceiling, if any.
     pub const fn limit(&self) -> Option<u64> {
         self.limit
@@ -128,13 +119,18 @@ pub fn admit_in_order(costs: &[u64], mut budget: Budget) -> (Vec<Fate>, Budget) 
 }
 
 /// The sum of the admitted costs — what the run actually spends.
+///
+/// Saturating, like [`Budget::charge`] and [`Budget::admits`]: the admitted
+/// costs are measurements, and a crafted manifest can declare a
+/// `compressed_size` that makes two of them sum past `u64::MAX`. The total is
+/// reported next to the charged ledger, so it has to be the same number rather
+/// than a panic in debug or a wrap in release.
 pub fn total_admitted(fates: &[Fate], costs: &[u64]) -> u64 {
     fates
         .iter()
         .zip(costs)
         .filter(|(f, _)| **f == Fate::Admitted)
-        .map(|(_, c)| *c)
-        .sum()
+        .fold(0, |total, (_, c)| total.saturating_add(*c))
 }
 
 #[cfg(test)]
@@ -185,6 +181,24 @@ mod tests {
             u64::MAX,
             "a budget must never wrap into a small number"
         );
+    }
+
+    /// Two costs of the largest class a crafted manifest can produce (each
+    /// `old_bytes + new_bytes` saturates to `u64::MAX - 1`) are more than a
+    /// `u64` holds. The total is a measurement printed in the summary, so it
+    /// must saturate to the same number the ledger reports.
+    #[test]
+    fn a_total_of_maximum_costs_saturates_with_the_ledger() {
+        let costs = [u64::MAX - 1, u64::MAX - 1];
+        let (fates, b) = admit_in_order(&costs, Budget::unlimited());
+        assert_eq!(fates, vec![Fate::Admitted, Fate::Admitted]);
+        assert_eq!(b.spent(), u64::MAX);
+        assert_eq!(
+            total_admitted(&fates, &costs),
+            u64::MAX,
+            "the reported total must be the saturated ledger, not a wrap"
+        );
+        assert_eq!(total_admitted(&fates, &costs), b.spent());
     }
 
     /// Smallest-first over the whole set, which is the rule the budget exists to

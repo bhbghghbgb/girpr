@@ -154,7 +154,7 @@ async fn attempt_inplace_inner(
     // check, so an intact file is never deleted.
     if ctx.repair_mode == RepairMode::Discard {
         drop(handle);
-        std::fs::remove_file(final_path).ok();
+        discard_target(final_path)?;
         handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
         // The file is gone: every chunk has to be written, and there is
         // nothing left to reuse from.
@@ -179,7 +179,8 @@ async fn attempt_inplace_inner(
     // difference is the *peak* disk usage, which nothing reports. The log is
     // the only place the outcome is visible, so both branches say which one
     // they took.
-    let have = handle.metadata().map(|m| m.len()).unwrap_or(0);
+    let have = handle_len(&handle)
+        .with_context(|| format!("stat {} before the trim", final_path.display()))?;
     if have > file.size.max(0) as u64 {
         if trim_is_free(file, &file.chunks, &sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
@@ -207,11 +208,7 @@ async fn attempt_inplace_inner(
     // The budget picks the tier; it never refuses the file. A file that
     // cannot get its reservation is written in the ordered direction, which
     // produces the same file with less reuse.
-    let payload: u64 = bad
-        .iter()
-        .filter(|&&i| sources[i].is_some() && scan.source_ok[i])
-        .map(|&i| file.chunks[i].uncompressed_size.max(0) as u64)
-        .sum();
+    let payload = staged_payload(&file.chunks, &sources, &scan.source_ok, &bad);
     let (tier, _reservation) = match ctx.summary.max_ram_bytes() {
         // "stage nothing at all" is a mode, not a shortage.
         Some(0) => (Tier::Ordered, None),
@@ -268,7 +265,8 @@ async fn attempt_inplace_inner(
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
                 .collect();
-            let usable = handle.metadata().map(|m| m.len()).unwrap_or(0);
+            let usable = handle_len(&handle)
+                .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
             let o = reuse::salvage_order(&chunks, &srcs, usable);
             tracing::info!(
                 file = %file.rel,
@@ -391,6 +389,46 @@ async fn attempt_inplace_inner(
     Ok(Inplace::Repaired(stats.clone()))
 }
 
+/// What one `File::metadata()` call said about the in-place target.
+///
+/// Only the length matters at the two sites that stat the handle: before the
+/// eager trim and for the salvage order. Keeping the error as its own state
+/// lets the failure arm be executed with an injected `io::Error`
+/// (`post::classify_deprecated`'s shape) instead of only being read, without a
+/// trait or an injection seam. [`handle_len`] turns it back into the exact
+/// `io::Result` from `handle.metadata()`, so production still propagates the
+/// error with the site's path context and fails the file (exit `3`).
+#[derive(Debug)]
+enum InplaceLen {
+    /// The handle is open; this is its current length.
+    Present(u64),
+    /// The handle exists but could not be stat'd.
+    Failed(std::io::Error),
+}
+
+/// Classify one in-place `metadata` result.
+///
+/// Split from [`handle_len`] so the error arm is unit-testable without a
+/// permission fixture, matching `util::classify_len` and
+/// `post::classify_deprecated`.
+fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> InplaceLen {
+    match stat {
+        Ok(m) => InplaceLen::Present(m.len()),
+        Err(e) => InplaceLen::Failed(e),
+    }
+}
+
+/// The handle's current length, with the stat error preserved.
+///
+/// This is the same `io::Result` the two sites got from `handle.metadata()?`,
+/// so the `?` path — and the failed-file outcome behind it — is unchanged.
+fn handle_len(handle: &std::fs::File) -> std::io::Result<u64> {
+    match classify_len(handle.metadata()) {
+        InplaceLen::Present(len) => Ok(len),
+        InplaceLen::Failed(e) => Err(e),
+    }
+}
+
 /// Is trimming the file's dead tail free?
 ///
 /// The tail past the manifest's size is dead weight, and releasing it before
@@ -427,6 +465,44 @@ pub(super) fn trim_is_free(
     })
 }
 
+/// The bytes the staged tier would have to hold in RAM: the sum of the
+/// server-declared uncompressed sizes of the bad chunks that still have an
+/// intact salvage source.
+///
+/// `uncompressed_size` is server-controlled and only clamped at zero, not
+/// bounded. Three chunks at `i64::MAX` do not fit a `u64`: a plain `.sum()`
+/// wraps to `0` in release — the "stage nothing" sentinel with no RAM
+/// reservation at all — and panics in debug. Saturate like every other
+/// server-size estimate, so a corrupt manifest fails the reservation and
+/// falls back to the ordered tier instead of bypassing the budget.
+fn staged_payload(
+    chunks: &[SophonChunk],
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+) -> u64 {
+    bad.iter()
+        .filter(|&&i| sources[i].is_some() && source_ok[i])
+        .fold(0u64, |total, &i| {
+            total.saturating_add(chunks[i].uncompressed_size.max(0) as u64)
+        })
+}
+
+/// Delete the target for `--repair-mode discard`.
+///
+/// `NotFound` is success: the file is already gone, which is what the mode
+/// wanted. Every other error is fatal: a refused delete (read-only
+/// attribute, ACL, sharing violation) must not become a later
+/// `create <path>: access denied` or silently keep old bytes while every
+/// chunk is treated as missing.
+fn discard_target(path: &std::path::Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("discard {}", path.display())),
+    }
+}
+
 /// A RAM reservation that gives itself back when it is dropped.
 struct RamReservation<'a> {
     summary: &'a crate::report::Summary,
@@ -451,4 +527,130 @@ enum Tier {
     /// written, and the write order is the one that keeps the most of them
     /// alive.
     Ordered,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R-4: a failed delete in discard mode must be reported as the delete,
+    /// not ignored and then blamed on the re-open. A directory at the target
+    /// is the portable way to make `remove_file` fail while the path exists.
+    #[test]
+    fn a_refused_discard_names_the_delete() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_refused");
+        let target = dir.join("foo.dat");
+        std::fs::create_dir_all(&target).unwrap();
+        let err = discard_target(&target).expect_err("a directory cannot be removed as a file");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("discard") && chain.contains(&target.display().to_string()),
+            "the delete is the failing step and must be named: {chain}"
+        );
+        assert!(target.exists(), "a refused delete leaves the path alone");
+    }
+
+    /// A target that disappeared between the open and the delete still gives
+    /// discard mode what it asked for.
+    #[test]
+    fn an_already_absent_discard_target_is_not_an_error() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "discard_absent");
+        discard_target(&dir.join("gone.dat")).expect("absent is the desired state");
+    }
+
+    /// P-2: the two in-place stat sites used a bare `handle.metadata()?`, so
+    /// the failure arm could only be read. The classifier keeps the error
+    /// itself, and `handle_len` hands it back to the caller's `?`, which still
+    /// fails the file (exit `3`) with the site's path context.
+    #[test]
+    fn a_failed_inplace_stat_preserves_the_error() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        match classify_len(Err(denied)) {
+            InplaceLen::Failed(e) => {
+                assert_eq!(e.kind(), std::io::ErrorKind::PermissionDenied);
+                assert_eq!(e.to_string(), "denied");
+            }
+            other => panic!("an ACL failure is a stat failure, not a length: {other:?}"),
+        }
+    }
+
+    /// The length half of the same classifier: the handle's metadata is what
+    /// the trim and the salvage order consume.
+    #[test]
+    fn an_inplace_stat_reports_the_handle_length() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "stat_len");
+        let path = dir.join("foo.dat");
+        std::fs::write(&path, b"12345").unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert_eq!(handle_len(&handle).unwrap(), 5);
+    }
+
+    fn chunk(id: &str, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: format!("md5-{id}"),
+            offset: 0,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    /// S-2: the payload is the one server-size sum that did not saturate. Three
+    /// chunks at `i64::MAX` overflow a `u64` (`2*MAX = u64::MAX - 1`), so the
+    /// old `.sum()` panicked here in debug and wrapped to `0` in release —
+    /// selecting the staged tier with no RAM reservation.
+    #[test]
+    fn an_overflowing_staged_payload_saturates() {
+        let chunks = vec![
+            chunk("a", i64::MAX),
+            chunk("b", i64::MAX),
+            chunk("c", i64::MAX),
+        ];
+        let sources = vec![Some(0), Some(0), Some(0)];
+        let ok = vec![true, true, true];
+        let bad = vec![0, 1, 2];
+        assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), u64::MAX);
+    }
+
+    /// The exact boundary: `2 * i64::MAX + 1 == u64::MAX`, and one more byte
+    /// saturates rather than wrapping or panicking.
+    #[test]
+    fn the_staged_payload_boundary_saturates() {
+        let mut chunks = vec![chunk("a", i64::MAX), chunk("b", i64::MAX)];
+        let mut sources = vec![Some(0), Some(0)];
+        let mut ok = vec![true, true];
+
+        chunks.push(chunk("c", 1));
+        sources.push(Some(0));
+        ok.push(true);
+        let bad = vec![0, 1, 2];
+        assert_eq!(
+            staged_payload(&chunks, &sources, &ok, &bad),
+            u64::MAX,
+            "the sum reaches the u64 ceiling exactly"
+        );
+
+        chunks.push(chunk("d", 1));
+        sources.push(Some(0));
+        ok.push(true);
+        let bad = vec![0, 1, 2, 3];
+        assert_eq!(
+            staged_payload(&chunks, &sources, &ok, &bad),
+            u64::MAX,
+            "anything past the ceiling saturates"
+        );
+    }
+
+    /// A chunk without a salvage source is downloaded, so it is not staged and
+    /// must not be in the reservation.
+    #[test]
+    fn the_staged_payload_counts_only_salvageable_chunks() {
+        let chunks = vec![chunk("a", 10), chunk("b", 20), chunk("c", 40)];
+        let sources = vec![Some(0), None, Some(0)];
+        let ok = vec![true, true, false];
+        let bad = vec![0, 1, 2];
+        assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
+    }
 }

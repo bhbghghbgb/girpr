@@ -107,6 +107,30 @@ impl VersionPair {
             ),
             OldTagSelector::Explicit(t) => (t.to_string(), "--old-tag".to_string()),
         };
+        // **The resolved tags are validated here, not only at the flags.** When
+        // `new`/`old` are `BranchHead`/`FirstDiffTag`, these strings come from
+        // the API's `main.tag` and `diff_tags[0]`, and `pair_dir` joins them raw
+        // into `<root>/<biz>/<old>__<new>/`. The flag path already checks its
+        // input; without this, a hostile or compromised API (or a local proxy)
+        // could reach the same path sink with `..\..\escape` or `C:evil` even
+        // though the flags were clean.
+        for (tag, source) in [
+            (&new_tag, new_source.as_str()),
+            (&old_tag, old_source.as_str()),
+        ] {
+            // A tag the API named is escaped on disk rather than refused, so a
+            // live device name is kept as evidence. A tag from a flag has no
+            // bundle yet and stays refused at argument resolution.
+            let api = matches!(source, "main.tag" | "diff_tags[0]");
+            let problem = if api {
+                tag_shape_problem_allowing_device(tag)
+            } else {
+                tag_shape_problem(tag)
+            };
+            if let Some(problem) = problem {
+                return Err(format!("{source} {problem}"));
+            }
+        }
         Ok(VersionPair {
             old: VersionRef {
                 tag: old_tag,
@@ -220,12 +244,20 @@ pub struct CapturePlan {
     /// a run admits to fetch; this limits any single response, whether or not the
     /// file was admitted.
     pub max_response_bytes: u64,
+    /// Ceiling on one decompressed body, in bytes. Applied to every zstd decode
+    /// and recorded in `MANIFEST.json` so a bundle can be decoded the same way.
+    pub max_decompressed_bytes: u64,
     /// HoYoPlay base override; `None` = the production base for [`Self::biz`].
     pub hyp_base: Option<String>,
     /// Sophon base override; `None` = the production base for [`Self::biz`].
     pub sophon_base: Option<String>,
     /// The argv as given, recorded in the artifact so a bundle says how it was made.
-    pub argv: Vec<String>,
+    ///
+    /// Built by [`crate::cli::recorded_argv`] from `args_os`, so a non-Unicode
+    /// path is recorded lossily rather than panicking after a successful parse.
+    /// The exact bytes are kept beside the lossy form; see
+    /// [`crate::cli::RecordedArgv`].
+    pub argv: crate::cli::RecordedArgv,
 }
 
 /// Validate an API base override.
@@ -293,7 +325,7 @@ impl std::fmt::Display for AudioSelection {
 /// This cannot resolve a version pair — that needs an API answer — but everything
 /// that is wrong in the *request* is caught here, so a bad flag is rejected
 /// before a socket is opened rather than after.
-pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan> {
+pub fn capture_plan(args: &CaptureArgs, argv: crate::cli::RecordedArgv) -> Result<CapturePlan> {
     let transport = validate_transport(
         args.jobs,
         args.retries,
@@ -309,6 +341,12 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
     }
     if let Some(t) = args.old_tag.as_deref() {
         validate_tag(t, "--old-tag")?;
+    }
+    if args.max_decompressed_bytes == 0 {
+        return Err(UsageError::new(
+            "--max-decompressed-bytes must be at least 1; a zero ceiling makes every \
+             zstd decode fail",
+        ));
     }
     if let (Some(new), Some(old)) = (&args.new_tag, &args.old_tag)
         && new.eq_ignore_ascii_case(old)
@@ -349,6 +387,7 @@ pub fn capture_plan(args: &CaptureArgs, argv: Vec<String>) -> Result<CapturePlan
         retries: transport.retries,
         timeout: transport.timeout,
         max_response_bytes: transport.max_response_bytes,
+        max_decompressed_bytes: args.max_decompressed_bytes,
         hyp_base: validate_base(args.hyp_base.as_deref(), "--hyp-base")?,
         sophon_base: validate_base(args.sophon_base.as_deref(), "--sophon-base")?,
         argv,
@@ -433,6 +472,14 @@ fn validate_audio(raw: &[String]) -> Result<AudioSelection> {
 
     let mut seen: Vec<&String> = Vec::new();
     for code in &normalised {
+        // The code is the `matching_field`, and the dump interpolates it raw into
+        // `manifests/<tag>/<field>.manifest…`. It is a file-name component, not
+        // free text: `..`, a separator or a Windows alias would name a file
+        // outside the manifest directory. The same rule guards the manifest
+        // entries, so an audio code is held to it too.
+        if let Some(problem) = crate::paths::field_component_problem(code) {
+            return Err(UsageError::new(format!("--audio {problem}")));
+        }
         if seen.contains(&code) {
             return Err(UsageError::new(format!(
                 "--audio {code} was given twice; a repeated language adds no manifest \
@@ -453,38 +500,28 @@ fn normalize_audio(raw: &str) -> String {
 ///
 /// Manifest paths are `/`-separated and rooted at the game directory, so an
 /// absolute path, a drive letter, a parent hop or a backslash cannot name a file
-/// in a manifest and would otherwise be silently admitted and then missed.
+/// in a manifest and would otherwise be silently admitted and then missed. The
+/// shape rule itself lives in [`crate::paths`], because the same rule has to
+/// cover the manifest, the bundle index and the launcher's scan directory — not
+/// only this flag.
+///
+/// **Repeats are a usage error**, for the same reason `--audio` rejects them: a
+/// second identical `--files` entry finds the same candidate and is admitted
+/// with the same capture id, which produces two admissions, two patchmap writes
+/// (the second overwriting the first) and a `files_captured` count of two for
+/// one file. Naming a path twice is never a different request.
 fn validate_paths(paths: &[String], flag: &str) -> Result<()> {
+    let mut seen: Vec<&str> = Vec::with_capacity(paths.len());
     for p in paths {
-        if p.is_empty() {
-            return Err(UsageError::new(format!("{flag} was given an empty path")));
+        if let Some(problem) = crate::paths::relative_path_problem(p) {
+            return Err(UsageError::new(format!("{flag} {problem}")));
         }
-        if p.contains('\\') {
+        if seen.contains(&p.as_str()) {
             return Err(UsageError::new(format!(
-                "{flag} {p:?} uses backslashes; manifest paths are /-separated"
+                "{flag} {p:?} was given twice; a repeated path adds no capture"
             )));
         }
-        if p.starts_with('/') {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} is absolute; paths are relative to the game directory"
-            )));
-        }
-        if p.contains(':') {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} looks like a drive-qualified path; paths are relative to \
-                 the game directory"
-            )));
-        }
-        if p.split('/').any(|c| c == "..") {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} escapes the game directory"
-            )));
-        }
-        if p.split('/').any(|c| c.is_empty()) {
-            return Err(UsageError::new(format!(
-                "{flag} {p:?} has an empty component (a doubled or trailing separator)"
-            )));
-        }
+        seen.push(p.as_str());
     }
     Ok(())
 }
@@ -523,21 +560,131 @@ pub fn validate_new_tag(tag: &str) -> Result<()> {
 }
 
 /// The shape every tag must have, sentinel or not.
+///
+/// A tag is interpolated raw into `<root>/<biz>/<old>__<new>/` (`pair_dir`) and
+/// into the capture directory, so it is a path component on every host. The
+/// checks here are the same rule `--files` applies to a manifest path
+/// ([`validate_paths`]): no separator of either flavour, no drive prefix, no
+/// parent component, no control character. `/` and space were the only ones
+/// checked before, so `C:`, `..\..` and `a\b` reached the path sink intact.
+///
+/// **The Windows rules are here too.** `* ? " < > |` cannot appear in a Windows
+/// directory name, and a trailing `.` is stripped by the filesystem, so `7.1.0.`
+/// and `7.1.0` would otherwise be two strings that name one directory. Both are
+/// rejected with the same message class as the traversal checks: a tag is a
+/// directory component, and the directory is named before the network work is
+/// useful, so a late `create_dir_all` failure would waste the whole run.
+///
+/// A reserved DOS device name is refused by the same rule the path validator
+/// uses ([`crate::paths`]): the tag becomes `manifests/<tag>`, so `CON` names a
+/// device whatever the extension on Windows, and a bundle built where it is
+/// accepted would carry a directory a Windows reader cannot open.
+///
+/// Split on both separators even though both are rejected above: the rules are
+/// then stated independently, which is what stops a future relaxation of one
+/// from silently reopening the other.
 fn validate_tag_shape(tag: &str, flag: &str) -> Result<()> {
+    match tag_shape_problem(tag) {
+        Some(problem) => Err(UsageError::new(format!("{flag} {problem}"))),
+        None => Ok(()),
+    }
+}
+
+/// Why `tag` cannot be a directory component, or `None` when it can.
+///
+/// The message names the tag and the rule, so both the flag path (which prefixes
+/// the flag) and the API path (which prefixes `main.tag` or `diff_tags[0]`) say
+/// which string was refused and why.
+///
+/// `manifest::dump::write` calls it too: it is the last place a tag becomes a
+/// path, and a caller that builds a `CapturedManifest` by hand must meet the
+/// same rule as the capture path.
+pub(crate) fn tag_shape_problem(tag: &str) -> Option<String> {
+    tag_shape_rule(tag).map(|(_, problem)| problem)
+}
+
+/// [`tag_shape_problem`] with the rule's stable identifier.
+pub(crate) fn tag_shape_rule(tag: &str) -> Option<(&'static str, String)> {
+    tag_shape_rule_inner(tag, false)
+}
+
+/// [`tag_shape_problem`] for a tag that came from the API, where a device name
+/// is escaped on disk instead of refused.
+///
+/// **Argument resolution still refuses.** A `--new-tag CON` names a directory
+/// before any request, so there is no observation to keep and refusing is the
+/// honest answer. But `main.tag` and `diff_tags[0]` are the API's own words: a
+/// live `CON` is a fact about the branch, so it is preserved in the documents
+/// and written under `manifests/%CON` (see [`crate::paths::escape_component`]).
+pub(crate) fn tag_shape_problem_allowing_device(tag: &str) -> Option<String> {
+    tag_shape_rule_inner(tag, true).map(|(_, problem)| problem)
+}
+
+fn tag_shape_rule_inner(tag: &str, allow_device: bool) -> Option<(&'static str, String)> {
     if tag.is_empty() {
-        return Err(UsageError::new(format!("{flag} was given an empty tag")));
+        return Some(("tag.empty", "was given an empty tag".to_string()));
     }
     if tag.len() > 32 {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} is longer than 32 characters; that is not a version tag"
-        )));
+        return Some((
+            "tag.too-long",
+            format!("{tag:?} is longer than 32 characters; that is not a version tag"),
+        ));
     }
-    if tag.contains('/') || tag.contains(' ') {
-        return Err(UsageError::new(format!(
-            "{flag} {tag:?} contains a separator or a space; a tag is a bare version string"
-        )));
+    if tag.chars().any(char::is_control) {
+        return Some((
+            "tag.control",
+            format!("{tag:?} contains a control character; a tag is a bare version string"),
+        ));
     }
-    Ok(())
+    if tag.contains('/') || tag.contains('\\') || tag.contains(' ') {
+        return Some((
+            "tag.separator",
+            format!("{tag:?} contains a separator or a space; a tag is a bare version string"),
+        ));
+    }
+    if tag.contains(':') {
+        return Some((
+            "tag.drive",
+            format!(
+                "{tag:?} looks like a drive-qualified or namespaced path; a tag is a \
+                 bare version string"
+            ),
+        ));
+    }
+    if tag.contains(['*', '?', '"', '<', '>', '|']) {
+        return Some((
+            "tag.windows-character",
+            format!(
+                "{tag:?} contains a character Windows cannot use in a directory name; \
+                 a tag is a bare version string"
+            ),
+        ));
+    }
+    if tag.starts_with('.') || tag.ends_with('.') {
+        return Some((
+            "tag.edge-dot",
+            format!(
+                "{tag:?} starts or ends with `.`; Windows strips a trailing dot from a \
+                 directory name, so two tags could name one directory"
+            ),
+        ));
+    }
+    if !allow_device && crate::paths::is_windows_device_name(tag) {
+        return Some((
+            "tag.device",
+            format!(
+                "{tag:?} names a Windows device; a tag is a bare version string and \
+                 becomes a directory name"
+            ),
+        ));
+    }
+    if tag.split(['/', '\\']).any(|c| c == "..") {
+        return Some((
+            "tag.parent",
+            format!("{tag:?} escapes the artifact directory"),
+        ));
+    }
+    None
 }
 
 /// `gircap verify` resolved and checked.
@@ -582,9 +729,18 @@ pub fn materialize_plan(args: &MaterializeArgs) -> Result<MaterializePlan> {
 }
 
 /// `artifacts/<biz>/<old>__<new>/` — the directory a bundle's id sits in.
+///
+/// The joined pair is escaped as one component: `CON.txt__7.1.0` would otherwise
+/// have the stem `CON` and open the console on Windows, so it is written as
+/// `%CON.txt__7.1.0`. Because [`crate::paths::escape_component`] doubles every
+/// `%`, a tag containing one also changes the directory name (`a%b` always
+/// becomes `a%%b`). The tags themselves are kept in `MANIFEST.json → versions`;
+/// `diagnostics/path_map.json` maps renames *inside* the bundle and cannot name
+/// this directory, which sits above it.
 pub fn pair_dir(root: &Path, biz: Biz, old_tag: &str, new_tag: &str) -> PathBuf {
+    let pair = format!("{old_tag}__{new_tag}");
     root.join(biz.as_str())
-        .join(format!("{old_tag}__{new_tag}"))
+        .join(crate::paths::escape_component(&pair).into_owned())
 }
 
 /// The capture id: a UTC timestamp, `YYYYMMDDTHHMMSS.ffffffZ`.
@@ -658,6 +814,7 @@ mod tests {
             audio: vec![DEFAULT_AUDIO.to_string()],
             manifest_detail: ManifestDetail::Full,
             gzip_threshold: crate::cli::DEFAULT_GZIP_THRESHOLD,
+            max_decompressed_bytes: crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
             probe_tags: Vec::new(),
             no_chunk_blobs: false,
             jobs: 4,
@@ -679,7 +836,10 @@ mod tests {
     }
 
     fn plan(mutate: impl FnOnce(&mut CaptureArgs)) -> Result<CapturePlan> {
-        capture_plan(&args_with(mutate), vec!["gircap".into(), "capture".into()])
+        capture_plan(
+            &args_with(mutate),
+            crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
+        )
     }
 
     #[test]
@@ -761,7 +921,36 @@ mod tests {
         assert_eq!(p.per_class, 1);
         assert!(!p.no_chunk_blobs);
         assert_eq!(p.gzip_threshold, crate::cli::DEFAULT_GZIP_THRESHOLD);
-        assert_eq!(p.argv, vec!["gircap".to_string(), "capture".to_string()]);
+        assert_eq!(
+            p.max_decompressed_bytes,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+        );
+        assert_eq!(
+            p.argv.lossy,
+            vec!["gircap".to_string(), "capture".to_string()]
+        );
+        // The raw form is recorded beside it, one entry per argument, in the
+        // same order. Its bytes are the host's own representation, so the test
+        // asserts what is portable: the shape, and that decoding the bytes the
+        // way `host_os` says gives back the lossy argument.
+        assert_eq!(p.argv.raw.len(), 2);
+        assert_eq!(p.argv.raw.len(), p.argv.lossy.len());
+    }
+
+    #[test]
+    fn a_zero_decompression_ceiling_is_a_usage_error() {
+        // Zero is not a smaller ceiling, it is a decode that can never produce a
+        // byte. Naming the flag before a socket opens is the same rule every
+        // other bad plan value follows.
+        let err = plan(|a| a.max_decompressed_bytes = 0).expect_err("zero is not a plan");
+        let msg = err.to_string();
+        assert!(msg.contains("--max-decompressed-bytes"), "{msg}");
+    }
+
+    #[test]
+    fn a_raised_decompression_ceiling_reaches_the_plan() {
+        let p = plan(|a| a.max_decompressed_bytes = 4096).expect("positive ceiling");
+        assert_eq!(p.max_decompressed_bytes, 4096);
     }
 
     #[test]
@@ -789,6 +978,29 @@ mod tests {
     fn a_repeated_audio_code_is_refused_rather_than_deduped() {
         let e = plan(|a| a.audio = vec!["en-us".into(), "en_us".into()]).unwrap_err();
         assert!(e.message().contains("twice"), "{}", e.message());
+    }
+
+    #[test]
+    fn an_audio_code_that_is_not_one_file_name_component_is_refused() {
+        // The code is the `matching_field`, which the dump interpolates into
+        // `manifests/<tag>/<field>.manifest…`. A separator or a traversal makes
+        // the capture write outside `--out`; the same shape rule now covers it.
+        for bad in ["../../../../evil", "en/us", r"en\us", "..", ""] {
+            let e = plan(|a| a.audio = vec![bad.to_string()]).unwrap_err();
+            assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage, "{bad:?}");
+            assert!(
+                e.message().contains("--audio"),
+                "{bad:?} -> {}",
+                e.message()
+            );
+        }
+        // And the measured codes still pass.
+        for good in ["en-us", "zh-cn", "ja-jp", "ko-kr"] {
+            assert!(
+                plan(|a| a.audio = vec![good.to_string()]).is_ok(),
+                "{good:?}"
+            );
+        }
     }
 
     #[test]
@@ -857,6 +1069,28 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_files_path_is_a_usage_error() {
+        // A duplicate finds the same candidate and would be admitted again with
+        // the same capture id: two admissions, two patchmap writes (the second
+        // overwriting the first) and a `files_captured` count of two for one
+        // file. `--audio` already refuses a repeated value for the same reason.
+        let e = plan(|a| {
+            a.files = vec![
+                "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
+                "GenshinImpact_Data/Plugins/HoYoChannel.dll".into(),
+            ]
+        })
+        .unwrap_err();
+        assert_eq!(e.exit_code(), crate::exit::ExitCode::Usage);
+        assert!(e.message().contains("twice"), "{}", e.message());
+        assert!(
+            e.message().contains("HoYoChannel.dll"),
+            "the message names the repeated path: {}",
+            e.message()
+        );
+    }
+
+    #[test]
     fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
         let e = plan(|a| {
             a.new_tag = Some("7.1.0".into());
@@ -883,6 +1117,99 @@ mod tests {
         }
         for good in ["7.1.0", "6.7.0", "5.5.0-nightly", "v7.1"] {
             assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
+        }
+    }
+
+    #[test]
+    fn a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix() {
+        // A tag is joined into the artifact directory raw. On Windows `\` is a
+        // separator and `C:` is a path prefix, so either one can move the
+        // bundle - and `..\..` can move it out of the root. The same rule must
+        // cover the pair flags and the probes, because all three reach the same
+        // sink.
+        for bad in [
+            "C:",
+            r"..\..",
+            r"a\b",
+            "a:b",
+            "..",
+            "7.1.0\u{7}",
+            // Windows cannot create these directory names, and a late
+            // `create_dir_all` failure would come after the network work.
+            "7.1.0?",
+            "7.1.0*",
+            "7.1.0\"",
+            "7.1.0<",
+            "7.1.0>",
+            "7.1.0|",
+            // Windows strips a trailing dot, so this and `7.1.0` would collide.
+            "7.1.0.",
+            ".7.1.0",
+            // A tag is `manifests/<tag>`, and Windows resolves a DOS device
+            // name whatever the extension: `create_dir_all` then fails late, or
+            // the bundle names a directory a Windows reader cannot open.
+            "CON",
+            "con",
+            "NUL",
+            "NUL.txt",
+            "aux.txt",
+            "COM1",
+            "COM1.bin",
+            "LPT9",
+            "CONIN$",
+            "CONIN$.txt",
+        ] {
+            assert!(
+                validate_tag(bad, "--old-tag").is_err(),
+                "--old-tag {bad:?} must be refused"
+            );
+            assert!(
+                validate_new_tag(bad).is_err(),
+                "--new-tag {bad:?} must be refused"
+            );
+            assert!(
+                plan(|a| a.probe_tags = vec![bad.to_string()]).is_err(),
+                "--probe-tags {bad:?} must be refused"
+            );
+        }
+        // And the shape rule did not become a ban on ordinary tags, including
+        // names that merely start like a device one.
+        for good in [
+            "7.1.0",
+            "6.7.0",
+            "5.5.0-nightly",
+            "v7.1",
+            "CONSOLE",
+            "console",
+            "COM0",
+            "LPT10",
+        ] {
+            assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
+            assert!(validate_new_tag(good).is_ok(), "{good:?}");
+        }
+    }
+
+    /// A tag becomes `manifests/<tag>`, so a DOS device name is refused by the
+    /// same rule the path validator uses. Windows ignores the extension when it
+    /// resolves the name, so `NUL.txt` and `CONIN$.txt` are devices too.
+    #[test]
+    fn a_tag_cannot_name_a_windows_device() {
+        for bad in [
+            "CON",
+            "NUL",
+            "NUL.txt",
+            "COM1",
+            "COM1.bin",
+            "CONIN$",
+            "CONIN$.txt",
+        ] {
+            let problem = tag_shape_problem(bad)
+                .unwrap_or_else(|| panic!("{bad:?} names a device, not a directory"));
+            assert!(problem.contains("device"), "{bad:?}: {problem}");
+        }
+        // Names that merely start like one are ordinary tags.
+        for good in ["7.1.0", "CONSOLE", "console", "COM0", "LPT10"] {
+            assert_eq!(tag_shape_problem(good), None, "{good:?}");
         }
     }
 
@@ -1044,6 +1371,60 @@ mod tests {
                 .tag,
             "5.5.0"
         );
+    }
+
+    /// A hostile or compromised API can supply `main.tag`/`diff_tags[0]`
+    /// without the caller ever passing a bad flag. Those strings reach
+    /// `pair_dir`, so they must pass the same shape check the flags do.
+    #[test]
+    fn api_resolved_tags_are_validated_before_they_name_a_directory() {
+        let p = pair_plan(None, None);
+
+        let mut b = branch();
+        b.tag = r"..\..\escape".into();
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(
+            e.contains("main.tag") && e.contains("escape"),
+            "the message names the API field and the offending tag: {e}"
+        );
+
+        let mut b = branch();
+        b.diff_tags[0] = "C:evil".into();
+        let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+        assert!(
+            e.contains("diff_tags[0]") && e.contains("drive-qualified"),
+            "the default old tag is validated too: {e}"
+        );
+
+        // An explicit tag is validated in `capture_plan`, and again here for a
+        // direct caller of `select`.
+        let e = VersionPair::select(
+            &branch(),
+            NewTagSelector::Explicit("7.1.0?"),
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap_err();
+        assert!(e.contains("--new-tag"), "{e}");
+
+        // A device name from the API is *kept*: `manifests/<tag>` is written
+        // under an escaped name and `path_map.json` records the pair. The
+        // documents keep the API's own spelling.
+        let mut b = branch();
+        b.tag = "CON".into();
+        let v = VersionPair::select(&b, p.new_selector(), p.old_selector())
+            .expect("an API device name is escaped, not refused");
+        assert_eq!(v.new.tag, "CON");
+        assert_eq!(v.new.source, "main.tag");
+
+        // The same value from a flag is still refused at argument resolution:
+        // there is no bundle and no observation to keep yet.
+        let e = VersionPair::select(
+            &branch(),
+            NewTagSelector::Explicit("CON"),
+            OldTagSelector::FirstDiffTag,
+        )
+        .unwrap_err();
+        assert!(e.contains("--new-tag") && e.contains("device"), "{e}");
     }
 
     /// Swapping them would attach a build id to the wrong tag, and every chunk

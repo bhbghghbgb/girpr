@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use super::{
-    ACCEPT, ACCEPT_ENCODING, ApiError, Kind, RealSleep, RequestLog, RequestRecord, RetryPolicy,
-    Sleep, Transport, header_map, now_rfc3339,
+    ACCEPT, ACCEPT_ENCODING, ApiError, ErrorBodies, ErrorBody, Kind, RealSleep, RequestLog,
+    RequestRecord, RetryPolicy, Sleep, Transport, header_map, now_rfc3339,
 };
 
 /// A fetched body and the record of how it arrived.
@@ -41,6 +41,21 @@ pub enum Destination<'a> {
     /// resident. Chunk blobs: the largest in the reference bundle is 3 689 476 B,
     /// and `--jobs 8` keeps eight of them in flight.
     File(&'a mut crate::hash::HashingFile),
+}
+
+/// A failed logical fetch, with the sequence number of the last request it
+/// made.
+///
+/// The error alone loses which `api/requests.ndjson` row produced the partial
+/// file on disk, so a caller that keeps those bytes cannot mark the row's
+/// `stored_as`. This carries both without changing [`ApiError`], which is the
+/// type every other caller matches on.
+#[derive(Debug)]
+pub struct FetchFailure {
+    /// What went wrong.
+    pub error: ApiError,
+    /// The `seq` of the final attempt.
+    pub seq: u64,
 }
 
 /// A body that was streamed to disk: what the caller needs without the bytes.
@@ -103,11 +118,38 @@ pub(crate) fn body_failure(
         }
     }
 }
-/// Drain a response body into `sink`, refusing to exceed the transport's ceiling.
+/// The length a response declares, when that declaration alone is over `cap`.
 ///
-/// **The one place a body is read, for every destination** — the buffered path,
-/// the file path, `observe`, and the drain of an *error* body. A ceiling enforced
-/// in three of those four would be a ceiling with a hole in it.
+/// The cheap half of the ceiling, shared so a successful body and an error body
+/// cannot disagree about what "declared too large" means.
+fn declared_over_ceiling(resp: &reqwest::Response, cap: u64) -> Option<u64> {
+    resp.content_length().filter(|d| *d > cap)
+}
+
+/// How much of a success body to reserve up front, from an untrusted header.
+///
+/// **The declared length is not an allocation size.** Reserving it was the O1
+/// bug: a loopback origin answering `Content-Length: 10737418240` made
+/// `Vec::with_capacity` ask for 10 GiB (and a header at or above `isize::MAX`
+/// panicked with a capacity overflow) *before* [`drain_capped`] could apply the
+/// ceiling. The reservation is therefore clamped to the ceiling **and** to a
+/// small starting size; the buffer grows as bytes actually arrive, where the
+/// running-total check is the bound. The typed `too_big` refusal still comes
+/// from [`drain_capped`], so a huge declaration is one error, not two.
+fn body_reservation(declared: Option<u64>, cap: u64) -> usize {
+    /// Enough to avoid repeated tiny reallocations on the common body, and far
+    /// too little for a header to turn into a memory commitment.
+    const INITIAL: u64 = 64 * 1024;
+    let bounded = declared.unwrap_or(0).min(cap).min(INITIAL);
+    usize::try_from(bounded).unwrap_or(usize::MAX)
+}
+
+/// Drain a **successful** response body into `sink`, refusing to exceed the
+/// transport's ceiling.
+///
+/// Every successful read goes through here — the buffered path, the file path and
+/// `observe`. A ceiling enforced in two of those three would be a ceiling with a
+/// hole in it.
 ///
 /// Two checks, because one is not enough:
 ///
@@ -116,21 +158,30 @@ pub(crate) fn body_failure(
 /// - against the running total as bytes arrive, for an origin that omits the
 ///   header or understates it.
 ///
-/// `sink` is generic rather than "either a `Vec` or a file" so all four callers
-/// share this, including the error-body drain, which writes to
-/// [`std::io::sink()`].
+/// `sink` is generic rather than "either a `Vec` or a file" so all three callers
+/// share this.
+///
+/// **An error body does not come through here.** It has the same two checks in
+/// [`drain_error_body`], but it must not *fail* the way this does: the primary
+/// fact of a non-2xx response is its status, and replacing a `404` with a
+/// `Shape`/`Transport` about the body both misreports the cause and — for
+/// `Transport` — would retry a request that will answer `404` again.
+///
+/// **A failure carries the bytes that arrived.** The count is local while the
+/// body is read, and returning only the error discarded it: a `2xx` that closed
+/// after 10 KiB was recorded with `bytes_in: 0`, which says the attempt was
+/// free. The caller prices the request with the second half of the tuple, so a
+/// partial body costs what it actually cost.
 async fn drain_capped<W: std::io::Write>(
     mut resp: reqwest::Response,
     sink: &mut W,
     cap: u64,
     url: &str,
     attempts: u32,
-) -> Result<u64, ApiError> {
-    let declared = resp.content_length();
-    if let Some(d) = declared
-        && d > cap
-    {
-        return Err(too_big(url, d, cap));
+) -> Result<u64, (ApiError, u64)> {
+    if let Some(d) = declared_over_ceiling(&resp, cap) {
+        // Nothing has crossed the wire yet, so `0` is the honest count.
+        return Err((too_big(url, d, cap), 0));
     }
     let mut seen = 0_u64;
     loop {
@@ -141,14 +192,125 @@ async fn drain_capped<W: std::io::Write>(
                     // The bytes are already gone, so this cannot stop the
                     // transfer — the running total stops the *memory*, which is
                     // what the ceiling is for.
-                    return Err(too_big(url, seen, cap));
+                    return Err((too_big(url, seen, cap), seen));
                 }
                 std::io::Write::write_all(sink, &chunk)
-                    .map_err(|e| body_failure(url, attempts, false, e))?;
+                    .map_err(|e| (body_failure(url, attempts, false, e), seen))?;
             }
             Ok(None) => return Ok(seen),
-            Err(e) => return Err(body_failure(url, attempts, true, e)),
+            Err(e) => return Err((body_failure(url, attempts, true, e), seen)),
         }
+    }
+}
+
+/// What [`drain_error_body`] saw.
+struct DrainedErrorBody {
+    /// Bytes that crossed the wire, whether or not they were kept.
+    bytes_received: u64,
+    /// The bytes kept, never more than the retention cap.
+    body: Vec<u8>,
+    /// Whether `body` is the whole received body.
+    truncated: bool,
+}
+
+/// Collect the body of a failed response, stopping at the transport's ceiling.
+///
+/// **The status is the failure, and nothing here changes that.** The body of a
+/// `4xx`/`5xx` is evidence, not the reason the request failed, so this applies
+/// the same two ceilings as [`drain_capped`] — the declared length before
+/// reading, the running total as bytes arrive — without turning any outcome into
+/// a different error:
+///
+/// - a body that fails mid-read is still a `Status` failure, so it is counted up
+///   to the failure and not retried as if the network were at fault;
+/// - a body over the ceiling is still a `Status` failure, so a lying `503` does
+///   not become a `Shape` (which would hide the status) nor a `Transport` (which
+///   would retry it);
+/// - a `404` with a truncated body stays a `404` and is not fetched again.
+///
+/// **`cap` bounds reading; `retain` bounds keeping.** The first is the
+/// `--max-response-bytes` promise and is used for `bytes_in`, exactly as before.
+/// The second is the smaller of that ceiling and what the run's error-body
+/// budget has left — buffering up to the response ceiling only to truncate the
+/// same bytes afterwards would hold a hostile body in memory twice.
+///
+/// The returned `truncated` is true whenever `body` is shorter than
+/// `bytes_received`, including a read that ended early and a body the retention
+/// cap could not hold.
+async fn drain_error_body(
+    mut resp: reqwest::Response,
+    cap: u64,
+    retain: u64,
+    url: &str,
+) -> DrainedErrorBody {
+    if let Some(declared) = declared_over_ceiling(&resp, cap) {
+        // Nothing has crossed the wire yet, so `0` is the honest count.
+        tracing::warn!(
+            url,
+            declared,
+            cap,
+            "error body declares more than --max-response-bytes; not read"
+        );
+        return DrainedErrorBody {
+            bytes_received: 0,
+            body: Vec::new(),
+            truncated: true,
+        };
+    }
+    let retain = usize::try_from(retain.min(cap)).unwrap_or(usize::MAX);
+    let mut seen = 0_u64;
+    let mut body: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                seen += chunk.len() as u64;
+                if seen > cap {
+                    // The chunk is already received, so it is counted; what the
+                    // ceiling prevents is waiting for the rest of it.
+                    tracing::warn!(
+                        url,
+                        seen,
+                        cap,
+                        "error body crossed --max-response-bytes; stopped reading"
+                    );
+                    truncated = true;
+                    break;
+                }
+                // Keep reading past the retention cap so `bytes_received` stays
+                // the same number the request row prices; only the buffer stops.
+                let room = retain.saturating_sub(body.len());
+                if chunk.len() > room {
+                    body.extend_from_slice(&chunk[..room]);
+                    truncated = true;
+                } else {
+                    body.extend_from_slice(&chunk);
+                }
+            }
+            Ok(None) => break,
+            // A read failure ends the count at what arrived. The status is still
+            // the failure the caller sees: an unreadable error body is not a
+            // reason to lose the `404`/`503` that explains the request. Log the
+            // failure anyway, or a suspiciously short `bytes_in` has no cause.
+            Err(e) => {
+                tracing::debug!(
+                    url,
+                    bytes = seen,
+                    error = %e,
+                    "error-body read failed; counting what arrived"
+                );
+                truncated = true;
+                break;
+            }
+        }
+    }
+    if body.len() as u64 != seen {
+        truncated = true;
+    }
+    DrainedErrorBody {
+        bytes_received: seen,
+        body,
+        truncated,
     }
 }
 
@@ -277,6 +439,8 @@ pub struct Fetcher {
     base_req_headers: BTreeMap<String, String>,
     /// The ceiling on one response body, from [Transport::max_response_bytes].
     max_response_bytes: u64,
+    /// The bodies of non-2xx responses, shared by every clone.
+    error_bodies: std::sync::Arc<ErrorBodies>,
 }
 
 impl Fetcher {
@@ -299,15 +463,16 @@ impl Fetcher {
     /// artifact.
     ///
     /// One failure does not abandon the rest: each item's `Err` stays in its own
-    /// slot, and a task that panics is recorded as an `Err` at that index. A
-    /// missing blob is better evidence than no bundle.
+    /// slot, and a task that panics is recorded as an `Err` at that index,
+    /// carrying the panic's own message. A missing blob is better evidence than
+    /// no bundle.
     ///
     /// `f` returns `(index, result)` and **never** an outer `Err`. The index has
     /// to come back even when the work failed, or a failed task is
-    /// indistinguishable from one that died: `JoinSet` reports a panic but not
-    /// which task panicked, so the only way to find out afterwards is to see
-    /// which index never came home. An outer `Result` would throw the index away
-    /// exactly when it is most needed.
+    /// indistinguishable from one that died. A `JoinSet` does not carry our
+    /// index through a panic — it names the failing task by id — so the loop
+    /// records each spawned task's id and maps it back. That is what lets the
+    /// payload reach its own slot instead of every failure sharing one string.
     ///
     /// `f` receives a clone of this fetcher rather than a borrow, because
     /// `JoinSet::spawn` needs a `'static` future. Cloning is three `Arc`s and
@@ -327,27 +492,56 @@ impl Fetcher {
     {
         let n = items.len();
         let mut out: Vec<Option<Result<R, String>>> = (0..n).map(|_| None).collect();
-        // Which items have been accounted for. A `JoinSet` will not say *which*
-        // task panicked, so a task that dies takes its slot with it and the
-        // index is recovered at the end from what never came back.
-        let mut returned: Vec<bool> = vec![false; n];
+        // Task id -> item index. `JoinSet` reports which task failed by id, not
+        // by our index, so recording each spawn's id is what lets a panic keep
+        // both its index and its cause instead of collapsing into one generic
+        // slot text. The map holds at most `jobs` entries: a completion removes
+        // its id and the replacement inserts a new one.
+        let mut slots: std::collections::HashMap<tokio::task::Id, usize> =
+            std::collections::HashMap::new();
         let mut set = tokio::task::JoinSet::new();
         let mut next = 0_usize;
 
         while next < n && set.len() < jobs.max(1) {
             let i = next;
             next += 1;
-            set.spawn(f(self.clone(), i, items[i].clone()));
+            slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
         }
-        while let Some(joined) = set.join_next().await {
-            if let Ok((i, r)) = joined {
-                returned[i] = true;
-                out[i] = Some(r);
+        while let Some(joined) = set.join_next_with_id().await {
+            match joined {
+                Ok((id, (i, r))) => {
+                    slots.remove(&id);
+                    out[i] = Some(r);
+                }
+                Err(e) => {
+                    // Recover the index *before* `join_failure` consumes the
+                    // error, so the cause can travel with the item it belongs
+                    // to rather than only into the log.
+                    let id = e.id();
+                    let why = crate::tasks::join_failure(e, "request");
+                    match slots.remove(&id) {
+                        Some(i) => {
+                            tracing::error!(
+                                item = i,
+                                error = %why,
+                                "a request task did not report"
+                            );
+                            out[i] = Some(Err(format!("item {i} did not return: {why}")));
+                        }
+                        // Unreachable while every spawn's id is recorded, but a
+                        // failure must still be visible rather than silently
+                        // lost if that ever stops being true.
+                        None => tracing::error!(
+                            error = %why,
+                            "a request task did not report and its index could not be recovered"
+                        ),
+                    }
+                }
             }
             if next < n {
                 let i = next;
                 next += 1;
-                set.spawn(f(self.clone(), i, items[i].clone()));
+                slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
             }
         }
 
@@ -355,11 +549,11 @@ impl Fetcher {
             .enumerate()
             .map(|(i, r)| {
                 r.unwrap_or_else(|| {
-                    Err(if returned[i] {
-                        format!("item {i} was dispatched but never returned")
-                    } else {
-                        "a request task panicked".to_string()
-                    })
+                    // A hole means no task ever reported and no id was left to
+                    // blame; keep the index rather than dropping the item.
+                    Err(format!(
+                        "item {i}: a request task panicked and its index could not be recovered"
+                    ))
                 })
             })
             .collect()
@@ -376,6 +570,24 @@ impl Fetcher {
         transport: Transport,
         log: RequestLog,
         sleeper: Arc<dyn Sleep>,
+    ) -> Result<Self, ApiError> {
+        Self::with_sleeper_and_error_budget(
+            transport,
+            log,
+            sleeper,
+            super::error_bodies::ERROR_BODY_BUDGET_BYTES,
+        )
+    }
+
+    /// [`Fetcher::with_sleeper`] with an explicit error-body retention budget.
+    ///
+    /// The budget is a run-wide constant in production; this seam exists so a
+    /// test can drive the truncation without writing a megabyte of mock body.
+    pub fn with_sleeper_and_error_budget(
+        transport: Transport,
+        log: RequestLog,
+        sleeper: Arc<dyn Sleep>,
+        error_body_budget: u64,
     ) -> Result<Self, ApiError> {
         let ua = crate::logging::user_agent();
         // `default_headers` from the same list the record is built from, so the
@@ -395,7 +607,17 @@ impl Fetcher {
             log,
             base_req_headers: RequestRecord::default_req_headers(&ua, None),
             max_response_bytes: transport.max_response_bytes,
+            error_bodies: std::sync::Arc::new(ErrorBodies::new(error_body_budget)),
         })
+    }
+
+    /// The non-2xx bodies this fetcher has seen.
+    ///
+    /// A handle rather than a snapshot: the caller that writes
+    /// `api/error_responses.json` runs after every fetch, and copying the bytes
+    /// before then would be a second copy of evidence nobody has read yet.
+    pub fn error_bodies(&self) -> &ErrorBodies {
+        &self.error_bodies
     }
 
     /// The log every fetch through this fetcher is recorded in.
@@ -447,7 +669,8 @@ impl Fetcher {
         let resp_headers = header_map(resp.headers());
         // A body that will not read is an empty body, not a failure: the status
         // and the content-type are the parts a consumer can rely on, and they
-        // have already been captured by this point.
+        // have already been captured by this point. The bytes that did arrive
+        // are still priced, for the same reason every other attempt's are.
         //
         // **But a body over the ceiling is a failure, and the two are different
         // things.** A probe is the one request an attacker can most cheaply
@@ -459,11 +682,11 @@ impl Fetcher {
         let mut body: Vec<u8> = Vec::new();
         let bytes_in = match drain_capped(resp, &mut body, self.max_response_bytes, url, 1).await {
             Ok(n) => n,
-            Err(e) if is_read_failure(&e) => {
+            Err((e, seen)) if is_read_failure(&e) => {
                 body = Vec::new();
-                0
+                seen
             }
-            Err(e) => return Err(e),
+            Err((e, _)) => return Err(e),
         };
         let record = self.record(
             seq,
@@ -498,7 +721,10 @@ impl Fetcher {
         kind: Kind,
         range: Option<&str>,
     ) -> Result<Fetched, ApiError> {
-        let run = self.run(url, kind, range, Destination::Memory).await?;
+        let run = self
+            .run(url, kind, range, Destination::Memory)
+            .await
+            .map_err(|f| f.error)?;
         // `run` is total over its destinations: `Memory` always yields the body
         // and `File` never does. This arm is unreachable by construction, and is
         // an `Err` rather than `unreachable!` so that no production path in this
@@ -543,6 +769,21 @@ impl Fetcher {
         kind: Kind,
         out: &mut crate::hash::HashingFile,
     ) -> Result<Streamed, ApiError> {
+        self.get_to_file_detailed(url, kind, out)
+            .await
+            .map_err(|f| f.error)
+    }
+
+    /// [`Fetcher::get_to_file`], keeping the final attempt's `seq` on failure.
+    ///
+    /// A caller that publishes the bytes a failed fetch left behind needs to
+    /// mark that request's row, and the typed error alone does not identify it.
+    pub async fn get_to_file_detailed(
+        &self,
+        url: &str,
+        kind: Kind,
+        out: &mut crate::hash::HashingFile,
+    ) -> Result<Streamed, FetchFailure> {
         let run = self.run(url, kind, None, Destination::File(out)).await?;
         debug_assert!(
             run.body.is_none(),
@@ -562,10 +803,10 @@ impl Fetcher {
         kind: Kind,
         range: Option<&str>,
         mut dest: Destination<'_>,
-    ) -> Result<Run, ApiError> {
+    ) -> Result<Run, FetchFailure> {
         let started = Instant::now();
         let mut attempts: u32 = 0;
-        let mut last: Option<ApiError> = None;
+        let mut last: Option<FetchFailure> = None;
 
         while attempts < self.policy.attempts {
             attempts += 1;
@@ -599,6 +840,7 @@ impl Fetcher {
                     // The failed attempt is logged too: a run that hit a CDN
                     // throttle and recovered must show the 429, or `attempts`
                     // is a claim nobody can check.
+                    let seq = record.seq;
                     self.log.push(record);
                     let retryable = match &err {
                         ApiError::Transport { .. } => true,
@@ -608,15 +850,18 @@ impl Fetcher {
                         ApiError::Shape { .. } => false,
                     };
                     if !retryable {
-                        return Err(err);
+                        return Err(FetchFailure { error: err, seq });
                     }
                     tracing::debug!(url, attempts, error = %err, "retryable failure");
-                    last = Some(err);
+                    last = Some(FetchFailure { error: err, seq });
                 }
             }
         }
 
-        Err(last.unwrap_or_else(|| ApiError::shape(url, "no attempt was made")))
+        Err(last.unwrap_or_else(|| FetchFailure {
+            error: ApiError::shape(url, "no attempt was made"),
+            seq: 0,
+        }))
     }
 
     /// Fetch and parse as JSON, checking that the wrapper says `retcode == 0`.
@@ -719,32 +964,31 @@ impl Fetcher {
         // `2xx`, which includes `206` — a `Range` response is a success, not a
         // partial failure.
         if !resp.status().is_success() {
-            // **The body of a failure is counted, not ignored.** A CDN
-            // `429`/`503` carrying a few KB of XML envelope is paid for on the
-            // wire, so recording `bytes_in: 0` reports it as free.
-            // `bytes_in` is sold in this module's doc as "the only way to price a
-            // manifest without re-downloading it", and it must not under-report
-            // *precisely the retried requests that cost the most* — a throttled
-            // run's cost figures are optimistic by exactly the amount the throttle
-            // cost.
-            //
-            // **Streamed and discarded**, not read into a buffer: the content is
-            // useless, only the length is not. Draining also lets the connection
-            // go back to the pool, which dropping a response mid-body would not.
-            //
-            // A body that fails to read mid-way counts what arrived, like every
-            // other count here: reporting `0` for bytes that demonstrably crossed
-            // the network would be a lie in the direction that matters least to
-            // notice.
-            let mut resp = resp;
-            let mut bytes_in: u64 = 0;
-            loop {
-                match resp.chunk().await {
-                    Ok(Some(c)) => bytes_in += c.len() as u64,
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
-            }
+            // **The body of a failure is kept as well as counted.** It is the
+            // origin's own words about why it would not serve, and the status
+            // alone leaves a later reader guessing. `--max-response-bytes` still
+            // bounds the read, and the run-wide budget bounds what is retained;
+            // what does not fit is a `truncated` row rather than a lost
+            // observation. See [`super::error_bodies`].
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            let remaining = self.error_bodies.remaining();
+            let drained = drain_error_body(resp, self.max_response_bytes, remaining, url).await;
+            let bytes_in = drained.bytes_received;
+            self.error_bodies.push(ErrorBody {
+                seq,
+                url: url.to_string(),
+                final_url: final_url.clone(),
+                status,
+                attempts,
+                content_type,
+                bytes_received: bytes_in,
+                body: drained.body,
+                truncated: drained.truncated,
+            });
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,
@@ -775,8 +1019,10 @@ impl Fetcher {
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
                 // One record for both outcomes, as before — the failure and the
-                // size are both about the same request.
-                let fail = |err: ApiError| {
+                // size are both about the same request. The count comes from the
+                // error, because a body that failed mid-read still crossed the
+                // wire and `bytes_in` prices what crossed it.
+                let fail = |err: ApiError, bytes_in: u64| {
                     let record = self.record(
                         seq,
                         kind,
@@ -786,27 +1032,29 @@ impl Fetcher {
                         resp_headers.clone(),
                         &final_url,
                         redirected,
-                        0,
+                        bytes_in,
                         attempts,
                         started,
                     );
                     (err, record)
                 };
-                let mut buf: Vec<u8> =
-                    Vec::with_capacity(resp.content_length().unwrap_or(0) as usize);
+                let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
+                    resp.content_length(),
+                    self.max_response_bytes,
+                ));
                 match drain_capped(resp, &mut buf, self.max_response_bytes, url, attempts).await {
                     Ok(n) => {
                         bytes_in = n;
                         Some(buf)
                     }
-                    Err(e) => return Err(fail(e)),
+                    Err((e, seen)) => return Err(fail(e, seen)),
                 }
             }
             Destination::File(out) => {
                 // Discard whatever a failed attempt left before this one writes.
                 // Without this the digests cover both responses — see
                 // `HashingFile::restart`.
-                let fail = |err: ApiError| {
+                let fail = |err: ApiError, bytes_in: u64| {
                     let record = self.record(
                         seq,
                         kind,
@@ -816,7 +1064,7 @@ impl Fetcher {
                         resp_headers.clone(),
                         &final_url,
                         redirected,
-                        0,
+                        bytes_in,
                         attempts,
                         started,
                     );
@@ -825,17 +1073,21 @@ impl Fetcher {
 
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
-                    // not truncate is a disk that will not write either.
-                    return Err(fail(body_failure(
-                        url,
-                        attempts,
-                        false,
-                        format!("preparing the body file: {e}"),
-                    )));
+                    // not truncate is a disk that will not write either. No body
+                    // byte of this attempt has been read, so its cost is zero.
+                    return Err(fail(
+                        body_failure(
+                            url,
+                            attempts,
+                            false,
+                            format!("preparing the body file: {e}"),
+                        ),
+                        0,
+                    ));
                 }
                 match drain_capped(resp, out, self.max_response_bytes, url, attempts).await {
                     Ok(n) => bytes_in = n,
-                    Err(e) => return Err(fail(e)),
+                    Err((e, seen)) => return Err(fail(e, seen)),
                 }
                 None
             }

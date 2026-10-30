@@ -73,7 +73,7 @@ use crate::sophon::SophonChunk;
 use crate::util;
 
 use crate::repair::phases::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan};
+use crate::repair::phases::plan::{PlannedFile, RepairPlan, validate_chunk_ranges};
 
 mod inplace;
 mod mode;
@@ -209,7 +209,10 @@ pub async fn repair_all(
         let sem = sem.clone();
         let ctx = ctx.clone();
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire_owned().await.unwrap();
+            let _permit = sem
+                .acquire_owned()
+                .await
+                .expect("the file semaphore is never closed");
             // Each file task gets a `file{seq,total,task,path}` span so its
             // progress can be grouped in logs; `task` is the tokio async-task id
             // (stable across thread hops), and the `picked up by worker` event
@@ -261,7 +264,9 @@ pub async fn repair_all(
                         // The bytes that did not have to be written: the file's
                         // size minus what was written. The in-place path
                         // leaves the correct chunks alone; the temp path
-                        // rewrites the whole file and keeps nothing.
+                        // rewrites every chunk it does not resume, and a `_tmp`
+                        // prefix left by an earlier run is kept and counts
+                        // here.
                         //
                         // The subtraction is against the file's **settled**
                         // writes, accumulated across its attempts: a chunk an
@@ -289,15 +294,38 @@ pub async fn repair_all(
             .await
         }));
     }
-    for h in handles {
-        let _ = h.await;
-    }
+    join_file_tasks(handles, &summary).await;
     progress.abort();
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
     // its clone yet. Either way `snapshot` reads the live counters.
     Arc::try_unwrap(summary)
         .map(|s| s.snapshot())
         .unwrap_or_else(|a| a.snapshot())
+}
+
+/// Await every spawned file task and charge each join error to `files_failed`.
+///
+/// A file task returns `()`, so its only `Err` is a panic or a cancellation —
+/// never an `anyhow::Error`. Dropping it would let a panicked file leave
+/// `files_failed == 0`: the run would bump `config.ini` and exit `0` with that
+/// file unrepaired, which is the launcher-desync failure the post-phase
+/// ordering exists to prevent.
+///
+/// The handles are awaited in **completion order**, not spawn order. A panic
+/// has already finished; waiting for all earlier handles first would let the
+/// queued files keep starting under `--fail-fast`, because the abort flag is
+/// only set once this loop observes the panic.
+async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Summary) {
+    let mut pending: futures::stream::FuturesUnordered<_> = handles.into_iter().collect();
+    while let Some(result) = futures::StreamExt::next(&mut pending).await {
+        if let Err(e) = result {
+            summary.files_failed.fetch_add(1, Ordering::Relaxed);
+            tracing::error!(error = %e, "repair task failed");
+            if summary.fail_fast() {
+                summary.abort();
+            }
+        }
+    }
 }
 
 /// Read-only inputs shared by every file task.
@@ -315,6 +343,13 @@ struct FileCtx {
     sleep: Arc<dyn Sleep>,
 }
 
+/// The manifest-relative path whose file task panics in tests.
+///
+/// Only [`repair_one_file`] and the wiring test use it; a real manifest cannot
+/// contain it, because it names no file the repair would ever plan.
+#[cfg(test)]
+const TEST_PANIC_REL: &str = "__girpr_test_panic__";
+
 /// Skip check, then up to [`MAX_ATTEMPTS`] repair attempts with linear backoff.
 async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // A runtime hard stop already fired: drop out without touching the file.
@@ -326,7 +361,23 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         return Ok(Repaired::Stopped);
     }
     let file = &ctx.plan.files[idx];
-    let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
+    // A test-only seam for the wiring, not the helper: the unit test on
+    // `join_file_tasks` proves the join loop counts a `JoinError`, but only a
+    // panic raised *inside* a real `repair_all` task proves that `repair_all`
+    // still calls it. Without this, reverting line 294 to `let _ = h.await`
+    // would be invisible to the suite.
+    #[cfg(test)]
+    if file.rel == TEST_PANIC_REL {
+        panic!("injected panic in the file task");
+    }
+    // `build_plan` already validated every range (exit `2`), so this is the
+    // defensive second gate for a plan built by hand: a write path must never
+    // seek on a bad range. Dry-run does not seek, so it keeps the old
+    // read-only behaviour here.
+    if !ctx.dry_run {
+        validate_chunk_ranges(file)?;
+    }
+    let final_path = util::contained_join(&ctx.game_dir, &file.rel)?;
     if let Some(parent) = final_path.parent()
         && !ctx.dry_run
     {
@@ -696,5 +747,98 @@ mod tests {
             ..file.clone()
         };
         assert!(trim_is_free(&bigger, &chunks, &[Some(0), Some(30)]));
+    }
+
+    /// F-8: the seam is reached **through `repair_all`**, not just through
+    /// `join_file_tasks`. Reverting `repair_all`'s join loop to a bare
+    /// `let _ = handle.await` (or dropping the handles) would leave the panic
+    /// invisible: the run would report success with the file unrepaired. This
+    /// test fails in exactly that case, because it never calls the join helper
+    /// itself.
+    #[tokio::test]
+    async fn a_panic_inside_a_file_task_fails_the_run() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_panic_wiring", "run");
+        let plan = Arc::new(RepairPlan {
+            latest: "1.0".into(),
+            files: vec![PlannedFile {
+                rel: TEST_PANIC_REL.into(),
+                size: 4,
+                md5: String::new(),
+                chunks: Vec::new(),
+            }],
+            url_prefix_by_file: Default::default(),
+        });
+        let summary = repair_all(
+            reqwest::Client::new(),
+            dir.to_path_buf(),
+            plan,
+            LocalChunkMap::new(),
+            Summary::new(),
+            1,
+            false,
+            crate::report::OutputFormat::Text,
+            RepairMode::Inplace,
+            Arc::new(crate::sleep::NoSleep),
+        )
+        .await;
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            1,
+            "a panic in the file task must surface as a failed file"
+        );
+    }
+
+    /// F-1: a panicked file task is a **failed file**, not a silent success.
+    ///
+    /// The task body returns `()`, so the only `Err` from its join handle is a
+    /// panic or a cancellation. The join loop has to count that error: with
+    /// `files_failed == 0` the run would reach the post phase, bump
+    /// `config.ini`, and exit `0` with the file unrepaired.
+    #[tokio::test]
+    async fn a_panicked_file_task_is_counted_as_a_failure() {
+        let mut summary = Summary::new();
+        summary.set_fail_fast(true);
+        let handles = vec![
+            tokio::spawn(async {}),
+            tokio::spawn(async { panic!("injected file-task panic") }),
+        ];
+        join_file_tasks(handles, &summary).await;
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            1,
+            "the panicked task must be the failed file"
+        );
+        assert!(summary.aborted(), "fail-fast must trip on the join error");
+    }
+
+    /// N-7: the join loop must observe a panic as soon as its task finishes.
+    /// Sequential awaiting in spawn order would wait for every earlier (here:
+    /// deliberately slower) handle first, so under `--fail-fast` the queued
+    /// files would keep starting after the run already knew it had failed.
+    ///
+    /// The slower task samples the abort flag when it finishes: it must
+    /// already be set by then. With spawn-order awaiting it is not, because
+    /// the panicked handle comes after it.
+    #[tokio::test]
+    async fn a_panic_is_observed_before_a_slower_earlier_task() {
+        let summary = Arc::new({
+            let mut s = Summary::new();
+            s.set_fail_fast(true);
+            s
+        });
+        let saw_abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slow_summary = Arc::clone(&summary);
+        let slow_saw = Arc::clone(&saw_abort);
+        let slow = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            slow_saw.store(slow_summary.aborted(), Ordering::SeqCst);
+        });
+        let panicking = tokio::spawn(async { panic!("injected file-task panic") });
+        join_file_tasks(vec![slow, panicking], &summary).await;
+        assert!(
+            saw_abort.load(Ordering::SeqCst),
+            "the panic must be observed before the slower task finishes"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
     }
 }

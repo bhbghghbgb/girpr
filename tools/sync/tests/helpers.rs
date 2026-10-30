@@ -87,6 +87,53 @@ fn exclude_wins_over_include() {
     assert!(is_excluded("secret.dat", &inc, &exc, true));
 }
 
+/// An excluded directory is a subtree, not one entry. Before this, `--exclude
+/// link` dropped `link` but kept `link/x.txt`, so the planner scheduled a path
+/// under the excluded link and the runtime guard deleted the link itself.
+#[test]
+fn excluding_a_directory_excludes_its_subtree() {
+    let exc = compile_patterns(&["link".to_string()]).unwrap();
+    assert!(is_excluded("link", &[], &exc, true));
+    assert!(is_excluded("link/x.txt", &[], &exc, true));
+    assert!(is_excluded("link/sub/y.txt", &[], &exc, true));
+    assert!(
+        !is_excluded("linkage/x.txt", &[], &exc, true),
+        "a prefix is not a subtree: the separator is the boundary"
+    );
+    assert!(!is_excluded("other/x.txt", &[], &exc, true));
+}
+
+/// `--include '*.txt'` matches the file and not the directory above it. The
+/// effective map still has to carry that directory: it is the entry that holds
+/// `is_link`, and without it a planner looking for a link ancestor sees nothing.
+#[test]
+fn an_included_file_pulls_its_ancestor_directories_into_the_map() {
+    let t = temp_root("include_ancestors");
+    let dir = t.subdir("w");
+    wfile(&dir, "top.txt", b"top");
+    wfile(&dir, "sub/a.txt", b"a");
+    wfile(&dir, "sub/skip.bin", b"skip");
+
+    let common = CommonOpts {
+        includes: compile_patterns(&["*.txt".to_string()]).unwrap(),
+        ..opts()
+    };
+    let db = CacheDb::open_temp(common.case_sensitive).unwrap();
+    let scan = scan_stat_only(&dir, &db, &common, scan(false, false)).unwrap();
+
+    assert!(scan.map.contains_key("top.txt"));
+    assert!(
+        scan.map.contains_key("sub"),
+        "the ancestor directory of an included file is in the map: {:?}",
+        scan.map.keys().collect::<Vec<_>>()
+    );
+    assert!(scan.map.contains_key("sub/a.txt"));
+    assert!(
+        !scan.map.contains_key("sub/skip.bin"),
+        "the include still narrows the file set"
+    );
+}
+
 #[test]
 fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     // Cache created sensitive with "a.txt"; disk renames to "A.txt".

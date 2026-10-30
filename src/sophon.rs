@@ -6,6 +6,7 @@ use std::io::Write;
 
 use crate::hyp::{ChunkBuild, ChunkManifestMeta};
 use crate::sleep::Sleep;
+use crate::util;
 
 /// Sophon chunk manifest protobuf (Starward `Sophon.proto` parity).
 /// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
@@ -183,12 +184,16 @@ async fn try_fetch_manifest(
         return Attempt::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
     }
     // The whole blob is zstd-compressed; the checksum is the MD5 of the
-    // DECOMPRESSED bytes. There is no ceiling on the decode: the reported
-    // size sizes the buffer, it does not promise the length.
-    let digest = match stream_body(resp.bytes_stream(), None, decoded).await {
+    // DECOMPRESSED bytes. There is no ceiling on the decode and none on the
+    // compressed body either: the reported size sizes the buffer, it does not
+    // promise the length, and nobody reserved the manifest's bytes.
+    let digest = match stream_body(resp.bytes_stream(), None, None, decoded).await {
         Ok(v) => v,
-        Err(StreamError::Transport(e)) => return Attempt::Retry(e),
-        Err(StreamError::Content(e)) => return Attempt::Retry(e),
+        Err(f) => {
+            return match f.error {
+                StreamError::Transport(e) | StreamError::Content(e) => Attempt::Retry(e),
+            };
+        }
     };
     tracing::debug!(manifest = %meta.manifest.id, compressed_bytes = digest.compressed_bytes, "manifest downloaded");
     tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = digest.bytes, expect_md5 = %meta.manifest.checksum, actual_md5 = %digest.md5, "manifest checksum check");
@@ -369,21 +374,49 @@ enum StreamError {
 /// produced. `expected` is the chunk's `uncompressed_size`, and it is enforced
 /// as the bytes go.
 ///
+/// `max_compressed` is the chunk's `compressed_size` — the bytes the caller
+/// reserved before the fetch. A body that crosses it is refused rather than
+/// streamed to an unbounded length: the reservation is a ceiling, and a server
+/// that sends more than the manifest claims is a server to stop talking to.
+/// The piece that crosses the line has already arrived, so the counter may
+/// exceed the cap by up to one transport piece; that is the honest number.
+///
+/// `consumed` accumulates the **compressed** bytes that crossed the wire in
+/// this call, across every attempt — the partial bodies of attempts that
+/// failed are in it too. That is the quantity the download ceiling is
+/// charged against: the bytes are spent whether the attempt succeeds or not,
+/// and a caller that refunded its whole reservation on failure would
+/// under-report a transport that delivered half a chunk and then dropped.
+///
 /// The digest is known when the stream ends, which is one byte too late to
 /// gate the write — the one thing the streaming path gives up. The file-level
 /// gate (the whole-file MD5) is what decides whether the file is good.
+#[allow(clippy::too_many_arguments)] // one parameter per input the fetch path needs
 pub async fn stream_chunk_to(
     client: &reqwest::Client,
     sleep: &dyn Sleep,
     url_prefix: &str,
     id: &str,
     expected: u64,
+    max_compressed: u64,
+    consumed: &mut u64,
     sink: &mut impl ChunkSink,
 ) -> Result<ChunkDigest> {
     let url = join_url(url_prefix, id);
     let mut last_err = anyhow::anyhow!("no attempts");
     for attempt in 1..=ATTEMPTS {
-        match try_stream_chunk(client, &url, id, attempt, expected, sink).await {
+        match try_stream_chunk(
+            client,
+            &url,
+            id,
+            attempt,
+            expected,
+            max_compressed,
+            consumed,
+            sink,
+        )
+        .await
+        {
             Attempt::Ok(d) => return Ok(d),
             Attempt::Fatal(e) => {
                 tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
@@ -405,12 +438,19 @@ pub async fn stream_chunk_to(
 /// another try, a status that says so is worth another try, and a body that is
 /// not what it should be is the origin's definitive answer — the file-level
 /// retry is what asks for it again.
+///
+/// Whatever the attempt delivered is added to `consumed` before it returns,
+/// on every path: this is the only place that sees the compressed byte count
+/// of an attempt that did not finish.
+#[allow(clippy::too_many_arguments)]
 async fn try_stream_chunk(
     client: &reqwest::Client,
     url: &str,
     id: &str,
     attempt: u64,
     expected: u64,
+    max_compressed: u64,
+    consumed: &mut u64,
     sink: &mut impl ChunkSink,
 ) -> Attempt<ChunkDigest> {
     let resp = match client.get(url).send().await {
@@ -435,12 +475,40 @@ async fn try_stream_chunk(
     if let Err(e) = sink.restart() {
         return Attempt::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
     }
-    let digest = match stream_body(resp.bytes_stream(), Some(expected), sink).await {
-        Ok(v) => v,
-        Err(StreamError::Transport(e)) => return Attempt::Retry(e),
-        Err(StreamError::Content(e)) => return Attempt::Fatal(e),
+    let digest = match stream_body(
+        resp.bytes_stream(),
+        Some(expected),
+        Some(max_compressed),
+        sink,
+    )
+    .await
+    {
+        Ok(v) => {
+            *consumed = consumed.saturating_add(v.compressed_bytes);
+            v
+        }
+        Err(f) => {
+            *consumed = consumed.saturating_add(f.compressed_bytes);
+            return match f.error {
+                StreamError::Transport(e) => Attempt::Retry(e),
+                StreamError::Content(e) => Attempt::Fatal(e),
+            };
+        }
     };
     Attempt::Ok(digest)
+}
+
+/// Why a streamed body failed, and how much of it had already arrived.
+///
+/// The compressed count is not a detail: the bytes crossed the wire, and the
+/// download meter has to charge them even though the attempt failed. Discarding
+/// it is what made a mid-stream failure look like a fetch that delivered
+/// nothing.
+#[derive(Debug)]
+struct StreamFailure {
+    error: StreamError,
+    /// Compressed bytes the body delivered before the attempt gave up.
+    compressed_bytes: u64,
 }
 
 /// Feed a compressed body through the decoder into `sink`, hashing on the way
@@ -451,11 +519,18 @@ async fn try_stream_chunk(
 /// neither the compressed body nor the decoded blob is ever resident as a
 /// whole. `expected` is the ceiling on the decoded size, and `None` means "no
 /// ceiling" — the case for a blob whose length is not promised by the API.
+/// `max_compressed` is the same ceiling for the compressed body: a chunk is
+/// reserved at its manifest `compressed_size`, and a body that crosses it is
+/// refused instead of being streamed to an unbounded length.
+///
+/// A failure carries the compressed byte count accumulated before it, so the
+/// caller can charge what really arrived.
 async fn stream_body<S, B, E>(
     mut body: S,
     expected: Option<u64>,
+    max_compressed: Option<u64>,
     sink: &mut impl ChunkSink,
-) -> Result<ChunkDigest, StreamError>
+) -> Result<ChunkDigest, StreamFailure>
 where
     S: futures::Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
@@ -470,24 +545,49 @@ where
         // it. (`write::Decoder` has `with_writer`, `get_ref`, `into_inner`,
         // `auto_flush` — and no `finish`: `zstd-0.13.3/src/stream/write/mod.rs`
         // puts `do_finish` on the *encoder*.)
-        let raw = zstd::stream::raw::Decoder::new()
-            .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")))?;
+        let raw = zstd::stream::raw::Decoder::new().map_err(|e| StreamFailure {
+            error: StreamError::Content(anyhow::anyhow!("zstd decoder: {e}")),
+            compressed_bytes: compressed,
+        })?;
         let mut dec = zstd::stream::zio::Writer::new(&mut hashing, raw);
         while let Some(piece) = body.next().await {
             let bytes = match piece {
                 Ok(b) => b,
-                Err(e) => return Err(StreamError::Transport(anyhow::anyhow!("read body: {e}"))),
+                Err(e) => {
+                    return Err(StreamFailure {
+                        error: StreamError::Transport(anyhow::anyhow!("read body: {e}")),
+                        compressed_bytes: compressed,
+                    });
+                }
             };
-            compressed += bytes.as_ref().len() as u64;
+            compressed = compressed.saturating_add(bytes.as_ref().len() as u64);
+            // The reservation is a ceiling: a body that crosses it is refused
+            // at the piece that crossed, not decoded and written in full. The
+            // piece has already crossed the wire, so it is in `compressed`.
+            if let Some(cap) = max_compressed
+                && compressed > cap
+            {
+                return Err(StreamFailure {
+                    error: StreamError::Content(anyhow::anyhow!(
+                        "compressed body exceeded the {cap} bytes reserved for it"
+                    )),
+                    compressed_bytes: compressed,
+                });
+            }
             if let Err(e) = dec.write_all(bytes.as_ref()) {
-                return Err(StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")));
+                return Err(StreamFailure {
+                    error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
+                    compressed_bytes: compressed,
+                });
             }
         }
         // The frame has to be *complete*: a truncated body decodes to a short
         // result without an error of its own, and a short result must not
         // pass for a successful download.
-        dec.finish()
-            .map_err(|e| StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")))?;
+        dec.finish().map_err(|e| StreamFailure {
+            error: StreamError::Content(anyhow::anyhow!("zstd chunk: {e}")),
+            compressed_bytes: compressed,
+        })?;
     }
     Ok(ChunkDigest {
         compressed_bytes: compressed,
@@ -559,6 +659,18 @@ pub fn join_url(prefix: &str, id: &str) -> String {
 }
 
 /// Build local-chunk reuse map: path -> list of (uncompressed_md5, uncompressed_size, offset).
+///
+/// The key is the **cleaned** rel — the same string `build_plan` stores in
+/// `PlannedFile::rel` — because every consumer (`est_download_bytes_by_file`,
+/// the scan, the temp and in-place writers) looks the file up by that spelling.
+/// Keying on the raw local-manifest spelling would lose reuse for a `./`- or
+/// `//`-spelled local manifest while the map's whole purpose is to find the
+/// bytes already on disk. Two raw spellings that clean to one key merge, which
+/// is the intended "first occurrence per chunk" behaviour.
+///
+/// The local manifest is best effort (`local_reuse_map`'s contract): an entry
+/// that cannot be cleaned is skipped with a warning rather than failing the
+/// run, because this map only ever saves downloads.
 pub fn build_local_chunk_map(
     manifests: &[WantedManifest],
 ) -> HashMap<String, Vec<(String, i64, i64)>> {
@@ -568,7 +680,18 @@ pub fn build_local_chunk_map(
             if f.is_folder {
                 continue;
             }
-            let e = map.entry(f.file.clone()).or_default();
+            let key = match util::clean_rel(&f.file) {
+                Ok(key) => key,
+                Err(e) => {
+                    tracing::warn!(
+                        file = %f.file,
+                        error = %format!("{e:#}"),
+                        "local reuse map: skipping a non-contained path"
+                    );
+                    continue;
+                }
+            };
+            let e = map.entry(key).or_default();
             for c in &f.chunks {
                 // keep first occurrence per md5 (duplicates exist)
                 if !e
@@ -604,10 +727,13 @@ mod tests {
     async fn stream(
         compressed: &[u8],
         expected: Option<u64>,
+        max_compressed: Option<u64>,
     ) -> Result<(Vec<u8>, ChunkDigest), StreamError> {
         let mut sink: Vec<u8> = Vec::new();
         let body = futures::stream::iter(pieces(compressed, 4096));
-        let digest = stream_body(body, expected, &mut sink).await?;
+        let digest = stream_body(body, expected, max_compressed, &mut sink)
+            .await
+            .map_err(|f| f.error)?;
         Ok((sink, digest))
     }
 
@@ -622,9 +748,13 @@ mod tests {
     async fn the_streamed_decode_agrees_with_the_buffered_one() {
         let payload: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
         let compressed = frame(&payload);
-        let (sink, digest) = stream(&compressed, Some(payload.len() as u64))
-            .await
-            .expect("the frame decodes");
+        let (sink, digest) = stream(
+            &compressed,
+            Some(payload.len() as u64),
+            Some(compressed.len() as u64),
+        )
+        .await
+        .expect("the frame decodes");
         let buffered = zstd::decode_all(&compressed[..]).expect("buffered decode");
         assert_eq!(sink, payload, "the sink got the decoded bytes");
         assert_eq!(sink, buffered, "and they are the buffered decode's bytes");
@@ -651,9 +781,13 @@ mod tests {
         let mut corrupt = payload.clone();
         corrupt[100] ^= 0xFF;
         let compressed = frame(&corrupt);
-        let (sink, digest) = stream(&compressed, Some(payload.len() as u64))
-            .await
-            .expect("the frame decodes");
+        let (sink, digest) = stream(
+            &compressed,
+            Some(payload.len() as u64),
+            Some(compressed.len() as u64),
+        )
+        .await
+        .expect("the frame decodes");
         assert_eq!(sink, corrupt, "the bytes are the corrupt ones");
         assert_eq!(
             digest.bytes,
@@ -677,10 +811,62 @@ mod tests {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
         let compressed = frame(&payload);
         let truncated = &compressed[..compressed.len() / 2];
-        let err = stream(truncated, Some(payload.len() as u64))
+        let err = stream(truncated, Some(payload.len() as u64), None)
             .await
             .expect_err("a truncated frame is not a download");
         assert!(matches!(err, StreamError::Content(_)), "{err:?}");
+    }
+
+    /// A transport that dies mid-body still delivered bytes, and the failure
+    /// says how many. The download ceiling is charged against that number, so
+    /// discarding it is what made a half-delivered chunk look free.
+    #[tokio::test]
+    async fn a_mid_stream_transport_failure_reports_what_arrived() {
+        let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let half = compressed.len() / 2;
+        let mut body = pieces(&compressed[..half], 4096);
+        body.push(Err(std::io::Error::other("the connection dropped")));
+        let mut sink: Vec<u8> = Vec::new();
+        let f = stream_body(
+            futures::stream::iter(body),
+            Some(payload.len() as u64),
+            Some(compressed.len() as u64),
+            &mut sink,
+        )
+        .await
+        .expect_err("a dropped body is not a download");
+        assert!(matches!(f.error, StreamError::Transport(_)), "{f:?}");
+        assert_eq!(
+            f.compressed_bytes, half as u64,
+            "the bytes that crossed the wire are reported, not lost"
+        );
+    }
+
+    /// The compressed body is capped at what the caller reserved: a server
+    /// that sends more than the manifest's `compressed_size` is cut off rather
+    /// than streamed to an unbounded length, and the piece that crossed the
+    /// line is still counted as spent.
+    #[tokio::test]
+    async fn a_body_past_its_reservation_is_refused() {
+        let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
+        let compressed = frame(&payload);
+        let mut sink: Vec<u8> = Vec::new();
+        let body = futures::stream::iter(pieces(&compressed, compressed.len()));
+        let f = stream_body(
+            body,
+            Some(payload.len() as u64),
+            Some(compressed.len() as u64 - 1),
+            &mut sink,
+        )
+        .await
+        .expect_err("a body past its reservation is a refusal");
+        assert!(matches!(f.error, StreamError::Content(_)), "{f:?}");
+        assert_eq!(
+            f.compressed_bytes,
+            compressed.len() as u64,
+            "the overrunning piece crossed the wire, so it is charged"
+        );
     }
 
     /// The ceiling is enforced as the bytes go: a body that decodes to more
@@ -690,7 +876,7 @@ mod tests {
     async fn a_body_longer_than_its_claim_is_refused() {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
         let compressed = frame(&payload);
-        let err = stream(&compressed, Some(1024))
+        let err = stream(&compressed, Some(1024), Some(compressed.len() as u64))
             .await
             .expect_err("too many bytes is a refusal");
         assert!(matches!(err, StreamError::Content(_)), "{err:?}");
@@ -738,7 +924,7 @@ mod tests {
         // The buffer the API's `uncompressed_size` sizes.
         let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
         let body = futures::stream::iter(pieces(&compressed, 4096));
-        let digest = stream_body(body, None, &mut sink)
+        let digest = stream_body(body, None, None, &mut sink)
             .await
             .expect("the frame decodes");
         assert_eq!(sink, raw, "the decoded bytes are the manifest");
@@ -919,5 +1105,46 @@ mod tests {
         );
         // folders never enter the reuse map
         assert!(!map.contains_key("dir/"));
+    }
+
+    /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),
+    /// and every reuse consumer looks the file up by that string. A key built
+    /// from the raw manifest spelling (`./game/foo.dat`) would never be hit, so
+    /// a non-canonical local manifest would lose all reuse. The key is cleaned
+    /// here, once, at the map's boundary; a path that cannot be cleaned is
+    /// skipped like any other best-effort local-manifest degradation.
+    #[test]
+    fn local_chunk_map_keys_are_the_cleaned_plan_spelling() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![
+                SophonChunkFile {
+                    file: "./game/foo.dat".into(),
+                    chunks: vec![chunk("c1", "d41d8cd98f00b204e9800998ecf8427e", 0, 20)],
+                    is_folder: false,
+                    size: 20,
+                    md5: "m1".into(),
+                },
+                SophonChunkFile {
+                    file: "../escape.dat".into(),
+                    chunks: vec![chunk("c2", "0cc175b9c0f1b6a831c399e269772661", 0, 20)],
+                    is_folder: false,
+                    size: 20,
+                    md5: "m2".into(),
+                },
+            ],
+        }];
+        let map = build_local_chunk_map(&wm);
+        assert!(
+            map.contains_key("game/foo.dat"),
+            "the key must be the plan's cleaned spelling: {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+        assert!(!map.contains_key("./game/foo.dat"));
+        assert!(
+            map.keys().all(|k| k != "../escape.dat"),
+            "a non-contained path must not enter the map"
+        );
+        assert_eq!(map.len(), 1);
     }
 }
