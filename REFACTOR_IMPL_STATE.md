@@ -38,7 +38,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] A2 — indexed per-file reuse entries. (`0fec9bc`)
 - [x] B3 — shared scan-range construction; fix the in-place offset-0 sources. (`5e49a7b`)
 - [x] D5 — deduplicate `verify_plan`'s branches. (`1783069`)
-- [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder.
+- [x] F1 / F2 — `Ceiling` newtype + `Extras` builder. (`70c13b3`)
 - [ ] G6 — single-pass `clean_rel`.
 - [ ] G5 — `PathRoot` cached base resolution.
 - [ ] C5 — `OsString` `_tmp` path.
@@ -66,6 +66,8 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   222). `DigestSource::Scanned(&Verdict)` and unit `Read` deviate slightly
   from the finding's sketch, to keep `damaged_chunks()` single-call and avoid
   reading an absent file.
+- [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder (`70c13b3`). `Ceiling` is
+  `pub` (public field), otherwise as sketched; key order unchanged.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
