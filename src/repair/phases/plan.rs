@@ -101,6 +101,35 @@ impl PlannedFile {
         }
         out
     }
+
+    /// The allocation-free half of [`layout`](Self::layout): do the chunks
+    /// cover `[0, size)` exactly, with no hole and no overlap?
+    ///
+    /// This walks `chunks` in order with a cursor instead of collecting,
+    /// sorting and counting ranges, so it can gate the full `layout()` call
+    /// when only the `tiled` verdict is needed. It therefore relies on the
+    /// chunk order [`build_plan`] produces — ascending by offset, with empty
+    /// chunks dropped — and gives the same answer as `layout().tiled` for
+    /// that order.
+    pub fn is_tiled(&self) -> bool {
+        let size = self.size.max(0) as u64;
+        let mut cursor = 0u64;
+        for c in &self.chunks {
+            // Same rule as `layout()`: a negative offset or size is not a
+            // range at all, so it cannot tile anything.
+            if c.offset < 0 || c.uncompressed_size < 0 {
+                continue;
+            }
+            let offset = c.offset as u64;
+            // `cursor` is the end of the coverage so far. A chunk above it
+            // leaves a hole; one below it claims bytes already covered.
+            if offset != cursor {
+                return false;
+            }
+            cursor = cursor.saturating_add(c.uncompressed_size as u64);
+        }
+        cursor == size
+    }
 }
 
 /// The shape of a file's chunk layout — see [`PlannedFile::layout`].
@@ -308,8 +337,11 @@ pub fn build_plan(
             // written: a hole in the coverage is a thing the writer has to
             // zero-fill, and an overlap is a thing it has to resolve, and
             // both are better known before the first byte moves than after.
-            let layout = file.layout();
-            if !layout.tiled {
+            // The cheap check gates `layout()`: its `gaps`/`overlaps` counts
+            // are only needed on the warning path, and the in-place writer
+            // builds its own layout for the holes it has to fill.
+            if !file.is_tiled() {
+                let layout = file.layout();
                 tracing::warn!(
                     rel = %file.rel,
                     gaps = layout.gaps.len(),
@@ -437,6 +469,39 @@ mod tests {
     fn a_file_with_no_chunks_and_no_size_is_tiled() {
         let f = file_with(0, vec![]);
         assert!(f.layout().tiled);
+    }
+
+    /// `is_tiled()` is the allocation-free half of `layout()`, used to gate it
+    /// in `build_plan`: on the sorted chunk list the plan guarantees, the two
+    /// must always agree — including the gap, overlap and tail cases.
+    #[test]
+    fn the_cheap_tiling_check_agrees_with_the_layout() {
+        let cases = [
+            (
+                "tiled",
+                file_with(128, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
+            ),
+            (
+                "hole",
+                file_with(192, vec![chunk("a", 0, 64), chunk("b", 128, 64)]),
+            ),
+            (
+                "overlap",
+                file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]),
+            ),
+            (
+                "tail",
+                file_with(200, vec![chunk("a", 0, 64), chunk("b", 64, 64)]),
+            ),
+            ("past size", file_with(64, vec![chunk("a", 0, 128)])),
+            ("empty file", file_with(0, vec![])),
+        ];
+        for (name, f) in &cases {
+            assert_eq!(f.is_tiled(), f.layout().tiled, "{name}");
+        }
+        assert!(cases[0].1.is_tiled(), "the chunks cover the file exactly");
+        assert!(!cases[1].1.is_tiled(), "a hole is not tiled");
+        assert!(!cases[2].1.is_tiled(), "an overlap is not tiled");
     }
 
     // -----------------------------------------------------------------------
