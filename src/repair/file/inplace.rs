@@ -140,10 +140,7 @@ async fn attempt_inplace_inner(
     // Back to one source verdict per chunk, in the plan's order: a chunk with
     // no source has no intact source, by definition. Everything below indexes
     // `source_ok` by chunk, and the discard scan is per range like the rest.
-    let mut source_ok = vec![false; file.chunks.len()];
-    for (k, &i) in source_owner.iter().enumerate() {
-        source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
-    }
+    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
     scan.source_ok = source_ok;
 
     // The chunks that are not correct where they belong. `file.chunks` is
@@ -357,6 +354,26 @@ async fn attempt_inplace_inner(
         );
     }
     Ok(repaired_in_place(stats, &final_scan.file_md5))
+}
+
+/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
+///
+/// `scan.source_ok` is indexed by the range list [`scan_ranges`] built, which
+/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
+/// that range `k` belongs to. A chunk with no source has no intact source, by
+/// definition, so it stays `false`. The discard path replaces a real scan with
+/// [`util::Scan::absent`], whose tuple is `(dest ranges, source ranges)`; this
+/// remap is what keeps that per-range shape from being read as per-chunk.
+fn source_ok_by_chunk(
+    chunks_len: usize,
+    source_owner: &[usize],
+    scan_source_ok: &[bool],
+) -> Vec<bool> {
+    let mut source_ok = vec![false; chunks_len];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
+    }
+    source_ok
 }
 
 /// The success settle shared by the first verify and the redo.
@@ -574,10 +591,14 @@ mod tests {
     }
 
     fn chunk(id: &str, size: i64) -> SophonChunk {
+        chunk_at(id, &format!("md5-{id}"), 0, size)
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
         SophonChunk {
             id: id.into(),
-            uncompressed_md5: format!("md5-{id}"),
-            offset: 0,
+            uncompressed_md5: md5.into(),
+            offset,
             compressed_size: size,
             uncompressed_size: size,
             unknown: 0,
@@ -640,5 +661,71 @@ mod tests {
         let ok = vec![true, true, false];
         let bad = vec![0, 1, 2];
         assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
+    }
+
+    /// B3: the in-place scan must not invent a source at offset 0 for a chunk
+    /// that has none. The same content sits at the head of the file under a
+    /// different layout, so a coerced source range would verify there and the
+    /// writer would believe it can copy the chunk instead of downloading it.
+    #[test]
+    fn an_inplace_scan_never_checks_a_source_less_chunk_at_offset_zero() {
+        let x = vec![0x58u8; 10];
+        let y = vec![0x59u8; 10];
+        let md5_x = format!("{:x}", md5::compute(&x));
+        let mut bytes = x.clone();
+        bytes.extend_from_slice(&y);
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "no_source_offset");
+        std::fs::write(dir.join("a.dat"), &bytes).unwrap();
+        let chunks = vec![chunk_at("c0", &md5_x, 10, 10)];
+
+        let (dest, source, owner) = scan_ranges(&chunks, &[None]);
+        assert!(
+            source.is_empty(),
+            "a chunk with no source contributes no source range"
+        );
+        assert!(owner.is_empty());
+        let scan = util::scan_file(&dir.join("a.dat"), &dest, &source).unwrap();
+        assert_eq!(
+            scan.dest_ok,
+            vec![false],
+            "the destination is the other copy"
+        );
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &scan.source_ok),
+            vec![false],
+            "the in-place path must not invent an intact source"
+        );
+    }
+
+    /// B3: `--repair-mode discard` replaces a real scan with `Scan::absent`
+    /// over the range lists `scan_ranges` built, so its `source_ok` is per
+    /// **range**, not per chunk. The remap has to land each verdict on the
+    /// chunk that owns the range, and a source-less chunk stays false.
+    #[test]
+    fn the_discard_scan_remaps_its_absent_source_verdicts_by_chunk() {
+        let chunks = vec![
+            chunk_at("c0", "md5-c0", 0, 10),
+            chunk_at("c1", "md5-c1", 10, 20),
+        ];
+        let (dest, source, owner) = scan_ranges(&chunks, &[None, Some(30)]);
+        assert_eq!(owner, vec![1], "only the second chunk has a source range");
+        let scan = util::Scan::absent(dest.len(), source.len());
+        assert_eq!(
+            scan.source_ok.len(),
+            1,
+            "absent is per range, not per chunk"
+        );
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &scan.source_ok),
+            vec![false, false],
+            "the deleted target has no intact source, and chunk 0 has none anyway"
+        );
+
+        // The same remap must carry a verdict to the chunk that owns it, so a
+        // later per-chunk leak cannot pass by simply keeping everything false.
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &[true]),
+            vec![false, true]
+        );
     }
 }
