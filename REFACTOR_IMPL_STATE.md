@@ -34,7 +34,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ### Phase 2 — behavior-adjacent
 
-- [ ] A1 — one chunk-identity predicate, normalized MD5.
+- [x] A1 — one chunk-identity predicate, normalized MD5. (`28f5869`)
 - [ ] A2 — indexed per-file reuse entries.
 - [ ] B3 — shared scan-range construction; fix the in-place offset-0 sources.
 - [ ] D5 — deduplicate `verify_plan`'s branches.
@@ -56,6 +56,8 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [ ] D2 — key the expected set directly in `plan_purge` (`4cedc14`; +1 unit
   test, 219). Last Phase 1 item; the rest of Phase 1 was accepted at
   `b03eb66`.
+- [ ] A1 — one chunk-identity predicate, normalized MD5 (`28f5869`; +1 unit
+  test, 220).
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
