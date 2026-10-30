@@ -54,6 +54,7 @@ pub use phases::plan::{PlannedFile, RepairPlan};
 pub use purge::{PurgeCandidate, PurgePlan, PurgeVerdict};
 pub use scope::PathScope;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -66,14 +67,86 @@ use crate::util;
 
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
+use scan::ScanReport;
+
 /// Bring one install to the latest live version.
 ///
 /// Returns the run counters and the process exit code:
 /// `0` ok (or `--check-only` clean) · `1` usage/config · `2` metadata/network ·
 /// `3` write/verify · `4` `--check-only` found damage. Fatal classes come back
 /// as [`RunFailure`], which carries the same codes.
+///
+/// The work is split in two halves: [`plan_phase`] decides everything and
+/// touches nothing, then [`execute_phase`] carries it out. This function is
+/// only the phase order.
 pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
+    // The counters accumulate across both halves and an early plan return still
+    // has to hand them back, so `run` owns the `Summary` and lends it out.
     let mut summary = Summary::default();
+    let phase = match plan_phase(&ctx, &mut summary).await? {
+        PlanOutcome::Finished(code) => return Ok((summary, code)),
+        PlanOutcome::Ready(phase) => *phase,
+    };
+    execute_phase(&ctx, phase, summary).await
+}
+
+/// Everything the plan half decided, handed to the execute half unchanged.
+///
+/// Every value here was computed before `game_dir` was created, which is what
+/// makes the plan half inspectable and its refusals free of side effects. The
+/// execute half re-derives its own root after `create_dir_all`; the `game_dir`
+/// carried here is the plan-phase form, which the second canonicalize refines.
+struct PlanPhase {
+    /// The install root as the plan phase resolved it (`canonicalize`, or the
+    /// raw `ctx.game_dir`). The execute half re-canonicalizes after creating it.
+    game_dir: PathBuf,
+    /// The metadata the plan was built against; the post-phase and the audio
+    /// scan-file write read it.
+    meta: Meta,
+    /// The HTTP client the manifests were fetched with. The repair loop reuses
+    /// it rather than constructing a second one.
+    http: reqwest::Client,
+    /// The work list, shared with the repair loop. The post-phase purge reads it.
+    plan: Arc<RepairPlan>,
+    /// The up-front purge candidates, when a purge or `--print-plan` asked for
+    /// them.
+    purge_plan: Option<PurgePlan>,
+    /// The install scan, when `--scan` asked for it.
+    scan: Option<ScanReport>,
+    /// The server's deprecated-file list (empty in read-only modes, or when the
+    /// best-effort fetch failed).
+    deprecated: Vec<String>,
+    /// The local chunk map, moved into the repair loop.
+    local_map: manifest::LocalChunkMap,
+}
+
+/// How [`plan_phase`] ends.
+///
+/// The assertion and `--print-plan` returns happen before anything is mutated,
+/// so they are outcomes of the plan rather than failures. The [`Summary`] is
+/// owned by [`run`], which returns it with the code here.
+enum PlanOutcome {
+    /// The plan is complete and execute half still has work to do.
+    ///
+    /// Boxed so the enum stays one word; `PlanPhase` is the whole run state.
+    Ready(Box<PlanPhase>),
+    /// The run ends in the plan half: `5` for a scope ceiling, `0` for
+    /// `--print-plan`.
+    Finished(i32),
+}
+
+/// The plan half: decide everything, touch nothing.
+///
+/// Metadata → `REPORT` → manifests → `build_plan` → the purge plan → the
+/// deprecated list → the scan → the ceilings → `--print-plan` / `--plan-out`.
+/// The two early exits here (`--print-plan` `0`, a scope ceiling `5`) are
+/// [`PlanOutcome::Finished`]; the run never reaches `create_dir_all`.
+///
+/// `summary` arrives empty and leaves with the plan-phase flags and totals set;
+/// `--plan-out` is the one write this half performs. It is the requested
+/// artifact, and it lands before the execute half so a write failure is exit `3`
+/// with nothing in the install mutated.
+async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, RunFailure> {
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only.
     let readonly = ctx.readonly();
@@ -97,7 +170,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // timing differs.
 
     // 1 + 2. local state and server metadata.
-    let meta = metadata::fetch(&ctx, &game_dir).await?;
+    let meta = metadata::fetch(ctx, &game_dir).await?;
 
     // 2.5 begin report to stdout (mirrored to log): versions + API-sourced
     // metadata, so a stdout parser sees what is on disk and what it will
@@ -310,7 +383,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         // gives every exit path one uniform SUMMARY tail.
         // Nothing has been written at this point — no directory created, no
         // `_tmp` opened, no file deleted, no `config.ini` touched.
-        return Ok((summary, 5));
+        return Ok(PlanOutcome::Finished(5));
     }
 
     // 4.7 `--print-plan`: report the whole plan and stop. Read-only by
@@ -356,8 +429,44 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
     }
     if ctx.print_plan {
-        return Ok((summary, 0));
+        return Ok(PlanOutcome::Finished(0));
     }
+
+    Ok(PlanOutcome::Ready(Box::new(PlanPhase {
+        game_dir,
+        meta,
+        http,
+        plan,
+        purge_plan,
+        scan,
+        deprecated,
+        local_map,
+    })))
+}
+
+/// The execute half: everything here may touch the disk.
+///
+/// Entered only with a completed [`PlanPhase`], so every refusal has already
+/// happened and `create_dir_all` below is the first mutation. The early returns
+/// keep their order and codes: `--check-only` (`0`/`4`), `--purge-only` (`0`/`5`),
+/// a runtime ceiling (`5`), a failed file (`3`), then the post-phase (`0`/`5`).
+async fn execute_phase(
+    ctx: &RunCtx,
+    phase: PlanPhase,
+    mut summary: Summary,
+) -> Result<(Summary, i32), RunFailure> {
+    let PlanPhase {
+        game_dir,
+        meta,
+        http,
+        plan,
+        purge_plan,
+        scan,
+        deprecated,
+        local_map,
+    } = phase;
+    let readonly = ctx.readonly();
+    let scope = &ctx.path_scope;
 
     // === execution phase: everything below may touch the disk ===
 
@@ -445,7 +554,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
         let outcome =
-            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
@@ -476,7 +585,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.sleep.clone(),
     )
     .await;
-    if let Some(code) = apply_run_flags(&ctx, &mut summary) {
+    if let Some(code) = apply_run_flags(ctx, &mut summary) {
         return Ok((summary, code));
     }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
@@ -488,7 +597,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // invariant obvious).
     if !readonly {
         let outcome =
-            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     } else if ctx.dry_run
