@@ -1,0 +1,445 @@
+﻿use anyhow::{Context, Result};
+use std::path::{Component, Path, PathBuf};
+
+/// What a file-length probe found.
+///
+/// `Absent` is exactly `NotFound`. Every other `metadata` error — a denied
+/// attribute read, a sharing violation, an invalid component — is
+/// `Unreadable`, not "absent" and not "zero": collapsing the two makes a
+/// present file look missing and a check report a size mismatch for a file it
+/// never managed to stat.
+#[derive(Debug)]
+pub enum FileLen {
+    /// The file exists; this is its length.
+    Present(u64),
+    /// The path is not there.
+    Absent,
+    /// The path could not be statted.
+    Unreadable(std::io::Error),
+}
+
+/// Classify one `metadata` result.
+///
+/// Split from [`file_len`] so the absent/unreadable split can be pinned with
+/// an injected `io::Error`, the way `post::classify_deprecated` is.
+fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> FileLen {
+    match stat {
+        Ok(m) => FileLen::Present(m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileLen::Absent,
+        Err(e) => FileLen::Unreadable(e),
+    }
+}
+
+/// Length of a path with absence and an unreadable stat kept distinct.
+pub fn file_len(path: &Path) -> FileLen {
+    classify_len(std::fs::metadata(path))
+}
+
+/// Validate a **server-controlled relative path** and return it in `/` form.
+///
+/// The manifest, the deprecated-files list and the audio directory names are
+/// all strings a server chose. [`Path::join`] **replaces** the base for an
+/// absolute path, for a Windows drive-relative path (`C:evil`), and for a UNC
+/// path, and `..` walks out of it. This refuses all of those spellings before
+/// any sink sees them:
+///
+/// - empty, a drive prefix (`C:`), a root (`/x`, `\\server\share`), or any
+///   `ParentDir` component;
+/// - anything that names no file (only `.` components);
+/// - a trailing separator (`game/`): every caller expects the rel to name one
+///   object, and a spelling that also says "directory" cannot be both;
+/// - Windows name rules, because the install is a Windows tree even when the
+///   checker runs elsewhere: a reserved device name (`NUL`, `con.dat`,
+///   `COM1`, `CONIN$`, …), a component ending in `.` or a space (Windows
+///   strips those and aliases the name), or a `:` other than the drive prefix
+///   (an NTFS alternate data stream).
+///
+/// The check is lexical and platform-independent: `C:evil` is a `Prefix`
+/// component on Windows but a plain component on Unix, so the drive spelling is
+/// rejected explicitly rather than left to `std`.
+///
+/// This is not a filesystem check; [`contained_join`] adds that.
+pub fn contained_rel(rel: &str) -> Result<PathBuf> {
+    let normalized = rel.replace('\\', "/");
+    anyhow::ensure!(!normalized.is_empty(), "path is empty");
+    anyhow::ensure!(
+        !normalized.ends_with('/'),
+        "path has a trailing separator: {rel}"
+    );
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        anyhow::bail!("path has a drive prefix: {rel}");
+    }
+    let path = Path::new(&normalized);
+    anyhow::ensure!(
+        !path.has_root() && !path.is_absolute(),
+        "path is absolute: {rel}"
+    );
+    let mut named = false;
+    // Build the cleaned form rather than returning the input: `a/./b` is
+    // accepted but must not survive as `a/./b`, because the plan stores this
+    // string and every later comparison (the purge's expected set, the reuse
+    // map, the scope) works on the plain form. A leading `.` in particular
+    // would make `expected_paths()` disagree with the purge walk — which
+    // reports `game/foo.dat` — and the cleanup would delete the file this run
+    // just repaired.
+    let mut clean = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .with_context(|| format!("path is not UTF-8: {rel}"))?;
+                anyhow::ensure!(
+                    !part.ends_with('.') && !part.ends_with(' '),
+                    "path has a Windows-trailing dot or space: {rel}"
+                );
+                anyhow::ensure!(
+                    !part.contains(':'),
+                    "path has a Windows alternate-stream separator: {rel}"
+                );
+                anyhow::ensure!(
+                    !is_windows_device_name(part),
+                    "path names a Windows device: {rel}"
+                );
+                named = true;
+                clean.push(part);
+            }
+            // `a/./b` is still contained; it just says nothing.
+            Component::CurDir => {}
+            _ => anyhow::bail!("path is not a plain relative path: {rel}"),
+        }
+    }
+    anyhow::ensure!(named, "path names no file: {rel}");
+    Ok(clean)
+}
+
+/// Validate a server-controlled relative path and return the `/`-separated
+/// string every gate and sink shares.
+///
+/// This is the lexical half of [`contained_join`] with no filesystem step. It
+/// exists so a caller normalises a server or config spelling **once**, at the
+/// boundary where it enters the run, and then reuses that exact string for the
+/// path-scope decision and for the filesystem operation. Cleaning only at the
+/// sink (as `contained_join` does) leaves the gate comparing a different
+/// spelling, so `./a/b` can pass a scope that hides `a/b`.
+pub fn clean_rel(rel: &str) -> Result<String> {
+    Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
+}
+
+/// Is this component a name Windows reserves for a device in every directory?
+///
+/// The comparison uses the part before the first `.` — `NUL.txt` is still the
+/// `NUL` device — and ignores case, which NTFS does for these names too.
+fn is_windows_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default();
+    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) {
+        return true;
+    }
+    ["COM", "LPT"].iter().any(|prefix| {
+        upper
+            .strip_prefix(prefix)
+            .is_some_and(|n| n.len() == 1 && ('1'..='9').contains(&n.chars().next().unwrap()))
+    })
+}
+
+/// Join a server-controlled relative path under `base`, refusing anything that
+/// resolves outside it.
+///
+/// The lexical check is [`contained_rel`]. The filesystem check resolves the
+/// **nearest existing ancestor** of both sides — so a missing `game_dir` (a
+/// `--print-plan` run, a fresh install) still works — and requires the joined
+/// path to stay under the base. That is what catches a symlink inside the
+/// install that points out of it, which a lexical `starts_with` cannot.
+pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
+    let rel = contained_rel(rel)?;
+    let joined = base.join(rel);
+    let base_resolved = resolve_existing_prefix(base)
+        .with_context(|| format!("resolve the game dir {}", base.display()))?;
+    let joined_resolved = resolve_existing_prefix(&joined)
+        .with_context(|| format!("resolve {}", joined.display()))?;
+    anyhow::ensure!(
+        joined_resolved.starts_with(&base_resolved),
+        "path escapes {}: {}",
+        base.display(),
+        joined.display()
+    );
+    Ok(joined)
+}
+
+/// Canonicalize `path` as far as it exists, then append the missing tail.
+///
+/// `canonicalize` fails on a path that is not there yet, and the plan runs
+/// before `game_dir` is created; resolving the longest existing prefix keeps
+/// the symlink resolution where it matters without requiring the leaf (or the
+/// whole tree) to exist.
+///
+/// Only [`ErrorKind::NotFound`] means "this component is not there yet". Every
+/// other error means the component **could not be resolved** — a denied
+/// attribute read, a sharing violation, a regular file used as a directory —
+/// and is returned instead of being swallowed. Treating such a component as a
+/// literal name and continuing lexically is exactly the "filesystem check that
+/// silently became a lexical check" failure this helper exists to prevent: a
+/// symlink whose target cannot be canonicalized would pass the containment
+/// comparison.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    loop {
+        match std::fs::canonicalize(cur) {
+            Ok(mut resolved) => {
+                for part in missing.iter().rev() {
+                    resolved.push(part);
+                }
+                return Ok(resolved);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match (cur.parent(), cur.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        missing.push(name.to_os_string());
+                        cur = parent;
+                    }
+                    // No existing prefix at all (or a root): the lexical form is
+                    // the best answer, and both sides use the same rule.
+                    _ => return Ok(path.to_path_buf()),
+                }
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("canonicalize {}", cur.display()));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contained_rel_accepts_only_plain_relative_paths() {
+        assert!(contained_rel("a/b.dat").is_ok());
+        assert!(contained_rel("a\\b.dat").is_ok());
+        // Accepted, but returned in the plain `/` form: a leading `.` would
+        // make the plan's expected set disagree with the purge walk.
+        assert_eq!(
+            contained_rel("./a/b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
+        assert_eq!(
+            contained_rel("a/./b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
+
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../outside.dat",
+            "a/../outside.dat",
+            "/abs/evil.dat",
+            "//server/share/evil.dat",
+            "\\\\server\\share\\evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            "C:\\evil.dat",
+            "c:/evil.dat",
+            "game/",
+            "game\\",
+            "game/./",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
+    /// N-14: Windows name rules are checked on every host, because the install
+    /// is a Windows tree. A device name writes to a device (or, for `NUL`,
+    /// nowhere) and a trailing dot/space aliases another name; neither is a
+    /// file a manifest can legitimately name.
+    #[test]
+    fn contained_rel_refuses_windows_device_and_alias_names() {
+        for bad in [
+            "NUL",
+            "nul",
+            "game/CON",
+            "game/con.dat",
+            "game/PRN.txt",
+            "game/AUX",
+            "game/COM1",
+            "game/com9.dat",
+            "game/lpt1.tar.gz",
+            "game/CONIN$",
+            "game/CONOUT$",
+            "game/CLOCK$",
+            "game/trailing.",
+            "game/trailing ",
+            "dir./file.dat",
+            "dir /file.dat",
+            "game/a:b",
+            "game/a:stream.dat",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+        // Near-misses stay legal: only the exact reserved stem is a device.
+        for good in [
+            "game/conifer.dat",
+            "game/nullable.bin",
+            "game/console",
+            "game/com10.dat",
+            "game/lpt",
+        ] {
+            assert!(contained_rel(good).is_ok(), "{good:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn contained_join_keeps_a_legitimate_path_under_the_base() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
+        let joined = contained_join(&dir, "game/foo.dat").unwrap();
+        assert_eq!(joined, dir.join("game/foo.dat"));
+        // The base does not need to exist: `--print-plan` runs before it does.
+        let missing = dir.join("not-created-yet");
+        let joined = contained_join(&missing, "game/foo.dat").unwrap();
+        assert_eq!(joined, missing.join("game/foo.dat"));
+        // A traversal attempt cannot reach the sibling file.
+        assert!(contained_join(&dir, "../outside.dat").is_err());
+        // A trailing separator does not name a file, so it is refused here too.
+        assert!(contained_join(&dir, "game/").is_err());
+    }
+
+    /// A symlink inside the install that points out of it is an escape even
+    /// though the path is lexically relative. Windows needs a privilege to
+    /// create one, so the case only runs where it can be made.
+    #[cfg(unix)]
+    #[test]
+    fn contained_join_resolves_a_symlink_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "outside");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "link");
+        std::os::unix::fs::symlink(&outside, dir.join("game")).unwrap();
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(got.is_err(), "a symlink out of the base must be refused");
+        // A symlink that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// A component that cannot be **resolved** is not a missing component: the
+    /// containment check must fail closed instead of falling back to a lexical
+    /// comparison.
+    ///
+    /// A NUL in a path component is the portable way to make `canonicalize`
+    /// return an error that is not `NotFound` (`InvalidInput` on both
+    /// platforms). Unix additionally reports `NotADirectory` for a regular
+    /// file used as a parent; Windows reports `NotFound` there, which is a
+    /// missing path rather than an unresolvable one.
+    #[test]
+    fn contained_join_fails_closed_when_a_component_cannot_be_resolved() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "unresolvable");
+        let got = contained_join(&dir, "bad\0name");
+        assert!(
+            got.is_err(),
+            "an unresolvable component must be refused, got {got:?}"
+        );
+        // The error surfaced from the resolver itself, not from the
+        // `starts_with` comparison.
+        let direct = resolve_existing_prefix(&dir.join("bad\0name"));
+        assert!(
+            direct.is_err(),
+            "a non-NotFound canonicalize error must be propagated"
+        );
+
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("blocker"), b"not a directory").unwrap();
+            let got = contained_join(&dir, "blocker/child.dat");
+            assert!(
+                got.is_err(),
+                "a file used as a parent is NotADirectory, not missing: {got:?}"
+            );
+        }
+    }
+
+    /// A directory junction inside the install that points out of it is an
+    /// escape, exactly like a Unix symlink, so the resolution path needs a
+    /// test on the platform whose reparse points it will meet.
+    ///
+    /// Junctions need no privilege (unlike symlinks), but a host that refuses
+    /// to create one cannot confirm the escape here, so the case is skipped
+    /// rather than failed. Link support is host-dependent — see
+    /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
+    /// only, exFAT has no hard links).
+    #[cfg(windows)]
+    #[test]
+    fn contained_join_resolves_a_junction_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_out");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
+        let link = dir.join("game");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&*outside)
+            .status();
+        let made = matches!(status, Ok(s) if s.success()) && link.exists();
+        if !made {
+            eprintln!("skipping: this host cannot create a directory junction");
+            return;
+        }
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(
+            got.is_err(),
+            "a junction out of the base must be refused: {got:?}"
+        );
+        // A junction that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        let alias = dir.join("alias");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(dir.join("real"))
+            .status();
+        if matches!(status, Ok(s) if s.success()) {
+            assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+        }
+    }
+
+    #[test]
+    fn file_len_separates_present_absent_and_unreadable() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_len", "states");
+        std::fs::write(dir.join("f"), b"12345").unwrap();
+        assert!(matches!(file_len(&dir.join("f")), FileLen::Present(5)));
+        assert!(matches!(file_len(&dir.join("missing")), FileLen::Absent));
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(matches!(classify_len(Err(denied)), FileLen::Unreadable(_)));
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert!(matches!(classify_len(Err(gone)), FileLen::Absent));
+
+        // A NUL cannot be statted (`InvalidInput` on Unix and Windows), so it
+        // reaches the unreadable arm without a deny ACL.
+        let err = match file_len(Path::new("bad\0name")) {
+            FileLen::Unreadable(e) => e,
+            other => panic!("a NUL path is not absent: {other:?}"),
+        };
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+
+        #[cfg(unix)]
+        {
+            // Unix: a regular file used as a parent is `ENOTDIR`, which is
+            // unreadable, not missing. Windows reports `NotFound` for the
+            // same shape, so this arm is platform-specific.
+            std::fs::write(dir.join("blocker"), b"x").unwrap();
+            match file_len(&dir.join("blocker/child.dat")) {
+                FileLen::Unreadable(e) => {
+                    assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);
+                }
+                other => panic!("ENOTDIR is unreadable, not absent: {other:?}"),
+            }
+        }
+    }
+}

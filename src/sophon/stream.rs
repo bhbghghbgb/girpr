@@ -1,96 +1,11 @@
 use anyhow::Result;
 use futures::StreamExt;
 use prost::Message;
-use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
-use crate::hyp::{ChunkBuild, ChunkManifestMeta};
+use crate::hyp::ChunkManifestMeta;
 use crate::sleep::Sleep;
-use crate::util;
-
-/// Sophon chunk manifest protobuf (Starward `Sophon.proto` parity).
-/// NOTE(starward-parity): the repeated field is misspelled `chuncks` upstream;
-/// kept verbatim so diffs against the reference stay obvious. Do not "fix" the
-/// spelling.
-/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L8-L30>
-/// message SophonChunkManifest { repeated SophonChunkFile chuncks = 1; }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunkManifest {
-    #[prost(message, repeated, tag = "1")]
-    pub chuncks: Vec<SophonChunkFile>,
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunkFile {
-    #[prost(string, tag = "1")]
-    pub file: String,
-    #[prost(message, repeated, tag = "2")]
-    pub chunks: Vec<SophonChunk>,
-    #[prost(bool, tag = "3")]
-    pub is_folder: bool,
-    #[prost(int64, tag = "4")]
-    pub size: i64,
-    #[prost(string, tag = "5")]
-    pub md5: String,
-}
-
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SophonChunk {
-    #[prost(string, tag = "1")]
-    pub id: String,
-    #[prost(string, tag = "2")]
-    pub uncompressed_md5: String,
-    #[prost(int64, tag = "3")]
-    pub offset: i64,
-    #[prost(int64, tag = "4")]
-    pub compressed_size: i64,
-    #[prost(int64, tag = "5")]
-    pub uncompressed_size: i64,
-    // NOTE(starward-parity): opaque upstream field, preserved for decode compat.
-    // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/Sophon.proto#L22-L30
-    #[prost(int64, tag = "6")]
-    pub unknown: i64,
-    #[prost(string, tag = "7")]
-    pub compressed_md5: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct WantedManifest {
-    pub meta: ChunkManifestMeta,
-    pub files: Vec<SophonChunkFile>,
-}
-
-/// Filter manifests: drop res_category ignores + non-selected audio fields (Starward parity).
-/// NOTE(starward-parity): the `len is 5 or 10 && contains('-')` audio heuristic
-/// (`zh-cn` / `mini-zh-cn`) and the audio re-add loop that bypasses the ignore
-/// set are both verbatim ports of `GetAvailableGameSophonChunkManifests` — the
-/// heuristic is fragile upstream, but diverging here would break parity.
-/// Do not "fix" without checking upstream first.
-/// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L742-L769>
-/// Audio fields look like `zh-cn` (len 5 with '-') or `mini-zh-cn` (len 10 with '-').
-pub fn select_manifests<'a>(
-    build: &'a ChunkBuild,
-    audio_langs: &HashSet<String>,
-    ignore: &HashSet<String>,
-) -> Vec<&'a ChunkManifestMeta> {
-    let mut out: Vec<&ChunkManifestMeta> = Vec::new();
-    for m in &build.manifests {
-        if ignore.contains(&m.matching_field) || ignore.contains(&m.category_id) {
-            continue;
-        }
-        let f = m.matching_field.as_str();
-        if (f.len() == 5 || f.len() == 10) && f.contains('-') {
-            continue; // audio/mini -> re-add only if selected
-        }
-        out.push(m);
-    }
-    for m in &build.manifests {
-        if audio_langs.contains(&m.matching_field) {
-            out.push(m);
-        }
-    }
-    out
-}
+use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
 
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
@@ -111,10 +26,9 @@ pub async fn fetch_manifest(
     meta: &ChunkManifestMeta,
 ) -> Result<Vec<SophonChunkFile>> {
     let url = join_url(&meta.manifest_download.url_prefix, &meta.manifest.id);
-    // The reported size *sizes* the buffer; it does not promise the length,
-    // and it is not trusted enough to allocate on. A blob bigger than the
-    // clamp grows the buffer; a bogus number cannot ask for an impossible
-    // allocation.
+    // The reported size *sizes* the buffer; it does not promise the length, and
+    // it is not trusted enough to allocate on. A blob bigger than the clamp
+    // grows the buffer; a bogus number cannot ask for an impossible allocation.
     let hint = manifest_size_hint(meta.manifest.uncompressed_size);
     let mut decoded: Vec<u8> = Vec::with_capacity(hint);
     let mut last_err = anyhow::anyhow!("no attempts");
@@ -319,11 +233,7 @@ impl<W: Write> Write for HashingWriter<W> {
 
 /// Where a streamed blob's decoded bytes land.
 ///
-/// The trait exists for one requirement: **a retry has to start the blob over.**
-/// A streamed body is written as it decodes, so a failed attempt can leave half
-/// a chunk in the sink, and the next attempt must not append to it.
-/// [`stream_chunk_to`] therefore asks the sink to restart before it tries
-/// again.
+/// The trait exists for one requirement: **a retry has to start the blob over.** A streamed body is written as it decodes, so a failed attempt can leave half a chunk in the sink, and the next attempt must not append to it. [`stream_chunk_to`] therefore asks the sink to restart before it tries again.
 pub trait ChunkSink: Write {
     /// Throw away what the failed attempt wrote and start the blob again.
     fn restart(&mut self) -> std::io::Result<()>;
@@ -387,10 +297,6 @@ enum StreamError {
 /// charged against: the bytes are spent whether the attempt succeeds or not,
 /// and a caller that refunded its whole reservation on failure would
 /// under-report a transport that delivered half a chunk and then dropped.
-///
-/// The digest is known when the stream ends, which is one byte too late to
-/// gate the write — the one thing the streaming path gives up. The file-level
-/// gate (the whole-file MD5) is what decides whether the file is good.
 #[allow(clippy::too_many_arguments)] // one parameter per input the fetch path needs
 pub async fn stream_chunk_to(
     client: &reqwest::Client,
@@ -658,60 +564,10 @@ pub fn join_url(prefix: &str, id: &str) -> String {
     format!("{}/{}", prefix.trim_end_matches('/'), id)
 }
 
-/// Build local-chunk reuse map: path -> list of (uncompressed_md5, uncompressed_size, offset).
-///
-/// The key is the **cleaned** rel — the same string `build_plan` stores in
-/// `PlannedFile::rel` — because every consumer (`est_download_bytes_by_file`,
-/// the scan, the temp and in-place writers) looks the file up by that spelling.
-/// Keying on the raw local-manifest spelling would lose reuse for a `./`- or
-/// `//`-spelled local manifest while the map's whole purpose is to find the
-/// bytes already on disk. Two raw spellings that clean to one key merge, which
-/// is the intended "first occurrence per chunk" behaviour.
-///
-/// The local manifest is best effort (`local_reuse_map`'s contract): an entry
-/// that cannot be cleaned is skipped with a warning rather than failing the
-/// run, because this map only ever saves downloads.
-pub fn build_local_chunk_map(
-    manifests: &[WantedManifest],
-) -> HashMap<String, Vec<(String, i64, i64)>> {
-    let mut map: HashMap<String, Vec<(String, i64, i64)>> = HashMap::new();
-    for m in manifests {
-        for f in &m.files {
-            if f.is_folder {
-                continue;
-            }
-            let key = match util::clean_rel(&f.file) {
-                Ok(key) => key,
-                Err(e) => {
-                    tracing::warn!(
-                        file = %f.file,
-                        error = %format!("{e:#}"),
-                        "local reuse map: skipping a non-contained path"
-                    );
-                    continue;
-                }
-            };
-            let e = map.entry(key).or_default();
-            for c in &f.chunks {
-                // keep first occurrence per md5 (duplicates exist)
-                if !e
-                    .iter()
-                    .any(|(md5, sz, _)| md5 == &c.uncompressed_md5 && *sz == c.uncompressed_size)
-                {
-                    e.push((c.uncompressed_md5.clone(), c.uncompressed_size, c.offset));
-                }
-            }
-        }
-    }
-    map
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
-    use crate::hyp::{ManifestFile, ManifestUrl};
-
-    // --- the streaming path -------------------------------------------------
 
     /// A frame the differential runs over.
     fn frame(payload: &[u8]) -> Vec<u8> {
@@ -771,10 +627,9 @@ mod tests {
         );
     }
 
-    /// A payload that decodes to the wrong bytes is caught by the digest: the
-    /// streaming path hashes what it wrote, so the comparison is the same one
-    /// the buffered path made — and it is the digest, not the length, that
-    /// catches it.
+    /// A corrupt payload is detected by the digest: the streaming path hashes
+    /// what it wrote, so the comparison is the same one the buffered path made
+    /// — and it is the digest, not the length, that catches it.
     #[tokio::test]
     async fn a_corrupt_payload_is_detected() {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
@@ -892,63 +747,6 @@ mod tests {
         assert!(sink.is_empty(), "the failed attempt's bytes are gone");
     }
 
-    /// The manifest's differential: the streamed decode of a manifest frame
-    /// yields the same bytes the buffered decode did, the same MD5 of the
-    /// **decompressed** bytes, and the same parsed message.
-    ///
-    /// The buffer is the size the API reported, and the decode fits in it —
-    /// which is the whole point of sizing it: a buffer that had to grow would
-    /// have doubled the peak.
-    #[tokio::test]
-    async fn the_streamed_manifest_parses_like_the_buffered_one() {
-        let manifest = SophonChunkManifest {
-            chuncks: vec![SophonChunkFile {
-                file: "a/b.dat".into(),
-                chunks: vec![SophonChunk {
-                    id: "abc".into(),
-                    uncompressed_md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-                    offset: 0,
-                    compressed_size: 10,
-                    uncompressed_size: 20,
-                    unknown: 0,
-                    compressed_md5: "x".into(),
-                }],
-                is_folder: false,
-                size: 20,
-                md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-            }],
-        };
-        let mut raw = Vec::new();
-        manifest.encode(&mut raw).expect("prost encode");
-        let compressed = frame(&raw);
-        // The buffer the API's `uncompressed_size` sizes.
-        let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
-        let body = futures::stream::iter(pieces(&compressed, 4096));
-        let digest = stream_body(body, None, None, &mut sink)
-            .await
-            .expect("the frame decodes");
-        assert_eq!(sink, raw, "the decoded bytes are the manifest");
-        assert_eq!(
-            sink,
-            zstd::decode_all(&compressed[..]).expect("buffered decode"),
-            "and they are the buffered decode's bytes"
-        );
-        assert_eq!(
-            digest.md5,
-            format!("{:x}", md5::compute(&raw)),
-            "the checksum is of the decompressed bytes"
-        );
-        assert_eq!(digest.bytes, raw.len() as u64);
-        assert_eq!(digest.compressed_bytes, compressed.len() as u64);
-        assert_eq!(
-            sink.capacity(),
-            raw.len(),
-            "the decode fitted the buffer the API's size asked for"
-        );
-        let parsed = SophonChunkManifest::decode(sink.as_slice()).expect("parse");
-        assert_eq!(parsed, manifest, "the same message as the buffered one");
-    }
-
     /// The manifest's reported size is a **hint**, and a hint cannot ask for an
     /// impossible allocation.
     ///
@@ -975,7 +773,6 @@ mod tests {
         );
     }
 
-    // --- the policy ---------------------------------------------------------
     /// The policy, pinned as a table rather than a prose claim: a retryable
     /// status must be one where a second identical request could come back
     /// different.
@@ -1001,150 +798,5 @@ mod tests {
     fn a_success_is_not_confused_with_a_retryable_failure() {
         assert!(!retryable(200));
         assert!(!retryable(204));
-    }
-
-    fn meta(field: &str) -> ChunkManifestMeta {
-        ChunkManifestMeta {
-            category_id: field.to_string(),
-            category_name: field.to_string(),
-            matching_field: field.to_string(),
-            manifest: ManifestFile::default(),
-            chunk_download: ManifestUrl::default(),
-            manifest_download: ManifestUrl::default(),
-        }
-    }
-
-    #[test]
-    fn manifest_filter_audio_and_ignore() {
-        let build = ChunkBuild {
-            build_id: "b".into(),
-            tag: "5.0".into(),
-            manifests: vec![meta("game"), meta("en-us"), meta("ja-jp"), meta("10302")],
-        };
-        let audio: HashSet<String> = ["en-us".to_string()].into_iter().collect();
-        let ignore: HashSet<String> = ["10302".to_string()].into_iter().collect();
-        let sel = select_manifests(&build, &audio, &ignore);
-        let fields: Vec<_> = sel.iter().map(|m| m.matching_field.as_str()).collect();
-        assert_eq!(fields, vec!["game", "en-us"]);
-    }
-
-    #[test]
-    fn proto_roundtrip() {
-        let m = SophonChunkManifest {
-            chuncks: vec![SophonChunkFile {
-                file: "a/b.dat".into(),
-                chunks: vec![SophonChunk {
-                    id: "abc".into(),
-                    uncompressed_md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-                    offset: 0,
-                    compressed_size: 10,
-                    uncompressed_size: 20,
-                    unknown: 0,
-                    compressed_md5: "x".into(),
-                }],
-                is_folder: false,
-                size: 20,
-                md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
-            }],
-        };
-        let mut buf = Vec::new();
-        prost::Message::encode(&m, &mut buf).unwrap();
-        let back = SophonChunkManifest::decode(buf.as_slice()).unwrap();
-        assert_eq!(back.chuncks[0].file, "a/b.dat");
-    }
-
-    fn chunk(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
-        SophonChunk {
-            id: id.into(),
-            uncompressed_md5: md5.into(),
-            offset,
-            compressed_size: size + 1,
-            uncompressed_size: size,
-            unknown: 0,
-            compressed_md5: "compressed".into(),
-        }
-    }
-
-    #[test]
-    fn local_chunk_map_dedups_by_md5_size_and_skips_folders() {
-        let wm = vec![WantedManifest {
-            meta: meta("game"),
-            files: vec![
-                SophonChunkFile {
-                    file: "a/b.dat".into(),
-                    chunks: vec![
-                        chunk("c1", "d41d8cd98f00b204e9800998ecf8427e", 0, 20),
-                        // same (md5,size) at a different offset must be dropped (first wins)
-                        chunk("c1dup", "d41d8cd98f00b204e9800998ecf8427e", 999, 20),
-                        // same size, different md5 must be kept
-                        chunk("c2", "0cc175b9c0f1b6a831c399e269772661", 20, 20),
-                    ],
-                    is_folder: false,
-                    size: 40,
-                    md5: "m1".into(),
-                },
-                SophonChunkFile {
-                    file: "dir/".into(),
-                    chunks: vec![chunk("cf", "0cc175b9c0f1b6a831c399e269772661", 0, 5)],
-                    is_folder: true,
-                    size: 0,
-                    md5: String::new(),
-                },
-            ],
-        }];
-        let map = build_local_chunk_map(&wm);
-        let e = &map["a/b.dat"];
-        assert_eq!(e.len(), 2);
-        assert_eq!(
-            e[0],
-            ("d41d8cd98f00b204e9800998ecf8427e".to_string(), 20, 0)
-        );
-        assert_eq!(
-            e[1],
-            ("0cc175b9c0f1b6a831c399e269772661".to_string(), 20, 20)
-        );
-        // folders never enter the reuse map
-        assert!(!map.contains_key("dir/"));
-    }
-
-    /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),
-    /// and every reuse consumer looks the file up by that string. A key built
-    /// from the raw manifest spelling (`./game/foo.dat`) would never be hit, so
-    /// a non-canonical local manifest would lose all reuse. The key is cleaned
-    /// here, once, at the map's boundary; a path that cannot be cleaned is
-    /// skipped like any other best-effort local-manifest degradation.
-    #[test]
-    fn local_chunk_map_keys_are_the_cleaned_plan_spelling() {
-        let wm = vec![WantedManifest {
-            meta: meta("game"),
-            files: vec![
-                SophonChunkFile {
-                    file: "./game/foo.dat".into(),
-                    chunks: vec![chunk("c1", "d41d8cd98f00b204e9800998ecf8427e", 0, 20)],
-                    is_folder: false,
-                    size: 20,
-                    md5: "m1".into(),
-                },
-                SophonChunkFile {
-                    file: "../escape.dat".into(),
-                    chunks: vec![chunk("c2", "0cc175b9c0f1b6a831c399e269772661", 0, 20)],
-                    is_folder: false,
-                    size: 20,
-                    md5: "m2".into(),
-                },
-            ],
-        }];
-        let map = build_local_chunk_map(&wm);
-        assert!(
-            map.contains_key("game/foo.dat"),
-            "the key must be the plan's cleaned spelling: {:?}",
-            map.keys().collect::<Vec<_>>()
-        );
-        assert!(!map.contains_key("./game/foo.dat"));
-        assert!(
-            map.keys().all(|k| k != "../escape.dat"),
-            "a non-contained path must not enter the map"
-        );
-        assert_eq!(map.len(), 1);
     }
 }
