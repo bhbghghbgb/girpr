@@ -43,7 +43,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] G5 — `PathRoot` cached base resolution. (`d5a8f2a`)
 - [x] C5 — `OsString` `_tmp` path. (`a6bb886`)
 - [x] C6 — bounded `JoinSet` in `repair_all`. (`a7e9703`)
-- [ ] H2 — `apply_run_flags`.
+- [x] H2 — `apply_run_flags`. (`bc550ae`)
 
 ### Phase 3 — structural / broad API
 
@@ -53,9 +53,12 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-_None._ D2, every Phase 2 task (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) and the
-review follow-ups (`2e02df7`, `7ab4ff5`, `edfb9b2`, `87807bb`, `e20ca5b`,
-`edbb471`) passed review; H2 and the Phase 3 tasks are not implemented yet.
+- [ ] H2 — `apply_run_flags` (`bc550ae`). Flag block moved out of `run`
+  unchanged; kept in `repair/mod.rs` (needs `RunCtx` + `note_stopped`), so
+  `report` stays independent of `config`. No new test (existing conditional-key
+  and ceiling tests pin it).
+
+Phase 3 (H1, G2, H4) is not implemented yet.
 
 D2 and Phase 2 (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) passed review:
 `cargo test --all-targets` (225 unit + 149 integration passing, 7 ignored),
