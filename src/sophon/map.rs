@@ -1,4 +1,4 @@
-//! Build local-chunk reuse map: path -> list of [`ReuseEntry`].
+//! Build local-chunk reuse map: path -> [`FileReuse`].
 //!
 //! The key is the **cleaned** rel — the same string `build_plan` stores in
 //! `PlannedFile::rel` — because every consumer (`est_download_bytes_by_file`,
@@ -37,17 +37,78 @@ pub struct ReuseEntry {
 impl ReuseEntry {
     /// Does this entry hold `c`'s bytes?
     ///
-    /// This is the one chunk-identity predicate: the map's dedup, the plan
-    /// estimate, the in-place source lookup and the temp path's reuse lookup
-    /// all use it, so "the same chunk" cannot mean different things there.
+    /// This is the one chunk-identity predicate: [`FileReuse`]'s index, the
+    /// plan estimate, the in-place source lookup and the temp path's reuse
+    /// lookup all agree with it, so "the same chunk" cannot mean different
+    /// things there.
     pub fn matches(&self, c: &SophonChunk) -> bool {
         self.size == c.uncompressed_size && self.md5.eq_ignore_ascii_case(&c.uncompressed_md5)
     }
 }
 
-/// Build local-chunk reuse map: path -> list of reuse entries.
-pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Vec<ReuseEntry>> {
-    let mut map: HashMap<String, Vec<ReuseEntry>> = HashMap::new();
+/// One file's reuse entries, in first-match order, plus an index by chunk
+/// identity for the hot lookup path.
+///
+/// The vector is the deterministic source of truth: [`Self::get`] answers from
+/// `by_key`, which points at the **first** entry for a `(md5, size)` key, so
+/// the index cannot change which entry wins. The key is normalized to lowercase
+/// here, which keeps lookups case-insensitive even for an entry built by hand.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FileReuse {
+    /// Every distinct chunk identity, in the order it first appeared.
+    entries: Vec<ReuseEntry>,
+    /// `(lowercase md5, size) -> index into `entries`, first insertion wins.
+    by_key: HashMap<(String, i64), usize>,
+}
+
+impl FileReuse {
+    /// Index `entries`, keeping the first entry for each chunk identity.
+    pub fn new(entries: Vec<ReuseEntry>) -> Self {
+        let mut reuse = Self::default();
+        for entry in entries {
+            reuse.insert(entry);
+        }
+        reuse
+    }
+
+    /// Add `entry` unless its chunk identity is already present.
+    fn insert(&mut self, entry: ReuseEntry) {
+        let key = Self::key(&entry.md5, entry.size);
+        if !self.by_key.contains_key(&key) {
+            self.by_key.insert(key, self.entries.len());
+            self.entries.push(entry);
+        }
+    }
+
+    /// The entry holding `c`'s bytes, or `None` when the chunk must download.
+    pub fn get(&self, c: &SophonChunk) -> Option<&ReuseEntry> {
+        let key = Self::key(&c.uncompressed_md5, c.uncompressed_size);
+        let entry = self.by_key.get(&key).map(|&i| &self.entries[i])?;
+        debug_assert!(
+            entry.matches(c),
+            "reuse index disagrees with the chunk-identity predicate"
+        );
+        Some(entry)
+    }
+
+    /// Does any entry hold `c`'s bytes?
+    pub fn contains(&self, c: &SophonChunk) -> bool {
+        self.get(c).is_some()
+    }
+
+    /// The entries in first-match order.
+    pub fn entries(&self) -> &[ReuseEntry] {
+        &self.entries
+    }
+
+    fn key(md5: &str, size: i64) -> (String, i64) {
+        (md5.to_ascii_lowercase(), size)
+    }
+}
+
+/// Build local-chunk reuse map: path -> indexed reuse entries.
+pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, FileReuse> {
+    let mut map: HashMap<String, FileReuse> = HashMap::new();
     for m in manifests {
         for f in &m.files {
             if f.is_folder {
@@ -68,13 +129,11 @@ pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Ve
             for c in &f.chunks {
                 // Keep first occurrence per chunk: the MD5 is normalized here,
                 // so two spellings of the same digest cannot both survive.
-                if !e.iter().any(|entry| entry.matches(c)) {
-                    e.push(ReuseEntry {
-                        md5: c.uncompressed_md5.to_ascii_lowercase(),
-                        size: c.uncompressed_size,
-                        offset: c.offset,
-                    });
-                }
+                e.insert(ReuseEntry {
+                    md5: c.uncompressed_md5.to_ascii_lowercase(),
+                    size: c.uncompressed_size,
+                    offset: c.offset,
+                });
             }
         }
     }
@@ -138,7 +197,7 @@ mod tests {
             ],
         }];
         let map = build_local_chunk_map(&wm);
-        let e = &map["a/b.dat"];
+        let e = map["a/b.dat"].entries();
         assert_eq!(e.len(), 2);
         assert_eq!(
             e[0],
@@ -179,7 +238,8 @@ mod tests {
                 md5: "m1".into(),
             }],
         }];
-        let entries = &build_local_chunk_map(&wm)["a/b.dat"];
+        let map = build_local_chunk_map(&wm);
+        let entries = map["a/b.dat"].entries();
         assert_eq!(entries.len(), 1, "case variants name the same chunk");
         assert_eq!(entries[0].md5, "d41d8cd98f00b204e9800998ecf8427e");
         assert_eq!(entries[0].offset, 0, "the first entry is kept");

@@ -2,7 +2,7 @@
 //!
 //! Two things come out of here:
 //! 1. the per-manifest file lists of the **latest** build (the plan's input),
-//! 2. `path -> [ReuseEntry]` for the **local** build, so an
+//! 2. `path -> FileReuse` for the **local** build, so an
 //!    unchanged chunk can be copied from the file already on disk instead of
 //!    downloaded.
 //!
@@ -17,13 +17,13 @@ use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
 use crate::sleep::Sleep;
-use crate::sophon::{self, ReuseEntry, SophonChunkFile, WantedManifest};
+use crate::sophon::{self, FileReuse, SophonChunkFile, WantedManifest};
 
 use crate::config::RunFailure;
 
-/// `path -> [ReuseEntry]`, built from the local build's manifests. Keyed by
+/// `path -> FileReuse`, built from the local build's manifests. Keyed by
 /// path only: reuse is same-file-only (S2).
-pub type LocalChunkMap = HashMap<String, Vec<ReuseEntry>>;
+pub type LocalChunkMap = HashMap<String, FileReuse>;
 
 /// Fetch every wanted manifest of the latest build, in order, keeping each
 /// one's chunk URL prefix next to its file list (the plan needs the pairing).

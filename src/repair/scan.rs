@@ -103,8 +103,7 @@ impl ScanReport {
         plan.files
             .iter()
             .map(|f| {
-                let entries = local_map.get(&f.rel).map(|v| v.as_slice()).unwrap_or(&[]);
-                let sources = reuse::sources_for(&f.chunks, entries);
+                let sources = reuse::sources_for(&f.chunks, local_map.get(&f.rel));
                 let resolved = match util::contained_join(game_dir, &f.rel) {
                     Ok(path) => super::file::resolve_mode(requested, &path),
                     // Defence in depth, matching the scan itself: a path that
@@ -284,8 +283,7 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
             };
         }
     };
-    let entries = local_map.get(&file.rel);
-    let sources = reuse::sources_for(&file.chunks, entries.map(|v| v.as_slice()).unwrap_or(&[]));
+    let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
     let dest_ranges: Vec<util::ScanRange<'_>> = file
         .chunks
         .iter()
