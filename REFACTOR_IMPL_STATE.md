@@ -13,7 +13,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] D6 — one-pass empty-chunk count. (`38bd295`)
 - [x] G7 — remove dead imports / dead `min`; add `read_range` bounds. (`5fe3a99`)
 - [x] C3 — extract the in-place success block. (`8d3e4c1`)
-- [ ] C7 — extract the reserved-write helper.
+- [x] C7 — extract the reserved-write helper. (`0fd4ae1`)
 - [ ] G3 — `OnceLock` the version regex.
 - [ ] G4 — direct `writeln!` into the config buffer.
 - [ ] F3 — allocation-free record rendering.
@@ -57,6 +57,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - D6 — `38bd295` · one-pass `retain` + count in `build_plan`; confirm validation still precedes the drop and the `empty` warning fields/text are unchanged.
 - G7 — `5fe3a99` · `read_range` now `usize::try_from` + `try_reserve_exact` with a new refusal test; `md5_file_slice` buffer is plain `MD5_BUF` and its inner imports are gone. Reviewer note: `md5_file_slice` still does `remaining as usize` (truncation on 32-bit), left out of scope.
 - C3 — `8d3e4c1` · `repaired_in_place` helper used by both success paths in `src/repair/file/inplace.rs`; check the seven log fields and their order match the old inline blocks exactly.
+- C7 — `0fd4ae1` · `write_reserved` shared by `write_at` / `copy_within` / `zero_fill`; verify reservation granularity and `note_write` order are unchanged (note: `zero_fill` now seeks per piece).
 
 ## Skipped
 
