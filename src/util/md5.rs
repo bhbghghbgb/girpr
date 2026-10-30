@@ -66,6 +66,14 @@ impl Md5 {
     pub fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
+
+    /// Does `s` spell this digest?
+    ///
+    /// Either case is accepted; a string that is not a digest (the empty MD5
+    /// above all) matches nothing.
+    pub fn matches_hex(self, s: &str) -> bool {
+        Self::parse_hex(s).is_ok_and(|other| other == self)
+    }
 }
 
 impl fmt::Display for Md5 {
@@ -330,6 +338,11 @@ pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
 
 /// Lowercase hex MD5 of a file.
 pub fn md5_file(path: &Path) -> Result<String> {
+    Ok(md5_file_digest(path)?.to_hex())
+}
+
+/// [`md5_file`] as a digest, for a gate that compares bytes.
+pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut buf = vec![0u8; MD5_BUF];
     let mut ctx = md5::Context::new();
@@ -340,7 +353,7 @@ pub fn md5_file(path: &Path) -> Result<String> {
         }
         ctx.consume(&buf[..n]);
     }
-    Ok(Md5::from(ctx.compute()).to_hex())
+    Ok(Md5::from(ctx.compute()))
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
@@ -361,6 +374,16 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
 /// end of file, for a short read), so a caller that wants to copy the same
 /// bytes afterwards seeks back once instead of opening the file again.
 pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) -> Result<String> {
+    Ok(md5_reader_slice_digest(f, offset, len, buf)?.to_hex())
+}
+
+/// [`md5_reader_slice`] as a digest, for a gate that compares bytes.
+pub(crate) fn md5_reader_slice_digest(
+    f: &mut File,
+    offset: u64,
+    len: u64,
+    buf: &mut Vec<u8>,
+) -> Result<Md5> {
     f.seek(SeekFrom::Start(offset))?;
     if buf.len() < MD5_BUF {
         buf.resize(MD5_BUF, 0);
@@ -376,7 +399,7 @@ pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) 
         ctx.consume(&buf[..n]);
         remaining -= n as u64;
     }
-    Ok(Md5::from(ctx.compute()).to_hex())
+    Ok(Md5::from(ctx.compute()))
 }
 
 #[cfg(test)]
@@ -434,6 +457,10 @@ mod tests {
         assert_eq!(upper.to_hex(), "d41d8cd98f00b204e9800998ecf8427e");
         assert_eq!(upper.to_string(), lower.to_hex());
         assert_eq!(format!("{upper:?}"), format!("Md5({})", upper.to_hex()));
+        assert!(upper.matches_hex("d41d8cd98f00b204e9800998ecf8427e"));
+        assert!(upper.matches_hex("D41D8CD98F00B204E9800998ECF8427E"));
+        assert!(!upper.matches_hex(""));
+        assert!(!upper.matches_hex("md5-a"));
     }
 
     #[test]

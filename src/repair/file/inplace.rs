@@ -18,7 +18,7 @@ use crate::config::RepairMode;
 use crate::repair::reuse;
 use crate::repair::scan::scan_ranges;
 use crate::sophon::SophonChunk;
-use crate::util;
+use crate::util::{self, Md5};
 use anyhow::{Context, Result};
 
 /// Repair one file **in place**.
@@ -114,7 +114,7 @@ async fn attempt_inplace_inner(
         on_disk = scan.file_len,
         "scanned"
     );
-    if scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+    if Md5::parse_hex(&scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
         return Ok(Inplace::Skipped);
     }
@@ -227,8 +227,8 @@ async fn attempt_inplace_inner(
                 .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
             // Every byte written is hash-gated before it lands, and a staged
             // source is a write's source: gate it here too.
-            let h = format!("{:x}", md5::compute(&bytes));
-            if !h.eq_ignore_ascii_case(&c.uncompressed_md5) {
+            let h = Md5::from(md5::compute(&bytes));
+            if !h.matches_hex(&c.uncompressed_md5) {
                 tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
                 continue;
             }
@@ -315,7 +315,7 @@ async fn attempt_inplace_inner(
     // 5. verify. One more read: the whole-file MD5 is the gate, and the
     // per-chunk verdicts name the culprit when it does not match.
     let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if after.file_md5.eq_ignore_ascii_case(&file.md5) {
+    if Md5::parse_hex(&after.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         return Ok(repaired_in_place(stats, &after.file_md5));
     }
 
@@ -345,7 +345,7 @@ async fn attempt_inplace_inner(
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
     let final_scan = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if !final_scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+    if !Md5::parse_hex(&final_scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel,

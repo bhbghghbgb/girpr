@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use crate::report::{self, Summary};
-use crate::util;
+use crate::util::{self, Md5};
 
 use super::plan::{PlannedFile, RepairPlan};
 use crate::repair::scan::{ScanReport, Verdict};
@@ -220,7 +220,7 @@ fn check_one(
             Err(e) => return CheckOutcome::failed(CheckFailure::Read(format!("{e:#}"))),
         },
     };
-    if actual.eq_ignore_ascii_case(&f.md5) {
+    if Md5::parse_hex(&actual).is_ok_and(|actual| actual.matches_hex(&f.md5)) {
         return CheckOutcome::clean();
     }
     let damaged_chunks = match digest {

@@ -44,8 +44,8 @@ pub(super) async fn attempt_temp(
         util::FileLen::Present(n) if n != file.size as u64 => {
             tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
         }
-        util::FileLen::Present(_) => match util::md5_file(final_path) {
-            Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
+        util::FileLen::Present(_) => match util::md5::md5_file_digest(final_path) {
+            Ok(h) if h.matches_hex(&file.md5) => {
                 tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
                 return Ok(Inplace::Skipped);
             }
@@ -288,8 +288,13 @@ fn try_reuse_slice(
             return Ok(ChunkOutcome::Download);
         }
     };
-    match util::md5_reader_slice(&mut sf, ro as u64, c.uncompressed_size as u64, scratch) {
-        Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
+    match util::md5::md5_reader_slice_digest(
+        &mut sf,
+        ro as u64,
+        c.uncompressed_size as u64,
+        scratch,
+    ) {
+        Ok(h) if h.matches_hex(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
             // The same handle: seek back to the slice start and copy the
             // bytes that were just verified, instead of opening `src` again.
@@ -473,7 +478,7 @@ pub(super) async fn write_downloaded_chunk(
             digest.bytes
         );
     }
-    if !digest.md5.eq_ignore_ascii_case(&c.uncompressed_md5) {
+    if !digest.md5.matches_hex(&c.uncompressed_md5) {
         tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
@@ -540,9 +545,9 @@ fn promote_tmp(
     if len != file.size as u64 {
         anyhow::bail!("tmp length {} != expected {}", len, file.size);
     }
-    let h = util::md5_file(tmp_path)?;
+    let h = util::md5::md5_file_digest(tmp_path)?;
     tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
-    if !h.eq_ignore_ascii_case(&file.md5) {
+    if !h.matches_hex(&file.md5) {
         if let Err(e) = std::fs::remove_file(tmp_path) {
             // The next attempt resumes by length, so a `_tmp` that cannot be
             // deleted only costs work: the final MD5 gate refuses it again.
