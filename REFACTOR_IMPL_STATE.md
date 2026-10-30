@@ -53,16 +53,13 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-- D1 — `ea2acce` · `path_key` in `src/util/path.rs` replaces `dedup_key` / `purge_key`; `pub(crate)`, not re-exported from `util`. Behavior claimed identical; verify both pinned case-folding tests and that no doc references the old names.
-- D6 — `38bd295` · one-pass `retain` + count in `build_plan`; confirm validation still precedes the drop and the `empty` warning fields/text are unchanged.
-- G7 — `5fe3a99` · `read_range` now `usize::try_from` + `try_reserve_exact` with a new refusal test; `md5_file_slice` buffer is plain `MD5_BUF` and its inner imports are gone. Reviewer note: `md5_file_slice` still does `remaining as usize` (truncation on 32-bit), left out of scope.
-- C3 — `8d3e4c1` · `repaired_in_place` helper used by both success paths in `src/repair/file/inplace.rs`; check the seven log fields and their order match the old inline blocks exactly.
-- C7 — `0fd4ae1` · `write_reserved` shared by `write_at` / `copy_within` / `zero_fill`; verify reservation granularity and `note_write` order are unchanged (note: `zero_fill` now seeks per piece).
-- G3 — `ef47fb9` · `OnceLock<Regex>` in `src/util/ini.rs` via `game_version_re()`, plus a new anchored-shape test; verify last-match-wins and the absent-vs-unreadable split are untouched.
-- G4 — `655301d` · `writeln!` serializer + single `read_to_string` with `NotFound => empty` in `src/util/ini.rs`. Reviewer note: an unreadable-but-existing config path now errors instead of being treated as empty (findings-sanctioned); confirm that is acceptable.
-- F3 — `34792e0` · `Cow` bare values and push-based JSON in `src/report/record.rs`, incl. a new `push_json_event`; verify text/JSON output is byte-identical (UInt vs Int, escaping).
-- A3 — `8d05154` · `survives_one`/`survives_count` + single winning-vector materialization in `src/repair/reuse.rs`; verify tie-goes-to-ascending and the `live` vectors are unchanged by the existing tests.
-- H3 — `eb418bb` · `note_stopped` in `src/repair/mod.rs` with a first-wins guard, used by the runtime-stop branch and `finish`, plus a new unit test. Reviewer note: the overwrite guard is currently latent (a runtime stop returns exit 5 before `finish`), so it only documents intent.
+_None yet._
+
+Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
+`cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean,
+and the output contracts named in each task were checked against the
+pre-refactor code.
 
 ## Skipped
 
