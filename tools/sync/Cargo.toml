@@ -39,6 +39,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 tracing-appender = "0.2"
 redb = "4.3.0"
 
+# Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
+# `MetadataExt::number_of_links` is still unstable (`windows_by_handle`) on the
+# toolchain this crate builds with, so the count comes from
+# `GetFileInformationByHandle`. The dependency is Windows-only, where it is used.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+] }
+
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.
 [dev-dependencies]

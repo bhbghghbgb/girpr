@@ -51,24 +51,29 @@ mod apply;
 mod plan;
 mod rename;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
-    SideCapability, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
+    SideCapability, SideEntry, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
     resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::report::verdict;
 use crate::rw::{RwRuntime, RwSide};
-use crate::util::{elapsed_s, is_record_path};
+use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
-use plan::build_plan;
-use rename::rename_to_src_casing;
+use plan::{
+    build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
+    ensure_mkdir_targets_free, spare_link_storage,
+};
+use rename::{RenameOutcome, rename_to_src_casing};
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
@@ -120,7 +125,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let _span_guard = span.enter();
     info!("start");
 
-    validate_inputs(&src, &dst)?;
+    let roots = validate_inputs(&src, &dst)?;
 
     // One runtime for the whole run: one limiter, one worker pool. A runtime per
     // phase would be two limiters wearing one flag's name, and two pools would
@@ -173,8 +178,22 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let dst_db = open_folder_cache(&dst, &common, dst_mode, false)?;
     info!("loading src side");
     let src_a = scan_stat_only(&src, &src_db, &common, src_mode)?;
+    // The effective source tree is what the mirror would copy, so a link in it
+    // that resolves to `dst` (or to a directory containing `dst`) is the same
+    // self-overlap `validate_inputs` refuses for the roots. It has to be caught
+    // here rather than from the raw paths: only the walk knows which links the
+    // filters kept and where each one points. Nothing has been written to the
+    // mirror at this point, and the cache write in phase A is not a content
+    // change.
+    validate_src_links(&src, &src_a.map, &roots.dst)?;
     info!("loading dst side");
     let dst_a = scan_stat_only(&dst, &dst_db, &common, dst_mode)?;
+    // The mirror image of `validate_src_links`: a link inside dst that resolves
+    // to src (or to a directory containing it) makes the two trees overlap
+    // through the walk, and a copy through a final-component file link would
+    // truncate a source file. Caught after the dst walk and before the plan, the
+    // rename and every apply phase, so nothing in either tree has changed yet.
+    validate_dst_links(&dst, &dst_a.map, &roots.src)?;
     info!(
         src_entries = src_a.map.len(),
         dst_entries = dst_a.map.len(),
@@ -269,14 +288,20 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
 
-    // 5. Align casing before diffing, so the diff can be case-sensitive.
-    let renamed = if common.case_sensitive {
-        0
+    // 5. Refuse a mkdir dst cannot create **before** the rename, which is the
+    // first filesystem change. A filter can hide the blocking dst entry from
+    // `dm`, so this asks the disk about every mkdir candidate's path and strict
+    // prefixes; the map-based `ensure_dirs_applicable` below cannot see them.
+    ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive)?;
+
+    // 6. Align casing before diffing, so the diff can be case-sensitive.
+    let RenameOutcome { renamed, on_disk } = if common.case_sensitive {
+        RenameOutcome::default()
     } else {
         rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
 
-    // 6. Plan, then print or apply.
+    // 7. Plan, then print or apply.
     //
     // `plans.required`, and it is keyed by **src** path — which survives the rename,
     // because the rename re-keys dst onto src's casing and never touches src's own
@@ -288,7 +313,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // differ.
     // `false` for `want_identical`: `sync` never reports its diff — it applies it — and
     // the plan print takes the equal set only if asked.
-    let diff = diff_maps(
+    let mut diff = diff_maps(
         &sm,
         &dm,
         &plans.required,
@@ -296,6 +321,14 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         CasePairing::Exact,
         common.show_identical,
     );
+
+    let mut plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
+    // Before the plan print: a dst file link and a target inside dst are one
+    // file. The plan must not delete the target the write-through needs, and it
+    // must not ask the two names to hold two contents. The diff's `EXTRA` record
+    // is dropped with the delete, so the printed plan and the applied plan name
+    // the same set.
+    spare_link_storage(&sm, &dm, &mut plan, &mut diff, &dst, on_disk.as_ref())?;
 
     // The plan print, the way `compare` prints it — every record except its
     // `SUMMARY`. `sync` emits its **own** summary at the end, counting actions
@@ -314,7 +347,20 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         report.emit(rec);
     }
 
-    let plan = build_plan(&sm, &dm, &diff, missing_only, keep_extra);
+    // Before the dry-run branch: a plan that cannot be applied is not a plan a
+    // dry run should print as if it could be. The apply passes re-check the
+    // paths they touch; this is the one place that fails before *any* of them.
+    ensure_link_safe(&plan, &dst, missing_only, keep_extra, on_disk.as_ref())?;
+    // The phase order makes a file ancestor creatable only when `fix_dirs`
+    // replaces it first. Today's planner always does; a future one that stops
+    // must fail here, at plan time, rather than midway through apply.
+    ensure_dirs_applicable(&plan, &dm)?;
+    // The copy guard's hard-link refusal must be a decision both modes take:
+    // `copy_one` runs only in a real run, and a dry run that reported `COPY` for
+    // a tree the real run refuses would answer a different question. A planned
+    // delete of the other name (the default run) is credited; one left in place
+    // (`--keep-extra`, or outside `dst`) is refused here.
+    ensure_hard_linked_targets_safe(&plan, &dm, &dst, on_disk.as_ref())?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),
@@ -346,6 +392,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
 
     let applied = Applier {
         src: &src,
+        src_canonical: &roots.src,
         dst: &dst,
         dst_db: &dst_db,
         dm: &dm,
@@ -381,8 +428,14 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     Ok(0)
 }
 
+/// The two roots as the identity checks compare them.
+struct CanonicalRoots {
+    src: PathBuf,
+    dst: PathBuf,
+}
+
 /// Reject the inputs that make a mirror meaningless, before anything is touched.
-fn validate_inputs(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+fn validate_inputs(src: &Path, dst: &Path) -> Result<CanonicalRoots> {
     if is_record_path(src) || is_record_path(dst) {
         bail!("sync needs folder vs folder (record inputs are compare-only)");
     }
@@ -392,5 +445,144 @@ fn validate_inputs(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
     // One cache per run: two spellings of one folder would otherwise make the
     // mirror delete src out from under itself, on top of the handle clash.
     ensure_distinct_sides(&classify(src), &classify(dst))?;
+    // A mirror may not contain its own source. With `dst` inside `src` the walk
+    // of src sees dst as part of the source, and the copy plan writes a parent's
+    // namesake over the child's file; with `src` inside `dst` the delete pass
+    // removes the source files before the copy that needed them. Canonical
+    // paths, so a `..` or a case-only spelling cannot hide the overlap. Component-wise and case-insensitive on
+    // Windows, via `path_within`.
+    //
+    // A link *inside* a root is not visible to this check; `validate_src_links`
+    // and `validate_dst_links` cover both directions once the walks have said
+    // which links each effective tree actually contains.
+    let src_canonical = canonical_or_raw(src);
+    let dst_canonical = canonical_or_raw(dst);
+    if path_within(&dst_canonical, &src_canonical) {
+        bail!(
+            "src and dst must be disjoint: dst `{}` is inside src `{}`; \
+             a mirror cannot write into its own source",
+            dst.display(),
+            src.display()
+        );
+    }
+    if path_within(&src_canonical, &dst_canonical) {
+        bail!(
+            "src and dst must be disjoint: src `{}` is inside dst `{}`; \
+             syncing would delete the source",
+            src.display(),
+            dst.display()
+        );
+    }
+    Ok(CanonicalRoots {
+        src: src_canonical,
+        dst: dst_canonical,
+    })
+}
+
+/// Refuse an effective source tree that reaches `dst` through a link.
+///
+/// The root check above canonicalizes only the two roots. The walk follows
+/// links (`scan::walk_live`), so a directory link inside `src` can expose
+/// `dst`'s files under the link's relative path while the two roots still look
+/// like siblings. Those files then look `EXTRA` on the dst side, the delete
+/// pass removes them, and the copy that needed them fails afterwards: data
+/// loss reported only as a copy error.
+///
+/// A link is legal when it points anywhere outside `dst`; that is ordinary
+/// mirrored content (a target *inside* `src` included). It is refused when its
+/// resolved target and `dst` intersect in either direction:
+///
+/// - the target is `dst` or inside it, so the link exposes dst's own files;
+/// - the target contains `dst`, so walking the link reaches dst from above.
+///
+/// This checks every link the effective map kept, not only directories: a
+/// file link can point at a dst file just as well. It runs after phase A and
+/// before the plan, the rename and every apply phase, so nothing in the mirror
+/// has changed yet. Filters and `--max-depth` are already applied here, which
+/// is why an excluded link is not refused: it is not part of this run's source.
+fn validate_src_links(
+    src: &Path,
+    entries: &HashMap<String, SideEntry>,
+    dst_canonical: &Path,
+) -> Result<()> {
+    for (rel, ent) in entries {
+        if !ent.is_link {
+            continue;
+        }
+        let target = std::fs::canonicalize(src.join(rel))
+            .with_context(|| format!("resolve src link `{rel}`"))?;
+        if path_within(&target, dst_canonical) {
+            bail!(
+                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
+                 which is inside dst `{}`; a mirror may not read its own destination \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                dst_canonical.display()
+            );
+        }
+        if path_within(dst_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
+                 which contains dst `{}`; a mirror may not reach its own destination \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                dst_canonical.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an effective destination tree that reaches `src` through a link.
+///
+/// The mirror of [`validate_src_links`], and the same invariant: the two trees
+/// must stay disjoint. The root check canonicalizes only the two roots, and the
+/// walk follows links inside a root, so a `dst` link into `src` can make a copy
+/// land on a source file. A **file** link at the copy path is the dangerous
+/// shape: `File::create` follows the final component, truncates the source, and
+/// the verify then reads the same file through the link, so the run can exit 0
+/// having destroyed source data. A directory link is unlinked rather than
+/// traversed, but refusing it here keeps one rule for the whole dst side.
+///
+/// Refused when the resolved target is `src` or inside it, or when it contains
+/// `src` (a write through the link would land above the source root). A link to
+/// anywhere else is ordinary dst content: `sync_writes_through_a_dst_file_link`
+/// depends on write-through to a target inside `dst` staying legal. A dst-only
+/// link into src is refused even when this run would only unlink it — the check
+/// is about where the link resolves, not about what today's plan does with it.
+///
+/// Runs immediately after dst's phase A, so `--include`/`--exclude` and
+/// `--max-depth` have already decided what this run's destination is, and before
+/// the plan, the rename and every apply phase, so neither tree has changed yet.
+fn validate_dst_links(
+    dst: &Path,
+    entries: &HashMap<String, SideEntry>,
+    src_canonical: &Path,
+) -> Result<()> {
+    for (rel, ent) in entries {
+        if !ent.is_link {
+            continue;
+        }
+        let target = std::fs::canonicalize(dst.join(rel))
+            .with_context(|| format!("resolve dst link `{rel}`"))?;
+        if path_within(&target, src_canonical) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which is inside src `{}`; a mirror may not write into its own source \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+        if path_within(src_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which contains src `{}`; a mirror may not reach its own source \
+                 through a link (remove the link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+    }
     Ok(())
 }

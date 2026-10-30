@@ -630,3 +630,54 @@ fn distrusting_a_record_does_not_make_it_uncovered() {
         "the record holds md5, so distrusting its cache changes nothing it owes"
     );
 }
+
+/// **A case-only pair exits `4`, even though `total_diff` is `0`.**
+///
+/// `Diff::total()` deliberately excludes `case_mismatch` and `Diff::is_empty()`
+/// consults it; `report_diff` computes the exit code from `is_empty()`. The
+/// predicate divergence is unit-tested, and the record shape is asserted
+/// elsewhere, but nothing pinned the *exit code*: a `report_diff` changed to use
+/// `total()` would still pass every existing case-only test and silently turn a
+/// case-only audit into "equal".
+///
+/// Asserting both halves is the point - the summary must say `total_diff=0`
+/// while the process says `4`. Either one alone can be true for the wrong
+/// reason.
+#[test]
+fn a_case_only_pair_exits_four_with_total_diff_zero() {
+    let t = temp_root("case_only_exit");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"identical bytes");
+    wfile(&dst, "A.txt", b"identical bytes");
+    sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("compare")
+        .arg("--src")
+        .arg(&src)
+        .arg("--dst")
+        .arg(&dst)
+        .arg("--output")
+        .arg("json")
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "a case-only difference is a difference: stderr {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let recs = common::parse_ndjson(&out.stdout);
+    let summary = common::summary_of(&recs);
+    assert_eq!(
+        summary["case_mismatch"], 1,
+        "the pair is a casing difference: {summary}"
+    );
+    assert_eq!(
+        summary["total_diff"], 0,
+        "and `total()` does not count it: {summary}"
+    );
+}

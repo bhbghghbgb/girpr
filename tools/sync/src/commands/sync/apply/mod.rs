@@ -4,7 +4,8 @@
 //! of steps. The phase *order* is a correctness invariant, so it lives in one
 //! place ([`Applier::apply`]) rather than being spread across the coordinator:
 //!
-//! 1. mkdir + fix-dirs (create the shapes src expects),
+//! 1. fix-dirs, then mkdir (create the shapes src expects; a fix replaces the
+//!    blocking file a nested directory needs),
 //! 2. pre-drop the cache entries for every path about to change,
 //! 3. delete extras, copy src files, remove unknown dirs,
 //! 4. prune leftover cache rows.
@@ -21,7 +22,7 @@
 //! action twice by hand. `--dry-run` reports the same records for the same plan,
 //! which is why the plan printer and these phases agree field for field.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
@@ -40,6 +41,10 @@ mod phases;
 /// resolved side maps, and the resolved config.
 pub(super) struct Applier<'a> {
     pub src: &'a Path,
+    /// `src` as the input validation resolved it. The removal passes compare a
+    /// delete target's directory against this, so a delete can never reach a
+    /// file the run is copying even if a plan names one.
+    pub src_canonical: &'a Path,
     pub dst: &'a Path,
     pub dst_db: &'a CacheDb,
     /// dst effective map, after the rename pass. Consulted for what dst actually
@@ -76,8 +81,14 @@ pub(super) struct Applied {
 impl Applier<'_> {
     /// Run every apply phase in the order documented on this module.
     pub(super) fn apply(&self, plan: &Plan) -> Result<Applied> {
-        self.mkdirs(plan)?;
+        // `fix_dirs` before `mkdirs`: a src directory can be nested under a dst
+        // *file*, in which case the plan holds the file in `fix_dirs` and its
+        // descendants in `mkdir`. `fix_dirs` removes the blocker and creates the
+        // replacement directory with `create_dir_all`, so the nested `mkdir` only
+        // succeeds after it. The other order aborted a valid plan with
+        // `AlreadyExists` (os error 183) after the dry run had promised success.
         self.fix_dirs(plan)?;
+        self.mkdirs(plan)?;
         self.predrop_cache_entries(plan)?;
         // Field order is the phase order: deletes, then copies, then rmdirs.
         let applied = Applied {
@@ -91,6 +102,9 @@ impl Applier<'_> {
 
     /// Create every src directory that dst lacks.
     ///
+    /// Runs after [`Applier::fix_dirs`], so a directory nested under a path dst
+    /// held as a file has its parent in place by the time this runs.
+    ///
     /// Each one is reported, like every other action in the plan. The apply
     /// phases record what they do and `--dry-run` records what it would do, and
     /// the two documents are supposed to be the same — a phase that works
@@ -100,6 +114,7 @@ impl Applier<'_> {
         info!(dirs = plan.mkdir.len(), "apply mkdirs");
         let mut w = self.dst_db.begin_write()?;
         for (i, r) in plan.mkdir.iter().enumerate() {
+            self.guard_no_link_ancestor(r, "create")?;
             std::fs::create_dir_all(self.dst.join(r))
                 .with_context(|| format!("mkdir {}", self.dst.join(r).display()))?;
             w.put(r, &FileRec::dir())?;
@@ -129,8 +144,16 @@ impl Applier<'_> {
             w.commit()?;
         }
         for r in &plan.fix_dirs {
+            // A link *above* this path would resolve the removal and the mkdir
+            // into its target. A link *at* it is the type conflict itself, and
+            // is unlinked below.
+            self.guard_no_link_ancestor(r, "replace")?;
             let p = self.dst.join(r);
-            if p.is_file() || p.is_symlink() {
+            if crate::link::try_is_link(&p)
+                .with_context(|| format!("check link {}", p.display()))?
+            {
+                crate::link::remove(&p).with_context(|| format!("unlink {}", p.display()))?;
+            } else if p.is_file() {
                 std::fs::remove_file(&p).with_context(|| format!("remove {}", p.display()))?;
             } else if p.is_dir() {
                 std::fs::remove_dir_all(&p).with_context(|| format!("rmdir {}", p.display()))?;
@@ -138,6 +161,14 @@ impl Applier<'_> {
             std::fs::create_dir_all(&p).with_context(|| format!("mkdir {}", p.display()))?;
             self.report.emit(Record::path("FIX-DIR", r));
         }
+        // The directory exists now, so it owes a row like `mkdirs` writes. The
+        // old row was removed and committed above; leaving the new one out made
+        // `compare-self` report the directory this run created as extra.
+        let mut w = self.dst_db.begin_write()?;
+        for r in &plan.fix_dirs {
+            w.put(r, &FileRec::dir())?;
+        }
+        w.commit()?;
         Ok(())
     }
 
@@ -181,8 +212,37 @@ impl Applier<'_> {
         }
         for r in &plan.delete_files {
             w.remove(r)?;
+            // Removing a link removes everything the walk reported under it.
+            // Those rows describe paths that will not exist after the unlink, so
+            // they are dropped here, before the filesystem change, rather than
+            // left for `compare-self` to report as missing.
+            if self.dm.get(r).is_some_and(|rec| rec.is_link) {
+                let prefix = format!("{r}/");
+                for key in w.load_keys()? {
+                    if key.starts_with(&prefix) {
+                        w.remove(&key)?;
+                    }
+                }
+            }
         }
         w.commit()?;
+        Ok(())
+    }
+
+    /// Fail before touching a path whose ancestor is a `dst` link.
+    ///
+    /// The plan-level check (`ensure_link_safe`) runs before any apply phase;
+    /// this is the per-phase belt and braces, so a path that changed since the
+    /// plan (or one a future phase adds) cannot resolve a link as an
+    /// intermediate component. The final component is deliberately not checked:
+    /// a link *at* the path is what a type conflict replaces.
+    fn guard_no_link_ancestor(&self, rel: &str, action: &str) -> Result<()> {
+        if let Some(link) = crate::link::link_ancestor_above(self.dst, rel)? {
+            bail!(
+                "refusing to {action} `{rel}` through dst link `{link}`: \
+                 remove the link, or exclude it with --exclude"
+            );
+        }
         Ok(())
     }
 }

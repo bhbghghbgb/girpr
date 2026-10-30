@@ -16,7 +16,7 @@ and not here.
 ## Load-bearing invariants, and what enforces them
 
 The dangerous edits in this crate are the ones that break an invariant nothing
-fails loudly about. Six of them.
+fails loudly about. Seven of them.
 
 ### The verify needs two independent reads
 
@@ -31,7 +31,9 @@ fire. It would read as a guarantee while asserting `x == x`.
 Two independent reads are what make the message mean anything, and because the
 second happens after `sync_all()`, it is a digest of the bytes that actually
 reached the disk — which is the only way a copy catches silent corruption on the
-way down. `--hash none` takes a different arm and keeps `std::io::copy`'s fast
+way down. A failed `sync_all` therefore aborts the copy: ignoring it would make
+the second read come from the same page cache the flush never wrote through.
+`--hash none` takes a different arm and keeps `std::io::copy`'s fast
 path, since there is no digest to justify giving it up.
 
 **Enforced by:** `verify_digests` takes two maps and is unreachable with one;
@@ -132,6 +134,163 @@ one place the rule has to be visible to `merge`; and
 edit puts a map back — a map passes every other test here and costs five
 allocations per row.
 
+### The effective source is checked against dst before a plan exists
+
+Two roots can be siblings and still overlap through the walk. `walk_live`
+follows links, so if `src/link` resolves to `dst` (or to a directory containing
+`dst`), one physical file appears both at its real dst path and under `link/`.
+The real path then looks `EXTRA`, the delete pass removes it, and the copy that
+needed it fails afterwards: data loss reported as a copy error. The root check
+in `validate_inputs` cannot see this, because it canonicalizes only the roots.
+
+`validate_src_links` therefore canonicalizes every link the **effective** src
+map kept and refuses an intersection with dst in either direction. It runs after
+src's phase A — so `--include`/`--exclude` and `--max-depth` have already
+decided what this run's source is — and before dst is scanned, planned, renamed
+or applied. A link to anywhere else is ordinary mirrored content, including one
+that points back inside `src`.
+
+`validate_dst_links` is the same check in the other direction, run immediately
+after dst's phase A. A dst link that resolves into `src`, or contains it, is
+refused before the plan, the rename or any apply phase. The dangerous shape is a
+final-component file link at a copy path: `File::create` follows it, truncates
+the source file, and the verify then reads the same file back through the link,
+so the run could exit 0 having destroyed its own input. The check is about where
+the link resolves, not about what this run's plan would do with it, so a dst-only
+link into `src` is refused even though unlinking it would be safe. `copy_one`
+re-asks the filesystem at the final component before it unlinks or creates
+anything, so a plan and a disk that disagree still cannot reach `src`. A dst link
+to anywhere else — including one inside `dst` itself — keeps the documented
+write-through.
+
+The removal passes do not rely on that check alone. `guard_removal_outside_src`
+canonicalizes each delete target's **parent** and refuses one that resolves
+inside src; the final component is deliberately not resolved, so a link at the
+target is removed as a link and its target survives. That is the second line
+because a plan is data: a later phase that invents a delete must not be able to
+remove the file the run is copying.
+
+**Enforced by:** `sync_refuses_a_src_directory_link_to_dst`,
+`sync_refuses_a_src_directory_link_inside_dst`,
+`sync_refuses_a_src_directory_link_containing_dst`,
+`sync_refuses_a_src_file_link_into_dst` (all but the last run on a Windows host
+through a junction; the file-link case may skip),
+`sync_refuses_a_dst_file_link_into_src` and
+`sync_refuses_a_dst_directory_link_into_src` (the first may skip; the junction
+case runs here), and `a_removal_whose_parent_resolves_inside_src_is_refused`.
+
+### A filtered dst blocker is refused before the rename
+
+`--include`/`--exclude` hide entries from the effective dst map (`dm`) but not
+from the disk. A file that the filter hides can still be sitting exactly where
+the plan will `mkdir`, so `build_plan` sees no type conflict and
+`ensure_dirs_applicable` — which reads `dm` — sees no blocker. The dry run then
+prints a `MKDIR`/`COPY` plan that the real run cannot execute: `create_dir_all`
+fails with `AlreadyExists` after earlier phases have changed dst.
+
+`ensure_mkdir_targets_free` closes that gap before the rename pass, which is the
+first filesystem change. It derives the same mkdir candidates `build_plan` will:
+src directories that the post-rename `dm` does not hold (a lowercase pair in
+insensitive mode, because the rename collapses those), and stats each candidate
+and every strict prefix on disk. An existing directory is fine; a non-directory
+is refused unless it is a planned `fix_dirs` entry, which runs before the
+nested mkdir. Every strict ancestor of a src directory is itself a src
+directory, so the blocker is normally its own candidate. `dm` is deliberately
+not widened to retain non-directory ancestors: that would make the planner
+delete an entry the filter promised to leave alone.
+
+**Enforced by:** `a_filtered_file_at_a_mkdir_path_is_refused_from_disk`,
+`a_file_at_a_strict_prefix_is_refused_from_disk`,
+`a_planned_fix_at_a_strict_prefix_is_applicable`, and
+`a_filtered_dst_file_blocking_a_mkdir_is_refused_before_the_rename` (which also
+pins that no case-only rename precedes the refusal).
+
+### A hard-linked destination is refused at plan time, not written through
+
+`try_is_link` answers only for reparse points, so a dst file that is another
+name for a src file is ordinary content to the walk. `File::create` truncates
+the inode, not the name, so a run would report success after destroying the
+other name; the verify then reads the changed inode back and agrees with
+itself. The decision is taken at plan time, in both modes, by
+`ensure_hard_linked_targets_safe`, so a dry run refuses the same tree instead
+of reporting a `COPY` the real run will not perform. `copy_one` keeps its own
+runtime check.
+
+The count, not an identity comparison with the copied source, is the check that
+covers the reported shape: `dst/a.txt` can be a hard link to `src/b.txt` while
+the copy is reading `src/a.txt`. A name the plan removes before the copy — a
+`delete_files` extra, or a file `fix_dirs` replaces — is credited, because the
+copy then truncates the only remaining name. Unlinking a dst **link** is not
+credited: it removes the link, not a name for the inode. Otherwise the refusal
+is conservative by design — a surviving shared inode is outside a mirror's
+write contract, wherever it lives — and the documented dst **symlink**
+write-through is unchanged, because a symlink is a different directory entry
+rather than a second name for the truncated inode.
+
+**Enforced by:** `a_dst_hard_link_is_refused_without_touching_the_shared_inode`
+(also under `--hash-all-of none`), `the_hard_link_refusal_is_the_same_decision_in_both_modes`,
+the plan-time preflight cases in `plan::tests`, and the `hardlink::tests`
+count and identity cases.
+
+### A kept dst file link's target is its content, not an extra
+
+The walk follows a file link, so `dm` holds the link at its own path and its
+target at the target's path when the target is inside `dst`. The two names are
+one file. The delete plan cannot know that from the map alone: the target looks
+`EXTRA`, so `delete_extras` removes it before the copy phase, and the copy then
+canonicalizes a dangling link (`NotFound`, exit 3) — or, with equal content and
+no copy, the run exits 0 leaving the link dangling and the next walk aborts.
+
+`spare_link_storage` answers this at plan time, in both modes, from the disk.
+For every `dm` file link that `src` also has as a file (so the link stays), it
+walks the `read_link` chain. An intermediate link is part of the chain and is
+spared too. Every link **component** of the target path is spared as well — the
+walk's alias spelling (`link/x`) and the canonical one (`real/x`) both, because
+the delete plan may name either — and every spared entry goes through
+`keep_path`, so all its ancestor directories are spared with it as well. A final
+target inside `dst` that `src` does not have is the link's content: it is dropped
+from `delete_files`, from the diff's `extra` bucket (so the printed record and
+the action name the same set), and from `rmdir` together with every directory
+above it. A final target `src` **does** have is one inode carrying two mirrored
+paths; if either end is planned for copy, the plan is refused before any change,
+because one file cannot hold two contents and the parallel copy phase could
+interleave them. A target the plan replaces with a directory is refused for the
+same reason. A target outside `dst` is the documented write-through and is not
+the plan's business.
+
+Two or more kept links can resolve to one terminal even when neither target is
+itself mirrored by `src` (`a -> c` and `b -> c`, or the chained `a -> b -> c`).
+`ensure_shared_storage_safe` judges that set as a whole by terminal storage: a
+plan that would copy any member is refused before the plan print and before any
+mutation, while a group with no copy writes nothing and is left alone.
+
+The target is named in the spelling the walk reported. Its final component is
+deliberately not resolved — it may be the chain's next hop — so its spelling is
+read from the parent directory's listing, case-insensitively on Windows only
+(the component rule of `util::same_path`); a link text with different casing
+therefore cannot miss `sm`/`dm`, the spare or the grouping key. In a dry run the
+link is still at its pre-rename spelling on disk, while `dm` and the plan use
+src's casing. `spare_link_storage` stats the on-disk spelling and maps the
+canonicalized target back through `DiskSpelling::plan_rel`, the same path map
+the other plan-time guards use.
+
+**Enforced by:** `sync_writes_through_a_dst_file_link`,
+`sync_keeps_the_target_of_a_dst_file_link_when_no_copy_is_needed`,
+`sync_spares_a_link_target_inside_a_dst_only_directory`,
+`sync_refuses_a_dst_file_link_whose_target_is_also_mirrored`,
+`sync_spares_a_kept_link_through_a_dst_directory_link`,
+`sync_refuses_two_kept_links_that_share_one_dst_file` and
+`sync_refuses_a_chained_pair_of_kept_links_sharing_storage` (file-link cases
+self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
+`sparing_a_links_content_drops_it_from_every_removal_list`,
+`a_link_target_is_named_relative_to_the_dst_root`,
+`a_case_differing_final_component_names_the_walk_entry`,
+`a_case_differing_link_component_is_spared_under_the_walk_spelling`,
+`a_case_differing_mirrored_target_is_refused`,
+`a_case_differing_terminal_is_spared_by_the_full_pass`,
+`a_case_differing_alias_is_spared_under_the_walk_key` and
+`a_case_only_rename_of_the_target_is_one_spare_in_both_modes`.
+
 ### A digest is looked up by name, not by slot
 
 `DigestSet` has two lookups and they are not interchangeable: `get(HashAlg)` reads
@@ -226,6 +385,17 @@ This is the price of not re-reading src, and it is recorded in `README.md`'s
 digests dropped, and a size difference settles the pair for free, so nothing ever
 rehashes it. `--no-trust-size` is the repair. The row looks healthy — right size,
 right mtime — which is what makes it worth stating.
+
+**Host coverage of the link cases.** Some end-to-end cases need primitives a
+regular user cannot always create: Windows without developer mode refuses
+`symlink_file`/`symlink_dir` (directory junctions via `mklink /J` still work
+without elevation), and hard-link fixtures need link creation too. `tests/symlink.rs`
+and `tests/sync.rs` self-skip those cases with a `skip:` line saying why, so a
+locked-down host runs the junction- and unit-level halves while the file-symlink
+bodies do not. A green local run is therefore not full link coverage — that gap
+is closed on a host that can create links, not by weakening or removing the
+cases. The skip reason sits beside each case; there is no separate document to
+keep in step with them.
 
 ---
 

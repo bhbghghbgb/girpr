@@ -368,6 +368,7 @@ mod tests {
             size,
             mtime_ns,
             hashes: DigestSet::default(),
+            is_link: false,
         }
     }
 
@@ -377,6 +378,7 @@ mod tests {
             size: 0,
             mtime_ns: 0,
             hashes: DigestSet::default(),
+            is_link: false,
         }
     }
 

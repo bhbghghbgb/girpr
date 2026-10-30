@@ -150,11 +150,9 @@ fn display_pads_to_the_width_in_the_format_spec() {
     }
 }
 
-/// **The memory claim, as an assertion.** A cache row used to be a
-/// `HashMap<String, Vec<u8>>` — five allocations per row, one row per file, held
-/// twice during phase C. This pins the replacement's size so a later edit that
-/// adds a `HashMap` or a `Vec` field fails here rather than quietly costing 25–50 MB
-/// on a 200k-file tree.
+/// **The memory claim, as an assertion.** This pins the replacement's size so a
+/// later edit that adds a `HashMap` or a `Vec` field fails here rather than
+/// quietly costing 25–50 MB on a 200k-file tree.
 ///
 /// Derived, not guessed: a `Box<[T]>` fat pointer (16), plus `Option<[u8; 16]>` at
 /// 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche to
@@ -324,10 +322,9 @@ fn debug_renders_the_spellings_the_logs_already_carry() {
 
 /// A repeated algorithm is **one** request, however the flags were typed.
 ///
-/// The non-adjacent case comes first because it is the one that used to slip
-/// through: `Vec::dedup` only collapses *consecutive* repeats, so
-/// `md5 sha256 md5` survived as three algorithms and reached
-/// `HashPlan::digest_count` as a promise of three digests.
+/// The non-adjacent case comes first because `Vec::dedup` only collapses
+/// *consecutive* repeats: `md5 sha256 md5` must still count as three algorithms
+/// and reach `HashPlan::digest_count` as a promise of three digests.
 #[test]
 fn a_repeated_algorithm_is_one_request() {
     assert_eq!(

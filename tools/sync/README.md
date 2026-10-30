@@ -316,6 +316,11 @@ comparison is the verify. src's own digest is taken from the copy's read rather
 than from a third pass over the file, so the cost is **2 reads + 1 write** per
 copied file rather than 3 + 1.
 
+**A failed flush is a failed copy.** A `sync_all` error aborts the copy, so the
+run exits `3` and writes no cache row for that file. Ignoring it would let the
+verify re-read the same page cache the flush never wrote through, cache the
+digest, and report success without the durability the flush was there to obtain.
+
 The re-read is not a belt-and-braces extra and must not be "optimised" away into
 a single pass. Hashing both sides from the same chunks going out would compare a
 value with itself: equal by construction, so a mismatch could never be reported
@@ -386,7 +391,8 @@ from a bad prune; it is a recovery aid, not a correctness mechanism.
 The prune keeps rows for what the run *created* — new directories, copied files,
 directories that replaced a file — as well as what it found, and drops rows for
 what it *destroyed*, including the whole subtree under a directory a copy had to
-clear out of the way. One case reaches neither: with `--case-sensitive` on a
+clear out of the way and the followed descendants of a link it removed. One case
+reaches neither: with `--case-sensitive` on a
 case-insensitive filesystem, a directory the run creates can be the same
 directory a later step removes, and its row then survives until the next run
 prunes it.
@@ -717,22 +723,55 @@ own summary is dropped: two differently-shaped summaries in one stream would mak
 Mirrors `src` → `dst`:
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
-   path, or on any IO error
-   (dangling symlink, walk loop, locked file — first error aborts the run).
+   path, if one root contains the other (a mirror may not contain its own source;
+   compared by canonical path and component-wise, so `A`/`AB` is not nesting and
+   `ROOT`/`root` is one tree on Windows), if a link inside `src` resolves to `dst`,
+   to something inside it, or to a directory that contains it, if a link inside
+   `dst` resolves to `src`, to something inside it, or to a directory that
+   contains it (each checked after its side's walk and before any mirror change; a
+   link pointing anywhere else is ordinary content), or on any IO error (dangling
+   symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
    `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
-   Windows) — after the plan, before the diff, so both sides are on exact keys.
-4. `COPY` missing + changed files (skipped when `--missing-only`), `MKDIR` missing dirs,
-   `DELETE` extra files + remove dst-only dirs deepest-first (both skipped when
-   `--keep-extra`, which spares directories as well as files).
-   Type-conflicts resolve toward src kind.
+   Windows) - after the pair plan and the mkdir preflight, before the diff, so
+   both sides are on exact keys. The two-step's temporary is a unique sibling
+   (`.girsync_case_tmp.<n>`, a fixed short name so a source near `NAME_MAX` stays
+   renameable) claimed before use, so a user file that happens to look like tool
+   residue is stepped over, never replaced.
+4. `FIX-DIR` type-conflicts toward src kind, then `MKDIR` missing dirs, then
+   `DELETE` extra files (skipped when `--keep-extra`, which spares directories as
+   well as files), then `COPY` missing + changed files (skipped when
+   `--missing-only`), then remove dst-only dirs deepest-first (also skipped when
+   `--keep-extra`).
+   **`FIX-DIR` precedes `MKDIR`** because a src directory can be nested under a
+   path where dst holds a file: the fix replaces the blocker, and only then can the
+   nested directory be created. The dry run reports the same order.
+   A `MKDIR` path that already exists on disk as a file is refused **before the
+   rename and before the plan is printed**, even when `--include`/`--exclude` hid
+   that dst entry from the map. The dry run and the real run exit 3 with the same
+   message naming the blocker, instead of the real run failing in
+   `create_dir_all` after an earlier action had already landed.
 5. Copy = truncate + write in place, preserve mtime, verify-after-copy by rehash
    (size+mtime under `--hash-all-of none`); the dst record entry is deleted *before* each
    file change. The `COPY` line is printed **as each copy completes**, so with more
-   than one rw operation permitted those lines come out in completion order. No resume.
+   than one rw operation permitted those lines come out in completion order.
+   **A destination with more than one hard link is refused before truncation.**
+   The other name is the same inode, so writing through it would change that file
+   too — and the verify would read the changed inode back and agree with itself.
+   This is what stops a `dst` hard link to a src file from destroying the source.
+   The decision is made at plan time in **both** modes: a dry run refuses the same
+   tree instead of reporting a `COPY` the real run will not perform. A same-inode
+   name the plan removes first reduces the count and is allowed — the default
+   run's delete of an extra, or a file `fix_dirs` replaces — so this is not a
+   blanket refusal of every shared inode. `copy_one` keeps its own runtime check.
+   **No resume**, in two senses: a failed mtime restore aborts the run although the
+   bytes are already correct (a rerun recopies that file), and cache rows written
+   since the last periodic commit are discarded when a run aborts (copies that
+   completed stay on disk, but a rerun re-stats, and may re-hash, that tail before
+   converging). Neither ever resumes mid-file.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
 The planner pairs the two sides as they are *on disk* — by lowercase in
@@ -771,10 +810,11 @@ and depends on none of those. Do not treat a *missing* row as a crash signal,
 though: a scan may legitimately record stat without a digest, so absence proves
 nothing.
 
-`--dry-run` reports `MKDIR`/`FIX-DIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in
-apply order and writes nothing (no backups, no cache updates, no FS changes). Its
-records are the same ones a real run reports, with `dry_run=true` on the
-`SUMMARY`; see the `--dry-run` section below.
+`--dry-run` reports the `RENAME` steps it would perform, then
+`FIX-DIR`/`MKDIR`/`DELETE`/`COPY`/`RMDIR` + `SUMMARY` in apply order, and writes
+nothing (no backups, no cache updates, no FS changes). Its records are the same
+ones a real run reports, with `dry_run=true` on the `SUMMARY`; see the
+`--dry-run` section below.
 
 ### `--dry-run`
 
@@ -825,7 +865,7 @@ and it is a hard error in both modes.
 `sync`'s two outputs are the same document. The `SUMMARY` uses identical field
 names — `renamed`, `mkdir`, `copied`, `deleted`, `rmdir`, `missing_only`,
 `keep_extra` — and the action records share one vocabulary and one order
-(`MKDIR`, `FIX-DIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
+(`FIX-DIR`, `MKDIR`, `DELETE`, `COPY`, `RMDIR`, which is apply order). The dry
 run's only addition is `dry_run=true`, so a caller reading either does not have to
 know which it got.
 
@@ -885,7 +925,11 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   relative path (UTF-8; case preserved as stored). Value = binary
   `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
   `entries` table + `meta{version, case_sensitive}` in the `meta` table.
-  `girpr-cache*` (DB file, backups, olds) is always excluded from scans.
+  `girpr-cache*` (DB file, backups, olds) is always excluded from scans — at
+  **any depth**, since a nested root or a followed link can bring its own cache
+  into the walk, and it is tool state rather than content. The prefix match
+  folds case on Windows only, where a case-only rename of the cache is the same
+  file; POSIX spellings stay exact.
   Legacy sled directories are rejected (rebuild with `--ignore-cache` or
   convert once with `sled2redb <old-dir> <new-file>`).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
@@ -905,7 +949,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   `--src`/`--dst` pair that resolves to one cache file — the same folder twice,
   the same record twice, or a folder paired with the record inside it.
   Resolution is by *canonical* path, so two spellings of one target (`F/sub/..`
-  vs `F`) collide too. Exit `3`.
+  vs `F`, or `ROOT` vs `root` on a case-insensitive filesystem) collide too, even
+  on a fresh tree where the cache file does not exist yet. Exit `3`.
 - **Cache is a cache, not truth.** Disk governs. `update` always populates the
   requested algos. `compare` and `sync` decide **per pair**, by
   `planner::plan_pairs`: a path needs a digest only when it is a file on both
@@ -1000,10 +1045,56 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
 - **Filters.** `glob`-crate patterns on relpaths; `--include` narrows, `--exclude`
   wins over include. Excluded paths are treated as nonexistent on **both** sides
   (skipped in walks, filtered from records, pruned from DBs, kept untouched in
-  dst during sync). Glob case-sensitivity follows the case mode.
+  dst during sync). An excluded directory excludes its whole subtree, so
+  `--exclude link` covers `link/x.txt` as well as `link`. An include that matches
+  only a descendant keeps the ancestor directories in the map, which is what
+  keeps a link above an included path visible to the plan. Glob case-sensitivity
+  follows the case mode.
 - **Symlinks** are followed (`--max-depth`, default 10, applies to the whole walk —
   raise for deep trees). Dangling links abort. Link targets outside the root are
-  followed and materialized as plain files/dirs. Dirs compare by presence only.
+  followed and materialized as plain files/dirs. On Windows only the redirecting
+  reparse tags (symbolic link, junction) are links; other reparse points (cloud
+  placeholders, dedup, AppExecLink) are ordinary entries and are copied and
+  removed as such. A `dst` link to a **file** is
+  followed and written through: the copy lands on the target, unless the target
+  resolves into `src`. When that target is inside `dst` and `src` does not have
+  the target's path, the target is the link's content, not an extra: the plan
+  keeps it (and the directories above it) instead of deleting them, and it keeps
+  every link component on the way to it in both the walk's spelling and the
+  canonical one, with their ancestor directories. The target is matched as the
+  entry the walk reported (case-insensitively on Windows), so a link text with
+  different casing obeys the same rules. If `src` does have the target too, the
+  link and the target are one file, so a plan that would copy either path is
+  refused before any change; two or more kept links that resolve to one terminal
+  are judged as a set, refused if any of them would be copied and left alone
+  when none is. A **dst** link that
+  reaches `src` (its target is `src`,
+  inside it, or is a directory containing it) is refused before any mirror change
+  with the same `disjoint` rule as a src link into dst, because a file link at a
+  copy path would otherwise truncate a source file. A `dst` directory link where
+  `src` has a file is unlinked, and the file is written in its place, when the
+  link points outside `src`.
+  Deleting an extra directory link removes **the link**, never its target: a path
+  under a `dst` link is never deleted through it, and the link is removed when
+  `src` does not have that path. A **src** link that reaches `dst` (its target is
+  `dst`, inside it, or is a directory containing it) makes the trees overlap
+  through the walk and is refused before any mirror change; a src link pointing
+  anywhere else is ordinary content and is materialized. Independently of the
+  plan, no removal may target a path whose directory resolves inside `src`, so a
+  mirror cannot delete the files it is copying. A link `src` **also** has is not a write-through
+  path: a run that would create, fix, copy or rename through it fails before
+  touching the filesystem, naming the link (remove it, or `--exclude` it). Its
+  extra descendants are left in place, so a default run fails rather than exit 0
+  on a tree it did not converge; `--keep-extra` and `--missing-only` accept that
+  non-convergence. **Hard links are not symlinks** and are not reported by
+  `try_is_link`. A destination with more than one hard link is refused before
+  truncation (see `copy`), in both `--dry-run` and a real run because the
+  decision is a plan-time preflight; a same-inode name the plan deletes first (or
+  a file `fix_dirs` replaces) is accounted for, so a default run that removes the
+  extra succeeds. Otherwise a hard link is compared and copied as an ordinary
+  file. Unix reads the count and identity from `nlink`/`dev`/`ino`, Windows from
+  `GetFileInformationByHandle` (volume serial + file index).
+  Dirs compare by presence only.
 - **Exit codes:** `0` ok/equal · `2` CLI parse error (clap) · `3` fatal at runtime
   (bad flag values, both sides naming one cache, IO/verify/corrupt — message on
   stderr;
@@ -1049,7 +1140,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 327 test functions, one of them #[ignore]d (326 run by default)
+cargo nextest run -p girsync   # 421 test functions, one of them #[ignore]d (420 run by default)
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's
@@ -1073,8 +1164,7 @@ by what the planner asked for.
 | a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
 
-Two places that used to cost far more than their output was worth, and now cost
-one pass each. Both are index-shaped rather than nested-loop-shaped, which is the
+Two places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
 
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
@@ -1091,7 +1181,8 @@ them; `--dry-run` costs the same again.
 - Deletes extras **by default**; in-place truncate means a killed run leaves
   truncated files (entries were pre-dropped, so rerun re-copies — verify with `compare`).
 - Backups/olds accumulate (`keep-all`, suffixed `_2…` on timestamp collision);
-  clean them manually. They are `girpr-cache*` so never sync.
+  clean them manually. They are `girpr-cache*` (case-insensitively on Windows)
+  so never sync.
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
