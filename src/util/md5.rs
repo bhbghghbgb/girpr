@@ -224,7 +224,14 @@ fn intern(
 /// for.
 pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     f.seek(SeekFrom::Start(offset))?;
-    let mut out = vec![0u8; len as usize];
+    // `len` comes from the server's `uncompressed_size`, so convert it instead
+    // of truncating, and reserve fallibly: a corrupt manifest must fail this
+    // read, not abort the process with an allocation failure.
+    let len = usize::try_from(len).with_context(|| format!("range of {len} bytes is too large"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .with_context(|| format!("reserve {len} bytes for a file range"))?;
+    out.resize(len, 0);
     f.read_exact(&mut out)?;
     Ok(out)
 }
@@ -246,13 +253,11 @@ pub fn md5_file(path: &Path) -> Result<String> {
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
-    use std::io::Seek;
-    use std::io::SeekFrom;
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     f.seek(SeekFrom::Start(offset))?;
     let mut ctx = md5::Context::new();
     let mut remaining = len;
-    let mut buf = vec![0u8; MD5_BUF.min(1 << 20)];
+    let mut buf = vec![0u8; MD5_BUF];
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
         let n = f.read(&mut buf[..want])?;
@@ -460,5 +465,15 @@ mod tests {
         let mut f = File::open(dir.join("f.dat")).unwrap();
         let got = read_range(&mut f, 64, 8).unwrap();
         assert_eq!(got, &data[64..72]);
+    }
+
+    #[test]
+    fn read_range_refuses_a_length_it_cannot_reserve() {
+        // A server-supplied size must become an error, not an abort: neither
+        // the `usize` conversion nor the fallible reservation may panic.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "read_range_big");
+        std::fs::write(dir.join("f.dat"), b"abc").unwrap();
+        let mut f = File::open(dir.join("f.dat")).unwrap();
+        assert!(read_range(&mut f, 0, u64::MAX).is_err());
     }
 }
