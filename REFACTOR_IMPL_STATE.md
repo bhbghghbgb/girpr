@@ -53,13 +53,9 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-- [ ] Review follow-ups: `2e02df7` (B3 tests), `7ab4ff5` (C6 docs),
-  `edfb9b2` (A2 lookup), `87807bb` (G5 `verify_plan` root), `e20ca5b`
-  (F1 `Ceiling` access), `edbb471` (MD5 fold + `is_tiled`). Reported clean at
-  229 unit + 149 integration passing, 7 ignored.
-
-_None._ D2 and every Phase 2 task (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6)
-passed review; H2 and the Phase 3 tasks are not implemented yet.
+_None._ D2, every Phase 2 task (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) and the
+review follow-ups (`2e02df7`, `7ab4ff5`, `edfb9b2`, `87807bb`, `e20ca5b`,
+`edbb471`) passed review; H2 and the Phase 3 tasks are not implemented yet.
 
 D2 and Phase 2 (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) passed review:
 `cargo test --all-targets` (225 unit + 149 integration passing, 7 ignored),
@@ -74,9 +70,9 @@ and each task's contract was checked against its pre-refactor code:
 - A1 — `ReuseEntry::matches` is the only `(md5, size)` predicate, and the map
   normalizes the digest once at its boundary. First-entry-wins is preserved
   (the two existing tests) and the new test pins case-variant collapse.
-- A2 — `FileReuse` keeps `entries` in first-match order and inserts only on an
-  absent key, so `get` cannot change the winner; a missing entry still degrades
-  to a download, and the `debug_assert!` keeps index and predicate in sync.
+- A2 — `FileReuse` keeps `entries` in first-match order and answers from a
+  bucket index keyed by chunk identity that never re-orders insertions, so
+  `get` cannot change the winner; a missing entry still degrades to a download.
 - B3 — `scan_ranges` is the one range builder. In the in-place path
   `source_ok` is remapped to one verdict per chunk (discard path included), so
   no consumer sees a per-range vector, and a source-less chunk is no longer
@@ -116,7 +112,7 @@ C6 review concerns:
    running after the run returned — and both write paths recover: the temp path
    resumes by length, the in-place path re-scans.
 
-Non-blocking follow-ups from this review (addressed, pending review):
+Non-blocking follow-ups from this review (addressed and accepted):
 
 - B3 — in-place tests for the source-less chunk and the discard remap.
   (`2e02df7`; `source_ok_by_chunk` extracted, +2 unit tests)
@@ -128,6 +124,39 @@ Non-blocking follow-ups from this review (addressed, pending review):
 - F1 — `Ceiling::load`/`store` are `pub`. (`e20ca5b`)
 - Phase 1 leftovers — `md5_file_slice_with_buf` folded away (`edbb471`), and
   `PlannedFile::is_tiled` narrowed to `pub(crate)` (same commit).
+
+The follow-ups passed review at `20a47ad`
+(`cargo test --all-targets`: 229 unit + 149 integration passing, 7 ignored;
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` clean):
+
+- `2e02df7` — the extracted remap is the same code that ran inline. The
+  source-less test builds the ranges through `scan_ranges` (empty source list,
+  empty owner) and shows the head-of-file copy would otherwise verify; the
+  discard test pins `Scan::absent`'s per-range tuple and that a `true` verdict
+  lands on its owner, so the remap cannot pass by keeping everything false.
+- `7ab4ff5` — the doc states the `JoinSet` drop semantics that C6 introduced;
+  no behavior change.
+- `edfb9b2` — the bucket key is a streaming hash of the ASCII-lowercased
+  digest plus size, so any identity-equal entry hashes alike (`eq_ignore_ascii_case`
+  and `to_ascii_lowercase` fold exactly the same bytes) and no lookup is
+  missed. Buckets keep insertion order and every candidate is confirmed with
+  `matches`, so first-match-wins and collision safety both survive; the dedup
+  path confirms the same way. The hash is process-local (the map is built and
+  used in one run and nothing serializes it), so `DefaultHasher`'s
+  unspecified-across-releases algorithm is not load-bearing.
+- `87807bb` — `verify_plan` takes the execute-phase root and keeps the
+  `contained_join` fallback, so a `--check-only` run no longer resolves the
+  base once per file; containment is still resolved per joined path.
+- `e20ca5b` — `Ceiling::load`/`store` are `pub`, matching the public
+  `ram_limit` field; the `u64::MAX` sentinel and the `Ordering` pass-through
+  are unchanged.
+- `edbb471` — `md5_file_slice_with_buf` folds into `md5_file_slice` (the reader
+  still grows one `MD5_BUF`), so the one-off form is still one open, one
+  buffer; `is_tiled` is `pub(crate)`. `md5_file_slice` now has no in-crate
+  caller but remains public API.
+
+Non-blocking follow-up: `md5_file_slice` is uncalled inside the crate; keep it
+as public API or drop it with the G2 digest series.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
