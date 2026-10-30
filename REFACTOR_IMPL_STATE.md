@@ -11,7 +11,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 - [x] D1 — one `case_key` helper. (`ea2acce`, shared `util::path::path_key`)
 - [x] D6 — one-pass empty-chunk count. (`38bd295`)
-- [ ] G7 — remove dead imports / dead `min`; add `read_range` bounds.
+- [x] G7 — remove dead imports / dead `min`; add `read_range` bounds. (`5fe3a99`)
 - [ ] C3 — extract the in-place success block.
 - [ ] C7 — extract the reserved-write helper.
 - [ ] G3 — `OnceLock` the version regex.
@@ -55,6 +55,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 - D1 — `ea2acce` · `path_key` in `src/util/path.rs` replaces `dedup_key` / `purge_key`; `pub(crate)`, not re-exported from `util`. Behavior claimed identical; verify both pinned case-folding tests and that no doc references the old names.
 - D6 — `38bd295` · one-pass `retain` + count in `build_plan`; confirm validation still precedes the drop and the `empty` warning fields/text are unchanged.
+- G7 — `5fe3a99` · `read_range` now `usize::try_from` + `try_reserve_exact` with a new refusal test; `md5_file_slice` buffer is plain `MD5_BUF` and its inner imports are gone. Reviewer note: `md5_file_slice` still does `remaining as usize` (truncation on 32-bit), left out of scope.
 
 ## Skipped
 
