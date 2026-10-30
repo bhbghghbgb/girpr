@@ -90,51 +90,65 @@ impl Order {
 /// ascending one writes forward, which is the friendlier pattern for a
 /// spinning disk.
 pub fn salvage_order(chunks: &[SophonChunk], sources: &[Option<u64>], usable_len: u64) -> Order {
-    let ascending = survives(chunks, sources, usable_len, true);
-    let descending = survives(chunks, sources, usable_len, false);
-    let kept_ascending = ascending.iter().filter(|b| **b).count();
-    let kept_descending = descending.iter().filter(|b| **b).count();
-    if kept_descending > kept_ascending {
-        Order {
-            ascending: false,
-            live: descending,
-        }
-    } else {
-        Order {
-            ascending: true,
-            live: ascending,
-        }
+    // Count both directions cheaply, then materialize only the winner: the
+    // two passes share `survives_one`, so the count and the vector cannot
+    // disagree about which sources are live.
+    let kept_ascending = survives_count(chunks, sources, usable_len, true);
+    let kept_descending = survives_count(chunks, sources, usable_len, false);
+    let ascending = kept_descending <= kept_ascending;
+    Order {
+        ascending,
+        live: survives(chunks, sources, usable_len, ascending),
     }
 }
 
-/// Which sources survive one direction.
+/// Whether one chunk's source survives one direction.
 ///
 /// The whole rule, in one place: a source survives when it is inside the
 /// file and it is not under the region the order has already written.
+fn survives_one(c: &SophonChunk, source: Option<u64>, usable_len: u64, ascending: bool) -> bool {
+    let Some(r) = source else {
+        return false;
+    };
+    let o = c.offset.max(0) as u64;
+    let s = c.uncompressed_size.max(0) as u64;
+    // The source must be inside the file being read from.
+    if r.checked_add(s).is_none_or(|end| end > usable_len) {
+        return false;
+    }
+    // Ascending: the region already written is `[0, o)`, so the source has
+    // to be at or after the destination. Descending: the region already
+    // written is `(o+s, size)`, so the source has to be at or before the
+    // destination.
+    if ascending { r >= o } else { r <= o }
+}
+
+/// How many sources survive one direction, without materializing a vector.
+fn survives_count(
+    chunks: &[SophonChunk],
+    sources: &[Option<u64>],
+    usable_len: u64,
+    ascending: bool,
+) -> usize {
+    chunks
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| survives_one(c, sources.get(*i).copied().flatten(), usable_len, ascending))
+        .count()
+}
+
+/// Which sources survive one direction.
 fn survives(
     chunks: &[SophonChunk],
     sources: &[Option<u64>],
     usable_len: u64,
     ascending: bool,
 ) -> Vec<bool> {
-    let mut live = vec![false; chunks.len()];
-    for (i, c) in chunks.iter().enumerate() {
-        let Some(r) = sources.get(i).copied().flatten() else {
-            continue;
-        };
-        let o = c.offset.max(0) as u64;
-        let s = c.uncompressed_size.max(0) as u64;
-        // The source must be inside the file being read from.
-        if r.checked_add(s).is_none_or(|end| end > usable_len) {
-            continue;
-        }
-        // Ascending: the region already written is `[0, o)`, so the source
-        // has to be at or after the destination. Descending: the region
-        // already written is `(o+s, size)`, so the source has to be at or
-        // before the destination.
-        live[i] = if ascending { r >= o } else { r <= o };
-    }
-    live
+    chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| survives_one(c, sources.get(i).copied().flatten(), usable_len, ascending))
+        .collect()
 }
 
 /// The reuse source of each chunk, taken from the local reuse map.
