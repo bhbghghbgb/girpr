@@ -35,7 +35,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 ### Phase 2 — behavior-adjacent
 
 - [x] A1 — one chunk-identity predicate, normalized MD5. (`28f5869`)
-- [ ] A2 — indexed per-file reuse entries.
+- [x] A2 — indexed per-file reuse entries. (`0fec9bc`)
 - [ ] B3 — shared scan-range construction; fix the in-place offset-0 sources.
 - [ ] D5 — deduplicate `verify_plan`'s branches.
 - [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder.
@@ -58,6 +58,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   `b03eb66`.
 - [ ] A1 — one chunk-identity predicate, normalized MD5 (`28f5869`; +1 unit
   test, 220).
+- [ ] A2 — indexed per-file reuse entries (`0fec9bc`).
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
