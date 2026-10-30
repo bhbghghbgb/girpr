@@ -47,7 +47,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ### Phase 3 — structural / broad API
 
-- [ ] H1 — split `repair::run` into plan/execute (mechanical move first).
+- [x] H1 — split `repair::run` into plan/execute (mechanical move first). (`d64df4f`)
 - [ ] G2 — `Md5` digest newtype across the gates (separate series).
 - [ ] H4 — `RunMode` enum (optional, after H1).
 
@@ -57,6 +57,12 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   unchanged; kept in `repair/mod.rs` (needs `RunCtx` + `note_stopped`), so
   `report` stays independent of `config`. No new test (existing conditional-key
   and ceiling tests pin it).
+
+- [ ] H1 — split `repair::run` into plan/execute (`d64df4f`). Mechanical move:
+  `plan_phase -> PlanOutcome (Ready(Box<PlanPhase>) | Finished(code)) ->
+  execute_phase`; `Summary` owned by `run` and lent to both halves; plan-only
+  state (estimates, `DiskPlan`, plan-phase root) stays in the plan half; execute
+  re-derives `game_dir`/root after `create_dir_all`. Baseline 229 + 149 holds.
 
 Phase 3 (H1, G2, H4) is not implemented yet.
 
