@@ -286,25 +286,13 @@ pub fn md5_file(path: &Path) -> Result<String> {
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
 ///
-/// Allocates its own read buffer; callers that hash several ranges of one
-/// file use [`md5_file_slice_with_buf`] to reuse one.
+/// Opens the file and hashes the range through the shared reader helper; the
+/// read buffer is internal. A caller that already holds the file and wants to
+/// reuse its buffer uses [`md5_reader_slice`] instead.
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
-    let mut buf = vec![0u8; MD5_BUF];
-    md5_file_slice_with_buf(path, offset, len, &mut buf)
-}
-
-/// MD5 of a byte slice range of a file [offset, offset+len), reusing `buf`.
-///
-/// `buf` is grown to at least [`MD5_BUF`] and is never shrunk, so one buffer
-/// serves every range of a file instead of one allocation per range.
-pub fn md5_file_slice_with_buf(
-    path: &Path,
-    offset: u64,
-    len: u64,
-    buf: &mut Vec<u8>,
-) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    md5_reader_slice(&mut f, offset, len, buf)
+    let mut buf = Vec::new();
+    md5_reader_slice(&mut f, offset, len, &mut buf)
 }
 
 /// MD5 of a byte slice range of a file the caller already has open, reusing

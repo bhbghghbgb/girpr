@@ -112,7 +112,7 @@ impl PlannedFile {
     /// chunk order [`build_plan`] produces — ascending by offset, with empty
     /// chunks dropped — and gives the same answer as `layout().tiled` for
     /// that order.
-    pub fn is_tiled(&self) -> bool {
+    pub(crate) fn is_tiled(&self) -> bool {
         let size = self.size.max(0) as u64;
         let mut cursor = 0u64;
         for c in &self.chunks {
