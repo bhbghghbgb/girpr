@@ -420,7 +420,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        let bad = phases::check::verify_plan(&game_dir, &plan, &summary, ctx.output, scan.as_ref());
+        // The execute-phase root was built after `create_dir_all` and the
+        // second canonicalize above, so it is the current form for these
+        // files; no per-file re-resolution is needed.
+        let bad = phases::check::verify_plan(
+            &game_dir,
+            root.as_ref(),
+            &plan,
+            &summary,
+            ctx.output,
+            scan.as_ref(),
+        );
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }

@@ -27,6 +27,7 @@ use crate::repair::scan::{ScanReport, Verdict};
 /// single read of the install.
 pub fn verify_plan(
     game_dir: &Path,
+    root: Option<&util::PathRoot>,
     plan: &RepairPlan,
     summary: &Summary,
     output: report::OutputFormat,
@@ -40,8 +41,12 @@ pub fn verify_plan(
         // Resolve once. A containment failure is a *diagnostic*: `build_plan`
         // already refused an escaping rel, so this is defence in depth, and it
         // must not be mislabelled as a size mismatch (which is what `.ok()`
-        // did here).
-        let path = util::contained_join(game_dir, &f.rel);
+        // did here). The run's cached root saves the per-file base resolution
+        // when it has one; `None` keeps the old `contained_join` fallback.
+        let path = root.map_or_else(
+            || util::contained_join(game_dir, &f.rel),
+            |root| root.join(&f.rel),
+        );
         let outcome = match scan.and_then(|s| s.files.get(&f.rel)) {
             Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
             None => check_one(f, &path, DigestSource::Read),
