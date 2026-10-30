@@ -284,10 +284,18 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     };
 
-    match util::md5_file_slice_with_buf(src, *ro as u64, c.uncompressed_size as u64, scratch) {
+    let mut sf = match File::open(src).with_context(|| format!("open {}", src.display())) {
+        Ok(sf) => sf,
+        Err(e) => {
+            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+            return Ok(ChunkOutcome::Download);
+        }
+    };
+    match util::md5_reader_slice(&mut sf, *ro as u64, c.uncompressed_size as u64, scratch) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            let mut sf = File::open(src)?;
+            // The same handle: seek back to the slice start and copy the
+            // bytes that were just verified, instead of opening `src` again.
             sf.seek(SeekFrom::Start(*ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
             let buf = scratch_slice(scratch, COPY_BUF);

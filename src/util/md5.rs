@@ -271,6 +271,16 @@ pub fn md5_file_slice_with_buf(
     buf: &mut Vec<u8>,
 ) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    md5_reader_slice(&mut f, offset, len, buf)
+}
+
+/// MD5 of a byte slice range of a file the caller already has open, reusing
+/// `buf`.
+///
+/// Seeks `f` to `offset` first and leaves it at the end of the range (or at
+/// end of file, for a short read), so a caller that wants to copy the same
+/// bytes afterwards seeks back once instead of opening the file again.
+pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) -> Result<String> {
     f.seek(SeekFrom::Start(offset))?;
     if buf.len() < MD5_BUF {
         buf.resize(MD5_BUF, 0);
