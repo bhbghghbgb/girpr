@@ -124,7 +124,7 @@ pub(super) fn without_verbatim(path: &Path) -> Cow<'_, Path> {
         return Cow::Borrowed(path);
     };
     if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-        Cow::Owned(PathBuf::from(format!(r"\{rest}")))
+        Cow::Owned(PathBuf::from(format!(r"\\{rest}")))
     } else if let Some(rest) = text.strip_prefix(r"\\?\") {
         Cow::Owned(PathBuf::from(rest))
     } else {

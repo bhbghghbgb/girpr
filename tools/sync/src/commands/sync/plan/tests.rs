@@ -1,4 +1,6 @@
 use super::super::rename::DiskSpelling;
+#[cfg(windows)]
+use super::link::without_verbatim;
 use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
@@ -436,6 +438,25 @@ fn a_relative_target_keeps_its_alias_spelling() {
         alias_target("a.bin", Path::new("../../x.bin")).as_deref(),
         None,
         "a target that escapes the root has no alias under it"
+    );
+}
+
+/// `canonicalize` returns a verbatim path while a junction's `read_link` keeps
+/// the spelling the junction was created with, so the two are compared without
+/// the prefix. Dropping it must still leave a path the other spelling matches:
+/// a UNC path needs **two** leading backslashes, not one.
+#[cfg(windows)]
+#[test]
+fn without_verbatim_rebuilds_the_prefix_the_path_needs() {
+    assert_eq!(
+        without_verbatim(Path::new(r"\\?\UNC\server\share\dir")).as_ref(),
+        Path::new(r"\\server\share\dir"),
+        "the UNC prefix is two backslashes, so the share stays a share"
+    );
+    assert_eq!(
+        without_verbatim(Path::new(r"\\?\C:\dir")).as_ref(),
+        Path::new(r"C:\dir"),
+        "a local drive path only drops the prefix"
     );
 }
 

@@ -23,7 +23,11 @@ mod safety;
 #[cfg(test)]
 mod tests;
 
-pub(super) use self::build::{CopyBecause, CopyItem, Plan, build_plan};
+pub(super) use self::build::{Plan, build_plan};
+// Nothing outside `plan` names these today, but they are part of the `plan::*`
+// surface this split preserves, so the re-export stays.
+#[allow(unused_imports)]
+pub(super) use self::build::{CopyBecause, CopyItem};
 pub(super) use self::records::{dry_run_records, summary_record};
 pub(super) use self::safety::{
     ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
