@@ -431,7 +431,12 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // default and never creates a `_tmp`.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L330-L331
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
-    let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
+    // Append the suffix to the path's `OsString` rather than its `display()`:
+    // `display()` is lossy, so a non-UTF-8 install path would name a different
+    // temp file than the one intended.
+    let mut tmp = final_path.as_os_str().to_owned();
+    tmp.push("_tmp");
+    let tmp_path = PathBuf::from(tmp);
 
     // The mode for this file. `--repair-mode temp` never uses the in-place
     // path; the rest decide from what the target is.
