@@ -296,15 +296,13 @@ pub fn build_plan(
             // A chunk with no content is a no-op at best and a hole in the
             // coverage at worst: it claims an offset and covers nothing.
             // Dropped defensively — a zero-size chunk is allowed, but the file
-            // can be repaired without it.
-            let empty = file
-                .chunks
-                .iter()
-                .filter(|c| c.uncompressed_size == 0)
-                .count();
+            // can be repaired without it. The drop and the count describe the
+            // same chunk list, so they are one pass.
+            let before = file.chunks.len();
+            file.chunks.retain(|c| c.uncompressed_size > 0);
+            let empty = before - file.chunks.len();
             if empty > 0 {
                 tracing::warn!(rel = %file.rel, empty, "dropped empty chunk(s) from the plan");
-                file.chunks.retain(|c| c.uncompressed_size > 0);
             }
             // The layout is checked **at plan time**, before anything is
             // written: a hole in the coverage is a thing the writer has to
