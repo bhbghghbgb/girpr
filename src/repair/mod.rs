@@ -476,6 +476,45 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         ctx.sleep.clone(),
     )
     .await;
+    if let Some(code) = apply_run_flags(&ctx, &mut summary) {
+        return Ok((summary, code));
+    }
+    if summary.files_failed.load(Ordering::Relaxed) > 0 {
+        return Ok((summary, 3));
+    }
+
+    // 7. post phase. `readonly` covers both `--dry-run` and `--check-only`
+    // (check-only already returned, but gating on `readonly` keeps the
+    // invariant obvious).
+    if !readonly {
+        let outcome =
+            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let code = finish(outcome, &mut summary);
+        return Ok((summary, code));
+    } else if ctx.dry_run
+        && ctx.purge_after
+        && !purge_logged
+        && let Some(pp) = purge_plan.as_ref()
+    {
+        // Dry-run logging only: list what the files-cleanup would delete (writes
+        // nothing; the byte count stays 0 by design). Skipped when the
+        // purge-before pass above already listed the same candidates, so
+        // `--purge-before --purge-after --dry-run` does not log each file twice.
+        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
+    }
+
+    Ok((summary, 0))
+}
+
+/// Fill in the conditional `SUMMARY` keys, then name any runtime hard stop.
+///
+/// Every key here is emitted **only when its flag was passed**: the
+/// `is_some` / `explicit` checks are the whole rule, kept in one function so
+/// it can be read against the rendering order in
+/// [`crate::report::summary::conditional_extras`]. Returns `Some(5)` when a
+/// runtime ceiling bound, after recording it in `stopped=`; the caller must
+/// return that code without running the post-phase.
+fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<i32> {
     // The byte figures, when their ceilings were asked for. The **settled**
     // one is what the repair achieved; the **spent** one is what it cost.
     // They are the same number in a clean run and differ exactly when the
@@ -517,42 +556,16 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // which ceiling it was without the reader having to know a mapping, and it
     // scales with the number of ceilings.
     let stopped = summary.stopped_by();
-    if let Some(flag) = stopped.flag() {
-        tracing::error!(
-            "stopped: {} is a hard stop, at {} bytes (the {} figure); \
-             *_tmp files left in place are resumed by the next run",
-            flag,
-            stopped.count(&summary),
-            stopped.figure()
-        );
-        note_stopped(&mut summary, flag);
-        return Ok((summary, 5));
-    }
-    if summary.files_failed.load(Ordering::Relaxed) > 0 {
-        return Ok((summary, 3));
-    }
-
-    // 7. post phase. `readonly` covers both `--dry-run` and `--check-only`
-    // (check-only already returned, but gating on `readonly` keeps the
-    // invariant obvious).
-    if !readonly {
-        let outcome =
-            phases::post::run(&ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
-        let code = finish(outcome, &mut summary);
-        return Ok((summary, code));
-    } else if ctx.dry_run
-        && ctx.purge_after
-        && !purge_logged
-        && let Some(pp) = purge_plan.as_ref()
-    {
-        // Dry-run logging only: list what the files-cleanup would delete (writes
-        // nothing; the byte count stays 0 by design). Skipped when the
-        // purge-before pass above already listed the same candidates, so
-        // `--purge-before --purge-after --dry-run` does not log each file twice.
-        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
-    }
-
-    Ok((summary, 0))
+    let flag = stopped.flag()?;
+    tracing::error!(
+        "stopped: {} is a hard stop, at {} bytes (the {} figure); \
+         *_tmp files left in place are resumed by the next run",
+        flag,
+        stopped.count(summary),
+        stopped.figure()
+    );
+    note_stopped(summary, flag);
+    Some(5)
 }
 
 /// Record which ceiling bound the run, keeping the first one that did.
