@@ -26,7 +26,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] C1 — per-file scratch buffers. (`0972167`)
 - [x] C2 — one source handle in `try_reuse_slice`. (`200c829`)
 - [x] B2 / C4 — borrowed chunks in `salvage_order`. (`58d9cf8`)
-- [ ] G1 — byte-digest compare in `RangeState::is_ok`.
+- [x] G1 — byte-digest compare in `RangeState::is_ok`. (`90746da`)
 - [ ] D3 — cheap tiling check in `build_plan`.
 - [ ] D4 — `Arc<str>` URL prefixes.
 - [ ] E1 — one `is_visible` per purge file.
@@ -57,6 +57,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [ ] C1 — per-file scratch buffers (`0972167`).
 - [ ] C2 — one source handle in `try_reuse_slice` (`200c829`).
 - [ ] B2 / C4 — borrowed chunks in `salvage_order` (`58d9cf8`; +1 unit test).
+- [ ] G1 — byte-digest compare in `RangeState::is_ok` (`90746da`).
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
