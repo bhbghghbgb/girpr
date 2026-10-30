@@ -297,6 +297,10 @@ enum StreamError {
 /// charged against: the bytes are spent whether the attempt succeeds or not,
 /// and a caller that refunded its whole reservation on failure would
 /// under-report a transport that delivered half a chunk and then dropped.
+///
+/// The digest is known when the stream ends, which is one byte too late to
+/// gate the write — the one thing the streaming path gives up. The file-level
+/// gate (the whole-file MD5) is what decides whether the file is good.
 #[allow(clippy::too_many_arguments)] // one parameter per input the fetch path needs
 pub async fn stream_chunk_to(
     client: &reqwest::Client,
@@ -627,9 +631,10 @@ mod tests {
         );
     }
 
-    /// A corrupt payload is detected by the digest: the streaming path hashes
-    /// what it wrote, so the comparison is the same one the buffered path made
-    /// — and it is the digest, not the length, that catches it.
+    /// A payload that decodes to the wrong bytes is caught by the digest: the
+    /// streaming path hashes what it wrote, so the comparison is the same one
+    /// the buffered path made — and it is the digest, not the length, that
+    /// catches it.
     #[tokio::test]
     async fn a_corrupt_payload_is_detected() {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
@@ -745,6 +750,63 @@ mod tests {
         sink.extend_from_slice(b"half a chunk");
         sink.restart().expect("restart");
         assert!(sink.is_empty(), "the failed attempt's bytes are gone");
+    }
+
+    /// The manifest's differential: the streamed decode of a manifest frame
+    /// yields the same bytes the buffered decode did, the same MD5 of the
+    /// **decompressed** bytes, and the same parsed message.
+    ///
+    /// The buffer is the size the API reported, and the decode fits in it —
+    /// which is the whole point of sizing it: a buffer that had to grow would
+    /// have doubled the peak.
+    #[tokio::test]
+    async fn the_streamed_manifest_parses_like_the_buffered_one() {
+        let manifest = SophonChunkManifest {
+            chuncks: vec![SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![SophonChunk {
+                    id: "abc".into(),
+                    uncompressed_md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
+                    offset: 0,
+                    compressed_size: 10,
+                    uncompressed_size: 20,
+                    unknown: 0,
+                    compressed_md5: "x".into(),
+                }],
+                is_folder: false,
+                size: 20,
+                md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
+            }],
+        };
+        let mut raw = Vec::new();
+        manifest.encode(&mut raw).expect("prost encode");
+        let compressed = frame(&raw);
+        // The buffer the API's `uncompressed_size` sizes.
+        let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
+        let body = futures::stream::iter(pieces(&compressed, 4096));
+        let digest = stream_body(body, None, None, &mut sink)
+            .await
+            .expect("the frame decodes");
+        assert_eq!(sink, raw, "the decoded bytes are the manifest");
+        assert_eq!(
+            sink,
+            zstd::decode_all(&compressed[..]).expect("buffered decode"),
+            "and they are the buffered decode's bytes"
+        );
+        assert_eq!(
+            digest.md5,
+            format!("{:x}", md5::compute(&raw)),
+            "the checksum is of the decompressed bytes"
+        );
+        assert_eq!(digest.bytes, raw.len() as u64);
+        assert_eq!(digest.compressed_bytes, compressed.len() as u64);
+        assert_eq!(
+            sink.capacity(),
+            raw.len(),
+            "the decode fitted the buffer the API's size asked for"
+        );
+        let parsed = SophonChunkManifest::decode(sink.as_slice()).expect("parse");
+        assert_eq!(parsed, manifest, "the same message as the buffered one");
     }
 
     /// The manifest's reported size is a **hint**, and a hint cannot ask for an

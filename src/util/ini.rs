@@ -803,7 +803,7 @@ mod tests {
              predownload=a,b,c\n\
              plugin_sdk_version=9.0\n\
              # hash comment\n\
-              \n\
+             \n\
              [Launcher]\n\
              log_level=3\n\
              ; inner comment\n\

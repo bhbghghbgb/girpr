@@ -219,6 +219,8 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// The spellings a hostile/corrupt server can send. Every one of them must
+    /// be refused; `a/b.dat` is the only legitimate shape.
     #[test]
     fn contained_rel_accepts_only_plain_relative_paths() {
         assert!(contained_rel("a/b.dat").is_ok());
@@ -408,6 +410,10 @@ mod tests {
         }
     }
 
+    /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.
+    /// The classifier is split out so an injected ACL-style error is pinned
+    /// without a permission fixture (S-3's shape), and a NUL path covers the
+    /// real syscall boundary on both platforms.
     #[test]
     fn file_len_separates_present_absent_and_unreadable() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_len", "states");

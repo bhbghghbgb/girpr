@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 use crate::report::emit::{progress_record, report_record, summary_record};
-use crate::report::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record, Val};
+use crate::report::record::{OutputFormat, Record};
 use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
 
 /// The two planes are two renderings of one field list. This is the
