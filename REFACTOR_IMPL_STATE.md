@@ -39,7 +39,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] B3 — shared scan-range construction; fix the in-place offset-0 sources. (`5e49a7b`)
 - [x] D5 — deduplicate `verify_plan`'s branches. (`1783069`)
 - [x] F1 / F2 — `Ceiling` newtype + `Extras` builder. (`70c13b3`)
-- [ ] G6 — single-pass `clean_rel`.
+- [x] G6 — single-pass `clean_rel`. (`80a2d5b`)
 - [ ] G5 — `PathRoot` cached base resolution.
 - [ ] C5 — `OsString` `_tmp` path.
 - [ ] C6 — bounded `JoinSet` in `repair_all`.
@@ -68,6 +68,9 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   reading an absent file.
 - [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder (`70c13b3`). `Ceiling` is
   `pub` (public field), otherwise as sketched; key order unchanged.
+- [ ] G6 — single-pass `clean_rel` (`80a2d5b`; +1 table-driven test, 223).
+  Validation order and error texts unchanged; device-name check is now
+  allocation-free and byte-based.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
