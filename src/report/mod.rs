@@ -21,7 +21,7 @@
 //!
 //! - [`record`] — `Record`, `Val`, `OutputFormat`, and the two renderings.
 //! - [`summary`] — `Summary`, `SummaryFlags`, and the conditional tail.
-//! - [`emit`] — `emit`, `progress_record`, `report_record`, `summary_record`.
+//! - [`mod@emit`] — `emit`, `progress_record`, `report_record`, `summary_record`.
 
 #[cfg(test)]
 mod tests;

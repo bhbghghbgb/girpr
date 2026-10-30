@@ -38,7 +38,7 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
 /// it); `Err` means it is there but could not be read **or** its text could
 /// not be parsed into any entry, which must not become an empty ignore set
 /// without a trace. One leading UTF-8 BOM is stripped; a mixed file warns per
-/// bad line and keeps the well-formed entries (see [`parse_config_list`]).
+/// bad line and keeps the well-formed entries (see `parse_config_list`).
 ///
 /// A line is an entry only when `is_delete` is `true`; an absent or `false`
 /// `is_delete` is the launcher's explicit no-op. A wrong-typed `is_delete`,

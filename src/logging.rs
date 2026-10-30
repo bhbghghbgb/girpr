@@ -20,7 +20,7 @@
 //!   executable. A **debug** build writes no file unless it is asked to, and
 //!   `--no-log-file` turns it off in any build.
 //! - Data-plane output (`REPORT` / `PROGRESS` / `SUMMARY`) stays on stdout via
-//!   [`crate::report::emit`]; the file layer is plain text, not JSON, because
+//!   [`mod@crate::report::emit`]; the file layer is plain text, not JSON, because
 //!   it is meant to be read with `grep 'path=<file>'`.
 //!
 //! A log file that cannot be opened degrades to a warning on stderr rather than
