@@ -28,7 +28,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] B2 / C4 — borrowed chunks in `salvage_order`. (`58d9cf8`)
 - [x] G1 — byte-digest compare in `RangeState::is_ok`. (`90746da`)
 - [x] D3 — cheap tiling check in `build_plan`. (`fe69394`)
-- [ ] D4 — `Arc<str>` URL prefixes.
+- [x] D4 — `Arc<str>` URL prefixes. (`6ee214b`)
 - [ ] E1 — one `is_visible` per purge file.
 - [ ] D2 — key the expected set directly in `plan_purge`.
 
@@ -59,6 +59,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [ ] B2 / C4 — borrowed chunks in `salvage_order` (`58d9cf8`; +1 unit test).
 - [ ] G1 — byte-digest compare in `RangeState::is_ok` (`90746da`).
 - [ ] D3 — cheap tiling check in `build_plan` (`fe69394`; +1 unit test).
+- [ ] D4 — `Arc<str>` URL prefixes (`6ee214b`).
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
