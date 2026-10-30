@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt::Write as FmtWrite;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -317,54 +318,59 @@ pub fn write_config_ini(
     };
 
     let path = game_dir.join("config.ini");
-    if path.exists() {
-        let text = std::fs::read_to_string(&path)?;
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
-                continue;
-            }
-            if line.starts_with('[') && line.ends_with(']') && line.len() >= 2 {
-                let inner = line[1..line.len() - 1].trim();
-                if inner.is_empty() {
-                    continue;
-                }
-                let lower = inner.to_ascii_lowercase();
-                match find_section(&sections, &lower) {
-                    Some(i) => current = Some(i),
-                    None => {
-                        sections.push(Section {
-                            name: inner.to_string(),
-                            lower,
-                            keys: Vec::new(),
-                        });
-                        current = Some(sections.len() - 1);
-                    }
-                }
-                continue;
-            }
-            let Some(eq) = line.find('=') else {
-                continue;
-            };
-            if eq < 1 {
-                continue;
-            }
-            let key = line[..eq].trim_end();
-            if key.is_empty() {
-                continue;
-            }
-            // Collapse: value is trimmed, surrounding `"` stripped.
-            let value = line[eq + 1..].trim().trim_matches('"');
-            let target = match current {
-                Some(i) => i,
-                None => {
-                    let g = ensure_general(&mut sections);
-                    current = Some(g);
-                    g
-                }
-            };
-            sections[target].insert(key, value);
+    // One read: `exists()` then `read_to_string` would stat twice and leave a
+    // TOCTOU window. Absent is the documented fresh-install input; any other
+    // read error is refused rather than silently treated as an empty config.
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
         }
+        if line.starts_with('[') && line.ends_with(']') && line.len() >= 2 {
+            let inner = line[1..line.len() - 1].trim();
+            if inner.is_empty() {
+                continue;
+            }
+            let lower = inner.to_ascii_lowercase();
+            match find_section(&sections, &lower) {
+                Some(i) => current = Some(i),
+                None => {
+                    sections.push(Section {
+                        name: inner.to_string(),
+                        lower,
+                        keys: Vec::new(),
+                    });
+                    current = Some(sections.len() - 1);
+                }
+            }
+            continue;
+        }
+        let Some(eq) = line.find('=') else {
+            continue;
+        };
+        if eq < 1 {
+            continue;
+        }
+        let key = line[..eq].trim_end();
+        if key.is_empty() {
+            continue;
+        }
+        // Collapse: value is trimmed, surrounding `"` stripped.
+        let value = line[eq + 1..].trim().trim_matches('"');
+        let target = match current {
+            Some(i) => i,
+            None => {
+                let g = ensure_general(&mut sections);
+                current = Some(g);
+                g
+            }
+        };
+        sections[target].insert(key, value);
     }
 
     let g = ensure_general(&mut sections);
@@ -387,10 +393,12 @@ pub fn write_config_ini(
     for s in &mut sections {
         s.keys.sort_by(|a, b| a.1.cmp(&b.1));
     }
+    // Writing to a `String` is infallible, so the `fmt::Result` is ignored;
+    // the blank line after each section is still pushed by hand.
     for s in &sections {
-        out.push_str(&format!("[{}]\n", s.name));
+        let _ = writeln!(out, "[{}]", s.name);
         for (k, _, v) in &s.keys {
-            out.push_str(&format!("{k}={v}\n"));
+            let _ = writeln!(out, "{k}={v}");
         }
         out.push('\n');
     }
