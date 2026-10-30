@@ -29,7 +29,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] G1 — byte-digest compare in `RangeState::is_ok`. (`90746da`)
 - [x] D3 — cheap tiling check in `build_plan`. (`fe69394`)
 - [x] D4 — `Arc<str>` URL prefixes. (`6ee214b`)
-- [ ] E1 — one `is_visible` per purge file.
+- [x] E1 — one `is_visible` per purge file. (`c4da9d3`)
 - [ ] D2 — key the expected set directly in `plan_purge`.
 
 ### Phase 2 — behavior-adjacent
@@ -60,6 +60,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [ ] G1 — byte-digest compare in `RangeState::is_ok` (`90746da`).
 - [ ] D3 — cheap tiling check in `build_plan` (`fe69394`; +1 unit test).
 - [ ] D4 — `Arc<str>` URL prefixes (`6ee214b`).
+- [ ] E1 — one `is_visible` per purge file (`c4da9d3`).
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
