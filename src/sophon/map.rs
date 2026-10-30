@@ -1,4 +1,4 @@
-//! Build local-chunk reuse map: path -> list of (uncompressed_md5, uncompressed_size, offset).
+//! Build local-chunk reuse map: path -> list of [`ReuseEntry`].
 //!
 //! The key is the **cleaned** rel — the same string `build_plan` stores in
 //! `PlannedFile::rel` — because every consumer (`est_download_bytes_by_file`,
@@ -13,14 +13,41 @@
 //! run, because this map only ever saves downloads.
 use std::collections::HashMap;
 
-use crate::sophon::proto::WantedManifest;
+use crate::sophon::proto::{SophonChunk, WantedManifest};
 use crate::util;
 
-/// Build local-chunk reuse map: path -> list of (uncompressed_md5, uncompressed_size, offset).
-pub fn build_local_chunk_map(
-    manifests: &[WantedManifest],
-) -> HashMap<String, Vec<(String, i64, i64)>> {
-    let mut map: HashMap<String, Vec<(String, i64, i64)>> = HashMap::new();
+/// One reuse candidate: a slice of the local file that may hold a chunk's
+/// bytes, so it can be copied instead of downloaded.
+///
+/// The identity consumers ask about is `(md5, size)`; `offset` is where the
+/// bytes live. The MD5 is normalized to lowercase once, here at the map's
+/// boundary (see [`build_local_chunk_map`]), while [`ReuseEntry::matches`]
+/// still compares case-insensitively so an entry built elsewhere is not
+/// spelling-sensitive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReuseEntry {
+    /// The chunk's uncompressed MD5, lowercase.
+    pub md5: String,
+    /// The chunk's uncompressed size.
+    pub size: i64,
+    /// Where the chunk's bytes live in the local file.
+    pub offset: i64,
+}
+
+impl ReuseEntry {
+    /// Does this entry hold `c`'s bytes?
+    ///
+    /// This is the one chunk-identity predicate: the map's dedup, the plan
+    /// estimate, the in-place source lookup and the temp path's reuse lookup
+    /// all use it, so "the same chunk" cannot mean different things there.
+    pub fn matches(&self, c: &SophonChunk) -> bool {
+        self.size == c.uncompressed_size && self.md5.eq_ignore_ascii_case(&c.uncompressed_md5)
+    }
+}
+
+/// Build local-chunk reuse map: path -> list of reuse entries.
+pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Vec<ReuseEntry>> {
+    let mut map: HashMap<String, Vec<ReuseEntry>> = HashMap::new();
     for m in manifests {
         for f in &m.files {
             if f.is_folder {
@@ -39,12 +66,14 @@ pub fn build_local_chunk_map(
             };
             let e = map.entry(key).or_default();
             for c in &f.chunks {
-                // keep first occurrence per md5 (duplicates exist)
-                if !e
-                    .iter()
-                    .any(|(md5, sz, _)| md5 == &c.uncompressed_md5 && *sz == c.uncompressed_size)
-                {
-                    e.push((c.uncompressed_md5.clone(), c.uncompressed_size, c.offset));
+                // Keep first occurrence per chunk: the MD5 is normalized here,
+                // so two spellings of the same digest cannot both survive.
+                if !e.iter().any(|entry| entry.matches(c)) {
+                    e.push(ReuseEntry {
+                        md5: c.uncompressed_md5.to_ascii_lowercase(),
+                        size: c.uncompressed_size,
+                        offset: c.offset,
+                    });
                 }
             }
         }
@@ -113,14 +142,47 @@ mod tests {
         assert_eq!(e.len(), 2);
         assert_eq!(
             e[0],
-            ("d41d8cd98f00b204e9800998ecf8427e".to_string(), 20, 0)
+            ReuseEntry {
+                md5: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+                size: 20,
+                offset: 0,
+            }
         );
         assert_eq!(
             e[1],
-            ("0cc175b9c0f1b6a831c399e269772661".to_string(), 20, 20)
+            ReuseEntry {
+                md5: "0cc175b9c0f1b6a831c399e269772661".to_string(),
+                size: 20,
+                offset: 20,
+            }
         );
         // folders never enter the reuse map
         assert!(!map.contains_key("dir/"));
+    }
+
+    /// The map's dedup and the consumers' lookup share one predicate, so a
+    /// later spelling of the same digest must not survive beside the first:
+    /// the MD5 is normalized (lowercased) at this boundary, once.
+    #[test]
+    fn local_chunk_map_collapses_case_variants_and_keeps_the_first() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![
+                    chunk("c1", "D41D8CD98F00B204E9800998ECF8427E", 0, 20),
+                    // the same chunk spelled in lowercase: dropped, first wins
+                    chunk("c1dup", "d41d8cd98f00b204e9800998ecf8427e", 999, 20),
+                ],
+                is_folder: false,
+                size: 40,
+                md5: "m1".into(),
+            }],
+        }];
+        let entries = &build_local_chunk_map(&wm)["a/b.dat"];
+        assert_eq!(entries.len(), 1, "case variants name the same chunk");
+        assert_eq!(entries[0].md5, "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(entries[0].offset, 0, "the first entry is kept");
     }
 
     /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),

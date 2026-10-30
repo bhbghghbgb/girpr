@@ -14,7 +14,7 @@ use super::{
     reserve_write, scratch_slice,
 };
 use crate::repair::scope::ledger::StoppedBy;
-use crate::sophon::{self, SophonChunk};
+use crate::sophon::{self, ReuseEntry, SophonChunk};
 use crate::util;
 
 /// The temp path: the original size + MD5 check, then the attempt.
@@ -240,7 +240,7 @@ fn try_reuse_slice(
     ctx: &FileCtx,
     src: &std::path::Path,
     c: &SophonChunk,
-    reuse_entries: Option<&Vec<(String, i64, i64)>>,
+    reuse_entries: Option<&Vec<ReuseEntry>>,
     out: &mut File,
     scratch: &mut Vec<u8>,
     tmp_path: &std::path::Path,
@@ -274,15 +274,12 @@ fn try_reuse_slice(
     }
     out.seek(SeekFrom::Start(c.offset as u64))?;
 
-    let candidate = reuse_entries.and_then(|entries| {
-        entries.iter().find(|(md5, sz, _)| {
-            md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
-        })
-    });
-    let Some((_, _, ro)) = candidate else {
+    let candidate = reuse_entries.and_then(|entries| entries.iter().find(|entry| entry.matches(c)));
+    let Some(entry) = candidate else {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download");
         return Ok(ChunkOutcome::Download);
     };
+    let ro = entry.offset;
 
     let mut sf = match File::open(src).with_context(|| format!("open {}", src.display())) {
         Ok(sf) => sf,
@@ -291,12 +288,12 @@ fn try_reuse_slice(
             return Ok(ChunkOutcome::Download);
         }
     };
-    match util::md5_reader_slice(&mut sf, *ro as u64, c.uncompressed_size as u64, scratch) {
+    match util::md5_reader_slice(&mut sf, ro as u64, c.uncompressed_size as u64, scratch) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
             // The same handle: seek back to the slice start and copy the
             // bytes that were just verified, instead of opening `src` again.
-            sf.seek(SeekFrom::Start(*ro as u64))?;
+            sf.seek(SeekFrom::Start(ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
             let buf = scratch_slice(scratch, COPY_BUF);
             while remaining > 0 {

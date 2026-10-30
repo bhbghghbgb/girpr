@@ -55,7 +55,7 @@
 //! this one pure function precisely so that it can be swapped without
 //! touching the writer.
 
-use crate::sophon::SophonChunk;
+use crate::sophon::{ReuseEntry, SophonChunk};
 
 /// The reuse source of each chunk, in the same order as the chunks: the
 /// offset in the same file the chunk's bytes could be copied from, or `None`
@@ -172,22 +172,20 @@ fn survives<'a>(
 
 /// The reuse source of each chunk, taken from the local reuse map.
 ///
-/// The map is `path -> [(uncompressed_md5, uncompressed_size, offset)]`, and
-/// the **first** entry matching a chunk's `(md5, size)` is its source — the
-/// same choice the temp path's reuse lookup makes, so the two cannot
-/// disagree about where a chunk's bytes are.
+/// The map is `path -> [ReuseEntry]`, and the **first** entry matching a
+/// chunk's `(md5, size)` is its source — the same choice the temp path's
+/// reuse lookup makes, so the two cannot disagree about where a chunk's
+/// bytes are.
 ///
 /// A chunk with no matching entry has no source: it has to be downloaded.
-pub fn sources_for(chunks: &[SophonChunk], entries: &[(String, i64, i64)]) -> Sources {
+pub fn sources_for(chunks: &[SophonChunk], entries: &[ReuseEntry]) -> Sources {
     chunks
         .iter()
         .map(|c| {
             entries
                 .iter()
-                .find(|(md5, sz, _)| {
-                    md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
-                })
-                .map(|(_, _, off)| (*off).max(0) as u64)
+                .find(|entry| entry.matches(c))
+                .map(|entry| entry.offset.max(0) as u64)
         })
         .collect()
 }
@@ -335,8 +333,16 @@ mod tests {
     fn sources_for_takes_the_first_entry_matching_the_chunk() {
         let chunks = vec![chunk("a", 0, 4)];
         let entries = vec![
-            ("md5-a".to_string(), 4i64, 12i64),
-            ("md5-a".to_string(), 4i64, 99i64),
+            ReuseEntry {
+                md5: "md5-a".to_string(),
+                size: 4,
+                offset: 12,
+            },
+            ReuseEntry {
+                md5: "md5-a".to_string(),
+                size: 4,
+                offset: 99,
+            },
         ];
         let sources = sources_for(&chunks, &entries);
         assert_eq!(sources, vec![Some(12)]);
@@ -345,10 +351,18 @@ mod tests {
     #[test]
     fn sources_for_matches_the_md5_case_insensitively_and_the_size_exactly() {
         let chunks = vec![chunk("a", 0, 4)];
-        let entries = vec![("MD5-A".to_string(), 4i64, 12i64)];
+        let entries = vec![ReuseEntry {
+            md5: "MD5-A".to_string(),
+            size: 4,
+            offset: 12,
+        }];
         assert_eq!(sources_for(&chunks, &entries), vec![Some(12)]);
         // The same md5 at a different size is a different chunk.
-        let entries = vec![("MD5-A".to_string(), 5i64, 12i64)];
+        let entries = vec![ReuseEntry {
+            md5: "MD5-A".to_string(),
+            size: 5,
+            offset: 12,
+        }];
         assert_eq!(sources_for(&chunks, &entries), vec![None]);
     }
 

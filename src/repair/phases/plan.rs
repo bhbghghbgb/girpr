@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::sophon::{SophonChunk, SophonChunkFile};
+use crate::sophon::{ReuseEntry, SophonChunk, SophonChunkFile};
 
 use super::manifest::LocalChunkMap;
 use crate::repair::scope::PathScope;
@@ -205,13 +205,11 @@ impl RepairPlan {
 /// and the capture's `totals.download_bytes` are the same figure. With no local
 /// map (a fresh install) it degenerates to "every chunk downloads", which is
 /// the honest worst case.
-pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<(String, i64, i64)>>) -> u64 {
+pub fn est_file_download_bytes(file: &PlannedFile, reuse: Option<&Vec<ReuseEntry>>) -> u64 {
     file.chunks
         .iter()
         .filter(|c| match reuse {
-            Some(entries) => !entries.iter().any(|(md5, sz, _)| {
-                md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
-            }),
+            Some(entries) => !entries.iter().any(|entry| entry.matches(c)),
             None => true,
         })
         // Server-controlled sizes can overflow a `u64` (three chunks at

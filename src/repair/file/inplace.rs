@@ -16,7 +16,7 @@ use super::{
 };
 use crate::config::RepairMode;
 use crate::repair::reuse;
-use crate::sophon::SophonChunk;
+use crate::sophon::{ReuseEntry, SophonChunk};
 use crate::util;
 use anyhow::{Context, Result};
 
@@ -74,7 +74,7 @@ async fn attempt_inplace_inner(
     writes: &mut FileWrites,
 ) -> Result<Inplace> {
     // The reuse candidates: where each chunk's bytes could be copied from.
-    let entries: &[(String, i64, i64)] = match ctx.local_map.get(&file.rel) {
+    let entries: &[ReuseEntry] = match ctx.local_map.get(&file.rel) {
         Some(v) => v.as_slice(),
         None => &[],
     };
