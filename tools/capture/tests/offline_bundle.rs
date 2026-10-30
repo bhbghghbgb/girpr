@@ -283,6 +283,26 @@ impl Bundle {
         // always find a way to be easier.
         write_json(&root.join("api/error_shapes.json"), &error_shapes());
 
+        // `api/error_responses.json`, also required in version 3. This fixture
+        // captures successfully, so the honest document is an empty one: no
+        // non-2xx body was retained, and the document says so rather than being
+        // absent and leaving a reader unable to tell "none" from "not recorded".
+        write_json(&root.join("api/error_responses.json"), &error_responses());
+
+        // `diagnostics/rejections.json`, required in version 3. A successful
+        // fixture refuses nothing, so the honest document is the empty one.
+        write_json(
+            &root.join("diagnostics/rejections.json"),
+            &gircap::rejections::Rejections::new().document(),
+        );
+
+        // `diagnostics/path_map.json`, required in version 3. This fixture has
+        // no device-name path, so the honest mapping is empty.
+        write_json(
+            &root.join("diagnostics/path_map.json"),
+            &gircap::pathmap::PathMap::new().document(),
+        );
+
         // `MANIFEST.json`, with one row per required class.
         let manifest = manifest();
         write_json(&root.join("MANIFEST.json"), &manifest);
@@ -353,6 +373,7 @@ fn manifest() -> Manifest {
             captured_at: "2026-10-14T00:00:00Z".into(),
             host_os: "test".into(),
             tool_argv: vec!["gircap".into()],
+            tool_argv_raw: vec![b"gircap".to_vec()],
             complete: true,
         },
         biz: gircap::emit::index::Biz_ {
@@ -373,6 +394,7 @@ fn manifest() -> Manifest {
         field: "game".into(),
         audio: Vec::new(),
         gzip_threshold: 1_048_576,
+        max_decompressed_bytes: gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         selection_pool: gircap::emit::index::SelectionPool {
             fields: vec!["game".into()],
             manifest_entries: BTreeMap::from([("game".to_string(), 2744)]),
@@ -419,6 +441,16 @@ fn build(tag: &str, id: &str) -> gircap::emit::index::Build {
 /// because the requirement under test is "the document is there and readable",
 /// not "the numbers are right". The numbers are `capture_layout`'s job, against
 /// a real probe.
+/// The empty error-response index for a fixture whose capture saw no non-2xx.
+fn error_responses() -> gircap::http::ErrorResponses {
+    gircap::http::ErrorResponses {
+        schema_version: gircap::SCHEMA_VERSION,
+        budget_bytes: gircap::http::ERROR_BODY_BUDGET_BYTES,
+        total_retained_bytes: 0,
+        responses: Vec::new(),
+    }
+}
+
 fn error_shapes() -> gircap::http::probe::ErrorShapes {
     use gircap::http::probe::ErrorShape;
     gircap::http::probe::ErrorShapes {
@@ -494,6 +526,39 @@ fn verify_passes_a_good_bundle() {
     assert_eq!(by["A16"], 1);
     assert_eq!(by["A17"], 1);
     assert!(!r.findings.is_empty() || r.findings.is_empty());
+}
+
+/// **O2.** `verify` is the command for a bundle someone else produced, so an
+/// incomplete matrix must be a red A17 rather than a clean pass. The document is
+/// mutated after `Bundle::open` so the test exercises the re-derivation path
+/// without also making A16 report the edited file; the point is that A17 sees
+/// the claim, not that the checksum catches the edit.
+#[test]
+fn verify_surfaces_an_incomplete_matrix_as_a_failed_a17() {
+    let b = Bundle::build("a17-incomplete");
+    let mut bundle = gircap::verify::Bundle::open(&b.root).expect("the bundle opens");
+    bundle.manifest.matrix.retain(|r| r.class != "added");
+    // The fixture records only A6; a real capture also records A17 as holding,
+    // which is the recording `verify` must contradict once the matrix is short.
+    bundle.recorded.assertions.push(Assertion::pass(
+        "A17",
+        "every required class is present",
+        "MANIFEST.json matrix",
+        "6 classes",
+    ));
+    let r = gircap::verify::reverify(bundle);
+    assert_eq!(r.result(), "fail");
+    let a17 = r
+        .rows
+        .iter()
+        .find(|x| x.id == "A17")
+        .expect("A17 is re-derived");
+    assert!(!a17.ok, "A17 must fail: {:?}", a17);
+    assert!(a17.actual.contains("added"), "{}", a17.actual);
+    assert!(
+        !r.agrees,
+        "the capture recorded A17 as holding; re-derivation must disagree"
+    );
 }
 
 /// After corrupting one byte of one chunk blob, `verify` reports `3` and
@@ -595,6 +660,153 @@ fn materialize_defaults_beside_the_bundle() {
     );
 }
 
+/// A crafted index whose `stored_path` leaves the root is refused when the
+/// bundle is opened, not measured as an A6 fact.
+///
+/// Without the check in `Bundle::open`, `check_blobs` joins the field and
+/// publishes the length, md5 and sha-256 of any file the operator can read. The
+/// assertion is on the open, because that is the boundary an operator reaches
+/// before a byte is read.
+#[test]
+fn a_bundle_whose_stored_path_leaves_the_root_is_refused() {
+    let b = Bundle::build("escaping-stored-path");
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    index.blobs[0].props.stored_path = Some("../../../outside.zst".into());
+    write_json(&index_path, &index);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("stored_path"), "{e}");
+    assert!(e.contains("outside.zst"), "{e}");
+
+    // And the command refuses at exit `1`, rather than reporting a measured
+    // escape as an assertion failure.
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("stored_path"), "{failure}");
+}
+
+/// **K1.** A crafted index whose offset cannot be added to its blob's size is
+/// refused when the bundle is opened, before any command reaches the layout
+/// arithmetic that would have aborted on it in debug.
+#[test]
+fn a_bundle_whose_index_offset_overflows_is_refused() {
+    let b = Bundle::build("overflowing-index-offset");
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    let blob = &mut index.blobs[0];
+    let id = blob.props.chunk_id.clone();
+    blob.referenced_by[0].offset = i64::MAX;
+    write_json(&index_path, &index);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains(&id), "names the blob: {e}");
+    assert!(
+        e.contains(&i64::MAX.to_string()) && e.contains("overflows i64"),
+        "names the value and the arithmetic: {e}"
+    );
+
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("overflows i64"), "{failure}");
+}
+
+/// `materialize` on a crafted patchmap path writes nothing outside `--out`.
+///
+/// The index's `referenced_by[].path` is moved with the patchmap so the blob
+/// closure still resolves; otherwise the rebuild would fail for an unrelated
+/// reason and the destination join would never run. The `out` tree is nested so
+/// `../../../escaped.dll` lands in the scratch root the test owns rather than in
+/// the machine's temp directory.
+#[test]
+fn materialize_refuses_a_patchmap_path_that_leaves_the_output() {
+    let b = Bundle::build("escaping-patchmap");
+    let escape = "../../../escaped.dll";
+
+    let index_path = b.root.join("chunks/index.json");
+    let mut index: ChunkIndex = read_json(&index_path);
+    for blob in &mut index.blobs {
+        for reference in &mut blob.referenced_by {
+            reference.path = escape.into();
+        }
+    }
+    write_json(&index_path, &index);
+
+    let map_path = b.root.join(format!("patchmaps/{CAPTURE}.json"));
+    let mut map: PatchMap = read_json(&map_path);
+    map.path = escape.into();
+    write_json(&map_path, &map);
+
+    let out = b.scratch.join("nested/out");
+    let plan = gircap::config::MaterializePlan {
+        artifact: b.root.clone(),
+        out: Some(out.clone()),
+    };
+    let failure =
+        block_on(gircap::run::materialize(plan)).expect_err("materialize refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("path"), "{failure}");
+
+    let escaped = b.scratch.join("escaped.dll");
+    assert!(
+        !escaped.exists(),
+        "the rebuild escaped --out: {}",
+        escaped.display()
+    );
+}
+
+/// `MANIFEST.json`'s `capture.id` names the default output when the artifact is
+/// a filesystem root, so it is a file-name component and not free text.
+#[test]
+fn a_bundle_whose_capture_id_is_not_one_file_name_component_is_refused() {
+    let b = Bundle::build("escaping-capture-id");
+    let manifest_path = b.root.join("MANIFEST.json");
+    let mut manifest: Manifest = read_json(&manifest_path);
+    manifest.capture.id = "../../escape".into();
+    write_json(&manifest_path, &manifest);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("capture.id"), "{e}");
+    assert!(e.contains("escape"), "{e}");
+}
+
+/// Two `patchmaps/*.json` that declare one `capture_id` are refused, not
+/// silently collapsed.
+///
+/// The map is keyed by the id the document declares, so the second `insert` used
+/// to replace the first: `verify` rebuilt one capture, never examined the other
+/// capture's blobs, and exited `0` on a bundle that had already lost a capture.
+/// The filenames are deliberately different, because the identity is the field.
+#[test]
+fn two_patchmaps_declaring_one_capture_id_are_refused() {
+    let b = Bundle::build("duplicate-patchmap-id");
+    let original = b.root.join(format!("patchmaps/{CAPTURE}.json"));
+    let map: PatchMap = read_json(&original);
+    write_json(&b.root.join("patchmaps/added+1.json"), &map);
+
+    let e = gircap::verify::Bundle::open(&b.root).unwrap_err();
+    assert!(e.contains("two patchmaps"), "{e}");
+    assert!(e.contains("declare capture_id"), "{e}");
+    assert!(e.contains(CAPTURE), "the repeated id is named: {e}");
+    assert!(
+        e.contains(&format!("{CAPTURE}.json")) && e.contains("added+1.json"),
+        "both files are named, so a reader can find them: {e}"
+    );
+
+    let plan = gircap::config::VerifyPlan {
+        artifact: b.root.clone(),
+    };
+    let failure = block_on(gircap::run::verify(plan)).expect_err("verify refuses the bundle");
+    assert_eq!(failure.code, gircap::exit::ExitCode::Usage);
+    assert!(failure.detail.contains("two patchmaps"), "{failure}");
+}
+
 /// `list` finds a bundle by walking, not by knowing the layout.
 ///
 /// The walk is rooted at **the tree the test owns** — `<scratch>/artifacts` —
@@ -624,6 +836,40 @@ fn list_finds_a_bundle_from_the_root() {
     assert!(hit.complete);
     // The sibling goes with the guard, not by hand: a directory removed by hand
     // is a directory left behind when the test panics before the removal.
+}
+
+/// The published order is the relative path, **not** depth.
+///
+/// "Deepest first" is not the order: the walk is depth-first but both lists
+/// are re-sorted by the relative-path string, so a shallower bundle whose
+/// leading component sorts earlier comes first. This pins the order the
+/// summary's `first` and `last` report.
+#[test]
+fn list_orders_bundles_by_relative_path_not_by_depth() {
+    let shallow = Bundle::build("order-shallow");
+    let deep = Bundle::build("order-deep");
+    // `z_region/hk4e_global/...` sorts after the shallow bundle's
+    // `hk4e_global/...` even though it is one directory deeper.
+    let pair = shallow
+        .artifacts
+        .join("z_region")
+        .join(BIZ)
+        .join(format!("{OLD_TAG}__{NEW_TAG}"));
+    std::fs::create_dir_all(&pair).unwrap();
+    std::fs::rename(&deep.root, pair.join("20261014T000000Z")).unwrap();
+
+    let found = gircap::verify::list(&shallow.artifacts).expect("lists");
+    assert_eq!(found.bundles.len(), 2, "{found:#?}");
+    assert_eq!(
+        found.bundles[0].path,
+        format!("{BIZ}/{OLD_TAG}__{NEW_TAG}/20261014T000000Z"),
+        "the shallower bundle sorts first because `hk4e_global` < `z_region`"
+    );
+    assert_eq!(
+        found.bundles[1].path,
+        format!("z_region/{BIZ}/{OLD_TAG}__{NEW_TAG}/20261014T000000Z"),
+        "the deeper bundle is last: depth is not an ordering key"
+    );
 }
 
 /// A directory that *looks* like a bundle - it has a `MANIFEST.json` - but is
@@ -679,6 +925,11 @@ fn reading_and_writing_a_document_back_is_byte_identical() {
     // have been a compile error rather than a discovery. The round-trip is what
     // says the two halves still agree on the wire format.
     round_trip::<gircap::http::probe::ErrorShapes>(&b.root.join("api/error_shapes.json"));
+    round_trip::<gircap::http::ErrorResponses>(&b.root.join("api/error_responses.json"));
+    round_trip::<gircap::rejections::RejectionsDocument>(
+        &b.root.join("diagnostics/rejections.json"),
+    );
+    round_trip::<gircap::pathmap::PathMapDocument>(&b.root.join("diagnostics/path_map.json"));
     round_trip::<PatchMap>(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
 }
 
@@ -730,7 +981,11 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
     let direct = materialize::rebuild(
         &materialize::ChunksByFile::build(&index),
-        &gircap::assemble::ChunkSource::from_index(&b.root, &index),
+        &gircap::assemble::ChunkSource::from_index(
+            &b.root,
+            &index,
+            gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        ),
         OLD_TAG,
         CAPTURE,
         DLL,

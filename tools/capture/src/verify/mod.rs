@@ -112,6 +112,19 @@ pub struct Bundle {
     /// serve. Required: a bundle without it cannot answer a question every
     /// consumer of the bundle eventually has to ask.
     pub error_shapes: ErrorShapes,
+    /// `api/error_responses.json` - the incidental non-2xx bodies the run saw,
+    /// with the bytes that were retained in `api/error_bodies/`. Required for the
+    /// same reason as `error_shapes.json`: a bundle that recorded only successes
+    /// has lost what the origin said when it refused.
+    pub error_responses: crate::http::ErrorResponses,
+    /// `diagnostics/rejections.json` — every value a shape rule refused, with
+    /// its source and rule. Required: a bundle that recorded only what it wrote
+    /// has lost the API's own attempts to name things it would not hold.
+    pub rejections: crate::rejections::RejectionsDocument,
+    /// `diagnostics/path_map.json` — every logical path written under an
+    /// escaped on-disk name, such as a Windows device component. Required: a
+    /// reader that materializes `game/`/`expected/` must follow it.
+    pub path_map: crate::pathmap::PathMapDocument,
 }
 
 impl Bundle {
@@ -171,10 +184,28 @@ impl Bundle {
         }
         let manifest: Manifest = read_json(&manifest_path)?;
         let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
+        // Arithmetic on the index's offsets and sizes is checked before any
+        // command assembles a byte: a crafted `offset` must not reach
+        // `Layout::of` as a panic. See `ChunkIndex::validate_arithmetic`.
+        index.validate_arithmetic()?;
         let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
         let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
         let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
+        let error_responses: crate::http::ErrorResponses =
+            read_json(&root.join("api/error_responses.json"))?;
+        let rejections: crate::rejections::RejectionsDocument =
+            read_json(&root.join("diagnostics/rejections.json"))?;
+        let path_map: crate::pathmap::PathMapDocument =
+            read_json(&root.join(crate::pathmap::DOCUMENT))?;
         let patchmaps = read_patchmaps(root)?;
+        // **The shape of every document-supplied path is checked at the door.**
+        // `verify` is the command an operator runs on a bundle they may not have
+        // produced, and every join below this point is `root.join(document
+        // field)`. Checking at the individual joins caught only the sinks that
+        // happened to remember; a field read by A6, by A18 or by `materialize`
+        // through the patchmap was still a way out. One pass here names the file
+        // and the field before any command reads a byte.
+        validate_document_paths(&manifest, &index, &patchmaps, &error_responses, &path_map)?;
         Ok(Bundle {
             root: root.to_path_buf(),
             manifest,
@@ -183,6 +214,9 @@ impl Bundle {
             checksums,
             recorded,
             error_shapes,
+            error_responses,
+            rejections,
+            path_map,
         })
     }
 
@@ -211,7 +245,15 @@ impl Bundle {
 ///
 /// Keyed by `capture_id` rather than by filename: the filename is a convenience
 /// and the field is the identity, so trusting it would let a renamed file
-/// masquerade as a second capture.
+/// masquerade as a second capture. The filename is therefore **not** required to
+/// equal the id, but two documents may not claim the same id: that is one capture
+/// with two irreconcilable descriptions, and `BTreeMap::insert` would drop the
+/// second silently, so this is an explicit error.
+///
+/// A directory entry that cannot be read, and two documents declaring one id, are
+/// both errors naming the file(s). `verify` is the last place a bundle can be
+/// told it is structurally wrong; a capture that vanished between two patchmaps
+/// is exactly the defect it must not step over.
 ///
 /// **A missing directory is an empty set, not an error.** `MANIFEST.json` is what
 /// makes a directory a bundle; `patchmaps/` is where its captures live, and a
@@ -233,17 +275,122 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
             return Err(format!("cannot read {}: {e}", dir.display()));
         }
     };
-    let mut paths: Vec<PathBuf> = rd
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "json"))
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            paths.push(path);
+        }
+    }
     paths.sort();
     let mut out = BTreeMap::new();
+    let mut from: BTreeMap<String, PathBuf> = BTreeMap::new();
     for p in paths {
         let map: PatchMap = read_json(&p)?;
-        out.insert(map.capture_id.clone(), map);
+        let id = map.capture_id.clone();
+        if let Some(first) = from.get(&id) {
+            return Err(format!(
+                "two patchmaps declare capture_id {id:?}: {} and {}",
+                first.display(),
+                p.display()
+            ));
+        }
+        from.insert(id.clone(), p);
+        out.insert(id, map);
     }
     Ok(out)
+}
+
+/// Refuse a bundle whose own documents name a path that leaves it.
+///
+/// Three fields become filesystem joins inside the offline commands:
+///
+/// - `chunks/index.json`'s `stored_path` is read by A6 and by every chunk
+///   decode;
+/// - `chunks/index.json`'s `references[].path` and `patchmaps/*.json`'s `path`
+///   key the rebuild, and `materialize` turns the rebuilt path back into
+///   `--out/<tree>/<path>`;
+/// - `MANIFEST.json`'s `capture.id` names the default `materialize` output when
+///   the artifact itself is a filesystem root.
+///
+/// A bundle is a document someone may have edited, so this is the read-side
+/// twin of the check `manifest::capture` applies before writing a path under
+/// `--out`. The rule is the shared one in [`crate::paths`]: no `\`, absolute
+/// path, drive prefix, `..`, empty component or Windows alias can name a file
+/// inside the bundle.
+///
+/// **Refused, not repaired.** A field that fails the rule is an error naming the
+/// document, the field and the value; silently skipping it would let a tampered
+/// bundle verify clean while omitting the one blob or capture that made it
+/// interesting.
+fn validate_document_paths(
+    manifest: &Manifest,
+    index: &ChunkIndex,
+    patchmaps: &BTreeMap<String, PatchMap>,
+    error_responses: &crate::http::ErrorResponses,
+    path_map: &crate::pathmap::PathMapDocument,
+) -> Result<(), String> {
+    if let Some(problem) = crate::paths::field_component_problem(&manifest.capture.id) {
+        return Err(format!("MANIFEST.json capture.id {problem}"));
+    }
+    for blob in &index.blobs {
+        if let Some(rel) = blob.props.stored_path.as_deref()
+            && let Some(problem) = crate::paths::relative_path_problem(rel)
+        {
+            return Err(format!(
+                "chunks/index.json blob {} stored_path {problem}",
+                blob.props.chunk_id
+            ));
+        }
+        for reference in &blob.referenced_by {
+            // A reference is a **logical** path: the game's spelling, which may
+            // name a device component. The on-disk twin is the escaped
+            // `stored_path`, checked above.
+            if let Some(problem) = crate::paths::logical_path_problem(&reference.path) {
+                return Err(format!(
+                    "chunks/index.json blob {} referenced_by path {problem}",
+                    blob.props.chunk_id
+                ));
+            }
+        }
+    }
+    for map in patchmaps.values() {
+        if let Some(problem) = crate::paths::logical_path_problem(&map.path) {
+            return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
+        }
+    }
+    for row in &error_responses.responses {
+        if let Some(rel) = row.stored_path.as_deref()
+            && let Some(problem) = crate::paths::relative_path_problem(rel)
+        {
+            return Err(format!(
+                "api/error_responses.json seq {} stored_path {problem}",
+                row.seq
+            ));
+        }
+    }
+    // The mapping document is the reader's authority for escaped names, so it
+    // must itself be safe and agree with the rule the writer used. A logical
+    // path may name a device; the on-disk path may not, and must be exactly the
+    // escape of the logical one — a map that redirected a read elsewhere would
+    // be a way past every join above.
+    for entry in &path_map.entries {
+        if let Some(problem) = crate::paths::logical_path_problem(&entry.logical) {
+            return Err(format!("diagnostics/path_map.json logical path {problem}"));
+        }
+        if let Some(problem) = crate::paths::relative_path_problem(&entry.on_disk) {
+            return Err(format!("diagnostics/path_map.json on_disk path {problem}"));
+        }
+        let expected = crate::paths::escape_path(&entry.logical);
+        if entry.on_disk != expected {
+            return Err(format!(
+                "diagnostics/path_map.json maps {:?} to {:?}, but the rule gives {:?}",
+                entry.logical, entry.on_disk, expected
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Read one JSON document, naming the file and the reason on failure.
@@ -256,7 +403,24 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The schema version a bundle declares, read on its own.
+/// What a directory's `MANIFEST.json` says about whether it is a bundle.
+///
+/// Three outcomes, kept apart because conflating them loses a bundle:
+/// **absence** and **a document that is not a bundle** are both "step over",
+/// but a manifest the process **cannot read** is an entry the walk could not
+/// see, and [`list`] must fail rather than answer with a shorter inventory.
+#[derive(Debug)]
+enum ManifestProbe {
+    /// No `MANIFEST.json` here: not a bundle.
+    Missing,
+    /// A manifest exists but declares no schema version this build can read:
+    /// not a bundle.
+    NotABundle(String),
+    /// A readable manifest declaring this schema version.
+    Version(u32),
+}
+
+/// Probe a `MANIFEST.json`, distinguishing absence from a read failure.
 ///
 /// **Nothing but the version.** The document is read as a JSON value rather
 /// than as a [`Manifest`], because a bundle written by an older schema does
@@ -265,21 +429,61 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
 /// cause. The version is the diagnosis.
 ///
 /// A document with no readable version is **not a bundle** — a half-written
-/// capture, or a directory that only looks like one — and says so.
-fn schema_version_of(path: &Path) -> Result<u32, String> {
-    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let value: serde_json::Value =
-        serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    value
+/// capture, or a directory that only looks like one — and says so. A document
+/// that could not be read at all is not the same fact: it is returned as
+/// `Err` naming the path and the I/O error, because a bundle may be behind it.
+///
+/// The reader is a parameter so [`list_with`] can inject a failing one; the
+/// only other caller passes [`std::fs::read`].
+fn probe_manifest(
+    path: &Path,
+    read: impl FnOnce(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<ManifestProbe, String> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => {}
+        // A `MANIFEST.json` that is not a file is not a manifest: the directory
+        // is not a bundle, and the walk keeps descending.
+        Ok(_) => return Ok(ManifestProbe::Missing),
+        // Nothing there means no bundle. Anything else is a directory the walk
+        // could not see, which is not the same as an empty one.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ManifestProbe::Missing),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    }
+    let raw = read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let value: serde_json::Value = match serde_json::from_slice(&raw) {
+        Ok(value) => value,
+        Err(e) => {
+            return Ok(ManifestProbe::NotABundle(format!(
+                "{}: {e}",
+                path.display()
+            )));
+        }
+    };
+    match value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
-        .map(|v| v as u32)
-        .ok_or_else(|| {
-            format!(
-                "{}: no schema_version; this is not a bundle gircap wrote",
-                path.display()
-            )
-        })
+    {
+        Some(v) => Ok(ManifestProbe::Version(v as u32)),
+        None => Ok(ManifestProbe::NotABundle(format!(
+            "{}: no schema_version; this is not a bundle gircap wrote",
+            path.display()
+        ))),
+    }
+}
+
+/// The schema version a bundle declares, read on its own.
+///
+/// The single-caller wrapper around [`probe_manifest`] for [`Bundle::open`],
+/// which wants a version or a reason and has no "step over" arm.
+fn schema_version_of(path: &Path) -> Result<u32, String> {
+    match probe_manifest(path, |p| std::fs::read(p))? {
+        ManifestProbe::Version(v) => Ok(v),
+        ManifestProbe::Missing => Err(format!(
+            "{}: not found; a bundle root holds a MANIFEST.json",
+            path.display()
+        )),
+        ManifestProbe::NotABundle(why) => Err(why),
+    }
 }
 
 /// What re-verification found.
@@ -408,13 +612,22 @@ pub fn reverify(bundle: Bundle) -> Report {
     });
 
     // 2. A6, one row per stored blob.
-    rows.extend(check_blobs(&root, &bundle.index));
+    rows.extend(check_blobs(
+        &root,
+        &bundle.index,
+        bundle.manifest.max_decompressed_bytes,
+    ));
 
     // 3. The closure check. A bundle whose blobs cannot rebuild both files is not
     // closed, and that is the single most important thing this command reports -
     // so it short-circuits: every row after this point would be about bytes that
     // do not exist.
-    let rebuilt = match materialize::rebuild_all(&root, &bundle.index, &bundle.patchmaps) {
+    let rebuilt = match materialize::rebuild_all(
+        &root,
+        &bundle.index,
+        &bundle.patchmaps,
+        bundle.manifest.max_decompressed_bytes,
+    ) {
         Ok(p) => p,
         Err(e) => {
             tracing::error!(subject = "closure", error = %e, "the retained blobs cannot rebuild the bundle");
@@ -525,20 +738,54 @@ const A18_ID: &str = "A18";
 /// A blob the index lists with no path is red, not skipped. `--no-chunk-blobs`
 /// produces exactly those, and `verify` reporting them as failures is what tells
 /// an operator that the bundle they are holding cannot be materialized.
-fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
+fn check_blobs(root: &Path, index: &ChunkIndex, ceiling: u64) -> Vec<Assertion> {
     let mut rows = Vec::new();
     for b in &index.blobs {
         let id = b.props.chunk_id.as_str();
         let Some(rel) = b.props.stored_path.as_deref() else {
+            let why = match b.props.why_unusable() {
+                Some(reason) => {
+                    format!("no path: the index lists it but nothing was stored ({reason})")
+                }
+                None => "no path: the index lists it but nothing was stored".into(),
+            };
             rows.push(Assertion::fail(
                 "A6",
                 crate::emit::selfcheck::wording("A6"),
                 id,
                 "a stored blob at a path",
-                "no path: the index lists it but nothing was stored",
+                &why,
             ));
             continue;
         };
+        // Defence in depth: `Bundle::open` refuses this shape before a reader
+        // gets here, but A6 is also callable through `reverify` on an index a
+        // caller built itself. The join must never be the first check.
+        if let Some(problem) = crate::paths::relative_path_problem(rel) {
+            rows.push(Assertion::fail(
+                "A6",
+                crate::emit::selfcheck::wording("A6"),
+                rel,
+                "a stored blob at a path inside the bundle",
+                &format!("unsafe path: {problem}"),
+            ));
+            continue;
+        }
+        // **Bytes at a path are not a usable blob.** Version 3 keeps a partial
+        // fetch and a blob whose measurement did not return, both with
+        // `stored_path` set. A6 is about a chunk that can be assembled from, so
+        // it asks the same predicate assembly does rather than only whether the
+        // file exists.
+        if let Some(why) = b.props.why_unusable() {
+            rows.push(Assertion::fail(
+                "A6",
+                crate::emit::selfcheck::wording("A6"),
+                rel,
+                "a complete, measured blob with a valid fetch",
+                &why,
+            ));
+            continue;
+        }
         let path = root.join(rel);
         match std::fs::read(&path) {
             Err(e) => rows.push(Assertion::fail(
@@ -553,7 +800,7 @@ fn check_blobs(root: &Path, index: &ChunkIndex) -> Vec<Assertion> {
                 crate::emit::selfcheck::wording("A6"),
                 rel,
                 &describe_indexed(&b.props),
-                &describe_bytes(&raw),
+                &describe_bytes(&raw, ceiling),
             )),
         }
     }
@@ -580,7 +827,7 @@ fn describe_indexed(p: &crate::blobs::props::BlobProps) -> String {
 /// Not-a-frame is its own sentence rather than a digest mismatch: a truncated
 /// transfer and wrong content are different faults, and a reader sent to the
 /// wrong one loses an afternoon.
-fn describe_bytes(raw: &[u8]) -> String {
+fn describe_bytes(raw: &[u8], ceiling: u64) -> String {
     if !hash::is_zstd(raw) {
         return format!("{} B, not a zstd frame", raw.len());
     }
@@ -588,7 +835,7 @@ fn describe_bytes(raw: &[u8]) -> String {
     // than materialised — `describe_bytes` exists to *describe*, so a multi-megabyte
     // decoded buffer it then throws away was the wrong shape entirely.
     let compressed = hash::md5_sha256(raw);
-    match hash::zstd_measure(raw, "stored blob") {
+    match hash::zstd_measure(raw, "stored blob", ceiling) {
         Ok(m) => format!(
             "{} B md5 {} sha256 {} -> {} B md5 {}",
             compressed.bytes, compressed.md5, compressed.sha256, m.len, m.md5
@@ -615,6 +862,21 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
             continue;
         };
         let rel = format!("{tree}/{}", r.path);
+        // Same defence as A6: the patchmap path was checked when the bundle was
+        // opened, and this is the join that would read it. A device component is
+        // legal in this *logical* path and was written under an escaped name, so
+        // the read follows the same escape the capture used.
+        if let Some(problem) = crate::paths::logical_path_problem(&rel) {
+            rows.push(Assertion::fail(
+                A18_ID,
+                A18,
+                &rel,
+                "a path inside the bundle",
+                &format!("unsafe path: {problem}"),
+            ));
+            continue;
+        }
+        let on_disk = crate::paths::escape_path(&rel);
 
         // A11: `rebuild` refuses to place a byte into a layout that violates it,
         // so a rebuilt side reaching here has already passed. The row says so
@@ -647,7 +909,7 @@ fn check_pair(root: &Path, pair: &materialize::Pair, map: &PatchMap) -> Vec<Asse
         }
 
         // A18: the rebuilt bytes against what the bundle shipped.
-        match std::fs::read(root.join(&rel)) {
+        match std::fs::read(root.join(&on_disk)) {
             Ok(shipped) => match materialize::compare(&rel, &r.bytes, &shipped) {
                 Ok(()) => rows.push(Assertion::pass(
                     A18_ID,
@@ -733,7 +995,45 @@ fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
         .iter()
         .filter(|e| e.decision == crate::assemble::Decision::Reuse)
         .collect();
-    let bytes: i64 = fetch.iter().map(|e| e.compressed_size).sum();
+    // **The cost is a sum over untrusted documents.** A plain `.sum::<i64>()`
+    // aborted on two `i64::MAX` entries in debug and wrapped to a negative
+    // number in release — which a negative `expectations.download_bytes` then
+    // matched, turning "costs -2 bytes" into a pass. One unrepresentable cost is
+    // enough: the remaining arithmetic would only be arithmetic on a number that
+    // is not a byte count.
+    let mut bytes: i64 = 0;
+    for e in &fetch {
+        if e.compressed_size < 0 {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{subject} (download_bytes)"),
+                "every FETCH compressed_size to be a non-negative byte count",
+                &format!(
+                    "chunk {} declares compressed_size {}",
+                    e.chunk_id, e.compressed_size
+                ),
+            ));
+            return rows;
+        }
+        match bytes.checked_add(e.compressed_size) {
+            Some(next) => bytes = next,
+            None => {
+                rows.push(Assertion::fail(
+                    A20_ID,
+                    A20,
+                    &format!("{subject} (download_bytes)"),
+                    "the FETCH compressed sizes to fit i64",
+                    &format!(
+                        "the sum overflows i64 at chunk {} (compressed_size {}, running \
+                         total {bytes} B)",
+                        e.chunk_id, e.compressed_size
+                    ),
+                ));
+                return rows;
+            }
+        }
+    }
     let moved = plan
         .iter()
         .filter(|e| {
@@ -844,9 +1144,8 @@ fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
 ///
 /// One direction only, and the direction that matters: a row the capture
 /// recorded as *holding* that no longer holds is a bundle that has changed since
-/// it was written. The other direction - a row that used to fail and now holds -
-/// is an improvement, and is reported through the row counts rather than as a
-/// disagreement.
+/// it was written. A row that previously failed and now holds is an improvement,
+/// and is reported through the row counts rather than as a disagreement.
 fn check_agreement(b: &Bundle, rows: &[Assertion]) -> bool {
     let recomputed = |id: &str| rows.iter().filter(|r| r.id == id).all(|r| r.ok);
     let mut ok = true;
@@ -914,12 +1213,16 @@ pub struct Unreadable {
     pub reason: String,
 }
 
-/// Every bundle under `root`, deepest first.
+/// Every bundle under `root`, sorted by relative path.
 ///
 /// Recursive rather than a fixed depth, because the layout is
 /// `<biz>/<old>__<new>/<capture_id>/` today and a root that points at
 /// `artifacts/hk4e_global` and one that points at `artifacts/` should both work
-/// without the caller knowing which.
+/// without the caller knowing which. The order is **not** deepest first: the
+/// walk is depth-first, but both lists are re-sorted by relative-path string
+/// before they are returned, so a mixed-depth root is ordered by name at the
+/// top level first. The spec does not promise an order; this one is stable and
+/// decides the summary's `first` and `last`.
 ///
 /// **A bundle that fails to open is not an error, and it is not dropped.**
 /// `list` is an index, and a half-written capture next to a good one is
@@ -928,7 +1231,33 @@ pub struct Unreadable {
 /// build refuses — an older schema, which is a permanent condition with a
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
 /// operator's inventory is complete.
+///
+/// **A walk that cannot read a directory or a manifest is an error, not a
+/// shorter inventory.** The `unreadable` list can name a bundle that does not
+/// open, but it cannot name what it never saw: an entry error, an ACL-denied
+/// directory, or a `MANIFEST.json` that cannot be read would be dropped, so
+/// `list` returned a confident, incomplete answer with exit `0`. An audit
+/// command fails fast instead and names the directory, entry or manifest it
+/// could not read.
 pub fn list(root: &Path) -> Result<Index, String> {
+    list_with(
+        root,
+        |d| {
+            let rd = std::fs::read_dir(d)?;
+            Ok(rd.map(|e| e.map(|e| e.path())).collect())
+        },
+        |p| std::fs::read(p),
+    )
+}
+
+/// [`list`] with the directory and manifest readers injected, so a test can
+/// make one read fail and see that the walk stops rather than shortening the
+/// inventory.
+fn list_with(
+    root: &Path,
+    mut read: impl FnMut(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+    mut read_manifest: impl FnMut(&Path) -> std::io::Result<Vec<u8>>,
+) -> Result<Index, String> {
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
@@ -936,13 +1265,15 @@ pub fn list(root: &Path) -> Result<Index, String> {
     let mut unreadable = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        if dir.join("MANIFEST.json").is_file() {
+        let manifest = dir.join("MANIFEST.json");
+        let probe = probe_manifest(&manifest, &mut read_manifest)?;
+        if !matches!(probe, ManifestProbe::Missing) {
             match Bundle::open(&dir) {
                 Ok(b) => found.push(listed_of(root, &b)),
                 Err(e) => {
                     // A directory that is not a bundle at all is stepped over;
                     // one that is a bundle this build refuses is named.
-                    if schema_version_of(&dir.join("MANIFEST.json")).is_ok() {
+                    if matches!(probe, ManifestProbe::Version(_)) {
                         unreadable.push(Unreadable {
                             path: crate::emit::index::rel(root, &dir),
                             reason: e.clone(),
@@ -958,16 +1289,9 @@ pub fn list(root: &Path) -> Result<Index, String> {
             // A bundle does not contain another bundle.
             continue;
         }
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut subs: Vec<PathBuf> = rd
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        // Sorted so the walk is the same on every filesystem.
-        subs.sort();
-        // Reversed, because the stack pops from the back.
+        // Sorted so the walk is the same on every filesystem; reversed because
+        // the stack pops from the back.
+        let subs = child_dirs(&dir, |d| read(d))?;
         stack.extend(subs.into_iter().rev());
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
@@ -976,6 +1300,34 @@ pub fn list(root: &Path) -> Result<Index, String> {
         bundles: found,
         unreadable,
     })
+}
+
+/// The child directories of `dir`, sorted, or the first reason the walk could
+/// not see all of them.
+///
+/// The reader is injected so the entry-error arm can be exercised without
+/// platform-specific permissions: a test hands over a synthetic `Err` for one
+/// entry, which is otherwise only reachable when a share disconnects between
+/// `read_dir` and the stat. `metadata` follows symlinks, as the `is_dir` it
+/// replaces did, and an entry that cannot be stat'ed is an error rather than a
+/// file: losing it would be the same silent omission this walk is fixing.
+fn child_dirs(
+    dir: &Path,
+    read: impl FnOnce(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
+) -> Result<Vec<PathBuf>, String> {
+    let entries = read(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let mut subs = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(|e| format!("cannot read an entry of {}: {e}", dir.display()))?;
+        let is_dir = std::fs::metadata(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?
+            .is_dir();
+        if is_dir {
+            subs.push(path);
+        }
+    }
+    subs.sort();
+    Ok(subs)
 }
 
 /// One `Listed` row from an opened bundle.
@@ -1095,6 +1447,132 @@ mod tests {
         );
     }
 
+    /// A directory the walk cannot read is **named**, not skipped.
+    ///
+    /// `list` is the operator's inventory; dropping a subtree makes a confident
+    /// answer that is short. The reader is real here — a file passed where a
+    /// directory is expected is the cheapest read failure a test can make.
+    #[test]
+    fn a_walk_that_cannot_read_a_directory_names_it() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-unreadable", "unreadable");
+        let file = d.join("not_a_directory");
+        std::fs::write(&file, b"x").expect("writes a file");
+
+        let e = child_dirs(&file, |p| {
+            let rd = std::fs::read_dir(p)?;
+            Ok(rd.map(|e| e.map(|e| e.path())).collect())
+        })
+        .expect_err("a file cannot be read as a directory");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("not_a_directory"), "the path is named: {e}");
+    }
+
+    /// And the walk propagates it: `list` fails rather than returning the
+    /// directories it managed to see before the unreadable one.
+    #[test]
+    fn a_list_walk_that_cannot_read_a_directory_fails_instead_of_answering() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-fails", "walk_fails");
+        let e = list_with(
+            &d,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "share offline",
+                ))
+            },
+            |p| std::fs::read(p),
+        )
+        .expect_err("the walk did not finish");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(
+            e.contains(&d.display().to_string()),
+            "the root is named: {e}"
+        );
+    }
+
+    /// A manifest the walk cannot **read** is a bundle it could not see, not a
+    /// directory that is not a bundle.
+    ///
+    /// A backup tool, an indexer or an editor can hold `MANIFEST.json` with an
+    /// exclusive share. The file is still there and still a file, so the old
+    /// `is_file()` probe passed and the failed read in `schema_version_of` was
+    /// flattened to "not a bundle": the bundle vanished from the inventory and
+    /// `list` exited `0`. The reader is injected because a share lock is
+    /// platform-specific; the failure it simulates is the same `fs::read` arm
+    /// the real lock takes.
+    #[test]
+    fn a_list_walk_that_cannot_read_a_manifest_fails_instead_of_dropping_the_bundle() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-manifest", "manifest_read");
+        let bundle = d.join("hk4e_global").join("7.0.0__7.1.0").join("cap");
+        std::fs::create_dir_all(&bundle).expect("makes the bundle directory");
+        std::fs::write(bundle.join("MANIFEST.json"), br#"{"schema_version": 2}"#)
+            .expect("writes a real manifest");
+
+        let e = list_with(
+            &d,
+            |p| {
+                let rd = std::fs::read_dir(p)?;
+                Ok(rd.map(|e| e.map(|e| e.path())).collect())
+            },
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "held by another process",
+                ))
+            },
+        )
+        .expect_err("a manifest that cannot be read is not a shorter inventory");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("MANIFEST.json"), "the manifest is named: {e}");
+        assert!(
+            e.contains("held by another process"),
+            "the cause is kept: {e}"
+        );
+    }
+
+    /// A stat failure that is not `NotFound` is a manifest the walk could not
+    /// see, not an absent one.
+    ///
+    /// The old `is_file()` probe turned any stat failure into `false` and the
+    /// directory was treated as "not a bundle at all" before any read happened.
+    /// A path holding a NUL cannot be stat'ed for a reason other than absence
+    /// on either host; the walk itself only reaches this arm when a share or an
+    /// ACL denies the stat, which a unit test cannot set up portably.
+    #[test]
+    fn a_manifest_that_cannot_be_stat_ed_fails_the_probe() {
+        let bad = Path::new("bad\0name").join("MANIFEST.json");
+        let e = probe_manifest(&bad, |_| {
+            panic!("the read is not reached when the stat fails")
+        })
+        .expect_err("a stat failure is not an absent manifest");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("MANIFEST.json"), "the manifest is named: {e}");
+    }
+
+    /// One failed entry is the whole walk's failure: a child that vanished
+    /// between `read_dir` and the stat may be a bundle, so it cannot be dropped.
+    #[test]
+    fn a_walk_that_loses_one_entry_names_the_directory() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-entry", "entry_error");
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let e = child_dirs(&d, move |_| Ok(vec![Err(denied)]))
+            .expect_err("an entry error is not a shorter listing");
+        assert!(e.contains("cannot read an entry"), "{e}");
+        assert!(e.contains("denied"), "the cause is kept: {e}");
+    }
+
+    /// An entry whose metadata cannot be read is an error too; `is_dir`'s
+    /// `false` on a failed stat is the same silent omission one level down.
+    #[test]
+    fn a_walk_that_cannot_stat_one_entry_names_it() {
+        let d = girpr_tempdir::TempDir::new("gircap-list-stat", "stat_error");
+        let vanished = d.join("vanished");
+        let e = child_dirs(&d, move |_| Ok(vec![Ok(vanished)]))
+            .expect_err("a missing entry is not a file");
+        assert!(e.contains("cannot read"), "{e}");
+        assert!(e.contains("vanished"), "the path is named: {e}");
+    }
+
     /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"
     /// would be claiming an assertion this command never looked at.
     #[test]
@@ -1141,6 +1619,82 @@ mod tests {
         assert!(!A20.is_empty());
     }
 
+    /// A patchmap whose plan is exactly these FETCH costs, with totals and
+    /// expectations carrying an honest (or deliberately wrong) sum.
+    fn arithmetic_map(costs: &[i64]) -> crate::assemble::PatchMap {
+        use crate::assemble::ranges::Range;
+        use crate::assemble::{Decision, Expectations, PatchMap, PlanEntry, Totals};
+        let plan: Vec<PlanEntry> = costs
+            .iter()
+            .enumerate()
+            .map(|(i, &cost)| PlanEntry {
+                i,
+                decision: Decision::Fetch,
+                target_range: Range::at(i as i64, 1),
+                source_range: None,
+                chunk_id: format!("chunk-{i}"),
+                url: None,
+                compressed_size: cost,
+                uncompressed_size: 1,
+                uncompressed_md5: "00".repeat(16),
+                note: None,
+            })
+            .collect();
+        let download_bytes = costs.iter().fold(0_i64, |t, c| t.saturating_add(*c));
+        PatchMap {
+            schema_version: crate::SCHEMA_VERSION,
+            capture_id: "a20".into(),
+            path: "dll".into(),
+            matching_field: "game".into(),
+            classes: Vec::new(),
+            old: None,
+            new: None,
+            totals: Some(Totals {
+                chunks: plan.len(),
+                reuse: 0,
+                fetch: plan.len(),
+                moved: 0,
+                download_bytes,
+                materialize_old_bytes: 0,
+                materialize_new_bytes: 0,
+            }),
+            plan: Some(plan),
+            expectations: Expectations {
+                result_path: None,
+                result_md5: None,
+                absent_after: false,
+                download_bytes,
+                must_not_fetch: Vec::new(),
+            },
+        }
+    }
+
+    /// **K1.** A negative `compressed_size` is not a small download: A20 must
+    /// fail with the chunk and value rather than let a negative expectation
+    /// agree with a negative sum.
+    #[test]
+    fn a_negative_fetch_cost_fails_a20_with_the_chunk_and_value() {
+        let rows = check_patchmap_arithmetic(&arithmetic_map(&[-1]));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok);
+        assert!(rows[0].actual.contains("chunk-0"), "{}", rows[0].actual);
+        assert!(rows[0].actual.contains("-1"), "{}", rows[0].actual);
+    }
+
+    /// **K1.** Two `i64::MAX` costs do not fit; A20 names the term and the
+    /// running total instead of aborting in debug or wrapping in release.
+    #[test]
+    fn an_overflowing_fetch_cost_fails_a20_instead_of_aborting() {
+        let rows = check_patchmap_arithmetic(&arithmetic_map(&[i64::MAX, i64::MAX]));
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(!rows[0].ok);
+        assert!(
+            rows[0].actual.contains("chunk-1") && rows[0].actual.contains("overflows i64"),
+            "{}",
+            rows[0].actual
+        );
+    }
+
     /// The set is deliberately smaller than the seventeen.
     #[test]
     fn assertions_needing_the_api_are_not_claimed_as_re_derived() {
@@ -1154,7 +1708,14 @@ mod tests {
     #[test]
     fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
         let index = ChunkIndex::build(vec![]);
-        assert!(check_blobs(Path::new("."), &index).is_empty());
+        assert!(
+            check_blobs(
+                Path::new("."),
+                &index,
+                crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+            )
+            .is_empty()
+        );
         let props =
             crate::blobs::props::BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
                 id: "aa00_".to_string() + &"0".repeat(32),
@@ -1174,7 +1735,11 @@ mod tests {
             },
             Vec::new(),
         )]);
-        let rows = check_blobs(Path::new("."), &index);
+        let rows = check_blobs(
+            Path::new("."),
+            &index,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        );
         assert_eq!(rows.len(), 1);
         assert!(
             !rows[0].ok,
@@ -1214,7 +1779,7 @@ mod tests {
             Vec::new(),
         )]);
         assert!(
-            check_blobs(&d, &index)[0].ok,
+            check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0].ok,
             "the good bundle's row is green"
         );
 
@@ -1223,7 +1788,7 @@ mod tests {
         let last = bad.len() - 1;
         bad[last] ^= 0xFF;
         std::fs::write(d.join("chunks/ab/cd"), &bad).unwrap();
-        let row = &check_blobs(&d, &index)[0];
+        let row = &check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0];
         assert!(!row.ok, "one altered byte turns the row red");
         assert_eq!(row.subject, "chunks/ab/cd", "and names the blob");
         assert!(row.id == "A6", "and the assertion: {}", row.id);

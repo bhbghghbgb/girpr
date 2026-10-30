@@ -119,12 +119,11 @@ pub struct Closed {
 /// disk. A third pass would find nothing new, which is the proof it converged —
 /// and `two_passes_converge` is that proof, as a test.
 ///
-/// The second pass is **unconditional.** It used to be guarded by
-/// `if !selfcheck.by_id().contains_key("A16")`, which could never be false:
-/// `selfcheck` is built from `rows`, and A16 is pushed *inside* the guard. A
-/// conditional that always fires is worse than none — it reads as "this might
-/// converge in one pass", and the comment above the pair is what actually
-/// guarantees it.
+/// The second pass is **unconditional.** A guard such as
+/// `if !selfcheck.by_id().contains_key("A16")` could never be false:
+/// `selfcheck` is built from `rows`, and A16 is pushed inside it. A conditional
+/// that always fires is worse than none — it reads as "this might converge in
+/// one pass", and the comment above the pair is what actually guarantees it.
 pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     let mut written = std::mem::take(&mut i.written);
     // A13-A15: about the tree that just exists. A16 and A17 are added below,
@@ -147,11 +146,10 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     }
     super::selfcheck::report_failed(&i.rows);
 
-    // The close-out's **one** full-tree digest pass. It used to be a fourth
-    // one, in a private function that also re-implemented `Checksums::scan`'s
-    // walk and inlined its `encoding_of` — so a third encoding would have
-    // taught `MANIFEST.json` the wrong one while `checksums.json` learned the
-    // right one.
+    // The close-out's **one** full-tree digest pass. A second, independent walk
+    // that re-implemented `Checksums::scan`'s walk and inlined its `encoding_of`
+    // would teach `MANIFEST.json` one encoding while `checksums.json` learned
+    // another.
     //
     // It runs *before* `build_manifest` rather than after. Nothing between here
     // and the call writes to the tree, so the pass sees the same bytes it
@@ -195,10 +193,9 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         })
         .collect();
 
-    // Counted here because the vector is **moved** below. It used to be
-    // `rows.clone()`, so that one integer on the summary could read `rows.len()`
-    // afterwards — a deep copy of every assertion id, subject, expected and
-    // actual string, for one `usize`.
+    // Counted here because the vector is **moved** below. A `rows.clone()` for
+    // one `usize` would be a deep copy of every assertion id, subject, expected
+    // and actual string.
     let assembly_rows = i.rows.len() as u64;
 
     let mut selfcheck = Selfcheck::build(i.rows, matrix_rows, &skipped);
@@ -338,6 +335,7 @@ mod tests {
             audio: &[],
             fields: &fixture.fields,
             gzip_threshold: 1024,
+            max_decompressed_bytes: crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
             diffs: &[],
             selection: &fixture.selection,
             index: &fixture.index,
@@ -360,7 +358,7 @@ mod tests {
         selection: crate::select::Selection,
         index: crate::blobs::ChunkIndex,
         fields: Vec<String>,
-        argv: Vec<String>,
+        argv: crate::cli::RecordedArgv,
     }
 
     fn fixture() -> Fixture {
@@ -392,7 +390,25 @@ mod tests {
                 admitted: Vec::new(),
                 rejected: Vec::new(),
                 forced_skipped: Vec::new(),
-                matrix: Vec::new(),
+                forced_unscored: Vec::new(),
+                // Every real capture writes one row per required class, so the
+                // fixture must too: A17 is about the matrix being *complete*,
+                // and an empty matrix is a bundle that has not said what
+                // happened to any class. The statuses are irrelevant to the
+                // close-out tests, which are about write order; `unavailable`
+                // is the honest one for a fixture that captured nothing.
+                matrix: crate::select::Class::ALL
+                    .iter()
+                    .map(|class| crate::select::MatrixRow {
+                        class: *class,
+                        status: crate::select::MatrixStatus::Unavailable,
+                        capture_id: None,
+                        covered_by: None,
+                        path: None,
+                        reason: Some("fixture: no captures".to_string()),
+                        candidates_considered: 0,
+                    })
+                    .collect(),
                 bytes_admitted: 0,
                 budget: crate::select::Budget::unlimited(),
             },
@@ -402,7 +418,7 @@ mod tests {
                 sets: BTreeMap::new(),
             },
             fields: vec!["game".to_string()],
-            argv: vec!["gircap".to_string(), "capture".to_string()],
+            argv: crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
         }
     }
 
@@ -527,9 +543,8 @@ mod tests {
     fn a16_is_recorded_exactly_once_despite_two_passes() {
         // The second pass pushes A16 onto a `Selfcheck` that was already built
         // and re-builds it. If `Selfcheck::build` ever appended rather than
-        // replacing, A16 would appear twice — and the guard that used to wrap the
-        // second pass was, as its comment says, a conditional that could never be
-        // false. This is the check that would have caught it.
+        // replacing, A16 would appear twice. This is the check that would have
+        // caught it.
         let root = scratch("a16-once");
         seed(&root);
         let closed = run(&root);
@@ -634,9 +649,37 @@ mod tests {
             "a declared gap is incomplete"
         );
         let skipped: Vec<&str> = closed.selfcheck.skipped();
-        for id in ["A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19"] {
-            assert!(skipped.contains(&id), "{id} should be declared skipped");
-        }
+        // **An explicit literal, not the constant filtered against itself.**
+        // Comparing `skipped()` filtered by `SKIPPED_WITHOUT_CHUNK_BLOBS` to
+        // `SKIPPED_WITHOUT_CHUNK_BLOBS` was a tautology: if the constant lost an
+        // id, both sides lost it and the assertion still passed. This literal is
+        // the claim; the first assertion keeps the constant from drifting away
+        // from it, and the second keeps the rows from dropping one.
+        //
+        // The fixture here is a seeded minimal tree, not a complete capture, so
+        // `skipped()` also reports the ids this tree never asserts (A1-A5, A15).
+        // Those are not part of the flag's declared set; the literal comparison
+        // below is the whole claim that matters.
+        let expected = [
+            "A6", "A7", "A8", "A9", "A10", "A11", "A12", "A19", "A21", "A22", "A23",
+        ];
+        assert_eq!(
+            super::super::selfcheck::SKIPPED_WITHOUT_CHUNK_BLOBS,
+            expected,
+            "the declared-skip constant is exactly these eleven ids"
+        );
+        let mut declared: Vec<&str> = skipped
+            .iter()
+            .copied()
+            .filter(|id| expected.contains(id))
+            .collect();
+        declared.sort_unstable();
+        let mut expected_sorted = expected;
+        expected_sorted.sort_unstable();
+        assert_eq!(
+            declared, expected_sorted,
+            "every explicitly declared id must be missing from the rows, once"
+        );
         // A declared gap must not also appear as a failing row.
         let failing: Vec<&str> = closed
             .selfcheck
@@ -653,7 +696,7 @@ mod tests {
     #[test]
     fn a_failed_row_ends_the_run_with_exit_3() {
         // The behaviour change this commit makes. A bundle whose own rows did
-        // not hold used to be written and reported as a success: `result: "fail"`
+        // not hold was written and reported as a success: `result: "fail"`
         // in the document, exit `0` from the process. A caller reading only the
         // exit code was told the capture worked.
         let s = Selfcheck::build(

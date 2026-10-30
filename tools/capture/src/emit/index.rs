@@ -42,6 +42,8 @@ pub struct ManifestInput<'a> {
     pub fields: &'a [String],
     /// The `--gzip-threshold` this run used, recorded in `MANIFEST.json`.
     pub gzip_threshold: u64,
+    /// The `--max-decompressed-bytes` this run used, recorded in `MANIFEST.json`.
+    pub max_decompressed_bytes: u64,
     /// The diffs, in the same order as `fields`.
     pub diffs: &'a [crate::manifest::diff::FieldDiff],
     /// The selection.
@@ -50,8 +52,8 @@ pub struct ManifestInput<'a> {
     pub index: &'a crate::blobs::ChunkIndex,
     /// Bytes the CDN sent.
     pub bytes_downloaded: u64,
-    /// The command line.
-    pub argv: &'a [String],
+    /// The command line, both the lossy rendering and the exact bytes.
+    pub argv: &'a crate::cli::RecordedArgv,
     /// Whether the run finished.
     pub complete: bool,
 }
@@ -64,13 +66,9 @@ pub struct ManifestInput<'a> {
 /// `files` is a separate argument rather than a field of [`ManifestInput`]
 /// because it is the one input the caller cannot supply: it comes from the
 /// close-out's full-tree digest pass, which has to run after every other
-/// document exists. As a struct field it invited a caller to pass `&[]` and get
-/// a document that lied, which is exactly what happened.
-///
-/// It used to come back empty, with `totals.bytes_on_disk: 0`, and be overwritten
-/// by the caller afterwards. The claim this doc makes was false for precisely
-/// those two fields; both are now derived here, so the returned document is
-/// whole and there is no second step that can be skipped or reordered.
+/// document exists. Both `files[]` and `totals.bytes_on_disk` are derived here,
+/// so the returned document is whole and there is no second step that can be
+/// skipped or reordered.
 pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Manifest, String> {
     let id = i.started.format("%Y%m%dT%H%M%S%.6fZ").to_string();
     let manifest_entries: BTreeMap<String, u64> = i
@@ -127,7 +125,8 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
             id,
             captured_at: i.started.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             host_os: std::env::consts::OS.to_string(),
-            tool_argv: i.argv.to_vec(),
+            tool_argv: i.argv.lossy.clone(),
+            tool_argv_raw: i.argv.raw.clone(),
             complete: i.complete,
         },
         biz: Biz_ {
@@ -156,6 +155,7 @@ pub fn build_manifest(i: &ManifestInput<'_>, files: &[FileEntry]) -> Result<Mani
         field: crate::manifest::MANIFEST_FIELD.to_string(),
         audio: i.audio.to_vec(),
         gzip_threshold: i.gzip_threshold,
+        max_decompressed_bytes: i.max_decompressed_bytes,
         selection_pool: SelectionPool {
             fields: i.fields.to_vec(),
             manifest_entries,
@@ -213,8 +213,8 @@ pub struct FileEntry {
 /// Both digests come from **one pass** — the alternative, hashing the file
 /// twice, reads every blob twice, which on a 90 MB artifact is the difference
 /// between a capture that feels instant and one that does not. The writer is
-/// [`hash::DualDigest`] rather than a `Tee` defined here: it used to be one, and
-/// the blob path re-derived the same thing because it could not reach this one.
+/// [`hash::DualDigest`] rather than a `Tee` defined here: one pass computes
+/// both digests, so a 90 MB artifact is not hashed twice.
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
     let mut file = std::fs::File::open(path)?;
     let mut d = hash::DualDigest::new();
@@ -434,7 +434,32 @@ impl Checksums {
                 self.entries.len()
             ));
         }
-        if self.total_bytes != self.entries.iter().map(|e| e.bytes).sum::<u64>() {
+        // **This total is folded from the document, not from the tool's own
+        // measurement.** `verify` runs on a bundle someone else may have
+        // written, and a plain `.sum()` panics in debug and wraps in release —
+        // where the wrapped figure can equal a crafted `total_bytes` and the
+        // disagreement is never named. The fold therefore saturates, as every
+        // measurement total does (K1/L2), and `checked_add` records the one
+        // thing saturation alone would hide: that the true sum does not fit.
+        // Without the second half, a crafted `total_bytes: u64::MAX` would
+        // compare equal to a saturated overflowing sum.
+        let mut total = 0u64;
+        let mut overflowed = false;
+        for e in &self.entries {
+            match total.checked_add(e.bytes) {
+                Some(t) => total = t,
+                None => {
+                    overflowed = true;
+                    total = u64::MAX;
+                    break;
+                }
+            }
+        }
+        if overflowed {
+            out.push(format!(
+                "entries' bytes overflow u64; the total saturates at {total}"
+            ));
+        } else if self.total_bytes != total {
             out.push("total_bytes disagrees with the entries".into());
         }
         // Only re-hash a file that still exists: a ghost above already named it,
@@ -685,6 +710,84 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root2);
     }
 
+    /// A16's `total_bytes` is a sum over a document the operator may not have
+    /// written, so it must not be a plain `.sum()`.
+    ///
+    /// `verify` runs on a bundle someone may have edited, and `reverify` calls
+    /// this before any digest is checked. A plain `Sum for u64` panics in debug
+    /// and wraps in release; the wrap is the dangerous half, because the crafted
+    /// `total_bytes` can then equal the wrapped figure and the disagreement is
+    /// never reported.
+    #[test]
+    fn a_crafted_checksums_total_cannot_overflow_or_certify_an_impossible_sum() {
+        let root = scratch("a16overflow");
+        let entry = |path: &str, bytes: u64| FileEntry {
+            path: path.into(),
+            bytes,
+            md5: hash::md5_hex(b"x"),
+            sha256: hash::sha256_hex(b"x"),
+            encoding: crate::hash::Encoding::Identity,
+        };
+        let doc = |entries: Vec<FileEntry>, total_bytes: u64| Checksums {
+            schema_version: crate::SCHEMA_VERSION,
+            algorithm: "sha256".into(),
+            file_count: entries.len() as u64,
+            total_bytes,
+            entries,
+        };
+
+        // The review's exact scenario: two `u64::MAX` entries wrap to
+        // `u64::MAX - 1` in release, which is the crafted `total_bytes` below,
+        // so the disagreement is certified instead of named. In debug the plain
+        // sum panics first.
+        let wrapped = doc(
+            vec![entry("a", u64::MAX), entry("b", u64::MAX)],
+            u64::MAX - 1,
+        );
+        let found = wrapped.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "the overflow must be a finding, not a panic or a wrap: {found:?}"
+        );
+
+        // Two near-maximum entries: the true total is still too large. In debug
+        // this is the same panic; in release it disagrees by wrapping.
+        let overflow = doc(
+            vec![entry("a", u64::MAX - 1), entry("b", u64::MAX - 1)],
+            u64::MAX - 1,
+        );
+        let found = overflow.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "the overflow must be a finding, not a panic or a wrap: {found:?}"
+        );
+
+        // A crafted `total_bytes` equal to the saturated value must not turn an
+        // overflowing sum into agreement either.
+        let saturated = doc(vec![entry("a", u64::MAX), entry("b", u64::MAX)], u64::MAX);
+        let found = saturated.findings(&root);
+        assert!(
+            found.iter().any(|f| f.contains("overflow")),
+            "u64::MAX must not certify an overflowing sum: {found:?}"
+        );
+
+        // The boundary itself is legal: an exact `u64::MAX` total, no overflow.
+        let exact = doc(vec![entry("a", u64::MAX - 1), entry("b", 1)], u64::MAX);
+        let found = exact.findings(&root);
+        assert!(
+            !found
+                .iter()
+                .any(|f| f.contains("total_bytes") || f.contains("overflow")),
+            "an exact u64::MAX total is arithmetically valid: {found:?}"
+        );
+
+        // And one byte below that same total is still a disagreement.
+        let off = doc(vec![entry("a", u64::MAX - 1), entry("b", 1)], u64::MAX - 1);
+        let found = off.findings(&root);
+        assert!(found.iter().any(|f| f.contains("total_bytes")), "{found:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_gzipped_file_is_recorded_as_gzip_so_a_reader_knows_which_digest() {
         assert_eq!(encoding_of("a.bin"), crate::hash::Encoding::Identity);
@@ -722,7 +825,7 @@ mod tests {
         diff_tags: Vec<String>,
         audio: Vec<String>,
         fields: Vec<String>,
-        argv: Vec<String>,
+        argv: crate::cli::RecordedArgv,
         diffs: Vec<crate::manifest::diff::FieldDiff>,
     }
 
@@ -746,6 +849,7 @@ mod tests {
                     admitted: Vec::new(),
                     rejected: Vec::new(),
                     forced_skipped: Vec::new(),
+                    forced_unscored: Vec::new(),
                     matrix: Vec::new(),
                     bytes_admitted: 0,
                     budget: crate::select::Budget::capped(10_000),
@@ -765,7 +869,7 @@ mod tests {
                 diff_tags: vec!["7.1.1".to_string(), "7.1.2".to_string()],
                 audio: vec!["audio_1".to_string()],
                 fields: vec!["game".to_string()],
-                argv: vec!["gircap".to_string(), "capture".to_string()],
+                argv: crate::cli::recorded_argv(["gircap".into(), "capture".into()]),
                 // `common + added` is what `selection_pool.manifest_entries`
                 // records, so a fixture with real counts is what pins that
                 // arithmetic. Zeros would pass either way and so would say
@@ -799,6 +903,7 @@ mod tests {
                 audio: &self.audio,
                 fields: &self.fields,
                 gzip_threshold: 1024,
+                max_decompressed_bytes: hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
                 diffs: &self.diffs,
                 selection: &self.selection,
                 index: &self.index,
@@ -905,6 +1010,92 @@ mod tests {
             "the fixture's byte total must not coincide with bytes_downloaded"
         );
     }
+
+    fn manifest_with(rows: &[(&str, &str)]) -> Manifest {
+        let f = Fixture::new();
+        let mut m = build_manifest(&f.input(), &[]).expect("manifest");
+        m.matrix = rows
+            .iter()
+            .map(|(class, status)| ManifestMatrixRow {
+                class: (*class).into(),
+                status: (*status).into(),
+                capture_id: None,
+                path: None,
+                matching_field: None,
+                covered_by: None,
+                also_satisfies: None,
+                reason: None,
+                candidates_considered: Some(0),
+            })
+            .collect();
+        m
+    }
+
+    fn complete_rows() -> Vec<(&'static str, &'static str)> {
+        crate::select::Class::ALL
+            .iter()
+            .map(|c| (c.id(), "unavailable"))
+            .collect()
+    }
+
+    #[test]
+    fn a17_accepts_a_complete_matrix() {
+        // The positive half: a matrix with exactly the six required classes, each
+        // once, is what every real capture writes.
+        let (ok, detail) = manifest_with(&complete_rows()).a17();
+        assert!(ok, "{detail}");
+        assert!(detail.contains("6 classes"), "{detail}");
+    }
+
+    #[test]
+    fn a17_rejects_a_five_row_matrix_naming_the_missing_class() {
+        // **O2.** A17 iterated the rows it was given and never compared them
+        // with `Class::ALL`, so deleting one row left a green A17 whose detail
+        // said "5 classes". Completeness is the assertion's whole job.
+        let mut rows = complete_rows();
+        rows.retain(|(class, _)| *class != "added");
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "a five-row matrix must not pass A17");
+        assert!(
+            detail.contains("added"),
+            "the missing class is named: {detail}"
+        );
+        assert!(detail.contains("missing"), "{detail}");
+    }
+
+    #[test]
+    fn a17_rejects_an_unknown_class_even_beside_the_required_six() {
+        // A row for a class that does not exist is not a substitute for the six:
+        // it must be reported itself, not silently carried as an extra row.
+        let mut rows = complete_rows();
+        rows.push(("bogus", "captured"));
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "an unknown class must not pass A17");
+        assert!(detail.contains("bogus"), "{detail}");
+        assert!(
+            detail.contains("required classes"),
+            "the detail names the valid set: {detail}"
+        );
+    }
+
+    #[test]
+    fn a17_rejects_a_lone_unknown_class() {
+        // The review's minimal reproducer: a matrix of one invented class used
+        // to report "(1 classes, each present and in an acceptable state)".
+        let (ok, detail) = manifest_with(&[("bogus", "captured")]).a17();
+        assert!(!ok, "{detail}");
+        assert!(detail.contains("bogus"), "{detail}");
+    }
+
+    #[test]
+    fn a17_still_rejects_a_duplicate_class() {
+        let mut rows = complete_rows();
+        rows.push(("reuse_in_place", "captured"));
+        let (ok, detail) = manifest_with(&rows).a17();
+        assert!(!ok, "a duplicated class must not pass A17");
+        assert!(detail.contains("reuse_in_place"), "{detail}");
+        assert!(detail.contains("twice"), "{detail}");
+    }
 }
 
 /// `MANIFEST.json` — the bundle's own index.
@@ -945,6 +1136,14 @@ pub struct Manifest {
     /// field is stale by definition; say so by refusing it rather than by
     /// inventing its number.
     pub gzip_threshold: u64,
+    /// The `--max-decompressed-bytes` this run used, in bytes.
+    ///
+    /// Recorded because every decode in the bundle — a manifest archive, a chunk
+    /// blob, a measurement — is bounded by it. A reader reproducing a decode
+    /// needs the number the capture actually used; assuming the flag's default
+    /// would turn a run with a raised ceiling into a bundle that cannot be read
+    /// back. Required, like `gzip_threshold`, for the same reason.
+    pub max_decompressed_bytes: u64,
     /// The fields that were scored and diffed.
     pub selection_pool: SelectionPool,
     /// The headline numbers.
@@ -976,7 +1175,18 @@ pub struct Capture {
     /// `windows` | `linux` | `macos`.
     pub host_os: String,
     /// The arguments, so a reader can reproduce the request set.
+    ///
+    /// `to_string_lossy` of each, so an argument that is not valid Unicode is
+    /// recorded with a replacement character. [`Self::tool_argv_raw`] has the
+    /// exact bytes for that case.
     pub tool_argv: Vec<String>,
+    /// The exact bytes of each argument, in the same order as `tool_argv`.
+    ///
+    /// The platform's own representation, which `host_os` disambiguates:
+    /// UTF-16LE code-unit bytes on Windows, the native byte string on Unix. A
+    /// non-Unicode `--out` or `argv[0]` cannot be recovered from the lossy form
+    /// above, so this is the only place the run's real command line survives.
+    pub tool_argv_raw: Vec<Vec<u8>>,
     /// False only if the run was interrupted; the selfcheck then says why.
     pub complete: bool,
 }
@@ -1179,7 +1389,8 @@ impl Manifest {
         s
     }
 
-    /// A17: every required class is present and in one of the four states.
+    /// A17: every required class is present exactly once, and each is in one
+    /// of the four states.
     ///
     /// **Every state is acceptable.** A17 is about the matrix being
     /// *complete* — every class has a row, and every row says what happened to
@@ -1187,12 +1398,23 @@ impl Manifest {
     /// run's budget would not pay for it. A matrix that records it is more
     /// honest than one that fails.
     ///
-    /// It used to be excluded, on the reasoning that `over_budget` is "a
-    /// finding about the run rather than about the world" — which had the
-    /// consequence that a class the budget refused ended the whole capture with
-    /// exit `3`, while `--require-class` was documented as the only thing that
-    /// turns an unmet class into a failed run.
+    /// **Every state is acceptable.** `over_budget` is one of those answers: a
+    /// candidate existed and this run's budget would not pay for it. Excluding
+    /// it would make a class the budget refused end the whole capture with exit
+    /// `3`, while `--require-class` is the flag that turns an unmet class into
+    /// a failed run. A17 must not do `--require-class`'s job for a class nobody
+    /// required.
+    ///
+    /// **Completeness means equality with [`crate::select::Class::ALL`], not
+    /// merely a set of rows that each look valid.** Checking only the rows that happen to be
+    /// present let a five-row matrix (or a single `{"class":"bogus"}` row) pass
+    /// with a detail claiming "5 classes": the one assertion whose job is to
+    /// prove the matrix is complete certified that it was not. An unknown class
+    /// is an A17 failure rather than a decode-boundary refusal because the
+    /// matrix is a *claim* the bundle makes about itself; `verify` is where a
+    /// claim is checked, and `Bundle::open` stays a structural reader.
     pub fn a17(&self) -> (bool, String) {
+        let required = crate::select::Class::ALL;
         let mut seen: Vec<&str> = Vec::new();
         for row in &self.matrix {
             if !matches!(
@@ -1207,10 +1429,25 @@ impl Manifest {
                     ),
                 );
             }
+            if !required.iter().any(|c| c.id() == row.class) {
+                return (
+                    false,
+                    format!(
+                        "{} is not one of the required classes ({})",
+                        row.class,
+                        required.map(|c| c.id()).join(", ")
+                    ),
+                );
+            }
             if seen.contains(&row.class.as_str()) {
                 return (false, format!("{} appears twice", row.class));
             }
             seen.push(&row.class);
+        }
+        for class in required {
+            if !seen.contains(&class.id()) {
+                return (false, format!("{} is missing from the matrix", class.id()));
+            }
         }
         (
             true,

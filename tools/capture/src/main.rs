@@ -55,10 +55,13 @@ async fn main() {
     // Resolving the plan is where flag validation happens, so a rejected request
     // is reported here rather than inside each command — one place, three calls.
     let outcome = match &cli.cmd {
-        Cmd::Capture(a) => match capture_plan(a, std::env::args().collect()) {
-            Ok(plan) => run::capture(plan).await,
-            Err(e) => Err(run::usage("capture", e.message())),
-        },
+        Cmd::Capture(a) => {
+            let argv = gircap::cli::recorded_argv(std::env::args_os());
+            match capture_plan(a, argv) {
+                Ok(plan) => run::capture(plan).await,
+                Err(e) => Err(run::usage("capture", e.message())),
+            }
+        }
         Cmd::Verify(a) => match verify_plan(a) {
             Ok(plan) => run::verify(plan).await,
             Err(e) => Err(run::usage("verify", e.message())),

@@ -22,6 +22,7 @@
 //! | [`http`] | [`http::Fetcher`]: retries, timeout, headers, request log |
 //! | [`hyp`] | the four HoYoPlay endpoints + Sophon `getBuild` |
 //! | [`manifest`] | fetch → zstd → verify → decode → dump → diff |
+//! | [`paths`] | the shape rule for values that name something inside a bundle |
 //! | [`select`] | scoring, variant classes, budget admission |
 //! | [`blobs`] | the content-addressed chunk store and the three sets |
 //! | [`assemble`] | building a file from chunks: old, new, and patch flow |
@@ -60,9 +61,13 @@ pub mod http;
 pub mod hyp;
 pub mod logging;
 pub mod manifest;
+pub mod pathmap;
+pub mod paths;
+pub mod rejections;
 pub mod report;
 pub mod run;
 pub mod select;
+mod tasks;
 pub mod verify;
 
 pub use exit::ExitCode;
@@ -100,4 +105,24 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// A version-1 bundle is **refused**: `gircap verify` says so and names the
 /// command that produces a current one.
-pub const SCHEMA_VERSION: u32 = 2;
+///
+/// **Version 3** records more of what a run saw, and makes every addition
+/// required:
+///
+/// - each blob row carries `fetch_error`, `partial` and `measurement_error`, so
+///   a refused fetch, bytes that arrived only in part, and a post-rename
+///   measurement failure are distinguishable from "never asked for";
+/// - `MANIFEST.json → capture.tool_argv_raw` carries the exact bytes of each
+///   argument beside the lossy human-readable `tool_argv`;
+/// - `api/error_responses.json` and `api/error_bodies/` keep the incidental
+///   non-2xx response bodies the run paid for;
+/// - `diagnostics/rejections.json` records every untrusted value the strict
+///   write rules refused, and `diagnostics/path_map.json` records any escaped
+///   on-disk name, so the observation is not lost with the refusal;
+/// - `MANIFEST.json` records the effective `--max-decompressed-bytes` so a
+///   decode can be reproduced.
+///
+/// A version-2 bundle is refused for the same reason a version-1 bundle is: a
+/// current reader would parse it and silently supply a different story for the
+/// evidence it lacks.
+pub const SCHEMA_VERSION: u32 = 3;

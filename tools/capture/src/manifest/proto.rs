@@ -42,16 +42,59 @@ impl SophonChunkFile {
     }
 
     /// `Σ chunk.uncompressed_size`, which the manifest asserts equals `size`.
+    ///
+    /// Saturating: this is a measurement of a document, and a hostile size must
+    /// not abort the tool that is only counting it.
     pub fn chunk_bytes(&self) -> i64 {
-        self.chunks.iter().map(|c| c.uncompressed_size).sum()
+        self.chunks
+            .iter()
+            .fold(0_i64, |total, c| total.saturating_add(c.uncompressed_size))
     }
 
     /// The last byte the chunks cover, given the last chunk's offset and length.
     pub fn covered_end(&self) -> i64 {
         self.chunks
             .last()
-            .map(|c| c.offset + c.uncompressed_size)
+            .map(|c| c.offset.saturating_add(c.uncompressed_size))
             .unwrap_or(0)
+    }
+
+    /// Refuse a declaration whose offsets and sizes cannot be added.
+    ///
+    /// **The manifest is a document from the network.** `offset`, `size` and
+    /// `compressed_size` are `int64`s on the wire with no domain check, so a
+    /// negative cost or an offset past `i64::MAX` reaches the arithmetic that
+    /// places chunks unless it is refused here. The capture path calls this once
+    /// per entry at the decode boundary; `assemble` calls it again so a
+    /// hand-built `FilePair` cannot bypass it.
+    pub fn validate_arithmetic(&self) -> Result<(), String> {
+        for (i, c) in self.chunks.iter().enumerate() {
+            if c.offset < 0 {
+                return Err(format!(
+                    "chunk {i} ({}): offset {} is negative",
+                    c.id, c.offset
+                ));
+            }
+            if c.compressed_size < 0 {
+                return Err(format!(
+                    "chunk {i} ({}): compressed_size {} is negative",
+                    c.id, c.compressed_size
+                ));
+            }
+            if c.uncompressed_size < 0 {
+                return Err(format!(
+                    "chunk {i} ({}): uncompressed_size {} is negative",
+                    c.id, c.uncompressed_size
+                ));
+            }
+            if c.offset.checked_add(c.uncompressed_size).is_none() {
+                return Err(format!(
+                    "chunk {i} ({}): offset {} + uncompressed_size {} overflows i64",
+                    c.id, c.offset, c.uncompressed_size
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -86,10 +129,10 @@ impl SophonChunk {
     /// **A digest is an identity, not a spelling.** `girpr` compares chunk
     /// identities case-insensitively (`repair::reuse::sources_for`,
     /// `repair::plan::Plan`), so a pair of manifests that spell one chunk's
-    /// md5 `AB…` and `ab…` describes the same content to the tool. This crate
-    /// used to compare them exactly, which made the two tools disagree *by
-    /// construction*: `gircap` would call such a chunk fetched where `girpr`
-    /// calls it reused, and the bundle would publish the wrong numbers.
+    /// md5 `AB…` and `ab…` describes the same content to the tool. Comparing
+    /// them exactly made the two tools disagree by construction: `gircap` calls
+    /// such a chunk fetched where `girpr` calls it reused, and the bundle would
+    /// publish the wrong numbers.
     ///
     /// The fix is here rather than at each comparison: normalising once, where
     /// the manifest enters the crate, makes the identity keys, the declared
@@ -335,5 +378,45 @@ mod tests {
             f["chunks"][0]["unknown_field6"],
             8_640_275_792_690_937_856i64
         );
+    }
+
+    /// **K1.** The decode boundary refuses a negative cost or offset with the
+    /// chunk index, id and value, rather than letting it into the plan.
+    #[test]
+    fn a_negative_manifest_number_is_refused_with_its_chunk_and_value() {
+        let mut m = sample();
+        m.chuncks[0].chunks[0].compressed_size = -1;
+        let entry = &m.chuncks[0];
+        let e = entry.validate_arithmetic().unwrap_err();
+        assert!(
+            e.contains("chunk 0") && e.contains(&entry.chunks[0].id),
+            "{e}"
+        );
+        assert!(e.contains("compressed_size -1"), "{e}");
+
+        m.chuncks[0].chunks[0].compressed_size = 1;
+        m.chuncks[0].chunks[1].offset = -7;
+        let e = m.chuncks[0].validate_arithmetic().unwrap_err();
+        assert!(e.contains("offset -7") && e.contains("chunk 1"), "{e}");
+    }
+
+    /// **K1.** An offset that cannot be added to its length is refused by name,
+    /// and the totals that only measure the document saturate rather than abort.
+    #[test]
+    fn an_unaddable_manifest_offset_is_refused_and_totals_saturate() {
+        let mut m = sample();
+        m.chuncks[0].chunks[0].offset = i64::MAX;
+        let e = m.chuncks[0].validate_arithmetic().unwrap_err();
+        assert!(
+            e.contains(&i64::MAX.to_string()) && e.contains("overflows i64"),
+            "{e}"
+        );
+
+        let mut huge = m.chuncks[0].clone();
+        huge.chunks[0].uncompressed_size = i64::MAX;
+        huge.chunks[1].uncompressed_size = i64::MAX;
+        assert_eq!(huge.chunk_bytes(), i64::MAX, "Σ saturates");
+        huge.chunks[1].offset = i64::MAX;
+        assert_eq!(huge.covered_end(), i64::MAX, "end saturates");
     }
 }

@@ -166,7 +166,13 @@ impl Captured {
     /// silently about the wrong version pair: every URL in the bundle would be
     /// right and the bundle would be wrong.
     pub fn validate(&self) -> Result<(), ApiError> {
-        self.game_configs()?.require_chunk_mode()?;
+        let configs = self.game_configs()?;
+        configs.require_chunk_mode()?;
+        // Fail here rather than at the fixture write: the scan directory is a
+        // path the launcher supplies and the fixture joins under `game/`. This
+        // runs before a manifest or a blob is fetched, so an escaping value
+        // costs no network work and no artifact directory.
+        configs.audio_pkg_scan_dir()?;
 
         let new = self.new_build()?;
         if new.tag != self.versions.new.tag {
@@ -659,7 +665,7 @@ mod tests {
                 endpoint: "getGameConfigs",
                 file: "getGameConfigs.json".into(),
                 seq: 0,
-                bytes: br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#.to_vec(),
+                bytes: br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK","audio_pkg_scan_dir":"GenshinImpact_Data/Persistent/audio_lang_14"}]}}"#.to_vec(),
             },
             branches: CapturedBody {
                 endpoint: "getGameBranches",
@@ -733,7 +739,7 @@ mod tests {
     #[test]
     fn the_stored_bytes_are_the_response_not_a_reserialization() {
         let c = mock_captured();
-        let raw = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+        let raw = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK","audio_pkg_scan_dir":"GenshinImpact_Data/Persistent/audio_lang_14"}]}}"#;
         assert_eq!(c.configs.bytes, raw);
         // And a typed round-trip would *not* reproduce them: the whitespace is
         // the server's, and nothing here preserves it.

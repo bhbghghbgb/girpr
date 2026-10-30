@@ -31,6 +31,8 @@ pub mod require;
 
 use serde::Serialize;
 
+use std::collections::BTreeMap;
+
 use crate::manifest::diff::{FieldDiff, State, by_cost, field_rank};
 
 pub use budget::{Budget, Fate};
@@ -140,16 +142,11 @@ impl MatrixStatus {
     /// **All four.** A17 is about the matrix being *complete*: every class has
     /// a row and every row says what happened. `over_budget` is one of those
     /// answers — "a candidate existed and this run's budget would not pay for
-    /// it" — and a matrix that recorded it is *more* honest than one that
-    /// failed.
-    ///
-    /// It used to be excluded, on the reasoning that `over_budget` is "a
-    /// finding about the run rather than about the world". That reasoning has a
-    /// consequence the same module's own docs already rejected: a class the
-    /// budget refused ended the run with exit `3`, while `--require-class` —
-    /// the flag that says "the caller wanted this class" — was documented as
-    /// the only thing that turns an unmet class into a failed run. A17 was
-    /// doing `--require-class`'s job for a class nobody had required.
+    /// it" — and excluding it would make a class the budget refused end the run
+    /// with exit `3`, while `--require-class` — the flag that says "the caller
+    /// wanted this class" — is the only thing that turns an unmet class into a
+    /// failed run. A17 must not do `--require-class`'s job for a class nobody
+    /// required.
     ///
     /// The requirement is still enforced: [`MatrixRow::is_satisfied`] excludes
     /// `over_budget`, so `--require-class` still refuses with exit `4`.
@@ -283,16 +280,25 @@ pub struct Selection {
     /// omission and a refusal are the same bytes and very different findings, so
     /// the run reports the count and the names on stderr.
     pub forced_skipped: Vec<String>,
+    /// `--files` paths the pool carries but which answer **no matrix class**.
+    ///
+    /// Separate from [`Selection::forced_skipped`] because the two are different
+    /// facts: one path is absent from the manifests, the other is present and is
+    /// a degenerate patch shape (a one-chunk file with no reuse, for example)
+    /// that no class claims. Neither is a capture, and a caller who named the
+    /// path needs to be told which one it was. Inventing a class for it would
+    /// make the matrix claim something false.
+    pub forced_unscored: Vec<String>,
     /// One row per required class, in admission order.
     pub matrix: Vec<MatrixRow>,
     /// Total charged against the budget.
     pub bytes_admitted: u64,
     /// The budget as it stood after admission.
     ///
-    /// Carried rather than recomputed by the caller: the caller's own `Budget`
-    /// was never charged — [`Budget`] is copyable and the charge happens
-    /// internally — so reporting *it* would say "0 of 1 000 000 spent" about a
-    /// run that spent 882 940.
+    /// Carried rather than recomputed by the caller: phase 0 and phase 2 charge
+    /// the same ledger, and [`Budget`] is copyable, so a caller holding its own
+    /// value would still see `spent == 0` after a run that spent 882 940 B. The
+    /// returned value is the one the admissions actually moved.
     pub budget: Budget,
 }
 
@@ -487,14 +493,31 @@ enum Coverage {
 pub fn select(
     pool: &[SizedCandidate],
     per_class: usize,
-    budget: Budget,
+    mut budget: Budget,
     forced: &[String],
 ) -> Selection {
     // Phase 0 — forced captures, in the caller's order, each one noted with
     // every class it happens to answer.
+    //
+    // **One ledger, charged here.** The caller's `Budget` is copied into this
+    // function and charged for every forced admission, then handed to phase 2
+    // as-is. A separate local ledger and a per-path check against the unspent
+    // caller budget admitted two 60 B paths under a 100 B ceiling, because each
+    // one individually satisfied `0 + 60 <= 100`; the cumulative total is the
+    // number the flag is about.
     let mut admitted: Vec<Admission> = Vec::new();
-    let mut spent = Budget::unlimited();
     let mut forced_skipped: Vec<String> = Vec::new();
+    let mut forced_unscored: Vec<String> = Vec::new();
+    let mut forced_rejected: Vec<Rejection> = Vec::new();
+    // **How many forced paths of each class have already taken an id.**
+    //
+    // A forced path is admitted with ordinal zero only when it is the *first*
+    // forced path of its primary class. Two distinct paths that both answer
+    // `added` would share the id `added`, so the second `patchmaps/added.json`
+    // would replace the first while the run still reported two captures. The
+    // ordinal is assigned here rather than at admission so the rejection record
+    // carries the same id the path would have written.
+    let mut forced_ordinals: BTreeMap<Class, usize> = BTreeMap::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
@@ -505,15 +528,36 @@ pub fn select(
             continue;
         };
         let Some(primary) = c.candidate.classes.first().copied() else {
+            // The pool carries the path, but the class set is a partition and
+            // this shape answers none of it (a degenerate patch). It is still a
+            // path the caller named, so it is recorded rather than dropped; it
+            // is not a capture, because a capture with no class would make the
+            // matrix claim something false.
+            forced_unscored.push(want.clone());
             continue;
         };
+        let nth = forced_ordinals.get(&primary).copied().unwrap_or(0);
+        forced_ordinals.insert(primary, nth + 1);
         let cost = c.budget_cost();
         if !budget.admits(cost) {
-            break;
+            // **Record and continue.** A `break` here would silently drop every
+            // forced path after the first refusal — including a cheaper one that
+            // cheaper one that would have fitted. A refusal is a finding about
+            // one path, not a reason to stop reading the caller's list.
+            forced_rejected.push(Rejection {
+                capture_id: c.candidate.capture_id(primary, nth),
+                primary_class: primary,
+                path: c.candidate.path.clone(),
+                matching_field: c.candidate.field.clone(),
+                state: c.candidate.state,
+                budget_cost: cost,
+                reason: unfunded(cost),
+            });
+            continue;
         }
-        spent.charge(cost);
+        budget.charge(cost);
         admitted.push(Admission {
-            capture_id: c.candidate.capture_id(primary, 0),
+            capture_id: c.candidate.capture_id(primary, nth),
             primary_class: primary,
             path: c.candidate.path.clone(),
             matching_field: c.candidate.field.clone(),
@@ -523,7 +567,6 @@ pub fn select(
             patch_bytes: c.candidate.patch_bytes,
         });
     }
-    let initial = spent.spent();
 
     // Phase 1 — wants, class by class, cheapest-first and excluding anything
     // already captured.
@@ -541,8 +584,8 @@ pub fn select(
     // `over_budget` — a decision about the *budget*, not about the class.
     let mut coverage: Vec<Coverage> = Vec::new();
     // `candidates_considered` for every class, in **one** pass over the pool.
-    // It used to be nine, one per class, each re-walking 2 921 candidates; the
-    // counts are the same, they were just being recomputed nine times.
+    // Nine passes — one per class — each re-walking 2 921 candidates would
+    // recompute the same counts nine times.
     let considered_by_class = considered_counts(pool);
     for class in Class::REQUIRED_ORDER {
         let considered = considered_by_class[class_idx(class)];
@@ -648,13 +691,22 @@ pub fn select(
     let mut ordered: Vec<usize> = (0..wants.len()).collect();
     ordered.sort_by(|&a, &b| cost_then_field_then_path(&wants[a].2, &wants[b].2));
     let costs: Vec<u64> = ordered.iter().map(|&i| wants[i].2.budget_cost()).collect();
-    let (fates, final_budget) =
-        budget::admit_in_order(&costs, Budget::with_spent(budget.limit(), initial));
-    let mut rejected: Vec<Rejection> = Vec::new();
+    // The same ledger phase 0 charged: `budget` already carries the forced
+    // spend, so `--max-download-bytes` is one cumulative number, not one number
+    // per phase.
+    let (fates, final_budget) = budget::admit_in_order(&costs, budget);
+    let mut rejected: Vec<Rejection> = forced_rejected;
 
     for (rank, i) in ordered.into_iter().enumerate() {
         let (class, ordinal, c) = &wants[i];
         if fates[rank] != Fate::Admitted {
+            // A forced path phase 0 refused can be wanted again for its class -
+            // phase 1 has to consider it, or the matrix would say `unavailable`
+            // about a path that exists. Phase 2 then refuses it for the same
+            // reason, and one path must not appear twice in `rejected`.
+            if rejected.iter().any(|r| r.path == c.candidate.path) {
+                continue;
+            }
             rejected.push(Rejection {
                 capture_id: c.candidate.capture_id(*class, *ordinal),
                 primary_class: *class,
@@ -745,11 +797,28 @@ pub fn select(
         matrix.push(row);
     }
 
+    let bytes_admitted: u64 = admitted
+        .iter()
+        .fold(0, |total, a| total.saturating_add(a.budget_cost));
+    // The ledger and the sum describe one fact, and both saturate: a crafted
+    // manifest can make two admitted costs sum past `u64::MAX`, and the summary
+    // must report the ledger's number rather than panic (debug) or wrap
+    // (release). A future admission path could still charge one without adding
+    // an `Admission` (or the reverse), and the matrix would then report a
+    // different spent total from the summary; keep the two tied in debug builds
+    // so that change is caught here rather than in a bundle.
+    debug_assert_eq!(
+        bytes_admitted,
+        final_budget.spent(),
+        "the admitted sum and the charged budget must be the same number"
+    );
+
     Selection {
-        bytes_admitted: admitted.iter().map(|a| a.budget_cost).sum(),
+        bytes_admitted,
         admitted,
         rejected,
         forced_skipped,
+        forced_unscored,
         matrix,
         budget: final_budget,
     }
@@ -781,11 +850,10 @@ fn unavailable_reason(class: Class, considered: u64) -> String {
 /// can tell "this version pair does not have one" from "this tool looked
 /// somewhere it should not have".
 ///
-/// **It says nothing about the reference pair, and it used to.** The note used
-/// to point at the spec's record of a class that was absent for 7.0.0 -> 7.1.0,
-/// which was true of the class set the spec had then. All six classes have
-/// candidates for that pair now, so there is no such absence to point at and
-/// the note is about the reader's next move instead.
+/// **It says nothing about the reference pair.** The note once pointed at
+/// the spec's record of a class absent for 7.0.0 -> 7.1.0, but all six
+/// classes have candidates for that pair now, so there is no such absence
+/// to point at and the note is about the reader's next move instead.
 const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
@@ -1146,6 +1214,147 @@ mod tests {
         );
     }
 
+    /// Two forced paths, each under the ceiling on its own, whose **sum** is
+    /// not. The second must be refused.
+    ///
+    /// This is the case the reverted series missed: checking each forced path
+    /// against the caller's unspent budget admitted both, because `0 + 60` and
+    /// `0 + 60` each fit a 100 B cap. The ledger has to be cumulative.
+    #[test]
+    fn forced_costs_are_checked_against_the_cumulative_budget_not_one_by_one() {
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row("x/a", State::Added, None, 60),
+                row("x/b", State::Added, None, 60),
+            ],
+        )]);
+        let s = select(&pool, 1, Budget::capped(100), &["x/a".into(), "x/b".into()]);
+
+        assert_eq!(s.admitted.len(), 1, "only one 60 B path fits in 100 B");
+        assert_eq!(s.paths(), vec!["x/a"], "the first one named wins");
+        assert_eq!(s.bytes_admitted, 60);
+        assert!(
+            s.bytes_admitted <= 100,
+            "the cumulative admission must not exceed the ceiling"
+        );
+        assert_eq!(
+            s.budget.spent(),
+            60,
+            "the returned budget is the one the forced phase charged"
+        );
+        let rejected: Vec<&str> = s.rejected.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(rejected, vec!["x/b"], "and the refusal is recorded");
+    }
+
+    /// A forced path over the ceiling must not hide a later, cheaper one.
+    ///
+    /// A `break` on the first refusal would let `--files a --files b` with
+    /// `a = 500 B`, `b = 100 B` under a 200 B cap capture neither and record
+    /// neither. A refusal is about one path, not the rest of the list.
+    #[test]
+    fn a_forced_path_over_the_ceiling_does_not_hide_a_cheaper_one_after_it() {
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row("x/a", State::Added, None, 500),
+                row("x/b", State::Added, None, 100),
+            ],
+        )]);
+        let s = select(&pool, 1, Budget::capped(200), &["x/a".into(), "x/b".into()]);
+
+        assert_eq!(
+            s.paths(),
+            vec!["x/b"],
+            "the later path fits and must be admitted"
+        );
+        let rejected: Vec<&str> = s.rejected.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(rejected, vec!["x/a"], "and the refused one is recorded");
+        assert_eq!(
+            s.matrix
+                .iter()
+                .find(|r| r.class == Class::Added)
+                .map(|r| r.status),
+            Some(MatrixStatus::CoveredBy),
+            "the class is answered by the admitted forced path"
+        );
+    }
+
+    /// Two **distinct** forced paths that answer the same primary class must not
+    /// share an id.
+    ///
+    /// `capture_id` is `<class>` or `<class>+<n>`, and passing `0` for every
+    /// forced path would make two new-only paths both `added`, both write
+    /// `patchmaps/added.json`, and the second write replace the first while
+    /// `captures_admitted` still said two. Numbering per class is what keeps
+    /// the identity of a forced path distinct.
+    #[test]
+    fn two_forced_paths_of_one_class_get_distinct_ids() {
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row("x/a", State::Added, None, 10),
+                row("x/b", State::Added, None, 20),
+            ],
+        )]);
+        let s = select(&pool, 1, Budget::unlimited(), &["x/a".into(), "x/b".into()]);
+
+        assert_eq!(s.paths(), vec!["x/a", "x/b"], "both are captured");
+        assert_eq!(
+            s.admitted
+                .iter()
+                .map(|a| a.capture_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["added", "added+1"],
+            "the second forced path of a class is numbered, not a duplicate"
+        );
+        let mut ids: Vec<&str> = s.admitted.iter().map(|a| a.capture_id.as_str()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), s.admitted.len(), "ids are unique");
+        // The matrix still resolves the class to the first admission, which is
+        // now the same patchmap that describes the first path.
+        let added = s.matrix.iter().find(|r| r.class == Class::Added).unwrap();
+        assert_eq!(added.capture_id.as_deref(), Some("added"));
+        assert_eq!(added.path.as_deref(), Some("x/a"));
+    }
+
+    /// A forced path the pool carries but which answers **no** class is
+    /// recorded, not silently dropped.
+    ///
+    /// A one-chunk file with no reuse is a degenerate patch: `added` already
+    /// covers "the file is created whole", so the class set is legitimately
+    /// empty. The old loop `continue`d past it, and a caller who named it saw
+    /// `requested: 1` and nothing else.
+    #[test]
+    fn a_forced_path_that_answers_no_class_is_recorded_as_unscored() {
+        let pool = candidates(&[field(
+            "game",
+            vec![row(
+                "x/degenerate",
+                State::Changed,
+                Some(scored("x/degenerate", 10, (5, 5), (1, 0, 0), false)),
+                5,
+            )],
+        )]);
+        assert!(
+            pool[0].candidate.classes.is_empty(),
+            "the fixture is the degenerate shape this test is about"
+        );
+
+        let s = select(&pool, 1, Budget::unlimited(), &["x/degenerate".into()]);
+        assert!(s.admitted.is_empty(), "no class, so no capture");
+        assert_eq!(
+            s.forced_unscored,
+            vec!["x/degenerate"],
+            "the path is recorded as present but unscored"
+        );
+        assert!(
+            s.forced_skipped.is_empty(),
+            "it is in the manifests, so it is not `skipped`"
+        );
+    }
+
     /// A class with no candidate is recorded as `unavailable` **with a reason**,
     /// rather than being dropped from the matrix.
     #[test]
@@ -1254,6 +1463,41 @@ mod tests {
         assert!(
             s.admitted.iter().any(|a| a.capture_id.contains('+')),
             "the second is `class+n`"
+        );
+    }
+
+    /// A crafted manifest may declare `compressed_size: i64::MAX`, and the
+    /// scoring add saturates each `old_bytes + new_bytes` to `u64::MAX - 1`.
+    /// Two admitted paths are then more than a `u64` holds. The summary total
+    /// is a measurement next to the saturating ledger, so it must report the
+    /// saturated number rather than panic (debug) or wrap (release).
+    #[test]
+    fn two_maximum_costs_report_the_saturated_ledger_not_an_overflow() {
+        let cost = u64::MAX - 1;
+        let pool = candidates(&[field(
+            "game",
+            vec![
+                row(
+                    "a/one",
+                    State::Identical,
+                    Some(scored("a/one", cost, (1, 1), (1, 1, 0), true)),
+                    1,
+                ),
+                row(
+                    "a/two",
+                    State::Identical,
+                    Some(scored("a/two", cost, (1, 1), (1, 1, 0), true)),
+                    1,
+                ),
+            ],
+        )]);
+        let s = select(&pool, 2, Budget::unlimited(), &[]);
+        assert_eq!(s.admitted.len(), 2, "an unlimited budget admits both");
+        assert_eq!(s.budget.spent(), u64::MAX, "the ledger saturates");
+        assert_eq!(
+            s.bytes_admitted,
+            u64::MAX,
+            "the reported total is the same saturated number"
         );
     }
 

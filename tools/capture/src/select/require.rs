@@ -45,10 +45,14 @@ pub fn unmet<'a>(required: &[Class], selection: &'a Selection) -> Vec<&'a Matrix
         .collect()
 }
 
-/// One class's line of the failure message: `identical: NotFundated (over budget)`.
+/// One class's line of the failure message: `reuse_moved: over_budget (the …)`.
+///
+/// The status is rendered through its **artifact spelling** (`over_budget`),
+/// not its Rust `Debug` spelling (`OverBudget`): the operator greps the same
+/// vocabulary that `MANIFEST.json` and the schema use.
 fn line(row: &MatrixRow) -> String {
     format!(
-        "{:?}{}",
+        "{}{}",
         row.status,
         row.reason
             .as_deref()
@@ -124,6 +128,7 @@ mod tests {
             admitted: Vec::new(),
             rejected: Vec::new(),
             forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
             matrix: rows,
             bytes_admitted: 0,
             budget: super::super::Budget::unlimited(),
@@ -183,6 +188,30 @@ mod tests {
         assert!(
             e.detail.contains("over budget"),
             "and the reason: {}",
+            e.detail
+        );
+    }
+
+    #[test]
+    fn the_failure_text_uses_the_artifact_spelling_not_debug() {
+        // **O3.** `line` formatted the status with `{:?}`, so the operator saw
+        // `OverBudget` while `MANIFEST.json`, the schema and every log line say
+        // `over_budget`. The status has a `Display` impl whose only job is to
+        // delegate to `id()`; the message must use it.
+        let sel = selection_with(vec![row(
+            Class::ReuseMoved,
+            MatrixStatus::OverBudget,
+            Some("the cheapest candidate cost 9000000 B"),
+        )]);
+        let e = check(&[Class::ReuseMoved], &sel).expect_err("over budget is unmet");
+        assert!(
+            e.detail.contains("reuse_moved: over_budget"),
+            "the artifact spelling must appear: {}",
+            e.detail
+        );
+        assert!(
+            !e.detail.contains("OverBudget"),
+            "the Rust Debug spelling must not: {}",
             e.detail
         );
     }

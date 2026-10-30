@@ -6,9 +6,11 @@
 //! `expected/`, `MANIFEST.json`, `checksums.json`, `README.md` — in the
 //! submodules below.
 //!
-//! Everything temporary goes to `tmp/` and is moved into place, so an interrupted
-//! run never leaves a half-written document that reads as a complete one.
-//! `verify/checksums.json` is what proves nothing is missing.
+//! **Atomicity is not uniform.** Only chunk blobs are written through a
+//! temporary file and renamed into place ([`crate::blobs::Store`]); every
+//! document written here is a plain create-and-write, so an interrupted run can
+//! leave a truncated metadata document. `verify/checksums.json` is what proves
+//! nothing is missing.
 
 pub mod closeout;
 pub mod fixture;
@@ -84,6 +86,94 @@ pub fn write_api(
     write_newline_doc(root, "api/error_shapes.json", shapes_json.as_bytes())?;
     written.push("api/error_shapes.json".to_string());
     Ok(written)
+}
+
+/// Write the incidental non-2xx bodies and their index.
+///
+/// **`api/error_bodies/<seq>.body` is byte-exact**, for the same reason the six
+/// API bodies are: a re-serialised error envelope would silently restyle what
+/// the origin said. `api/error_responses.json` carries what a reader needs
+/// before opening one: status, content type, the URL and where it landed, how
+/// many attempts it took, how many bytes arrived, how many were kept, whether
+/// that is all of them, and the path.
+///
+/// `<seq>` is the request's sequence number in `api/requests.ndjson`, zero-padded
+/// to six digits so a directory listing sorts in issue order. A row with no kept
+/// bytes has `stored_path: null` and no file — a zero-byte file would be a body
+/// that was never read, which is a different fact from a body that was empty.
+///
+/// Returns the paths written, bodies first then the index, which is the order
+/// they join `MANIFEST.json → files[]`.
+pub fn write_error_responses(
+    root: &Path,
+    bodies: &[crate::http::ErrorBody],
+    budget: u64,
+) -> std::io::Result<Vec<String>> {
+    let mut written = Vec::with_capacity(bodies.len() + 1);
+    let mut responses = Vec::with_capacity(bodies.len());
+    for b in bodies {
+        let stored_path = if b.body.is_empty() {
+            None
+        } else {
+            let rel = format!("api/error_bodies/{:06}.body", b.seq);
+            write_bytes(root, &rel, &b.body)?;
+            written.push(rel.clone());
+            Some(rel)
+        };
+        responses.push(crate::http::ErrorResponseRow {
+            seq: b.seq,
+            url: b.url.clone(),
+            final_url: b.final_url.clone(),
+            status: b.status,
+            attempts: b.attempts,
+            content_type: b.content_type.clone(),
+            bytes_received: b.bytes_received,
+            retained_bytes: b.retained_bytes(),
+            truncated: b.truncated,
+            stored_path,
+        });
+    }
+    let doc = crate::http::ErrorResponses {
+        schema_version: crate::SCHEMA_VERSION,
+        budget_bytes: budget,
+        total_retained_bytes: responses
+            .iter()
+            .fold(0u64, |n, r| n.saturating_add(r.retained_bytes)),
+        responses,
+    };
+    write_doc(root, "api/error_responses.json", &doc)?;
+    written.push("api/error_responses.json".to_string());
+    Ok(written)
+}
+
+/// Write `diagnostics/rejections.json`, the values the capture refused.
+///
+/// **The document is always written**, even when nothing was refused: a reader
+/// then cannot mistake "this run saw no hostile value" for "this run did not
+/// look", which is the ambiguity `error_shapes.json` was made required to
+/// remove. When the run refuses at the manifest boundary — before the rest of
+/// the tree exists — the caller writes the same document into the would-be
+/// bundle directory so the evidence survives the failed run.
+pub fn write_rejections(
+    root: &Path,
+    rejections: &crate::rejections::Rejections,
+) -> std::io::Result<Vec<String>> {
+    write_doc(root, "diagnostics/rejections.json", &rejections.document())?;
+    Ok(vec!["diagnostics/rejections.json".to_string()])
+}
+
+/// Write `diagnostics/path_map.json`, the logical→on-disk names.
+///
+/// **Always written.** A bundle with no device name has an empty `entries` list,
+/// which says "nothing needed escaping" rather than leaving a reader to wonder
+/// whether the document was forgotten. The mapping is what an external reader
+/// follows instead of re-deriving [`crate::paths::escape_path`].
+pub fn write_path_map(
+    root: &Path,
+    path_map: &crate::pathmap::PathMap,
+) -> std::io::Result<Vec<String>> {
+    write_doc(root, crate::pathmap::DOCUMENT, &path_map.document())?;
+    Ok(vec![crate::pathmap::DOCUMENT.to_string()])
 }
 
 /// Write `diff/paths.diff.json`, `diff/paths.tsv` and `diff/reuse_pool.json`.
@@ -196,9 +286,8 @@ pub fn write_patchmap(
 /// role lists, because knowing which chunks *would* have been needed is the part
 /// of the document that survives a metadata-only run.
 ///
-/// **`patchmaps/` is created first, as part of writing this.** It used to be a
-/// `create_dir_all` in the orchestrator, one line above the call, which meant
-/// the directory's existence depended on a caller remembering an unrelated step.
+/// **`patchmaps/` is created first, as part of writing this.** The directory's
+/// existence must not depend on a caller remembering an unrelated step:
 /// `--no-chunk-blobs` admits captures and then stores no blobs, so nothing is
 /// written there and the directory simply never appeared — which made `verify`
 /// refuse the bundle as unreadable (exit 1, "a bundle with no patchmaps has no
@@ -234,7 +323,12 @@ pub fn write_selection(
         "per_class": per_class,
         "budget": {
             "limit": selection.budget.limit(),
-            "spent": selection.bytes_admitted,
+            // **The charged ledger, not a second sum.** `bytes_admitted` is the
+            // same number today, but reading it here made the document own a
+            // second representation of one fact; a future admission path could
+            // change one and not the other. The `debug_assert` in `select`
+            // keeps the two equal while the summary still reports the sum.
+            "spent": selection.budget.spent(),
             "unlimited": selection.budget.limit().is_none(),
         },
         "required_order": crate::select::Class::REQUIRED_ORDER.map(|c| c.id()),
@@ -277,8 +371,8 @@ fn write_doc(root: &Path, rel: &str, value: &impl serde::Serialize) -> std::io::
 ///
 /// The small metadata documents written here are **not** written atomically: a
 /// half-written one is a small, reproducible failure. Chunk blobs are the only
-/// thing written through `tmp/`-and-move, and that is
-/// [`crate::blobs::Store`]'s own `write`.
+/// artifact written through a temporary file and renamed into place, and that is
+/// [`crate::blobs::Store`]'s own concern.
 pub fn write_bytes(root: &Path, rel: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
     write_parts(root, rel, &[bytes])
 }
@@ -418,8 +512,8 @@ pub fn write_json_gz(
             .map_err(|e| std::io::Error::other(format!("flush {rel}: {}", e.into_error())))?;
         // `finish()?` and not a bare drop. **The bytes are the same either way**
         // — `flate2::write::GzEncoder`'s `Drop` attempts the finish, so the
-        // trailer is not what this call is for, contrary to what the comment
-        // here used to say. `Drop` cannot report an error, though, and a
+        // trailer is not what this call is for. `Drop` cannot report an error,
+        // though, and a
         // truncated manifest decode must not be written silently. Pinned by
         // `hash::tests::dropping_a_gz_encoder_without_finishing_produces_the_same_bytes`.
         enc.finish()?;
@@ -517,6 +611,83 @@ mod tests {
         // Absent, not created: one of these cases is about the writer creating
         // its own parents, so pre-creating the root would assert nothing.
         girpr_tempdir::TempDir::absent("gircap-emit", name)
+    }
+
+    #[test]
+    fn error_bodies_are_written_byte_exact_and_indexed() {
+        // F5: the body of a refused request is evidence, and a re-serialised one
+        // would be the tool's reading of the origin rather than the origin's
+        // words. The index has to answer "what did I keep, and is it all of it"
+        // without opening a body.
+        let root = tmp("error-bodies");
+        let envelope = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let bodies = vec![
+            crate::http::ErrorBody {
+                seq: 7,
+                url: "https://cdn.example/chunks/gone".into(),
+                final_url: "https://cdn.example/chunks/gone".into(),
+                status: 404,
+                attempts: 1,
+                content_type: Some("application/xml".into()),
+                bytes_received: envelope.len() as u64,
+                body: envelope.to_vec(),
+                truncated: false,
+            },
+            // Nothing kept: the run's budget had been spent. The row survives.
+            crate::http::ErrorBody {
+                seq: 9,
+                url: "https://cdn.example/chunks/slow".into(),
+                final_url: "https://cdn.example/chunks/slow".into(),
+                status: 429,
+                attempts: 3,
+                content_type: None,
+                bytes_received: 5_000,
+                body: Vec::new(),
+                truncated: true,
+            },
+        ];
+        let written = write_error_responses(&root, &bodies, crate::http::ERROR_BODY_BUDGET_BYTES)
+            .expect("write");
+        assert_eq!(
+            written,
+            vec![
+                "api/error_bodies/000007.body".to_string(),
+                "api/error_responses.json".to_string(),
+            ]
+        );
+        assert_eq!(
+            std::fs::read(root.join("api/error_bodies/000007.body")).expect("read back"),
+            envelope,
+            "the kept body is byte-exact"
+        );
+        assert!(
+            !root.join("api/error_bodies/000009.body").exists(),
+            "a row that kept nothing names no file"
+        );
+
+        let doc: crate::http::ErrorResponses =
+            serde_json::from_slice(&std::fs::read(root.join("api/error_responses.json")).unwrap())
+                .expect("the document parses through its own type");
+        assert_eq!(doc.schema_version, crate::SCHEMA_VERSION);
+        assert_eq!(doc.budget_bytes, crate::http::ERROR_BODY_BUDGET_BYTES);
+        assert_eq!(doc.total_retained_bytes, envelope.len() as u64);
+        assert_eq!(doc.responses.len(), 2);
+        let kept = &doc.responses[0];
+        assert_eq!(kept.seq, 7);
+        assert_eq!(kept.status, 404);
+        assert_eq!(kept.retained_bytes, envelope.len() as u64);
+        assert_eq!(kept.bytes_received, envelope.len() as u64);
+        assert!(!kept.truncated);
+        assert_eq!(
+            kept.stored_path.as_deref(),
+            Some("api/error_bodies/000007.body")
+        );
+        let lost = &doc.responses[1];
+        assert_eq!(lost.retained_bytes, 0);
+        assert_eq!(lost.bytes_received, 5_000);
+        assert!(lost.truncated);
+        assert_eq!(lost.stored_path, None);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

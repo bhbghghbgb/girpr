@@ -217,10 +217,10 @@ pub fn wording(id: &str) -> &'static str {
 
 /// Log every selfcheck row that did not pass, with what it expected.
 ///
-/// **The fuller of the two spellings this replaced.** One call site logged
-/// `detail` and omitted `expected`; the other logged both. The one that dropped
-/// a field was the strict subset, so keeping the fuller form means no log line
-/// anywhere in the crate is less informative than it used to be.
+/// **The fuller of the two spellings.** One call site logged `detail` and
+/// omitted `expected`; the other logged both. The one that dropped a field was
+/// the strict subset, so keeping the fuller form means no log line anywhere in
+/// the crate omits a field the other one recorded.
 ///
 /// Next to the rows rather than in the dispatcher, so a caller cannot add a
 /// red row and forget to say so.
@@ -424,35 +424,18 @@ pub fn api_and_manifest(
                 b.props.stored_path.clone().unwrap_or_else(|| {
                     format!("chunks/blobs/{}.zst (not stored)", b.props.chunk_id)
                 });
-            let v = b.props.verified;
-            rows.push(match v {
-                Some(v) if v.all_green() && b.props.decode_error.is_none() => {
-                    Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed)
-                }
-                Some(v) => Assertion::fail(
+            // One question, answered by the same predicate assembly and `verify`
+            // use. A version-3 row can hold bytes and still be unusable: a
+            // partial fetch, a decode failure, or a measurement that did not
+            // return all keep `stored_path` while rejecting the blob.
+            rows.push(match b.props.why_unusable() {
+                None => Assertion::pass("A6", wording("A6"), &subject, &b.props.md5_decompressed),
+                Some(why) => Assertion::fail(
                     "A6",
                     wording("A6"),
                     &subject,
-                    "all four checks hold",
-                    &format!(
-                        "{}; md5(decompressed) {}",
-                        v.failures().join(", "),
-                        b.props.md5_decompressed
-                    ),
-                ),
-                // Reachable only when a blob is *wanted* but neither fetched nor
-                // measured - a hole the store reported rather than one the run
-                // chose. `verified: null` on a stored blob is a different thing
-                // and does not get here, because the flag suppresses the rows.
-                None => Assertion::fail(
-                    "A6",
-                    wording("A6"),
-                    &subject,
-                    "measured",
-                    b.props
-                        .decode_error
-                        .as_deref()
-                        .unwrap_or("wanted but never measured"),
+                    "a complete, measured blob whose four checks hold",
+                    &why,
                 ),
             });
         }
@@ -490,8 +473,15 @@ pub fn closing(
     // A14: `game/` holds nothing but the tool-read config and the variant
     // files. Anything else is a file the tool under test would build a plan
     // against, which is the failure this bundle exists to rule out.
-    let captured: std::collections::BTreeSet<&str> =
-        selection.admitted.iter().map(|a| a.path.as_str()).collect();
+    // A captured path is compared under the name the tree actually holds: a
+    // device component is escaped on disk (`CON` -> `%CON`) and recorded in
+    // `diagnostics/path_map.json`, so the *logical* spelling would look like a
+    // stray next to the file the writer correctly created.
+    let captured: std::collections::BTreeSet<String> = selection
+        .admitted
+        .iter()
+        .map(|a| crate::paths::escape_path(&a.path))
+        .collect();
     let game_files: std::collections::BTreeSet<&str> = written
         .iter()
         .filter_map(|p| p.strip_prefix("game/"))
@@ -499,7 +489,7 @@ pub fn closing(
     let strays: Vec<&str> = game_files
         .iter()
         .copied()
-        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(p))
+        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(*p))
         .collect();
     rows.push(if strays.is_empty() {
         Assertion::pass(
@@ -697,10 +687,10 @@ pub fn check_config_ini(dir: &std::path::Path, old_tag: &str) -> Assertion {
 ///
 /// It is the complement of what a `--no-chunk-blobs` run *does* assert — A1-A5,
 /// A13-A17 — within [`WORDING`], and that is exactly what [`Selfcheck::skipped`]
-/// computes from the rows. This constant used to be a bare `vec![]` at the
-/// call site with the derived method beside it and no connection between them:
-/// two sources of truth for one fact, where a change to `WORDING` would silently
-/// change what the document said without changing what the run recorded.
+/// computes from the rows. A bare `vec![]` at the call site with the derived
+/// method beside it would be two sources of truth for one fact, where a change
+/// to `WORDING` would silently change what the document said without changing
+/// what the run recorded.
 ///
 /// `skipped_were_declared_not_asserted` is the check. It builds a selfcheck the
 /// way a `--no-chunk-blobs` run does and requires the two to be identical.

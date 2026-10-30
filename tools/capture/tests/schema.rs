@@ -197,6 +197,9 @@ fn every_document_carries_the_crate_schema_version() {
         "verify/checksums.json",
         "verify/selfcheck.json",
         "api/tag_probe.json",
+        "api/error_responses.json",
+        "diagnostics/path_map.json",
+        "diagnostics/rejections.json",
         "manifests/7.0.0/game.manifest.meta.json",
     ] {
         let doc = json(&b.join(rel));
@@ -231,6 +234,7 @@ fn the_manifest_index_key_set_is_the_documented_one() {
             "files",
             "gzip_threshold",
             "matrix",
+            "max_decompressed_bytes",
             "schema_version",
             "selection_pool",
             "tool",
@@ -240,19 +244,190 @@ fn the_manifest_index_key_set_is_the_documented_one() {
         ],
         "MANIFEST.json's top-level keys"
     );
+    assert_eq!(
+        doc["max_decompressed_bytes"],
+        gircap::hash::DEFAULT_MAX_DECOMPRESSED_BYTES
+    );
     assert_eq!(keys(&doc["versions"]), vec!["diff_tags", "new", "old"]);
     assert_eq!(
         keys(&doc["capture"]),
-        vec!["captured_at", "complete", "host_os", "id", "tool_argv"]
+        vec![
+            "captured_at",
+            "complete",
+            "host_os",
+            "id",
+            "tool_argv",
+            "tool_argv_raw",
+        ]
     );
+}
+
+/// `capture.tool_argv_raw` has one byte array per `tool_argv` entry, and those
+/// bytes decode back to the lossy argument.
+///
+/// The lossy form is what a reader shows a human; the raw form is what makes a
+/// non-Unicode argument (an unpaired surrogate in `--out`, say) recoverable at
+/// all. The two lists must stay aligned, and the bytes must be in the encoding
+/// `host_os` names.
+#[test]
+fn a_capture_records_the_exact_bytes_of_its_arguments() {
+    let b = bundle();
+    let doc = json(&b.join("MANIFEST.json"));
+    let lossy = doc["capture"]["tool_argv"]
+        .as_array()
+        .expect("tool_argv is an array");
+    let raw = doc["capture"]["tool_argv_raw"]
+        .as_array()
+        .expect("tool_argv_raw is an array");
+    assert_eq!(raw.len(), lossy.len(), "one raw entry per argument");
+    let host = doc["capture"]["host_os"].as_str().expect("host_os");
+    for (i, (l, r)) in lossy.iter().zip(raw).enumerate() {
+        let bytes: Vec<u8> = r
+            .as_array()
+            .unwrap_or_else(|| panic!("raw[{i}] is an array"))
+            .iter()
+            .map(|n| {
+                n.as_u64()
+                    .unwrap_or_else(|| panic!("raw[{i}] holds numbers")) as u8
+            })
+            .collect();
+        let decoded = match host {
+            "windows" => {
+                assert_eq!(bytes.len() % 2, 0, "raw[{i}] is whole UTF-16 code units");
+                let units: Vec<u16> = bytes
+                    .chunks_exact(2)
+                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                String::from_utf16(&units).expect("each argument was valid Unicode")
+            }
+            _ => String::from_utf8(bytes).expect("each argument was valid Unicode"),
+        };
+        assert_eq!(&decoded, l.as_str().expect("lossy entry is a string"));
+    }
+    // The command is the second argument, as it was invoked.
+    assert_eq!(lossy[1], "capture");
+}
+
+/// The incidental error-body index, and the bodies it names.
+///
+/// The row is the observation; the body is the evidence. A `stored_path` that
+/// names a file of a different length from `retained_bytes` would make the
+/// index lie about what it kept, so both are checked on whatever rows this
+/// capture happened to produce.
+#[test]
+fn the_error_responses_document_has_the_documented_shape() {
+    let b = bundle();
+    let doc = json(&b.join("api/error_responses.json"));
+    assert_eq!(
+        keys(&doc),
+        vec![
+            "budget_bytes",
+            "responses",
+            "schema_version",
+            "total_retained_bytes",
+        ],
+        "api/error_responses.json's top-level keys"
+    );
+    assert_eq!(doc["budget_bytes"], gircap::http::ERROR_BODY_BUDGET_BYTES);
+    let rows = doc["responses"].as_array().expect("responses is an array");
+    let retained: u64 = rows
+        .iter()
+        .map(|r| r["retained_bytes"].as_u64().expect("retained_bytes"))
+        .sum();
+    assert_eq!(doc["total_retained_bytes"], retained);
+    for row in rows {
+        assert_eq!(
+            keys(row),
+            vec![
+                "attempts",
+                "bytes_received",
+                "content_type",
+                "final_url",
+                "retained_bytes",
+                "seq",
+                "status",
+                "stored_path",
+                "truncated",
+                "url",
+            ],
+            "a row's keys"
+        );
+        let (kept, received) = (
+            row["retained_bytes"].as_u64().expect("retained_bytes"),
+            row["bytes_received"].as_u64().expect("bytes_received"),
+        );
+        assert!(
+            kept <= received,
+            "a row cannot keep more than arrived: {row}"
+        );
+        match row["stored_path"].as_str() {
+            Some(rel) => {
+                let on_disk = std::fs::metadata(b.join(rel))
+                    .unwrap_or_else(|e| panic!("{rel}: {e}"))
+                    .len();
+                assert_eq!(on_disk, kept, "{rel} is not the length the row claims");
+            }
+            None => assert_eq!(kept, 0, "no path means nothing was kept: {row}"),
+        }
+    }
+}
+
+/// The rejection document's shape, and that a healthy run really has none.
+///
+/// The document is written even when nothing was refused — an absent file would
+/// be indistinguishable from a run that never looked — so its empty state is the
+/// one this fixture can pin. The rows themselves are asserted where they are
+/// produced: `capture_layout`'s hostile-manifest tests read a real refusal back
+/// from disk.
+#[test]
+fn the_rejection_document_exists_and_is_empty_for_a_healthy_capture() {
+    let b = bundle();
+    let doc = json(&b.join("diagnostics/rejections.json"));
+    assert_eq!(
+        keys(&doc),
+        vec![
+            "cap_bytes",
+            "omitted",
+            "rejections",
+            "schema_version",
+            "total",
+        ],
+        "diagnostics/rejections.json's top-level keys"
+    );
+    assert_eq!(doc["cap_bytes"], 512);
+    assert_eq!(doc["total"], 0);
+    assert_eq!(doc["omitted"], 0);
+    assert_eq!(doc["rejections"], serde_json::json!([]));
+}
+
+/// And the mapping document, whose empty state says "nothing needed escaping"
+/// rather than leaving a reader to guess whether it was written at all.
+#[test]
+fn the_path_map_exists_and_is_empty_for_a_healthy_capture() {
+    let b = bundle();
+    let doc = json(&b.join("diagnostics/path_map.json"));
+    assert_eq!(
+        keys(&doc),
+        vec!["entries", "schema_version"],
+        "diagnostics/path_map.json's top-level keys"
+    );
+    assert_eq!(doc["entries"], serde_json::json!([]));
+}
+
+/// A raised decompression ceiling is recorded, not silently replaced by the
+/// default on read: it is the number every decode in the bundle was bounded by.
+#[test]
+fn a_capture_records_the_decompression_ceiling_it_used() {
+    let b = capture_into("gircap-ceiling", &["--max-decompressed-bytes", "123456"]);
+    let doc = json(&b.join("MANIFEST.json"));
+    assert_eq!(doc["max_decompressed_bytes"], 123_456);
 }
 
 /// `gzip_threshold` is required, and a bundle without it does not open.
 ///
-/// It used to carry `#[serde(default = "…")]` so that `schema_version` could stay
-/// `1` and a bundle predating the field would still verify. That made a bundle
-/// with **no recorded threshold** read back as having used the flag's default —
-/// which is a claim about a run nobody wrote down, on the one field whose whole
+/// `#[serde(default = "…")]` on the field would let a bundle predating it
+/// still verify, reading back the flag's default as though the run had used
+/// it — a claim about a run nobody wrote down, on the one field whose whole
 /// purpose is to say why one document is gzipped and the next is not.
 ///
 /// A field that defaults to a constant is worse than a field that is required,
@@ -285,6 +460,31 @@ fn a_manifest_without_the_gzip_threshold_does_not_open() {
     );
 }
 
+/// `max_decompressed_bytes` is required too: a bundle cannot be decoded without
+/// knowing the ceiling its capture used, and defaulting it would invent a number
+/// nobody recorded.
+#[test]
+fn a_manifest_without_the_decompression_ceiling_does_not_open() {
+    let dir = TempDir::new("gircap-no-ceiling", "copy");
+    copy_tree(&bundle(), &dir);
+
+    let path = dir.join("MANIFEST.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("MANIFEST.json")).expect("parse");
+    doc.as_object_mut()
+        .expect("an object")
+        .remove("max_decompressed_bytes");
+    std::fs::write(&path, serde_json::to_vec_pretty(&doc).unwrap()).expect("rewrite");
+
+    let err = gircap::verify::Bundle::open(&dir)
+        .expect_err("a bundle with no recorded ceiling must not open")
+        .to_string();
+    assert!(
+        err.contains("max_decompressed_bytes"),
+        "the refusal must name the field: {err}"
+    );
+}
+
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
     std::fs::create_dir_all(to).expect("scratch");
     for e in std::fs::read_dir(from).expect("readable").flatten() {
@@ -311,8 +511,11 @@ fn the_chunk_index_key_set_is_the_documented_one() {
             "chunk_id",
             "container",
             "decode_error",
+            "fetch_error",
             "md5_compressed",
             "md5_decompressed",
+            "measurement_error",
+            "partial",
             "referenced_by",
             "sets",
             "sha256_compressed",
@@ -323,6 +526,12 @@ fn the_chunk_index_key_set_is_the_documented_one() {
         ],
         "a blob entry's keys"
     );
+    // Version 3's evidence fields are present on every row, even when there was
+    // no failure: a reader can rely on the key rather than distinguish absent
+    // from null.
+    assert!(blob["fetch_error"].is_null());
+    assert_eq!(blob["partial"], serde_json::json!(false));
+    assert!(blob["measurement_error"].is_null());
     assert_eq!(
         keys(&blob["referenced_by"][0]),
         vec!["build_id", "capture_id", "offset", "path", "role", "tag"],

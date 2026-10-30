@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 use crate::exit::ExitCode;
 
 pub mod error;
+pub mod error_bodies;
 pub mod fetcher;
 pub mod log;
 pub mod negative;
@@ -52,6 +53,9 @@ pub mod record;
 pub mod transport;
 
 pub use error::ApiError;
+pub use error_bodies::{
+    ERROR_BODY_BUDGET_BYTES, ErrorBodies, ErrorBody, ErrorResponseRow, ErrorResponses,
+};
 pub(crate) use fetcher::shared_req_headers;
 pub use fetcher::{Destination, Fetched, Fetcher, Observation, Streamed};
 
@@ -809,6 +813,21 @@ mod tests {
         .expect("client builds")
     }
 
+    /// [`fetcher`] with an explicit error-body retention budget.
+    fn fetcher_with_error_budget(retries: u32, sleeper: Arc<dyn Sleep>, budget: u64) -> Fetcher {
+        Fetcher::with_sleeper_and_error_budget(
+            Transport {
+                retries,
+                timeout: Duration::from_secs(5),
+                max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            },
+            RequestLog::new(),
+            sleeper,
+            budget,
+        )
+        .expect("client builds")
+    }
+
     /// The provenance row a fetch logged, for asserting what was **recorded**.
     ///
     /// `Fetched` carries only a `seq`, so the assertions read the log instead —
@@ -820,6 +839,36 @@ mod tests {
         let v = f.log().records();
         assert!(!v.is_empty(), "nothing was recorded");
         v.into_iter().next_back().expect("at least one row")
+    }
+
+    /// A panicking metadata job keeps its index and carries its own cause.
+    ///
+    /// The slot string reaches `fetch_errors` and the summary, so reporting
+    /// only "a request task panicked" loses the one text that says why.
+    /// `JoinSet` names the failed task by id; the loop maps that id back to the
+    /// item index before the error is consumed.
+    #[tokio::test]
+    async fn a_panicking_request_task_keeps_its_index_and_cause() {
+        let f = fetcher(1, Arc::new(RecordingSleep::default()));
+        let items = [0usize, 1, 2];
+        let got = f
+            .map_concurrently(&items, 2, |_fetcher, i, _item| async move {
+                if i == 1 {
+                    panic!("metadata job exploded");
+                }
+                (i, Ok::<usize, String>(i * 10))
+            })
+            .await;
+
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].as_ref().ok(), Some(&0));
+        let why = got[1].as_ref().expect_err("the middle job panicked");
+        assert!(why.contains("item 1"), "the index is context: {why}");
+        assert!(
+            why.contains("metadata job exploded"),
+            "the cause must survive: {why}"
+        );
+        assert_eq!(got[2].as_ref().ok(), Some(&20), "the rest still runs");
     }
 
     /// A panic in one fetch must not take the log — or the run — with it.
@@ -1189,6 +1238,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_declared_length_far_beyond_the_ceiling_is_a_typed_refusal_not_an_allocation() {
+        // **O1.** The buffered path used the declared `Content-Length` as a
+        // `Vec::with_capacity` size *before* `drain_capped` applied the ceiling.
+        // A loopback origin could therefore make the process request 10 GiB (and
+        // a declaration at or above `isize::MAX` panicked with a capacity
+        // overflow) instead of returning the promised typed refusal.
+        //
+        // Both cases matter: the first is the review's 10 GiB header, the second
+        // is the value that made the old conversion a panic rather than an
+        // allocation attempt. The reservation is now clamped, so neither reaches
+        // the allocator as a size.
+        let cases = [(isize::MAX as u64) + 1, 10 * 1024 * 1024 * 1024];
+        for claim in cases {
+            let Ok(claim) = usize::try_from(claim) else {
+                continue;
+            };
+            let body = big_body(64);
+            let mock = spawn_answers(
+                vec![Answer {
+                    status: 200,
+                    body: leak(&body),
+                    claim: Some(claim),
+                    omit_length: false,
+                }],
+                "",
+            );
+            let f = fetcher_with(1, Arc::new(RecordingSleep::default()), body.len() as u64);
+
+            let err = f
+                .get(&url(&mock, "/huge"), Kind::Chunk, None)
+                .await
+                .expect_err("a declared length over the ceiling must be a typed refusal");
+            let text = err.to_string();
+            assert!(
+                text.contains("ceiling"),
+                "Content-Length {claim} must be refused by the ceiling, not the allocator: {text}"
+            );
+            assert_eq!(
+                mock.hits.load(Ordering::SeqCst),
+                1,
+                "a Shape refusal is not retried"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn the_file_destination_is_capped_too() {
         // A ceiling enforced in the buffered path and not the file path is a
         // ceiling with a hole in it — and the file path is the one that fetches
@@ -1285,6 +1380,9 @@ mod tests {
         // `bytes_in` must price every request, not only the successful ones: a
         // `429` carrying a few KB of XML envelope is transferred, and the requests
         // it would under-report are the retried ones — the expensive ones.
+        //
+        // The same body is now **kept** as well as counted (F5): the status alone
+        // says the origin refused, and the envelope says why.
         let envelope = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Error>\n  \
                          <Code>TooManyRequests</Code>\n  <Message>Slow down.</Message>\n\
                          </Error>\n";
@@ -1308,6 +1406,44 @@ mod tests {
             "bytes_in must count the body that arrived, not report the failure as free"
         );
         assert_eq!(rows[0].status, 429);
+
+        let kept = f.error_bodies().snapshot();
+        assert_eq!(kept.len(), 1, "one row per failed response");
+        assert_eq!(kept[0].seq, rows[0].seq, "the row joins the request log");
+        assert_eq!(kept[0].body, envelope, "the body is kept byte-exact");
+        assert_eq!(kept[0].bytes_received, envelope.len() as u64);
+        assert_eq!(kept[0].retained_bytes(), envelope.len() as u64);
+        assert!(!kept[0].truncated);
+        assert_eq!(kept[0].status, 429);
+        assert_eq!(
+            kept[0].content_type.as_deref(),
+            Some("application/octet-stream"),
+            "the content type is what the origin sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_body_over_the_run_budget_is_kept_in_part_and_marked_truncated() {
+        // A throttled run can fail thousands of chunks; keeping every page would
+        // make the evidence larger than the artifact. The row survives, the body
+        // is cut, and `truncated` says which.
+        let envelope = b"0123456789";
+        let mock = spawn(vec![(404, envelope)], "");
+        let f = fetcher_with_error_budget(1, Arc::new(RecordingSleep::default()), 4);
+
+        f.get(&url(&mock, "/gone"), Kind::Chunk, None)
+            .await
+            .expect_err("404 is not a success");
+
+        let kept = f.error_bodies().snapshot();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].body, b"0123", "the budget bounds retention");
+        assert_eq!(
+            kept[0].bytes_received, 10,
+            "the count is still what the request cost"
+        );
+        assert!(kept[0].truncated, "the row must not claim it kept it all");
+        assert_eq!(f.error_bodies().remaining(), 0);
     }
 
     #[tokio::test]
@@ -1365,6 +1501,226 @@ mod tests {
             f.log().bytes_in(),
             envelope.len() as u64 * 2 + payload.len() as u64,
             "the run's total is every body it received"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_declared_oversized_error_body_is_not_read_at_all() {
+        // A `503` that *says* it is sending 10 MiB is refused on the header, so
+        // the failure costs the status line and nothing else. Before this, the
+        // error body was drained with no ceiling at all, so a hostile origin could
+        // hold the request open until the timeout — once per retry.
+        let body = big_body(4096);
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 503,
+                body: leak(&body),
+                claim: Some(10 * 1024 * 1024),
+                omit_length: false,
+            }],
+            "",
+        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), 1024);
+
+        let err = f
+            .get(&url(&mock, "/busy"), Kind::Chunk, None)
+            .await
+            .expect_err("503 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 503, .. }),
+            "the status is the failure, not the body: {err:?}"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].bytes_in, 0,
+            "a declared length over the ceiling is refused before a byte is read"
+        );
+    }
+
+    /// A `2xx` body that fails after N bytes is priced at **N**, not zero.
+    ///
+    /// The 404 twin below has pinned this for an error body since F5; the
+    /// success branch had the same hole. `drain_capped` knew the running total
+    /// when the origin hung up, and `Fetcher::attempt` discarded it and recorded
+    /// `0`, so a retried 200 reported the first attempt as free in a log whose
+    /// contract is "every body received".
+    #[tokio::test]
+    async fn a_truncated_success_body_is_priced_at_what_arrived() {
+        let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
+        let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
+        let mock = spawn_answers(
+            vec![
+                Answer {
+                    status: 200,
+                    body: sent,
+                    // Promise more than is sent, then hang up: a mid-body close.
+                    claim: Some(sent.len() * 10),
+                    omit_length: false,
+                },
+                Answer {
+                    status: 200,
+                    body: full,
+                    claim: None,
+                    omit_length: false,
+                },
+            ],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let got = f
+            .get(&url(&mock, "/blob"), Kind::Chunk, None)
+            .await
+            .expect("a read failure is retried, and the retry succeeds");
+        assert_eq!(got.body, full, "the second attempt's body is returned");
+
+        let rows = f.log().records();
+        assert_eq!(rows.len(), 2, "the failed attempt is part of the log");
+        assert_eq!(rows[0].status, 200);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the bytes that arrived before the close are the attempt's cost"
+        );
+        assert_eq!(rows[1].bytes_in, full.len() as u64);
+    }
+
+    /// The same accounting on the destination that fetches chunk blobs.
+    ///
+    /// `Attempt` has two failure closures — one per destination — and the bug
+    /// was hard-coded in both. A test of one would not pin the other.
+    #[tokio::test]
+    async fn a_truncated_success_body_is_priced_at_what_arrived_for_a_file_too() {
+        let sent = b"\x28\xb5\x2f\xfdpartial frame that stops";
+        let full = b"\x28\xb5\x2f\xfdthe whole frame on the retry";
+        let mock = spawn_answers(
+            vec![
+                Answer {
+                    status: 200,
+                    body: sent,
+                    claim: Some(sent.len() * 10),
+                    omit_length: false,
+                },
+                Answer {
+                    status: 200,
+                    body: full,
+                    claim: None,
+                    omit_length: false,
+                },
+            ],
+            "",
+        );
+        let dir = scratch("truncated-file");
+        let path = dir.join("blob.bin");
+        let mut out = crate::hash::HashingFile::create(&path).expect("create");
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let got = f
+            .get_to_file(&url(&mock, "/blob"), Kind::Chunk, &mut out)
+            .await
+            .expect("the retry succeeds and restarts the file");
+        assert_eq!(got.bytes_in, full.len() as u64);
+        assert_eq!(
+            std::fs::read(&path).expect("the stored file"),
+            full,
+            "the retry's body replaced the partial one"
+        );
+
+        let rows = f.log().records();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the file destination's failed attempt is priced the same way"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_truncated_error_body_keeps_its_status_and_is_not_retried() {
+        // The regression the reverted `f9352f7` patch introduced: routing the
+        // error body through `drain_capped` turned a mid-read failure into a
+        // `Transport`, which the retry policy then retried. A `404` with a
+        // truncated body would be fetched again, three times, for the same answer.
+        let sent = b"<?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>";
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 404,
+                body: sent,
+                // Promise more than is sent, then hang up: a truncated body.
+                claim: Some(sent.len() * 10),
+                omit_length: false,
+            }],
+            "",
+        );
+        let f = fetcher(3, Arc::new(RecordingSleep::default()));
+
+        let err = f
+            .get(&url(&mock, "/gone"), Kind::Chunk, None)
+            .await
+            .expect_err("404 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 404, .. }),
+            "a truncated error body must not replace the status: {err:?}"
+        );
+        assert_eq!(
+            mock.hits.load(Ordering::SeqCst),
+            1,
+            "a 404 is not retryable, and a broken body does not make it one"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].bytes_in,
+            sent.len() as u64,
+            "the bytes that did arrive are still priced"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_oversized_error_body_is_counted_only_as_far_as_it_arrived() {
+        // The second check, for an error body that omits `Content-Length`: the
+        // running total has to stop it too, or the ceiling has a hole exactly
+        // where a hostile origin would aim.
+        //
+        // The body is far larger than a socket read, so "stopped early" is
+        // observable: `bytes_in` is over the ceiling but nowhere near the body.
+        let body = big_body(1024 * 1024);
+        let cap = 64 * 1024;
+        let mock = spawn_answers(
+            vec![Answer {
+                status: 503,
+                body: leak(&body),
+                claim: None,
+                omit_length: true,
+            }],
+            "",
+        );
+        let f = fetcher_with(1, Arc::new(RecordingSleep::default()), cap);
+
+        let err = f
+            .get(&url(&mock, "/endless"), Kind::Chunk, None)
+            .await
+            .expect_err("503 is not a success");
+        assert!(
+            matches!(err, ApiError::Status { status: 503, .. }),
+            "the ceiling must not turn the status into a `Shape`: {err:?}"
+        );
+
+        let rows: Vec<_> = f.log().records();
+        assert_eq!(rows.len(), 1);
+        assert!(
+            rows[0].bytes_in > cap,
+            "the count must include the chunk that crossed the ceiling: {}",
+            rows[0].bytes_in
+        );
+        assert!(
+            rows[0].bytes_in < body.len() as u64,
+            "reading must stop at the ceiling, not drain a megabyte: {}",
+            rows[0].bytes_in
         );
     }
 

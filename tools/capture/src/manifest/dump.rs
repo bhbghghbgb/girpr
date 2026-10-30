@@ -24,8 +24,15 @@ use crate::manifest::proto::SophonChunkFile;
 use crate::manifest::{CapturedManifest, Stored};
 
 /// The artifact-relative path of a manifest's files.
+///
+/// The tag is escaped: an API tag that is a Windows device name (`CON`,
+/// `NUL.txt`) is preserved in the documents but cannot be a directory, so it is
+/// written as `%CON` and `diagnostics/path_map.json` records the pair.
 pub fn dir(tag: &str) -> String {
-    format!("manifests/{tag}")
+    format!(
+        "manifests/{}",
+        crate::paths::escape_component(tag).into_owned()
+    )
 }
 
 /// The archive, stored exactly as served.
@@ -77,6 +84,30 @@ pub fn write(
 ) -> std::io::Result<Vec<StoredAs>> {
     let tag = captured.tag.clone();
     let field = captured.matching_field.clone();
+    // The field is interpolated raw into four artifact-relative names below.
+    // Validate before the first `create_dir_all`: a field this rule refuses must
+    // not leave a single document, and a caller that built a `CapturedManifest`
+    // itself gets the same refusal the capture path does.
+    if let Some(problem) = crate::paths::field_component_problem(&field) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("manifest field {problem}"),
+        ));
+    }
+    // The tag is the other component of all four names, and it was the one the
+    // writer trusted. The CLI validates both resolved tags before a pair is
+    // named, but this sink is reachable by any in-crate caller that builds a
+    // `CapturedManifest`, and `tag_dir`/`archive_rel` interpolate it raw.
+    //
+    // A device name is **allowed here** because `dir` escapes it; an API tag
+    // that names `CON` is evidence to keep, not a reason to refuse. Every other
+    // tag rule still applies.
+    if let Some(problem) = crate::config::tag_shape_problem_allowing_device(&tag) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("manifest tag {problem}"),
+        ));
+    }
     let mut out = Vec::with_capacity(4);
 
     // 1. The archive, byte-exact.
@@ -363,6 +394,81 @@ mod tests {
         assert_eq!(meta["id_parts"]["prefix_semantics"], "opaque");
         assert_eq!(meta["verified"]["id_prefix_verified"], false);
         assert_eq!(meta["category_name"], "\u{6e38}\u{620f}\u{672c}\u{4f53}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A `matching_field` from any source is a file-name component. The dump is
+    /// the last place it becomes a path, so the refusal happens before the first
+    /// document is created rather than after three of four have landed.
+    #[test]
+    fn a_field_that_names_a_path_is_refused_before_anything_is_written() {
+        let root = tmp("field-escape");
+        let name = root.file_name().unwrap().to_string_lossy().into_owned();
+        let outside = root
+            .parent()
+            .unwrap()
+            .join(format!("{name}-escape.manifest.zst"));
+        let mut c = captured();
+        c.matching_field = format!("../../../{name}-escape");
+
+        let e = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(e.to_string().contains("manifest field"), "{e}");
+        assert!(!root.exists(), "the dump created a tree it refused");
+        assert!(
+            !outside.exists(),
+            "the field escaped the dump root: {}",
+            outside.display()
+        );
+    }
+
+    /// The tag is the **other** component of the same four names. The writer used
+    /// to validate only the field, so a hand-built `CapturedManifest` with a
+    /// traversal tag reached `root.join(rel)` unrefused.
+    #[test]
+    fn a_tag_that_names_a_path_is_refused_before_anything_is_written() {
+        let root = tmp("tag-escape");
+        let outside = root.parent().unwrap().join("tag-escape");
+        let mut c = captured();
+        c.tag = "../../tag-escape".into();
+
+        let e = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(e.to_string().contains("manifest tag"), "{e}");
+        assert!(!root.exists(), "the dump created a tree it refused");
+        assert!(
+            !outside.exists(),
+            "the tag escaped the dump root: {}",
+            outside.display()
+        );
+    }
+
+    /// A device-name tag is the one tag the writer accepts and escapes: the
+    /// documents keep the API's spelling, the directory is `%CON`, and the four
+    /// files land under it. Refusing it would discard a live observation.
+    #[test]
+    fn a_device_tag_is_written_under_an_escaped_directory() {
+        let root = tmp("tag-device");
+        let mut c = captured();
+        c.tag = "CON".into();
+        c.meta.tag = "CON".into();
+
+        let paths = write(&root, &mut c, 1_048_576, ManifestDetail::PathsOnly).unwrap();
+        assert!(
+            paths.iter().all(|p| p.path.starts_with("manifests/%CON/")),
+            "{paths:?}"
+        );
+        assert!(root.join("manifests/%CON/game.manifest.zst").is_file());
+        assert!(
+            !root.join("manifests/CON").exists(),
+            "the unescaped device name must not be created"
+        );
+        // The document keeps the tag the API gave.
+        let meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("manifests/%CON/game.manifest.meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta["tag"], "CON");
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -236,7 +236,7 @@ every change that must not move a bundle byte.
 
 It compares **two captures of one binary**, so it is blind by construction to a
 change applied **uniformly to every capture** — a field that starts being written
-where it used to be null, or a wording narrowed in every row. Closing that needs
+where it was null, or a wording narrowed in every row. Closing that needs
 a *written expectation*, not a comparison, and that is what the per-document pins
 in `tests/capture_layout.rs` are: `api/requests.ndjson`'s 28 rows, and
 `MANIFEST.json` / `verify/checksums.json` / `README.md` / `verify/selfcheck.json`
@@ -263,7 +263,7 @@ says which is which.
 | `flate2` output is not byte-stable across zlib versions | re-running produces a different `manifest.json.gz` | `checksums.json` records the *decompressed* digest for gzipped files, so artifact identity does not depend on the compressor |
 | The tool drifts toward "also do repair" | loses its purpose | assembly exists purely to *prove* the artifact, never to ship a patched game; there is no output path outside `game/` and `expected/` |
 | An audio manifest supplies a capture | `game/` then holds a VO asset the fixture was not designed around | captures record `matching_field`; `game` wins every cost tie, so audio is only reached when the `game` pool has no candidate |
-| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive and leaves `schema_version` where it is — a reader must tolerate an unknown field and reject only an unknown `schema_version`. A new **required** thing is not: it makes the bundles that predate it stale by definition, and re-capturing them is the answer rather than teaching every reader two shapes. What is never acceptable is a **required field that defaults**, because the default is indistinguishable from the real value. |
+| A document or field is added and an existing bundle stops verifying | a bundle you already paid for becomes unreadable | a new *field* is additive within a version — a reader must tolerate an unknown field and reject only an unknown `schema_version`. Version 3 deliberately made the evidence fields and documents **required**, because a bundle that omitted them could not distinguish "nothing was there" from "nobody looked": the cost is one re-capture, and it is paid rather than teaching every reader two shapes. What is never acceptable is a **required field that defaults**, because the default is indistinguishable from the real value. |
 
 ---
 

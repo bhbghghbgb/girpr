@@ -197,10 +197,19 @@ impl GameConfigs {
     /// Never hardcoded: it is the launcher's path, and the fixture has to write
     /// the file where the tool under test looks for it.
     pub fn audio_pkg_scan_dir(&self) -> Result<&str, ApiError> {
-        self.launch()?
+        let dir = self
+            .launch()?
             .audio_pkg_scan_dir
             .as_deref()
-            .ok_or_else(|| missing("audio_pkg_scan_dir"))
+            .ok_or_else(|| missing("audio_pkg_scan_dir"))?;
+        // The fixture writes this under `game/`, so it is a document-supplied
+        // path on the same boundary as `--files` and a manifest entry. The
+        // launcher is a trusted source only until `--hyp-base` points at a test
+        // or proxy server, which this tool explicitly supports.
+        if let Some(problem) = crate::paths::relative_path_problem(dir) {
+            return Err(ApiError::shape("audio_pkg_scan_dir", problem));
+        }
+        Ok(dir)
     }
 
     /// `installation_dir` — the default install directory name.
@@ -944,6 +953,24 @@ mod tests {
         );
         assert_eq!(c.installation_dir().unwrap(), "Genshin Impact game");
         assert_eq!(c.exe_file_name().unwrap(), "GenshinImpact.exe");
+    }
+
+    /// The scan directory is a document-supplied path: the fixture joins it
+    /// under `game/`, so an escaping value has to be refused where it is read.
+    #[test]
+    fn an_escaping_audio_scan_dir_is_refused() {
+        for value in ["../../escape", "a\\b", "C:/Windows", ""] {
+            let body = CONFIGS.replace("GenshinImpact_Data/Persistent/audio_lang_14", value);
+            let c: GameConfigs = serde_json::from_str::<Wrapper<GameConfigs>>(&body)
+                .unwrap()
+                .data;
+            let e = c.audio_pkg_scan_dir().unwrap_err();
+            let text = e.to_string();
+            assert!(
+                text.contains("audio_pkg_scan_dir"),
+                "{value:?}: the error names the field: {text}"
+            );
+        }
     }
 
     #[test]
