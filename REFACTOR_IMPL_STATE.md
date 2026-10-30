@@ -15,7 +15,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] C3 — extract the in-place success block. (`8d3e4c1`)
 - [x] C7 — extract the reserved-write helper. (`0fd4ae1`)
 - [x] G3 — `OnceLock` the version regex. (`ef47fb9`)
-- [ ] G4 — direct `writeln!` into the config buffer.
+- [x] G4 — direct `writeln!` into the config buffer. (`655301d`)
 - [ ] F3 — allocation-free record rendering.
 - [ ] A3 — count-then-materialize salvage order.
 - [ ] H3 — one `stopped` setter.
@@ -59,6 +59,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - C3 — `8d3e4c1` · `repaired_in_place` helper used by both success paths in `src/repair/file/inplace.rs`; check the seven log fields and their order match the old inline blocks exactly.
 - C7 — `0fd4ae1` · `write_reserved` shared by `write_at` / `copy_within` / `zero_fill`; verify reservation granularity and `note_write` order are unchanged (note: `zero_fill` now seeks per piece).
 - G3 — `ef47fb9` · `OnceLock<Regex>` in `src/util/ini.rs` via `game_version_re()`, plus a new anchored-shape test; verify last-match-wins and the absent-vs-unreadable split are untouched.
+- G4 — `655301d` · `writeln!` serializer + single `read_to_string` with `NotFound => empty` in `src/util/ini.rs`. Reviewer note: an unreadable-but-existing config path now errors instead of being treated as empty (findings-sanctioned); confirm that is acceptable.
 
 ## Skipped
 
