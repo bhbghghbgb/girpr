@@ -259,6 +259,50 @@ pub async fn scan_plan(
     out
 }
 
+/// The scan's two range lists for one file, plus the chunk each source range
+/// belongs to.
+///
+/// `dest` has one range per chunk, in plan order. `source` has a range only
+/// for the chunks that **have** a source: coercing the absent ones to offset
+/// 0 would ask the scan to verify the chunk's bytes at the head of the file,
+/// so unrelated bytes that happen to match (the file reflowed, or the head
+/// holds the content under a different layout) would mark a non-existent
+/// source intact while the writer, which gates on `sources[i].is_some()`,
+/// downloads the chunk anyway. `source_owner[k]` is the chunk `source[k]`
+/// belongs to, so the scan's per-source verdicts can be mapped back to one
+/// verdict per chunk.
+pub(crate) fn scan_ranges<'a>(
+    chunks: &'a [SophonChunk],
+    sources: &[Option<u64>],
+) -> (
+    Vec<util::ScanRange<'a>>,
+    Vec<util::ScanRange<'a>>,
+    Vec<usize>,
+) {
+    let dest_ranges = chunks
+        .iter()
+        .map(|c| {
+            (
+                c.offset.max(0) as u64,
+                c.uncompressed_size.max(0) as u64,
+                c.uncompressed_md5.as_str(),
+            )
+        })
+        .collect();
+    let mut source_ranges: Vec<util::ScanRange<'_>> = Vec::new();
+    let mut source_owner: Vec<usize> = Vec::new();
+    for (i, (c, src)) in chunks.iter().zip(sources.iter()).enumerate() {
+        let Some(offset) = src else { continue };
+        source_owner.push(i);
+        source_ranges.push((
+            *offset,
+            c.uncompressed_size.max(0) as u64,
+            c.uncompressed_md5.as_str(),
+        ));
+    }
+    (dest_ranges, source_ranges, source_owner)
+}
+
 /// Scan one file: one read, every answer.
 fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> Scanned {
     let path = match util::contained_join(game_dir, &file.rel) {
@@ -284,34 +328,7 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
         }
     };
     let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
-    let dest_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .map(|c| {
-            (
-                c.offset.max(0) as u64,
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
-    // Only chunks that **have** a source get a source range. Coercing the
-    // absent ones to offset 0 would ask the scan to verify the chunk's bytes
-    // at the head of the file, so unrelated bytes that happen to match (the
-    // file reflowed, or the head holds the content under a different layout)
-    // would mark a non-existent source intact while the writer, which gates on
-    // `sources[i].is_some()`, downloads the chunk anyway.
-    let mut source_ranges: Vec<util::ScanRange<'_>> = Vec::new();
-    let mut source_owner: Vec<usize> = Vec::new();
-    for (i, (c, src)) in file.chunks.iter().zip(sources.iter()).enumerate() {
-        let Some(offset) = src else { continue };
-        source_owner.push(i);
-        source_ranges.push((
-            *offset,
-            c.uncompressed_size.max(0) as u64,
-            c.uncompressed_md5.as_str(),
-        ));
-    }
+    let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
     let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
         // An unreadable file is not a failed scan: the verdict is "nothing
         // is correct", which is what the repair would find too.

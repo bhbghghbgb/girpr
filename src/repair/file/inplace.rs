@@ -16,6 +16,7 @@ use super::{
 };
 use crate::config::RepairMode;
 use crate::repair::reuse;
+use crate::repair::scan::scan_ranges;
 use crate::sophon::SophonChunk;
 use crate::util;
 use anyhow::{Context, Result};
@@ -77,32 +78,10 @@ async fn attempt_inplace_inner(
     let sources = reuse::sources_for(&file.chunks, ctx.local_map.get(&file.rel));
 
     // The scan's two lists, both parallel to the chunks: where each chunk
-    // *belongs*, and where its bytes could be copied from. A chunk with no
-    // candidate gets an empty source range, so the two verdicts line up
-    // index for index.
-    let dest_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .map(|c| {
-            (
-                c.offset.max(0) as u64,
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
-    let source_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .zip(sources.iter())
-        .map(|(c, src)| {
-            (
-                src.unwrap_or(0),
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
+    // *belongs*, and where its bytes could be copied from. Only chunks with a
+    // candidate get a source range (see `scan::scan_ranges`); `source_owner`
+    // maps those verdicts back to the chunk they belong to.
+    let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
 
     // 1. open. A dry run changes nothing: no file is created and no
     // attribute is cleared, so the target is only read.
@@ -153,9 +132,19 @@ async fn attempt_inplace_inner(
         discard_target(final_path)?;
         handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
         // The file is gone: every chunk has to be written, and there is
-        // nothing left to reuse from.
+        // nothing left to reuse from. `absent` is per range, not per chunk, so
+        // it is remapped below like every other scan.
         scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
     }
+
+    // Back to one source verdict per chunk, in the plan's order: a chunk with
+    // no source has no intact source, by definition. Everything below indexes
+    // `source_ok` by chunk, and the discard scan is per range like the rest.
+    let mut source_ok = vec![false; file.chunks.len()];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
+    }
+    scan.source_ok = source_ok;
 
     // The chunks that are not correct where they belong. `file.chunks` is
     // sorted by offset (the plan guarantees it), so this list is ascending
