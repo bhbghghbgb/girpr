@@ -193,12 +193,18 @@ pub fn sources_for(chunks: &[SophonChunk], reuse: Option<&FileReuse>) -> Sources
 mod tests {
     use super::*;
     use crate::sophon::ReuseEntry;
+    use crate::util::Md5;
 
-    /// A chunk with the given destination offset and length.
+    /// A chunk with the given destination offset and length. The salvage rule
+    /// does not read the digest, so a fixed one is enough here.
     fn chunk(id: &str, offset: i64, size: i64) -> SophonChunk {
+        chunk_at(id, "d41d8cd98f00b204e9800998ecf8427e", offset, size)
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
         SophonChunk {
             id: id.into(),
-            uncompressed_md5: format!("md5-{id}"),
+            uncompressed_md5: md5.into(),
             offset,
             compressed_size: size,
             uncompressed_size: size,
@@ -331,17 +337,18 @@ mod tests {
 
     #[test]
     fn sources_for_takes_the_first_entry_matching_the_chunk() {
-        let chunks = vec![chunk("a", 0, 4)];
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let chunks = vec![chunk_at("a", md5, 0, 4)];
         let reuse = FileReuse::new(vec![
             ReuseEntry {
-                md5: "md5-a".to_string(),
+                md5: Md5::parse_hex(md5).unwrap(),
                 size: 4,
                 offset: 12,
             },
             // A duplicate key, spelled differently: the index must still keep
             // the first entry, exactly as the linear scan did.
             ReuseEntry {
-                md5: "MD5-A".to_string(),
+                md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
                 size: 4,
                 offset: 99,
             },
@@ -352,16 +359,16 @@ mod tests {
 
     #[test]
     fn sources_for_matches_the_md5_case_insensitively_and_the_size_exactly() {
-        let chunks = vec![chunk("a", 0, 4)];
+        let chunks = vec![chunk_at("a", "d41d8cd98f00b204e9800998ecf8427e", 0, 4)];
         let reuse = FileReuse::new(vec![ReuseEntry {
-            md5: "MD5-A".to_string(),
+            md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
             size: 4,
             offset: 12,
         }]);
         assert_eq!(sources_for(&chunks, Some(&reuse)), vec![Some(12)]);
         // The same md5 at a different size is a different chunk.
         let reuse = FileReuse::new(vec![ReuseEntry {
-            md5: "MD5-A".to_string(),
+            md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
             size: 5,
             offset: 12,
         }]);

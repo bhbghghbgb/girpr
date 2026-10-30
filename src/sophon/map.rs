@@ -15,20 +15,19 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hasher};
 
 use crate::sophon::proto::{SophonChunk, WantedManifest};
-use crate::util;
+use crate::util::{self, Md5};
 
 /// One reuse candidate: a slice of the local file that may hold a chunk's
 /// bytes, so it can be copied instead of downloaded.
 ///
 /// The identity consumers ask about is `(md5, size)`; `offset` is where the
-/// bytes live. The MD5 is normalized to lowercase once, here at the map's
-/// boundary (see [`build_local_chunk_map`]), while [`ReuseEntry::matches`]
-/// still compares case-insensitively so an entry built elsewhere is not
-/// spelling-sensitive.
+/// bytes live. The MD5 is parsed into its 16 bytes once, here at the map's
+/// boundary (see [`build_local_chunk_map`]), so [`ReuseEntry::matches`] is a
+/// byte comparison and an entry built elsewhere is not spelling-sensitive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReuseEntry {
-    /// The chunk's uncompressed MD5, lowercase.
-    pub md5: String,
+    /// The chunk's uncompressed MD5.
+    pub md5: Md5,
     /// The chunk's uncompressed size.
     pub size: i64,
     /// Where the chunk's bytes live in the local file.
@@ -43,14 +42,15 @@ impl ReuseEntry {
     /// lookup all agree with it, so "the same chunk" cannot mean different
     /// things there.
     pub fn matches(&self, c: &SophonChunk) -> bool {
-        self.matches_identity(&c.uncompressed_md5, c.uncompressed_size)
+        Md5::parse_hex(&c.uncompressed_md5)
+            .is_ok_and(|md5| self.matches_identity(md5, c.uncompressed_size))
     }
 
     /// The same predicate without a chunk to point at, for the index's insert
     /// path: an entry is a duplicate when its digest and size name the same
-    /// chunk, regardless of spelling.
-    fn matches_identity(&self, md5: &str, size: i64) -> bool {
-        self.size == size && self.md5.eq_ignore_ascii_case(md5)
+    /// chunk.
+    fn matches_identity(&self, md5: Md5, size: i64) -> bool {
+        self.size == size && self.md5 == md5
     }
 }
 
@@ -62,15 +62,15 @@ impl ReuseEntry {
 /// hashes alike, in first-insertion order. Each candidate is confirmed with
 /// [`ReuseEntry::matches`], so a hash collision cannot change which entry wins,
 /// and the first matching entry is the same one the old linear scan chose. The
-/// key is computed over the ASCII-lowercased digest without allocating, which
-/// keeps lookups case-insensitive even for an entry built by hand.
+/// key is a hash of the digest bytes, which needs no case folding: the digest
+/// was already parsed at the map's boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileReuse {
     /// Every distinct chunk identity, in the order it first appeared.
     entries: Vec<ReuseEntry>,
-    /// `(hash of the ASCII-lowercased md5, size) -> indices into `entries`,
-    /// in insertion order. The hash only selects candidates; `get` confirms
-    /// them, so a collision can never pick a wrong entry.
+    /// `(hash of the md5, size) -> indices into `entries`, in insertion
+    /// order. The hash only selects candidates; `get` confirms them, so a
+    /// collision can never pick a wrong entry.
     by_key: HashMap<(u64, i64), Vec<usize>>,
 }
 
@@ -86,11 +86,11 @@ impl FileReuse {
 
     /// Add `entry` unless its chunk identity is already present.
     fn insert(&mut self, entry: ReuseEntry) {
-        let key = Self::key(&entry.md5, entry.size);
+        let key = Self::key(entry.md5, entry.size);
         let duplicate = self.by_key.get(&key).is_some_and(|candidates| {
             candidates
                 .iter()
-                .any(|&i| self.entries[i].matches_identity(&entry.md5, entry.size))
+                .any(|&i| self.entries[i].matches_identity(entry.md5, entry.size))
         });
         if duplicate {
             return;
@@ -101,7 +101,8 @@ impl FileReuse {
 
     /// The entry holding `c`'s bytes, or `None` when the chunk must download.
     pub fn get(&self, c: &SophonChunk) -> Option<&ReuseEntry> {
-        let key = Self::key(&c.uncompressed_md5, c.uncompressed_size);
+        let md5 = Md5::parse_hex(&c.uncompressed_md5).ok()?;
+        let key = Self::key(md5, c.uncompressed_size);
         self.by_key
             .get(&key)?
             .iter()
@@ -119,19 +120,15 @@ impl FileReuse {
         &self.entries
     }
 
-    /// The lookup key: a streaming hash of the ASCII-lowercased digest, plus
-    /// the size.
+    /// The lookup key: a hash of the digest bytes, plus the size.
     ///
-    /// Deliberately **not** a `String`: the old key allocated a lowercased copy
-    /// on every lookup, on the hot path (`sources_for` asks once per chunk).
-    /// Hashing the bytes one at a time matches `to_ascii_lowercase`'s rule for
-    /// non-ASCII input too, and `size` is returned separately so the digest
-    /// hash never has to encode it.
-    fn key(md5: &str, size: i64) -> (u64, i64) {
+    /// Deliberately **not** a `String`: the digest was parsed once at the
+    /// boundary, and the hot path (`sources_for` asks once per chunk) hashes
+    /// the 16 bytes it already has. `size` is returned separately so the
+    /// digest hash never has to encode it.
+    fn key(md5: Md5, size: i64) -> (u64, i64) {
         let mut hasher = DefaultHasher::new();
-        for byte in md5.bytes() {
-            hasher.write_u8(byte.to_ascii_lowercase());
-        }
+        hasher.write(md5.as_bytes());
         (hasher.finish(), size)
     }
 }
@@ -157,10 +154,15 @@ pub fn build_local_chunk_map(manifests: &[WantedManifest]) -> HashMap<String, Fi
             };
             let e = map.entry(key).or_default();
             for c in &f.chunks {
-                // Keep first occurrence per chunk: the MD5 is normalized here,
-                // so two spellings of the same digest cannot both survive.
+                // Keep first occurrence per chunk: parsing the digest here
+                // makes two spellings the same value, so they cannot both
+                // survive. A string that is not a digest is not a reuse
+                // candidate at all — the chunk degrades to a download.
+                let Ok(md5) = Md5::parse_hex(&c.uncompressed_md5) else {
+                    continue;
+                };
                 e.insert(ReuseEntry {
-                    md5: c.uncompressed_md5.to_ascii_lowercase(),
+                    md5,
                     size: c.uncompressed_size,
                     offset: c.offset,
                 });
@@ -199,6 +201,10 @@ mod tests {
         }
     }
 
+    fn digest(hex: &str) -> Md5 {
+        Md5::parse_hex(hex).unwrap()
+    }
+
     #[test]
     fn local_chunk_map_dedups_by_md5_size_and_skips_folders() {
         let wm = vec![WantedManifest {
@@ -232,7 +238,7 @@ mod tests {
         assert_eq!(
             e[0],
             ReuseEntry {
-                md5: "d41d8cd98f00b204e9800998ecf8427e".to_string(),
+                md5: digest("d41d8cd98f00b204e9800998ecf8427e"),
                 size: 20,
                 offset: 0,
             }
@@ -240,7 +246,7 @@ mod tests {
         assert_eq!(
             e[1],
             ReuseEntry {
-                md5: "0cc175b9c0f1b6a831c399e269772661".to_string(),
+                md5: digest("0cc175b9c0f1b6a831c399e269772661"),
                 size: 20,
                 offset: 20,
             }
@@ -249,17 +255,17 @@ mod tests {
         assert!(!map.contains_key("dir/"));
     }
 
-    /// A2: the hot key must fold case and keep size distinct without building a
-    /// lowercased `String` per lookup.
+    /// A2: the hot key must be spelling-insensitive and keep size distinct
+    /// without building a `String` per lookup.
     #[test]
     fn the_lookup_key_is_case_insensitive_and_size_sensitive() {
         assert_eq!(
-            FileReuse::key("D41D8CD98F00B204E9800998ECF8427E", 20),
-            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 20)
+            FileReuse::key(digest("D41D8CD98F00B204E9800998ECF8427E"), 20),
+            FileReuse::key(digest("d41d8cd98f00b204e9800998ecf8427e"), 20)
         );
         assert_ne!(
-            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 20),
-            FileReuse::key("d41d8cd98f00b204e9800998ecf8427e", 21)
+            FileReuse::key(digest("d41d8cd98f00b204e9800998ecf8427e"), 20),
+            FileReuse::key(digest("d41d8cd98f00b204e9800998ecf8427e"), 21)
         );
     }
 
@@ -270,16 +276,16 @@ mod tests {
     fn a_hash_collision_falls_through_to_the_matching_entry() {
         let asked = chunk("asked", "d41d8cd98f00b204e9800998ecf8427e", 0, 20);
         let wrong = ReuseEntry {
-            md5: "0cc175b9c0f1b6a831c399e269772661".into(),
+            md5: digest("0cc175b9c0f1b6a831c399e269772661"),
             size: 20,
             offset: 1,
         };
         let right = ReuseEntry {
-            md5: "D41D8CD98F00B204E9800998ECF8427E".into(),
+            md5: digest("D41D8CD98F00B204E9800998ECF8427E"),
             size: 20,
             offset: 2,
         };
-        let key = FileReuse::key(&asked.uncompressed_md5, asked.uncompressed_size);
+        let key = FileReuse::key(digest(&asked.uncompressed_md5), asked.uncompressed_size);
         let reuse = FileReuse {
             entries: vec![wrong, right.clone()],
             by_key: std::collections::HashMap::from([(key, vec![0, 1])]),
@@ -293,7 +299,7 @@ mod tests {
 
     /// The map's dedup and the consumers' lookup share one predicate, so a
     /// later spelling of the same digest must not survive beside the first:
-    /// the MD5 is normalized (lowercased) at this boundary, once.
+    /// the MD5 is parsed at this boundary, once.
     #[test]
     fn local_chunk_map_collapses_case_variants_and_keeps_the_first() {
         let wm = vec![WantedManifest {
@@ -313,8 +319,27 @@ mod tests {
         let map = build_local_chunk_map(&wm);
         let entries = map["a/b.dat"].entries();
         assert_eq!(entries.len(), 1, "case variants name the same chunk");
-        assert_eq!(entries[0].md5, "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(entries[0].md5, digest("d41d8cd98f00b204e9800998ecf8427e"));
         assert_eq!(entries[0].offset, 0, "the first entry is kept");
+    }
+
+    /// A string that is not a digest (an empty MD5 above all) is "unknown",
+    /// not a reuse identity: it must not enter the map, and the chunk it named
+    /// degrades to a download.
+    #[test]
+    fn a_non_digest_never_becomes_a_reuse_candidate() {
+        let wm = vec![WantedManifest {
+            meta: meta("game"),
+            files: vec![SophonChunkFile {
+                file: "a/b.dat".into(),
+                chunks: vec![chunk("empty", "", 0, 20), chunk("label", "md5-a", 20, 20)],
+                is_folder: false,
+                size: 40,
+                md5: "m1".into(),
+            }],
+        }];
+        let map = build_local_chunk_map(&wm);
+        assert!(map["a/b.dat"].entries().is_empty());
     }
 
     /// V-3: the plan stores the cleaned rel (`build_plan` calls `clean_rel`),
