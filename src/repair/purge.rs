@@ -98,8 +98,10 @@ pub fn plan_purge(
 ) -> PurgePlan {
     // Fold the three keep sets once, here, rather than rebuilding a set for
     // every walked file. `classify_purge_path` folds only the walked rel, so
-    // the purge compares the same `path_key` the plan dedups on.
-    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| path_key(r)).collect();
+    // the purge compares the same `path_key` the plan dedups on. The expected
+    // set is keyed straight from the plan's rels: the raw-spelling
+    // `expected_paths()` set would be immediately re-keyed into a second one.
+    let expected: HashSet<String> = plan.expected_rels().map(path_key).collect();
     let server_keep: HashSet<String> = server_keep.iter().map(|r| path_key(r)).collect();
     let blacklist: HashSet<String> = blacklist.iter().map(|r| path_key(r)).collect();
     let mut files: Vec<PurgeCandidate> = Vec::new();
@@ -386,7 +388,7 @@ pub fn classify_purge_path(
 /// Rule order matters (first match wins); each rule names its provenance:
 /// 0. **Path scope**: a path outside `--include`/`--exclude`
 ///    does not exist, so it is kept — *before* the manifest check, not after.
-///    Order is load-bearing: `plan.expected_paths()` is the only
+///    Order is load-bearing: the plan's rels (`expected_rels()`) are the only
 ///    manifest-derived input to the keep set, so a scope applied anywhere but
 ///    here would leave the cleanup with a *narrower* keep set than an
 ///    unfiltered run, and the fixture `gircap` hands us would be eaten.
@@ -551,6 +553,38 @@ mod tests {
                     "{rule}: on Unix the case variant is a distinct path"
                 );
             }
+        }
+    }
+
+    /// D2: the expected keep set is keyed straight from `plan.files`, so a
+    /// plan rel whose spelling differs from the walk only in case still names
+    /// the same file on Windows — and a distinct path on Unix, exactly as the
+    /// classifier's `path_key` fold says.
+    #[test]
+    fn plan_purge_keys_the_keep_set_from_the_plan_rels() {
+        let dir = TempDir::new("girpr_test_purge", "plan_keyed");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"keep").unwrap();
+
+        let pp = plan_purge(
+            &dir,
+            &plan_of("Game/Foo.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        if cfg!(windows) {
+            assert!(
+                rels.is_empty(),
+                "the plan rel names the walked file: {rels:?}"
+            );
+        } else {
+            assert_eq!(
+                rels,
+                vec!["game/foo.dat"],
+                "on Unix the case variant is a distinct path"
+            );
         }
     }
 

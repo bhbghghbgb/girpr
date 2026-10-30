@@ -158,8 +158,17 @@ pub struct RepairPlan {
 
 impl RepairPlan {
     /// Paths the files-cleanup must treat as expected (docs/02 step 7).
+    ///
+    /// Borrowed so a caller that needs its own key (the purge keys the keep
+    /// set with `path_key`) does not pay for two sets and two clones per file.
+    pub fn expected_rels(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().map(|f| f.rel.as_str())
+    }
+
+    /// The same paths as owned `String`s, for callers that want the raw
+    /// spelling. [`Self::expected_rels`] is the allocation-free view.
     pub fn expected_paths(&self) -> HashSet<String> {
-        self.files.iter().map(|f| f.rel.clone()).collect()
+        self.expected_rels().map(str::to_string).collect()
     }
 
     /// `Σ compressed_size` over every planned file, against a local reuse map.
