@@ -93,10 +93,14 @@ impl ScanReport {
     ///
     /// The `PLAN` total and the `--plan-out` document are fed from this one
     /// vector, so the document cannot disagree with the line.
+    ///
+    /// `root` is the run's cached install root. `None` means the base itself
+    /// could not be resolved, and each file falls back to [`util::contained_join`].
     pub fn est_download_bytes_by_file(
         &self,
         plan: &RepairPlan,
         game_dir: &Path,
+        root: Option<&util::PathRoot>,
         requested: RepairMode,
         local_map: &LocalChunkMap,
     ) -> Vec<u64> {
@@ -104,7 +108,13 @@ impl ScanReport {
             .iter()
             .map(|f| {
                 let sources = reuse::sources_for(&f.chunks, local_map.get(&f.rel));
-                let resolved = match util::contained_join(game_dir, &f.rel) {
+                // The run's cached root when it has one; otherwise resolve the
+                // base here, exactly as `contained_join` always did.
+                let joined = root.map_or_else(
+                    || util::contained_join(game_dir, &f.rel),
+                    |root| root.join(&f.rel),
+                );
+                let resolved = match joined {
                     Ok(path) => super::file::resolve_mode(requested, &path),
                     // Defence in depth, matching the scan itself: a path that
                     // escapes is not readable, so nothing is reusable.
@@ -207,6 +217,7 @@ struct Scanned {
 /// concurrency, exactly as it bounds the repair loop.
 pub async fn scan_plan(
     game_dir: &Path,
+    root: Option<&util::PathRoot>,
     plan: Arc<RepairPlan>,
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
@@ -215,14 +226,19 @@ pub async fn scan_plan(
     // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
     // per task would deep-clone the whole plan — the same reason
     // `file::repair_all` shares its `FileCtx` instead of the plan's files.
+    //
+    // The install root is resolved once here, not once per file, and shared by
+    // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
+    let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let mut stream = futures::stream::iter(0..plan.files.len())
         .map(move |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.to_path_buf();
             let local_map = Arc::clone(&local_map);
+            let root = root.clone();
             async move {
                 tokio::task::spawn_blocking(move || {
-                    scan_one(&game_dir, &plan.files[idx], &local_map)
+                    scan_one(&game_dir, root.as_deref(), &plan.files[idx], &local_map)
                 })
                 .await
             }
@@ -304,8 +320,17 @@ pub(crate) fn scan_ranges<'a>(
 }
 
 /// Scan one file: one read, every answer.
-fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> Scanned {
-    let path = match util::contained_join(game_dir, &file.rel) {
+fn scan_one(
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    file: &PlannedFile,
+    local_map: &LocalChunkMap,
+) -> Scanned {
+    let joined = root.map_or_else(
+        || util::contained_join(game_dir, &file.rel),
+        |root| root.join(&file.rel),
+    );
+    let path = match joined {
         Ok(p) => p,
         Err(e) => {
             // `build_plan` already refused an escaping rel, so this is defence
@@ -552,7 +577,7 @@ mod tests {
             "the head copy really would verify at offset 0"
         );
 
-        let scanned = scan_one(&dir, &file, &LocalChunkMap::new());
+        let scanned = scan_one(&dir, None, &file, &LocalChunkMap::new());
         assert_eq!(scanned.verdict.dest_ok, vec![false]);
         assert_eq!(
             scanned.verdict.source_ok,

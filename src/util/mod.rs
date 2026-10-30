@@ -3,8 +3,9 @@
 //!
 //! - [`md5`] — one read, every answer: `scan_file`, `scan_reader`,
 //!   `read_range`, `md5_file`, `md5_file_slice`, plus `Scan` and `EMPTY_MD5`.
-//! - [`path`] — `contained_rel`, `clean_rel`, `contained_join`, `file_len`,
-//!   `FileLen`: lexical + filesystem checks for server-controlled rel paths.
+//! - [`path`] — `contained_rel`, `clean_rel`, `contained_join`, `PathRoot`,
+//!   `file_len`, `FileLen`: lexical + filesystem checks for server-controlled
+//!   rel paths.
 //! - [`ini`] — `read_game_version`, `read_ignore_categories`,
 //!   `read_blacklist`, `write_config_ini`: the launcher's config.ini files.
 //!
@@ -20,4 +21,4 @@ pub use self::md5::{
     EMPTY_MD5, Scan, ScanRange, md5_file, md5_file_slice, md5_file_slice_with_buf,
     md5_reader_slice, read_range, scan_file, scan_reader,
 };
-pub use self::path::{FileLen, clean_rel, contained_join, contained_rel, file_len};
+pub use self::path::{FileLen, PathRoot, clean_rel, contained_join, contained_rel, file_len};

@@ -190,6 +190,64 @@ fn is_windows_device_name(part: &str) -> bool {
         && matches!(bytes[3], b'1'..=b'9')
 }
 
+/// A base path resolved once, for callers that join many rel paths under it.
+///
+/// [`contained_join`] resolves the base on every call. A run that joins one rel
+/// per planned file would pay for that same resolution — a `canonicalize` walk
+/// up to the nearest existing ancestor — once per file, so the hot callers
+/// build one `PathRoot` and call [`join`](Self::join) per file instead.
+///
+/// Caching the **base** does not make the check lexical: the joined path is
+/// still resolved on the filesystem and compared with the cached resolved base,
+/// so a symlink inside the install that points out of it is still refused.
+///
+/// A base that does not exist yet (the `--print-plan` run before `game_dir` is
+/// created) resolves to the same "nearest existing ancestor + missing tail"
+/// form as [`contained_join`] uses, so the missing-base lifecycle is unchanged.
+/// The cached form is **not** refreshed implicitly: a caller that creates the
+/// base later must build a fresh `PathRoot` after that.
+#[derive(Debug, Clone)]
+pub struct PathRoot {
+    base: PathBuf,
+    resolved: PathBuf,
+}
+
+impl PathRoot {
+    /// Resolve `base` once.
+    pub fn new(base: &Path) -> Result<Self> {
+        let resolved = resolve_existing_prefix(base)
+            .with_context(|| format!("resolve the game dir {}", base.display()))?;
+        Ok(Self {
+            base: base.to_path_buf(),
+            resolved,
+        })
+    }
+
+    /// Join a server-controlled relative path under this root, refusing
+    /// anything that resolves outside it.
+    ///
+    /// This is the per-file half of [`contained_join`]: the lexical check is
+    /// still [`contained_rel`], and the joined path is still resolved and
+    /// compared with the resolved base.
+    pub fn join(&self, rel: &str) -> Result<PathBuf> {
+        self.join_rel(contained_rel(rel)?)
+    }
+
+    /// The filesystem half of [`join`](Self::join), after the lexical check.
+    fn join_rel(&self, rel: PathBuf) -> Result<PathBuf> {
+        let joined = self.base.join(rel);
+        let joined_resolved = resolve_existing_prefix(&joined)
+            .with_context(|| format!("resolve {}", joined.display()))?;
+        anyhow::ensure!(
+            joined_resolved.starts_with(&self.resolved),
+            "path escapes {}: {}",
+            self.base.display(),
+            joined.display()
+        );
+        Ok(joined)
+    }
+}
+
 /// Join a server-controlled relative path under `base`, refusing anything that
 /// resolves outside it.
 ///
@@ -198,20 +256,14 @@ fn is_windows_device_name(part: &str) -> bool {
 /// `--print-plan` run, a fresh install) still works — and requires the joined
 /// path to stay under the base. That is what catches a symlink inside the
 /// install that points out of it, which a lexical `starts_with` cannot.
+///
+/// This is the one-off form: it resolves `base` on every call. A caller that
+/// joins many rels under one base should build a [`PathRoot`] once instead.
 pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
+    // The lexical refusal comes first, as it always has: a bad rel is reported
+    // without touching the filesystem, even when the base is also unreadable.
     let rel = contained_rel(rel)?;
-    let joined = base.join(rel);
-    let base_resolved = resolve_existing_prefix(base)
-        .with_context(|| format!("resolve the game dir {}", base.display()))?;
-    let joined_resolved = resolve_existing_prefix(&joined)
-        .with_context(|| format!("resolve {}", joined.display()))?;
-    anyhow::ensure!(
-        joined_resolved.starts_with(&base_resolved),
-        "path escapes {}: {}",
-        base.display(),
-        joined.display()
-    );
-    Ok(joined)
+    PathRoot::new(base)?.join_rel(rel)
 }
 
 /// Canonicalize `path` as far as it exists, then append the missing tail.
@@ -402,6 +454,32 @@ mod tests {
         assert!(contained_join(&dir, "../outside.dat").is_err());
         // A trailing separator does not name a file, so it is refused here too.
         assert!(contained_join(&dir, "game/").is_err());
+    }
+
+    /// G5: the cached root resolves the base once, and a base that does not
+    /// exist yet keeps the same "nearest existing ancestor + missing tail"
+    /// form as `contained_join`. A root built after the base is created sees the
+    /// created form; the cached one is the caller's to refresh.
+    #[test]
+    fn path_root_keeps_the_missing_base_lifecycle_and_refreshes_after_creation() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_path_root", "cache");
+        let missing = dir.join("not-created-yet");
+        let before = PathRoot::new(&missing).unwrap();
+        assert_eq!(
+            before.join("game/foo.dat").unwrap(),
+            missing.join("game/foo.dat")
+        );
+        std::fs::create_dir_all(&missing).unwrap();
+        let after = PathRoot::new(&missing).unwrap();
+        assert_eq!(
+            after.join("game/foo.dat").unwrap(),
+            missing.join("game/foo.dat")
+        );
+        // The cached form is still a valid containment check after the base
+        // appears; it just does not carry the new resolution.
+        assert!(before.join("game/foo.dat").is_ok());
+        // And an escape is refused through the cached form too.
+        assert!(after.join("../outside.dat").is_err());
     }
 
     /// A symlink inside the install that points out of it is an escape even

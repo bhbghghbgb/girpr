@@ -85,6 +85,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         .game_dir
         .canonicalize()
         .unwrap_or_else(|_| ctx.game_dir.clone());
+    // Resolve the install root once for the plan-phase callers. `None` means
+    // the base itself could not be resolved; those callers then fall back to
+    // `contained_join`, so a refusal stays per file and keeps its message.
+    let root = util::PathRoot::new(&game_dir).ok();
 
     // NOTE: no unconditional temp sweep. All cleanup is the single
     // Collapse-style files-cleanup (`plan::purge`), run before and/or
@@ -237,6 +241,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         Some(
             scan::scan_plan(
                 &game_dir,
+                root.as_ref(),
                 Arc::clone(&plan),
                 Arc::new(local_map.clone()),
                 ctx.jobs,
@@ -270,7 +275,13 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // `PLAN` total below and the `--plan-out` document further down. A second
     // derivation would be a second answer.
     let est_download_by_file: Vec<u64> = match &scan {
-        Some(s) => s.est_download_bytes_by_file(&plan, &game_dir, ctx.repair_mode, &local_map),
+        Some(s) => s.est_download_bytes_by_file(
+            &plan,
+            &game_dir,
+            root.as_ref(),
+            ctx.repair_mode,
+            &local_map,
+        ),
         None => plan.est_download_bytes_by_file(&local_map),
     };
     let est_download_bytes = est_download_by_file
@@ -313,8 +324,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // and the `--plan-out` document. Compute it when either was asked for, so
     // the document is written for a run that does the work as well as for
     // `--print-plan`.
-    let disk = (ctx.print_plan || ctx.plan_out.is_some())
-        .then(|| scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs));
+    let disk = (ctx.print_plan || ctx.plan_out.is_some()).then(|| {
+        scope::report::DiskPlan::new(&game_dir, root.as_ref(), &plan, ctx.repair_mode, ctx.jobs)
+    });
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
             &plan,
@@ -359,6 +371,9 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The directory may have been created by the line above, so canonicalize
     // again before any path is built from it.
     let game_dir = game_dir.canonicalize().unwrap_or(game_dir);
+    // The plan-phase root cached the pre-create form (or a missing tail). The
+    // base exists now, so resolve it again for the execute-phase callers.
+    let root = util::PathRoot::new(&game_dir).ok();
 
     // The single-writer lock. Two runs against one install can write
     // conflicting bytes into the same file, so a run that mutates the
@@ -440,6 +455,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     summary = file::repair_all(
         http,
         game_dir.clone(),
+        root,
         plan.clone(),
         local_map,
         summary,

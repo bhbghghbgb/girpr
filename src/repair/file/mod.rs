@@ -187,6 +187,7 @@ pub enum Mode {
 pub async fn repair_all(
     http: reqwest::Client,
     game_dir: PathBuf,
+    root: Option<util::PathRoot>,
     plan: Arc<RepairPlan>,
     local_map: LocalChunkMap,
     summary: Summary,
@@ -204,6 +205,7 @@ pub async fn repair_all(
     // per-task deep clone once cost ~6GB across ~3k tasks.
     let ctx = Arc::new(FileCtx {
         game_dir,
+        root,
         http,
         plan: Arc::clone(&plan),
         local_map,
@@ -351,6 +353,12 @@ async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Su
 /// Read-only inputs shared by every file task.
 struct FileCtx {
     game_dir: PathBuf,
+    /// The install root resolved once for the whole repair loop.
+    ///
+    /// `None` means the base itself could not be resolved; `repair_one_file`
+    /// then falls back to `contained_join`, keeping the per-file refusal and
+    /// its message.
+    root: Option<util::PathRoot>,
     http: reqwest::Client,
     plan: Arc<RepairPlan>,
     local_map: LocalChunkMap,
@@ -397,7 +405,11 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if !ctx.dry_run {
         validate_chunk_ranges(file)?;
     }
-    let final_path = util::contained_join(&ctx.game_dir, &file.rel)?;
+    let joined = ctx.root.as_ref().map_or_else(
+        || util::contained_join(&ctx.game_dir, &file.rel),
+        |root| root.join(&file.rel),
+    );
+    let final_path = joined?;
     if let Some(parent) = final_path.parent()
         && !ctx.dry_run
     {
@@ -809,6 +821,7 @@ mod tests {
         let summary = repair_all(
             reqwest::Client::new(),
             dir.to_path_buf(),
+            None,
             plan,
             LocalChunkMap::new(),
             Summary::new(),
