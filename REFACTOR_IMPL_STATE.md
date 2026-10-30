@@ -49,7 +49,9 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 - [x] H1 — split `repair::run` into plan/execute (mechanical move first). (`d64df4f`)
 - [x] G2 — `Md5` digest newtype across the gates. (`d8808dc`, `3300f08`, `2b70d45`)
-- [ ] H4 — `RunMode` enum (optional, after H1).
+- [-] H4 — `RunMode` enum (optional, after H1). — skipped: the five-variant
+  enum cannot preserve `--print-plan --check-only`,
+  `--check-only --purge-only` or `--purge-only --dry-run`; see "Skipped".
 
 ## Pending review tasks
 
@@ -72,7 +74,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   tests (232). Note: non-digest labels (hand-built test data only) no longer
   compare equal, so such data never matches a gate.
 
-Phase 3 (H1, G2, H4) is not implemented yet.
+_None._ Everything except H4 is implemented; H4 is skipped (see "Skipped").
 
 D2 and Phase 2 (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) passed review:
 `cargo test --all-targets` (225 unit + 149 integration passing, 7 ignored),
@@ -214,4 +216,23 @@ pre-refactor code.
 
 ## Skipped
 
-_None yet._
+- **H4 — `RunMode` enum** (`REFACTOR_FINDINGS.md` §H4, explicitly optional).
+  The five-variant shape (`Repair`, `Check`, `PurgeOnly`, `PrintPlan`,
+  `DryRun`) is not behavior-preserving: `check_only`, `purge_only`, `dry_run`
+  and `print_plan` are independent gates, not one mutually exclusive
+  dimension. Verified combinations that no single variant reproduces:
+  - `--print-plan --check-only` — `check_only` drops the purge plan from the
+    pre-flight delete ceiling while `print_plan` still prints it, so
+    `--print-plan --purge-after --max-delete-bytes 0` exits 5 alone and 0 with
+    `--check-only`; one variant cannot be both.
+  - `--check-only --purge-only` — `purge_only` builds the purge plan, which
+    satisfies the include-empty guard, then `check_only` returns 0; either
+    variant alone changes the exit code (1 vs 0 / full run).
+  - `--purge-only --dry-run` — `purge_only` takes the post-phase early return
+    with `config_bumped_zero`, `dry_run` alone runs the repair loop and skips
+    the post-phase; `PurgeOnly` alone would delete, `DryRun` alone would not
+    run that post-phase.
+  No commit was made; the tree is unchanged. A reduced enum
+  (`Repair`/`Check`/`PurgeOnly` plus orthogonal `dry_run`/`print_plan`) is
+  possible but does not deliver the finding's shape, so it was not taken
+  without a decision.
