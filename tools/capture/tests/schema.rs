@@ -295,8 +295,10 @@ fn a_capture_records_the_exact_bytes_of_its_arguments() {
             "windows" => {
                 assert_eq!(bytes.len() % 2, 0, "raw[{i}] is whole UTF-16 code units");
                 let units: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| u16::from_le_bytes(*b))
                     .collect();
                 String::from_utf16(&units).expect("each argument was valid Unicode")
             }

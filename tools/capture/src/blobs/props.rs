@@ -333,7 +333,7 @@ impl BlobProps {
     /// The bytes are already on disk and the compressed digests were computed by
     /// the write, so a mis-served response becomes a measured row with
     /// `decode_error` and the two decode-dependent checks false. Everything else
-    /// that can go wrong is a decode failure (recorded by [`BlobProps::assemble`])
+    /// that can go wrong is a decode failure (recorded by `BlobProps::assemble`)
     /// or an I/O error that still has to be reported.
     pub fn measure_file(
         path: &std::path::Path,
@@ -408,7 +408,7 @@ impl BlobProps {
     /// `false` because the decode was attempted and did not produce a file. This
     /// is the spec's row shape (`docs/00-spec.md` §4.2 and
     /// `docs/01-artifact-schema.md`), and the same shape a framed blob whose
-    /// decode fails gets from [`BlobProps::assemble`].
+    /// decode fails gets from `BlobProps::assemble`.
     pub fn undecodable(raw: &[u8], chunk: &SophonChunk, why: String) -> BlobProps {
         Self::undecodable_from_digests(hash::md5_sha256(raw), chunk, why)
     }

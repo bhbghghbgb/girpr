@@ -105,7 +105,7 @@ pub struct ErrorResponses {
     pub budget_bytes: u64,
     /// `Σ retained_bytes`.
     pub total_retained_bytes: u64,
-    /// One row per non-2xx attempt seen by [`super::Fetcher::run`], in `seq`
+    /// One row per non-2xx attempt seen by `super::Fetcher::run`, in `seq`
     /// order.
     pub responses: Vec<ErrorResponseRow>,
 }

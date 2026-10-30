@@ -214,33 +214,46 @@ pub fn write_variant(
     super::write_rel(root, &rel, file.bytes)
 }
 
+/// The variant files to write, plus the map that escapes their paths.
+///
+/// Grouped so [`write_gamedir`] does not need one parameter per file set.
+pub struct VariantSets<'a, 'b> {
+    /// Files written under `game/`.
+    pub old: &'a [VariantFile<'b>],
+    /// Files written under `expected/`.
+    pub new: &'a [VariantFile<'b>],
+    /// Where each logical path is escaped on disk.
+    pub path_map: &'a crate::pathmap::PathMap,
+}
+
 /// Write `game/` and `expected/` in one call.
 ///
 /// Convenience for a test and for any caller holding every assembly at once;
 /// [`write_prelude`] plus [`write_variant`] is what `run` uses, so the fixture is
 /// never fully resident.
-#[allow(clippy::type_complexity)]
 pub fn write_gamedir(
     root: &Path,
     biz: &Biz,
     old_tag: &str,
     scan_dir: &str,
     audio: &[String],
-    old_files: &[VariantFile<'_>],
-    new_files: &[VariantFile<'_>],
-    path_map: &crate::pathmap::PathMap,
+    variant: VariantSets<'_, '_>,
 ) -> std::io::Result<Written> {
     let mut w = Written {
         game: write_prelude(root, biz, old_tag, scan_dir, audio)?,
         expected: Vec::new(),
     };
-    for f in old_files {
+    for f in variant.old {
         w.game
-            .push(write_variant(root, super::GAME_TREE, f, path_map)?);
+            .push(write_variant(root, super::GAME_TREE, f, variant.path_map)?);
     }
-    for f in new_files {
-        w.expected
-            .push(write_variant(root, super::EXPECTED_TREE, f, path_map)?);
+    for f in variant.new {
+        w.expected.push(write_variant(
+            root,
+            super::EXPECTED_TREE,
+            f,
+            variant.path_map,
+        )?);
     }
     Ok(w)
 }
@@ -378,9 +391,11 @@ mod tests {
             "7.0.0",
             "GenshinImpact_Data/Persistent/audio_lang_14",
             &["en-us".to_string()],
-            &[old, gone],
-            &[new],
-            &crate::pathmap::PathMap::new(),
+            VariantSets {
+                old: &[old, gone],
+                new: &[new],
+                path_map: &crate::pathmap::PathMap::new(),
+            },
         )
         .expect("writes");
 
@@ -437,9 +452,11 @@ mod tests {
             "7.0.0",
             "GenshinImpact_Data/Persistent/audio_lang_14",
             &[],
-            &[],
-            &[device, literal],
-            &map,
+            VariantSets {
+                old: &[],
+                new: &[device, literal],
+                path_map: &map,
+            },
         )
         .expect("writes");
 

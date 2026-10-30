@@ -346,7 +346,7 @@ pub const DEFAULT_MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 /// The limit is the declaration itself; the decoder is read through
 /// `take(limit + 1)` so the extra byte is what detects a frame longer than it
 /// claimed, without materialising the rest of a bomb. `ceiling` is the run's
-/// effective [`DEFAULT_DEFAULT_MAX_DECOMPRESSED_BYTES`] and applies even when the
+/// effective [`DEFAULT_MAX_DECOMPRESSED_BYTES`] and applies even when the
 /// declaration is missing or absurd.
 pub fn decompression_limit(expected: Option<u64>, ceiling: u64) -> u64 {
     expected.unwrap_or(ceiling).min(ceiling)

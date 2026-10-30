@@ -1726,7 +1726,7 @@ fn a_device_name_manifest_path_is_kept_and_escaped_on_disk() {
         .expect("the old side is mapped");
     assert_eq!(
         game_map["on_disk"],
-        format!("game/GenshinImpact_Data/Resources/%CON")
+        "game/GenshinImpact_Data/Resources/%CON".to_string()
     );
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(bundle.join("MANIFEST.json")).unwrap()).unwrap();

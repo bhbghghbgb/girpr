@@ -41,7 +41,7 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p gircap   # 619 tests, none ignored, no network
+cargo nextest run -p gircap   # 755 tests, three #[ignore]d for cost (752 run by default), no network
 ```
 
 Nextest runs **each test in its own process**, which is what makes the suite's
