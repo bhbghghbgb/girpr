@@ -20,12 +20,15 @@ impl Default for Ceiling {
 
 impl Ceiling {
     /// The stored ceiling; `u64::MAX` means "no ceiling".
-    pub(crate) fn load(&self, order: Ordering) -> u64 {
+    ///
+    /// `pub` because [`Summary::ram_limit`] is a public field: an external
+    /// reader that can hold the value must also be able to read it.
+    pub fn load(&self, order: Ordering) -> u64 {
         self.0.load(order)
     }
 
     /// Install a ceiling; `u64::MAX` means "no ceiling".
-    pub(crate) fn store(&self, value: u64, order: Ordering) {
+    pub fn store(&self, value: u64, order: Ordering) {
         self.0.store(value, order);
     }
 
