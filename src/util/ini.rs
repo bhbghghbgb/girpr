@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
@@ -24,12 +25,25 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
     };
-    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
-        .expect("the game_version pattern is a literal");
-    Ok(re
+    Ok(game_version_re()
         .captures_iter(&text)
         .last()
         .map(|c| c[1].trim().to_string()))
+}
+
+/// The `game_version` line pattern, compiled once per process.
+///
+/// The pattern is a literal, so parsing it once is enough; it is called per run
+/// in production but often in tests. Semantics are fixed: `^` anchors at the
+/// line start (no leading whitespace before `game_version`), `\s*` around `=`,
+/// at least one character of value, trailing whitespace trimmed, and the caller
+/// takes the **last** match.
+fn game_version_re() -> &'static regex::Regex {
+    static GAME_VERSION: OnceLock<regex::Regex> = OnceLock::new();
+    GAME_VERSION.get_or_init(|| {
+        regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
+            .expect("the game_version pattern is a literal")
+    })
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
@@ -427,6 +441,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
+    }
+
+    /// The cached pattern keeps the documented shape: no leading whitespace
+    /// before the key, whitespace allowed around `=`, a value of at least one
+    /// character, trailing whitespace trimmed, and the last match wins.
+    #[test]
+    fn version_pattern_keeps_its_anchored_shape() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "version_shape");
+        std::fs::write(
+            dir.join("config.ini"),
+            "[General]\n game_version=9.9.9\ngame_version=4.0.0\ngame_version = 5.1.0  \ngame_version=\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_game_version(&dir).unwrap().unwrap(),
+            "5.1.0",
+            "the indented and the empty-value lines must not match"
+        );
     }
 
     #[test]
