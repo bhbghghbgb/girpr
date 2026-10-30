@@ -63,8 +63,10 @@ impl Scan {
 struct RangeState {
     offset: u64,
     len: u64,
-    /// Lowercased expected MD5 — the manifest's spelling is not canonical.
-    expect: String,
+    /// The expected MD5, parsed once — the manifest's spelling is not
+    /// canonical. `None` when the expectation is empty (or otherwise not a
+    /// hex digest): "unknown", not "matches".
+    expect: Option<[u8; 16]>,
     ctx: md5::Context,
     /// Bytes of this range actually read. A range that runs past the end of
     /// the file is short, and a short range is never correct.
@@ -74,13 +76,14 @@ struct RangeState {
 impl RangeState {
     /// Is the range exactly what the manifest says it should be?
     ///
-    /// Three things have to hold: every byte of the range was on disk, the
-    /// range hashes to the expected MD5, and the expectation was not empty
-    /// (an empty MD5 is "unknown", not "matches").
+    /// Three things have to hold: every byte of the range was on disk, there
+    /// *is* an expectation (an empty MD5 is "unknown", not "matches"), and the
+    /// range hashes to it.
     fn is_ok(&self) -> bool {
-        self.seen == self.len
-            && !self.expect.is_empty()
-            && format!("{:x}", self.ctx.clone().compute()) == self.expect
+        let Some(expect) = self.expect else {
+            return false;
+        };
+        self.seen == self.len && self.ctx.clone().compute().0 == expect
     }
 }
 
@@ -118,7 +121,7 @@ pub fn scan_file(path: &Path, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) 
 pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
     f.seek(SeekFrom::Start(0))?;
     let mut ranges: Vec<RangeState> = Vec::new();
-    let mut index: HashMap<(u64, u64, String), usize> = HashMap::new();
+    let mut index: HashMap<(u64, u64, Option<[u8; 16]>), usize> = HashMap::new();
     let mut dest_idx = Vec::with_capacity(dest.len());
     let mut source_idx = Vec::with_capacity(source.len());
     // The two lists are interned separately, so a range that appears in both
@@ -189,18 +192,19 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
 
 /// Find or create the range state for `(offset, len, md5)`.
 ///
-/// Two ranges are the same range when they cover the same bytes **and**
-/// expect the same content; the same bytes with a different expectation are
-/// two different questions, so they get two digests.
+/// Two ranges are the same range when they cover the same bytes **and** expect
+/// the same digest; the same bytes with a different expectation are
+/// two different questions, so they get two digests. An expectation that is
+/// not a digest is "unknown", and every unknown is the same question.
 fn intern(
     ranges: &mut Vec<RangeState>,
-    index: &mut HashMap<(u64, u64, String), usize>,
+    index: &mut HashMap<(u64, u64, Option<[u8; 16]>), usize>,
     offset: u64,
     len: u64,
     md5: &str,
 ) -> usize {
-    let expect = md5.to_ascii_lowercase();
-    let key = (offset, len, expect.clone());
+    let expect = parse_md5_hex(md5);
+    let key = (offset, len, expect);
     if let Some(&i) = index.get(&key) {
         return i;
     }
@@ -214,6 +218,35 @@ fn intern(
     });
     index.insert(key, i);
     i
+}
+
+/// Parse a hex MD5 into the 16 bytes it spells, or `None` when it is not one.
+///
+/// Either case is accepted: the manifest's spelling is not canonical. A string
+/// that is not 32 hex digits — the empty MD5 above all — is "unknown", not a
+/// digest, so it can never match.
+fn parse_md5_hex(md5: &str) -> Option<[u8; 16]> {
+    let bytes = md5.as_bytes();
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let hi = hex_digit(bytes[2 * i])?;
+        let lo = hex_digit(bytes[2 * i + 1])?;
+        *byte = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+/// The value of one ASCII hex digit, in either case.
+fn hex_digit(b: u8) -> Option<u8> {
+    Some(match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => return None,
+    })
 }
 
 /// Read `len` bytes at `offset` into a buffer.
