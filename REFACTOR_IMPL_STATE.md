@@ -10,7 +10,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 ### Phase 0 — pure cleanup (no behavior change)
 
 - [x] D1 — one `case_key` helper. (`ea2acce`, shared `util::path::path_key`)
-- [ ] D6 — one-pass empty-chunk count.
+- [x] D6 — one-pass empty-chunk count. (`38bd295`)
 - [ ] G7 — remove dead imports / dead `min`; add `read_range` bounds.
 - [ ] C3 — extract the in-place success block.
 - [ ] C7 — extract the reserved-write helper.
@@ -54,6 +54,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 ## Pending review tasks
 
 - D1 — `ea2acce` · `path_key` in `src/util/path.rs` replaces `dedup_key` / `purge_key`; `pub(crate)`, not re-exported from `util`. Behavior claimed identical; verify both pinned case-folding tests and that no doc references the old names.
+- D6 — `38bd295` · one-pass `retain` + count in `build_plan`; confirm validation still precedes the drop and the `empty` warning fields/text are unchanged.
 
 ## Skipped
 
