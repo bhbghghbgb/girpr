@@ -158,11 +158,13 @@ pub fn plan_purge(
         }
         let path = e.path();
         let rel = rel_path(path, game_dir);
-        let outside = !scope.is_visible(&rel);
-        match classify_purge_path(&rel, &expected, &server_keep, &blacklist, scope) {
+        // Match the scope once and hand the answer to the classifier: rule 0
+        // needs exactly this value, and the `hidden` count needs it too.
+        let visible = scope.is_visible(&rel);
+        match classify_purge_path_visible(&rel, visible, &expected, &server_keep, &blacklist) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
-                debug_assert!(!outside, "a hidden path must classify Keep");
+                debug_assert!(visible, "a hidden path must classify Keep");
                 // A candidate that cannot be stat'd is still a candidate: the
                 // delete does not need its size. Counting it as zero would
                 // understate the ceiling, so say so and count the failure.
@@ -185,7 +187,7 @@ pub fn plan_purge(
                 });
             }
         }
-        if outside {
+        if !visible {
             hidden += 1;
         }
     }
@@ -358,6 +360,23 @@ pub enum PurgeVerdict {
 /// Decide the fate of one `/`-separated rel path for the files-cleanup.
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
+/// Convenience wrapper around [`classify_purge_path_visible`]: it computes
+/// the path-scope verdict itself. [`plan_purge`] already knows whether a
+/// walked path is visible, so it calls the variant directly and matches the
+/// scope once per file.
+pub fn classify_purge_path(
+    rel: &str,
+    expected: &HashSet<String>,
+    server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
+    scope: &PathScope,
+) -> PurgeVerdict {
+    classify_purge_path_visible(rel, scope.is_visible(rel), expected, server_keep, blacklist)
+}
+
+/// [`classify_purge_path`] with the path-scope verdict (`visible`) already
+/// computed.
+///
 /// `expected`, `server_keep` and `blacklist` must already be keyed with
 /// `path_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
 /// once per file. That keeps the classification case-insensitive on Windows
@@ -384,15 +403,15 @@ pub enum PurgeVerdict {
 ///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
 ///    `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
 ///    exe and server bookkeeping files.
-pub fn classify_purge_path(
+pub fn classify_purge_path_visible(
     rel: &str,
+    visible: bool,
     expected: &HashSet<String>,
     server_keep: &HashSet<String>,
     blacklist: &HashSet<String>,
-    scope: &PathScope,
 ) -> PurgeVerdict {
     // 0. Out of scope → does not exist.
-    if !scope.is_visible(rel) {
+    if !visible {
         return PurgeVerdict::Keep;
     }
     let key = path_key(rel);
