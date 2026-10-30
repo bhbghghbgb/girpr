@@ -499,7 +499,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
             stopped.count(&summary),
             stopped.figure()
         );
-        summary.flags.stopped = Some(flag);
+        note_stopped(&mut summary, flag);
         return Ok((summary, 5));
     }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
@@ -529,6 +529,17 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     Ok((summary, 0))
 }
 
+/// Record which ceiling bound the run, keeping the first one that did.
+///
+/// `SUMMARY`'s `stopped=` names the flag that bound, so a later ceiling (the
+/// post-phase delete budget after a clean repair loop) must not rewrite the
+/// answer the earlier one already gave.
+fn note_stopped(summary: &mut Summary, flag: &'static str) {
+    if summary.flags.stopped.is_none() {
+        summary.flags.stopped = Some(flag);
+    }
+}
+
 /// Turn a post-phase outcome into the run's exit code, and say which ceiling
 /// bound.
 ///
@@ -543,7 +554,7 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );
-            summary.flags.stopped = Some("--max-delete-bytes");
+            note_stopped(summary, "--max-delete-bytes");
             5
         }
     }
@@ -577,5 +588,20 @@ async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
             tracing::warn!("deprecated list unavailable: {e:#}");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Summary, note_stopped};
+
+    /// `SUMMARY`'s `stopped=` names the **first** ceiling to bind: a later
+    /// phase that also hits one must not rewrite the answer.
+    #[test]
+    fn the_first_ceiling_to_bind_keeps_the_stopped_flag() {
+        let mut summary = Summary::new();
+        note_stopped(&mut summary, "--max-write-bytes");
+        note_stopped(&mut summary, "--max-delete-bytes");
+        assert_eq!(summary.flags.stopped, Some("--max-write-bytes"));
     }
 }
