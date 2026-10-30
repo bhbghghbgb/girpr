@@ -579,7 +579,25 @@ fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     anyhow::bail!("write-bytes ceiling reached")
 }
 
-/// Write `bytes` at `offset`.
+/// Write `bytes` at `offset` and settle them.
+///
+/// The reservation is the caller's: the three write paths reserve at
+/// different granularities on purpose (see [`write_at`], [`copy_within`] and
+/// [`zero_fill`]), and the ceiling must be charged at exactly the same points.
+/// This helper is only the part they share — seek, write, [`note_write`].
+fn write_reserved(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    f: &mut File,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<()> {
+    f.seek(SeekFrom::Start(offset))?;
+    f.write_all(bytes)?;
+    note_write(ctx, writes, bytes.len() as u64)
+}
+
+/// Write `bytes` at `offset`, reserving the whole slice up front.
 fn write_at(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -588,17 +606,15 @@ fn write_at(
     bytes: &[u8],
 ) -> Result<()> {
     reserve_write(ctx, bytes.len() as u64)?;
-    f.seek(SeekFrom::Start(offset))?;
-    f.write_all(bytes)?;
-    note_write(ctx, writes, bytes.len() as u64)?;
-    Ok(())
+    write_reserved(ctx, writes, f, offset, bytes)
 }
 
 /// Copy `len` bytes from `src` to `dst` inside the same file.
 ///
-/// The copy is done in pieces, and each piece is read before it is written,
-/// so the source and the destination never have to be disjoint in the
-/// *handle* — only in the *file*, which the write order guarantees.
+/// The copy is done in pieces, and each piece is reserved and written before
+/// the next is read, so the source and the destination never have to be
+/// disjoint in the *handle* — only in the *file*, which the write order
+/// guarantees.
 fn copy_within(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -617,9 +633,7 @@ fn copy_within(
         f.seek(SeekFrom::Start(src + done))?;
         f.read_exact(&mut buf[..n])?;
         reserve_write(ctx, n as u64)?;
-        f.seek(SeekFrom::Start(dst + done))?;
-        f.write_all(&buf[..n])?;
-        note_write(ctx, writes, n as u64)?;
+        write_reserved(ctx, writes, f, dst + done, &buf[..n])?;
         done += n as u64;
     }
     Ok(())
@@ -629,6 +643,9 @@ fn copy_within(
 ///
 /// A hole in the chunk coverage is a region no chunk claims, so nothing else
 /// would ever write it: without this it would keep the old file's bytes.
+///
+/// The whole length is reserved once, before the first piece lands; the
+/// pieces are then written without touching the ceiling again.
 fn zero_fill(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -642,14 +659,14 @@ fn zero_fill(
     // The zero-fill is a write like any other: it lands in the install and
     // the write ceiling counts it.
     reserve_write(ctx, len)?;
-    out.seek(SeekFrom::Start(offset))?;
     let zeros = vec![0u8; COPY_BUF.min(len as usize)];
     let mut left = len;
+    let mut pos = offset;
     while left > 0 {
         let n = (left as usize).min(zeros.len());
-        out.write_all(&zeros[..n])?;
-        note_write(ctx, writes, n as u64)?;
+        write_reserved(ctx, writes, out, pos, &zeros[..n])?;
         left -= n as u64;
+        pos += n as u64;
     }
     Ok(())
 }
