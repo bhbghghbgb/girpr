@@ -252,12 +252,31 @@ pub fn md5_file(path: &Path) -> Result<String> {
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
+///
+/// Allocates its own read buffer; callers that hash several ranges of one
+/// file use [`md5_file_slice_with_buf`] to reuse one.
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
+    let mut buf = vec![0u8; MD5_BUF];
+    md5_file_slice_with_buf(path, offset, len, &mut buf)
+}
+
+/// MD5 of a byte slice range of a file [offset, offset+len), reusing `buf`.
+///
+/// `buf` is grown to at least [`MD5_BUF`] and is never shrunk, so one buffer
+/// serves every range of a file instead of one allocation per range.
+pub fn md5_file_slice_with_buf(
+    path: &Path,
+    offset: u64,
+    len: u64,
+    buf: &mut Vec<u8>,
+) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     f.seek(SeekFrom::Start(offset))?;
+    if buf.len() < MD5_BUF {
+        buf.resize(MD5_BUF, 0);
+    }
     let mut ctx = md5::Context::new();
     let mut remaining = len;
-    let mut buf = vec![0u8; MD5_BUF];
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
         let n = f.read(&mut buf[..want])?;

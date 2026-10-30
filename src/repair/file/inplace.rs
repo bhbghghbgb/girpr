@@ -280,7 +280,9 @@ async fn attempt_inplace_inner(
     };
 
     // 4. patch. Ascending in the staged tier (forward writes), in the
-    // salvage order in the ordered tier.
+    // salvage order in the ordered tier. One scratch buffer serves the whole
+    // patch: the chunks are written one at a time, so the copy pieces reuse it.
+    let mut scratch = Vec::new();
     let mut write_order: Vec<usize> = (0..bad.len()).collect();
     if let Some(o) = &order
         && !o.ascending
@@ -304,6 +306,7 @@ async fn attempt_inplace_inner(
                 ctx,
                 writes,
                 &mut handle,
+                &mut scratch,
                 src,
                 dst,
                 c.uncompressed_size.max(0) as u64,

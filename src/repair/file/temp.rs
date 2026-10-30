@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 
 use super::{
     COPY_BUF, ChunkStats, FileCtx, FileWrites, Inplace, Mode, PlannedFile, note_write,
-    reserve_write,
+    reserve_write, scratch_slice,
 };
 use crate::repair::scope::ledger::StoppedBy;
 use crate::sophon::{self, SophonChunk};
@@ -117,8 +117,20 @@ async fn repair_attempt_inner(
         "tmp resume point"
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
+    // One scratch buffer for this file: every reuse hash and copy reuses it
+    // instead of allocating a fresh 512 KiB buffer per chunk.
+    let mut scratch = Vec::new();
     for c in &file.chunks {
-        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, tmp_path, writes)? {
+        match try_reuse_slice(
+            ctx,
+            final_path,
+            c,
+            reuse_entries,
+            &mut f,
+            &mut scratch,
+            tmp_path,
+            writes,
+        )? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -223,12 +235,14 @@ fn chunk_failure_after_rollback(
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
+#[allow(clippy::too_many_arguments)] // the per-file scratch is one more input; a bundle would churn both callers
 fn try_reuse_slice(
     ctx: &FileCtx,
     src: &std::path::Path,
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
+    scratch: &mut Vec<u8>,
     tmp_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
@@ -270,13 +284,13 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     };
 
-    match util::md5_file_slice(src, *ro as u64, c.uncompressed_size as u64) {
+    match util::md5_file_slice_with_buf(src, *ro as u64, c.uncompressed_size as u64, scratch) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
             let mut sf = File::open(src)?;
             sf.seek(SeekFrom::Start(*ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
-            let mut buf = vec![0u8; COPY_BUF];
+            let buf = scratch_slice(scratch, COPY_BUF);
             while remaining > 0 {
                 let want = (remaining as usize).min(buf.len());
                 let n = sf.read(&mut buf[..want])?;

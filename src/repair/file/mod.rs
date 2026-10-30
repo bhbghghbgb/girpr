@@ -58,8 +58,8 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use tracing::Instrument;
@@ -87,6 +87,26 @@ const MAX_ATTEMPTS: u32 = 5;
 
 /// Copy buffer for the local-slice reuse path.
 const COPY_BUF: usize = 512 * 1024;
+
+/// The shared zero block for [`zero_fill`]: [`COPY_BUF`] zero bytes, allocated
+/// once and never written, so every hole is filled in the same pieces a local
+/// copy uses.
+fn zero_block() -> &'static [u8] {
+    static ZEROS: OnceLock<Vec<u8>> = OnceLock::new();
+    ZEROS.get_or_init(|| vec![0u8; COPY_BUF])
+}
+
+/// The per-file scratch buffer for [`copy_within`] and the reuse copy, grown to
+/// at least `want` bytes.
+///
+/// A file's chunks are written one at a time, so one buffer per file is enough;
+/// it is never shrunk, so the next piece reuses the same allocation.
+fn scratch_slice(buf: &mut Vec<u8>, want: usize) -> &mut [u8] {
+    if buf.len() < want {
+        buf.resize(want, 0);
+    }
+    &mut buf[..want]
+}
 
 /// Outcome of one file task.
 // TODO: rename `Repaired::Repaired` (e.g. `Done`) — touches match sites at
@@ -619,6 +639,7 @@ fn copy_within(
     ctx: &FileCtx,
     writes: &mut FileWrites,
     f: &mut File,
+    scratch: &mut Vec<u8>,
     src: u64,
     dst: u64,
     len: u64,
@@ -626,7 +647,7 @@ fn copy_within(
     if len == 0 {
         return Ok(());
     }
-    let mut buf = vec![0u8; COPY_BUF.min(len as usize)];
+    let buf = scratch_slice(scratch, COPY_BUF.min(len as usize));
     let mut done = 0u64;
     while done < len {
         let n = ((len - done) as usize).min(buf.len());
@@ -659,7 +680,7 @@ fn zero_fill(
     // The zero-fill is a write like any other: it lands in the install and
     // the write ceiling counts it.
     reserve_write(ctx, len)?;
-    let zeros = vec![0u8; COPY_BUF.min(len as usize)];
+    let zeros = zero_block();
     let mut left = len;
     let mut pos = offset;
     while left > 0 {
