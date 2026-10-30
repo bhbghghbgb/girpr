@@ -53,38 +53,79 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-- [ ] D2 — key the expected set directly in `plan_purge` (`4cedc14`; +1 unit
-  test, 219). Last Phase 1 item; the rest of Phase 1 was accepted at
-  `b03eb66`.
-- [ ] A1 — one chunk-identity predicate, normalized MD5 (`28f5869`; +1 unit
-  test, 220).
-- [ ] A2 — indexed per-file reuse entries (`0fec9bc`).
-- [ ] B3 — shared scan-range construction; in-place `source_ok` remapped per
-  chunk (`5e49a7b`; correctness fix, no new test — existing integration
-  guards cover it).
-- [ ] D5 — deduplicate `verify_plan`'s branches (`1783069`; +2 unit tests,
-  222). `DigestSource::Scanned(&Verdict)` and unit `Read` deviate slightly
-  from the finding's sketch, to keep `damaged_chunks()` single-call and avoid
-  reading an absent file.
-- [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder (`70c13b3`). `Ceiling` is
-  `pub` (public field), otherwise as sketched; key order unchanged.
-- [ ] G6 — single-pass `clean_rel` (`80a2d5b`; +1 table-driven test, 223).
-  Validation order and error texts unchanged; device-name check is now
-  allocation-free and byte-based.
-- [ ] G5 — `PathRoot` cached base resolution (`d5a8f2a`; +1 unit test, 224).
-  Wired into scan estimate/scan, `DiskPlan::new`, `repair_all`; refreshed after
-  `create_dir_all`. `verify_plan` left on `contained_join` (not in the list).
-  Purge never joined a rel.
-- [ ] C5 — `OsString` `_tmp` path (`a6bb886`). No test change (no non-UTF-8
-  harness); `_tmp` suffix and purge rule unchanged.
-- [ ] C6 — bounded `JoinSet` in `repair_all` (`a7e9703`; +1 unit test, 225).
-  Semaphore removed (window is the bound); `join_file_tasks` now owns the
-  spawn-and-join loop. Review concerns: (1) the `file` span is now built in
-  the driver, so its `task = ?tokio::task::try_id()` names the driver task,
-  not the file task — the field no longer distinguishes files; (2) the
-  fail-fast warning may now fire deterministically where the old spawn-all
-  loop had already spawned everything; (3) a cancelled `repair_all` now aborts
-  the in-flight tasks instead of detaching them.
+_None._ D2 and every Phase 2 task (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6)
+passed review; H2 and the Phase 3 tasks are not implemented yet.
+
+D2 and Phase 2 (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) passed review:
+`cargo test --all-targets` (225 unit + 149 integration passing, 7 ignored),
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean,
+and each task's contract was checked against its pre-refactor code:
+
+- D2 — `expected_rels()` is the allocation-free view and `expected_paths()`
+  still hands back the raw spelling (the tests' entry point). `plan_purge` keys
+  the plan's rels straight into its one expected set, so the keep set is still
+  exactly the plan's cleaned rels and `classify_purge_path`'s "sets are already
+  keyed" contract is untouched.
+- A1 — `ReuseEntry::matches` is the only `(md5, size)` predicate, and the map
+  normalizes the digest once at its boundary. First-entry-wins is preserved
+  (the two existing tests) and the new test pins case-variant collapse.
+- A2 — `FileReuse` keeps `entries` in first-match order and inserts only on an
+  absent key, so `get` cannot change the winner; a missing entry still degrades
+  to a download, and the `debug_assert!` keeps index and predicate in sync.
+- B3 — `scan_ranges` is the one range builder. In the in-place path
+  `source_ok` is remapped to one verdict per chunk (discard path included), so
+  no consumer sees a per-range vector, and a source-less chunk is no longer
+  hashed at offset 0. `Scan::absent(dest.len(), source.len())` is unchanged.
+- D5 — the failure shapes, field names and counter updates are the
+  pre-refactor ones; `damaged_chunks()` is computed once, and presence/length
+  are still checked before the digest for both digest sources. The fallback
+  "unreadable" text is byte-identical (`{e:#}` formatted into the message).
+- F1 / F2 — `Summary::default()`, `new()` and the old hand-written `new()`
+  agree field for field (`ram_limit` still `u64::MAX`), `snapshot` still copies
+  the ceiling and the stop marker, and `Extras` pushes the same keys in the
+  same order.
+- G6 — the component walk is shared; accepted/rejected spellings and the
+  `/`-separated output are unchanged, and the device-name check is
+  allocation-free and byte-based (no character-boundary slicing).
+- G5 — `PathRoot` caches only the base resolution; each joined path is still
+  resolved on the filesystem and compared with it, `contained_join` keeps its
+  message and its lexical-first ordering, and the execute phase rebuilds the
+  root after `create_dir_all`.
+- C5 — the `_tmp` suffix is appended to the `OsString`; the suffix and the
+  purge rule are unchanged, and UTF-8 paths are byte-identical.
+- C6 — the in-flight window is the bound, `JoinError` accounting and the
+  completion-order drain are kept, and `--fail-fast` is checked before every
+  spawn. The three concerns recorded with the commit are answered below.
+
+C6 review concerns:
+
+1. `task = ?tokio::task::try_id()` still names the **file** task: the span is
+   built in `file_task`'s body, and an `async fn` body runs on the spawned
+   task, so the field is unchanged. The note assumed a driver-built span.
+2. `--fail-fast` is now deterministic: draining the window in completion order
+   means no file starts after an observed failure. That is the documented
+   contract ("no further file is started"); the `remaining` warning keeps its
+   text and still fires at most once.
+3. A cancelled `repair_all` now aborts the in-flight tasks (the `JoinSet`
+   drop) instead of detaching them. That is the safer outcome — no writer keeps
+   running after the run returned — and both write paths recover: the temp path
+   resumes by length, the in-place path re-scans.
+
+Non-blocking follow-ups from this review:
+
+- B3 — add an in-place unit test that a source-less chunk is never scanned at
+  offset 0 (the existing guard only pins `scan_one`), and pin the discard-path
+  remap the same way.
+- C6 — say in the module doc that a dropped driver aborts the in-flight file
+  tasks; it is the one observable difference from the semaphore shape.
+- A2 — `FileReuse::key` lowercases the digest per lookup; a `[u8; 16]` key
+  (G2) would make the hot lookup allocation-free.
+- G5 — `verify_plan` still calls `contained_join` per file; hand it the
+  execute-phase `PathRoot` (a `--check-only` run builds one and does not use
+  it).
+- F1 — `Ceiling` is `pub` only because `Summary::ram_limit` is a public field,
+  but `load`/`store` are `pub(crate)`, so an external reader can hold the
+  value and not read it. Make the accessors `pub` or the field private.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
