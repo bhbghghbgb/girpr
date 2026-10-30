@@ -30,7 +30,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] D3 — cheap tiling check in `build_plan`. (`fe69394`)
 - [x] D4 — `Arc<str>` URL prefixes. (`6ee214b`)
 - [x] E1 — one `is_visible` per purge file. (`c4da9d3`)
-- [ ] D2 — key the expected set directly in `plan_purge`.
+- [x] D2 — key the expected set directly in `plan_purge`. (`4cedc14`)
 
 ### Phase 2 — behavior-adjacent
 
@@ -53,7 +53,9 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-_None._
+- [ ] D2 — key the expected set directly in `plan_purge` (`4cedc14`; +1 unit
+  test, 219). Last Phase 1 item; the rest of Phase 1 was accepted at
+  `b03eb66`.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
