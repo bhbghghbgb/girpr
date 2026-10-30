@@ -53,6 +53,11 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
+- [ ] Review follow-ups: `2e02df7` (B3 tests), `7ab4ff5` (C6 docs),
+  `edfb9b2` (A2 lookup), `87807bb` (G5 `verify_plan` root), `e20ca5b`
+  (F1 `Ceiling` access), `edbb471` (MD5 fold + `is_tiled`). Reported clean at
+  229 unit + 149 integration passing, 7 ignored.
+
 _None._ D2 and every Phase 2 task (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6)
 passed review; H2 and the Phase 3 tasks are not implemented yet.
 
@@ -111,21 +116,18 @@ C6 review concerns:
    running after the run returned — and both write paths recover: the temp path
    resumes by length, the in-place path re-scans.
 
-Non-blocking follow-ups from this review:
+Non-blocking follow-ups from this review (addressed, pending review):
 
-- B3 — add an in-place unit test that a source-less chunk is never scanned at
-  offset 0 (the existing guard only pins `scan_one`), and pin the discard-path
-  remap the same way.
-- C6 — say in the module doc that a dropped driver aborts the in-flight file
-  tasks; it is the one observable difference from the semaphore shape.
-- A2 — `FileReuse::key` lowercases the digest per lookup; a `[u8; 16]` key
-  (G2) would make the hot lookup allocation-free.
-- G5 — `verify_plan` still calls `contained_join` per file; hand it the
-  execute-phase `PathRoot` (a `--check-only` run builds one and does not use
-  it).
-- F1 — `Ceiling` is `pub` only because `Summary::ram_limit` is a public field,
-  but `load`/`store` are `pub(crate)`, so an external reader can hold the
-  value and not read it. Make the accessors `pub` or the field private.
+- B3 — in-place tests for the source-less chunk and the discard remap.
+  (`2e02df7`; `source_ok_by_chunk` extracted, +2 unit tests)
+- C6 — dropped-driver abort documented in the `file` module docs. (`7ab4ff5`)
+- A2 — allocation-free reuse lookup. (`edfb9b2`; bucket by streaming hash of
+  the lowercased digest + size, candidates confirmed with `matches`, +2 unit
+  tests)
+- G5 — `verify_plan` takes the execute-phase `PathRoot`. (`87807bb`)
+- F1 — `Ceiling::load`/`store` are `pub`. (`e20ca5b`)
+- Phase 1 leftovers — `md5_file_slice_with_buf` folded away (`edbb471`), and
+  `PlannedFile::is_tiled` narrowed to `pub(crate)` (same commit).
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
@@ -156,6 +158,7 @@ its only caller when C2 switched to `md5_reader_slice`, and `md5_file_slice`
 now only wraps it — fold the buffer variant into `md5_file_slice` once it has
 no second caller. `PlannedFile::is_tiled` relies on the plan's sorted chunk
 order (documented); it can be `pub(crate)` until a second caller needs it.
+Both addressed in `edbb471`.
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
