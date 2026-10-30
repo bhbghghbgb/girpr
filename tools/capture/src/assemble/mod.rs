@@ -25,10 +25,6 @@ pub use types::{
 #[cfg(test)]
 use crate::blobs::chunks::FilePair;
 #[cfg(test)]
-use crate::blobs::{ChunkIndex, Sources};
-#[cfg(test)]
-use crate::hash;
-#[cfg(test)]
 use crate::select::Class;
 #[cfg(test)]
 use assembly::totals_for;

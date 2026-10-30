@@ -68,6 +68,14 @@ pub struct Unreadable {
 /// build refuses — an older schema, which is a permanent condition with a
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
 /// operator's inventory is complete.
+///
+/// **A walk that cannot read a directory or a manifest is an error, not a
+/// shorter inventory.** The `unreadable` list can name a bundle that does not
+/// open, but it cannot name what it never saw: an entry error, an ACL-denied
+/// directory, or a `MANIFEST.json` that cannot be read would be dropped, so
+/// `list` returned a confident, incomplete answer with exit `0`. An audit
+/// command fails fast instead and names the directory, entry or manifest it
+/// could not read.
 pub fn list(root: &Path) -> Result<Index, String> {
     list_with(
         root,

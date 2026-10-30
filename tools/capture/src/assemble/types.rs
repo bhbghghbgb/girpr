@@ -273,7 +273,7 @@ pub struct PatchOutcome {
     ///
     /// **Not the bytes themselves.** Holding them here would keep a third copy of
     /// a ~22 MB file alive beside `old.bytes` and `new.bytes` for the rest of the
-    /// capture, and nothing outside [`assemble`] ever read them.
+    /// capture, and nothing outside [`super::assemble`] ever read them.
     ///
     /// The comparison is still a **byte** comparison, and still happens where both
     /// sides are alive; it is settled before these bytes are returned. So this does

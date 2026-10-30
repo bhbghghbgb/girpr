@@ -44,7 +44,7 @@ pub fn derived_ids() -> Vec<&'static str> {
 
 /// What re-verification found.
 ///
-/// The rebuilt bytes are kept rather than dropped, because [`materialize`] is the
+/// The rebuilt bytes are kept rather than dropped, because [`super::materialize`] is the
 /// same rebuild with somewhere to put them, and rebuilding twice on a 135 MB
 /// bundle costs a minute of the operator's time for nothing.
 ///
