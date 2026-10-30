@@ -14,6 +14,7 @@
 //! optimization (chunk reuse), never an input to correctness.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
@@ -150,7 +151,9 @@ pub struct Layout {
 pub struct RepairPlan {
     pub latest: String,
     pub files: Vec<PlannedFile>,
-    pub url_prefix_by_file: HashMap<String, String>,
+    /// The chunk URL prefix each file's chunks live under, shared per manifest
+    /// so a manifest's files do not each own a copy of the same string.
+    pub url_prefix_by_file: HashMap<String, Arc<str>>,
 }
 
 impl RepairPlan {
@@ -275,9 +278,11 @@ pub fn build_plan(
     scope: &PathScope,
 ) -> Result<RepairPlan> {
     let mut files: Vec<PlannedFile> = Vec::new();
-    let mut prefix: HashMap<String, String> = HashMap::new();
+    let mut prefix: HashMap<String, Arc<str>> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (url_prefix, list) in per_manifest {
+        // One allocation per manifest: every file in the list shares it.
+        let url_prefix: Arc<str> = Arc::from(url_prefix);
         for f in list {
             // Folders are dropped: directories are created on demand instead.
             if f.is_folder || f.file.is_empty() {
@@ -296,7 +301,7 @@ pub fn build_plan(
             if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(path_key(&rel)) {
                 continue;
             }
-            prefix.insert(rel.clone(), url_prefix.clone());
+            prefix.insert(rel.clone(), Arc::clone(&url_prefix));
             // The chunk list is made **ascending by offset** here, once,
             // because everything downstream depends on it and nothing
             // upstream guarantees it: the manifest is whatever the server
@@ -601,7 +606,10 @@ mod tests {
             vec!["a.dat", "b.dat"]
         );
         assert_eq!(plan.latest, "5.0");
-        assert_eq!(plan.url_prefix_by_file.get("a.dat").unwrap(), "http://x");
+        assert_eq!(
+            plan.url_prefix_by_file.get("a.dat").unwrap().as_ref(),
+            "http://x"
+        );
     }
 
     #[test]
@@ -629,7 +637,10 @@ mod tests {
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
-        assert_eq!(plan.url_prefix_by_file.get("a/b.dat").unwrap(), "http://x");
+        assert_eq!(
+            plan.url_prefix_by_file.get("a/b.dat").unwrap().as_ref(),
+            "http://x"
+        );
         assert_eq!(plan.expected_paths().len(), 1);
     }
 
