@@ -360,7 +360,7 @@ the prebuilt release for the platform. Every crate in the workspace (`girpr`,
 [`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
 
 ```powershell
-cargo nextest run             # 265 tests in this package, all offline
+cargo nextest run             # 362 tests in this package, all offline (7 #[ignore]d)
 cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
