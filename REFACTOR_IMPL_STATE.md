@@ -55,26 +55,41 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-- [ ] H2 — `apply_run_flags` (`bc550ae`). Flag block moved out of `run`
-  unchanged; kept in `repair/mod.rs` (needs `RunCtx` + `note_stopped`), so
-  `report` stays independent of `config`. No new test (existing conditional-key
-  and ceiling tests pin it).
-
-- [ ] H1 — split `repair::run` into plan/execute (`d64df4f`). Mechanical move:
-  `plan_phase -> PlanOutcome (Ready(Box<PlanPhase>) | Finished(code)) ->
-  execute_phase`; `Summary` owned by `run` and lent to both halves; plan-only
-  state (estimates, `DiskPlan`, plan-phase root) stays in the plan half; execute
-  re-derives `game_dir`/root after `create_dir_all`. Baseline 229 + 149 holds.
-
-- [ ] G2 — `Md5` digest newtype (`d8808dc`, `3300f08`, `2b70d45`). Scan,
-  writer, check-only, manifest-checksum and reuse gates compare 16 bytes;
-  wire/report/JSON fields stay `String` and output is unchanged. Three public
-  surfaces changed type (`ReuseEntry.md5`, `ChunkDigest.md5`,
-  `HashingWriter::md5()`); `tests/peak_heap.rs` adjusted for the type. +3 unit
-  tests (232). Note: non-digest labels (hand-built test data only) no longer
-  compare equal, so such data never matches a gate.
-
 _None._ Everything except H4 is implemented; H4 is skipped (see "Skipped").
+
+Phase 3 (H1, H2, G2) passed review:
+`cargo test --all-targets` (232 unit + 149 integration passing, 7 ignored),
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean,
+and each task's contract was checked against its pre-refactor code:
+
+- H2 — `apply_run_flags` is the same conditional-key ladder moved verbatim out
+  of the repair path: it runs after `repair_all`, before the `files_failed`
+  check and the post-phase, and returns `5` only when a runtime ceiling bound.
+  It stays in `repair/mod.rs` because it needs `RunCtx` and `note_stopped`, so
+  `report` does not grow a dependency on `config`; `stopped=` still keeps the
+  first flag. The existing conditional-key, spent-figure and ceiling tests pin
+  the output.
+- H1 — `run` is now only the phase order (`plan_phase -> PlanOutcome ->
+  execute_phase`). The plan half performs exactly the pre-refactor steps through
+  the `--print-plan` return (`5` preflight / `0` print), and the execute half
+  performs `create_dir_all`, the second canonicalize + root, the lock, the audio
+  write, `--purge-before`, `--check-only` (`0`/`4`), `--purge-only` (`0`/`5`),
+  the repair loop (`5`/`3`), the post-phase (`0`/`5`) and the dry-run
+  `--purge-after` log. `Summary` is owned by `run` and lent to the plan half, so
+  a plan early return still hands back the same counters; plan-only inputs
+  (`est_download_by_file`, `DiskPlan`, the plan-phase `PathRoot`) do not cross,
+  and execute re-derives `game_dir`/root after `create_dir_all` exactly as
+  before.
+- G2 — every digest gate now compares bytes: `RangeState`, the temp/in-place
+  writer gates, the manifest checksum, check-only, and the reuse identity.
+  `Md5::parse_hex` accepts either case and rejects non-digests, so the old
+  `eq_ignore_ascii_case` gates keep their answers for hex input; wire/report/
+  JSON fields stay `String`, and the only type changes are the internal
+  `ReuseEntry.md5`, `ChunkDigest.md5` and `HashingWriter::md5()` surfaces (plus
+  the `tests/peak_heap.rs` call site). Non-digest labels in hand-built test data
+  now never match, which is the same "unknown" answer the computed-hex path
+  already gave. Three new unit tests pin parse/case/`EMPTY` and the
+  non-digest-to-download rule.
 
 D2 and Phase 2 (A1, A2, B3, D5, F1/F2, G6, G5, C5, C6) passed review:
 `cargo test --all-targets` (225 unit + 149 integration passing, 7 ignored),
@@ -174,8 +189,8 @@ The follow-ups passed review at `20a47ad`
   buffer; `is_tiled` is `pub(crate)`. `md5_file_slice` now has no in-crate
   caller but remains public API.
 
-Non-blocking follow-up: `md5_file_slice` is uncalled inside the crate; keep it
-as public API or drop it with the G2 digest series.
+Non-blocking follow-up resolved: `md5_file_slice` is uncalled inside the crate
+and stays public API; the G2 series did not need to drop it.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
