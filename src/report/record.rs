@@ -19,6 +19,9 @@
 //! `tracing` events on stderr (and optionally a `TRACE` log file — see
 //! [`crate::logging`]).
 
+use std::borrow::Cow;
+use std::fmt::Write as FmtWrite;
+
 /// How often the background reporter emits `PROGRESS` during long phases.
 pub const PROGRESS_INTERVAL_SECS: u64 = 10;
 
@@ -139,7 +142,9 @@ impl Record {
     /// The JSON `event` name: the text label lowercased, so `SUMMARY`/`summary`
     /// and `PLAN`/`plan` cannot be spelled two ways.
     pub fn event(&self) -> String {
-        self.label.to_ascii_lowercase()
+        let mut event = String::with_capacity(self.label.len());
+        push_lowercase(&mut event, self.label);
+        event
     }
 
     /// The fields, in report order, without the `event` name.
@@ -167,18 +172,19 @@ impl Record {
     /// it on is not this crate's call: cargo unifies features across the whole
     /// workspace build, so enabling it here would silently reorder the JSON
     /// another tool in this repository emits. The fields are few and all
-    /// primitives, so the cost is a `to_string` per key and per value.
+    /// primitives, so keys and string values are pushed straight into the
+    /// output; only a value that needs escaping takes a temporary.
     pub fn json(&self) -> String {
         let mut s = String::with_capacity(64 + 24 * self.fields.len());
         s.push('{');
-        s.push_str(&json_string("event"));
+        push_json_string(&mut s, "event");
         s.push(':');
-        s.push_str(&json_string(&self.event()));
+        push_json_event(&mut s, self.label);
         for (k, v) in &self.fields {
             s.push(',');
-            s.push_str(&json_string(k));
+            push_json_string(&mut s, k);
             s.push(':');
-            s.push_str(&json_value(v));
+            push_json_value(&mut s, v);
         }
         s.push('}');
         s
@@ -194,36 +200,60 @@ impl Record {
 }
 
 /// A value as it appears inside a text line: bare, never quoted.
-fn bare(v: &Val) -> String {
+fn bare(v: &Val) -> Cow<'_, str> {
     match v {
-        Val::Str(s) => s.clone(),
-        Val::UInt(u) => u.to_string(),
-        Val::Int(i) => i.to_string(),
+        Val::Str(s) => Cow::Borrowed(s),
+        Val::UInt(u) => Cow::Owned(u.to_string()),
+        Val::Int(i) => Cow::Owned(i.to_string()),
     }
 }
 
-/// A JSON string literal, with the escapes a raw quote would need.
+/// Append `s` lowercased. ASCII is folded and everything else is left alone,
+/// the same rule `str::to_ascii_lowercase` follows.
+fn push_lowercase(out: &mut String, s: &str) {
+    out.extend(s.chars().map(|c| c.to_ascii_lowercase()));
+}
+
+/// Append `s` as a JSON string literal, with the escapes a raw quote would need.
 ///
-/// Only reached by a key or a [`Val::Str`] carrying a `"` or a control
-/// character — a Windows artifact path has backslashes, which JSON allows
-/// unescaped, so the common case is a memcpy.
-fn json_string(s: &str) -> String {
+/// Only a string carrying a `"` or a control character takes the temporary
+/// `serde_json` path — a Windows artifact path has backslashes, which JSON
+/// allows unescaped, so the common case is a memcpy into the output.
+fn push_json_string(out: &mut String, s: &str) {
     if s.bytes().all(|b| b >= 0x20 && b != b'"') {
-        let mut out = String::with_capacity(s.len() + 2);
         out.push('"');
         out.push_str(s);
         out.push('"');
-        return out;
+        return;
     }
     // `serde_json` is the authority on escaping; it cannot fail on a `str`.
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+    out.push_str(&serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string()));
 }
 
-/// A [`Val`] as a JSON literal, preserving its type.
-fn json_value(v: &Val) -> String {
+/// Append the JSON `event` name: the label lowercased as a string literal.
+///
+/// Labels are static ASCII in practice, so the lowercase form goes straight
+/// into the output; a label that needs escaping falls back to the general path.
+fn push_json_event(out: &mut String, label: &str) {
+    if label.bytes().all(|b| b >= 0x20 && b != b'"') {
+        out.push('"');
+        push_lowercase(out, label);
+        out.push('"');
+        return;
+    }
+    push_json_string(out, &label.to_ascii_lowercase());
+}
+
+/// Append a [`Val`] as a JSON literal, preserving its type.
+fn push_json_value(out: &mut String, v: &Val) {
+    // Writing to a `String` is infallible, so the `fmt::Result` is ignored.
     match v {
-        Val::Str(s) => json_string(s),
-        Val::UInt(u) => u.to_string(),
-        Val::Int(i) => i.to_string(),
+        Val::Str(s) => push_json_string(out, s),
+        Val::UInt(u) => {
+            let _ = write!(out, "{u}");
+        }
+        Val::Int(i) => {
+            let _ = write!(out, "{i}");
+        }
     }
 }
