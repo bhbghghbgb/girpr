@@ -216,16 +216,22 @@ pub async fn scan_plan(
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
 ) -> ScanReport {
-    let mut stream =
-        futures::stream::iter(
-            plan.files.iter().cloned().map(|f| {
-                let game_dir = game_dir.to_path_buf();
-                let local_map = Arc::clone(&local_map);
-                async move {
-                    tokio::task::spawn_blocking(move || scan_one(&game_dir, &f, &local_map)).await
-                }
-            }),
-        )
+    // NOTE: the plan is shared by `Arc` and each task is handed an index, not a
+    // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
+    // per task would deep-clone the whole plan — the same reason
+    // `file::repair_all` shares its `FileCtx` instead of the plan's files.
+    let mut stream = futures::stream::iter(0..plan.files.len())
+        .map(move |idx| {
+            let plan = Arc::clone(&plan);
+            let game_dir = game_dir.to_path_buf();
+            let local_map = Arc::clone(&local_map);
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    scan_one(&game_dir, &plan.files[idx], &local_map)
+                })
+                .await
+            }
+        })
         .buffer_unordered(jobs.max(1));
 
     let mut out = ScanReport::default();
