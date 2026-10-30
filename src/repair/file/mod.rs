@@ -54,6 +54,12 @@
 //!
 //! Files run in parallel, bounded to `jobs` in flight; chunks inside a file
 //! are strictly sequential.
+//!
+//! The bound is a `JoinSet` owned by the driver. Dropping that driver — a
+//! cancelled run, or the future itself being dropped — drops the set and
+//! **aborts every file task still in flight**. That is the one observable
+//! difference from the old semaphore shape, where dropping the handles
+//! detached the tasks and let them finish on their own.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
