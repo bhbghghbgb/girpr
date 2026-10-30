@@ -41,7 +41,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] F1 / F2 — `Ceiling` newtype + `Extras` builder. (`70c13b3`)
 - [x] G6 — single-pass `clean_rel`. (`80a2d5b`)
 - [x] G5 — `PathRoot` cached base resolution. (`d5a8f2a`)
-- [ ] C5 — `OsString` `_tmp` path.
+- [x] C5 — `OsString` `_tmp` path. (`a6bb886`)
 - [ ] C6 — bounded `JoinSet` in `repair_all`.
 - [ ] H2 — `apply_run_flags`.
 
@@ -75,6 +75,8 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   Wired into scan estimate/scan, `DiskPlan::new`, `repair_all`; refreshed after
   `create_dir_all`. `verify_plan` left on `contained_join` (not in the list).
   Purge never joined a rel.
+- [ ] C5 — `OsString` `_tmp` path (`a6bb886`). No test change (no non-UTF-8
+  harness); `_tmp` suffix and purge rule unchanged.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
