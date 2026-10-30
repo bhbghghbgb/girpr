@@ -53,14 +53,37 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 
 ## Pending review tasks
 
-- [ ] B1 — `Arc<RepairPlan>` + index in `scan_plan` (`5474064`).
-- [ ] C1 — per-file scratch buffers (`0972167`).
-- [ ] C2 — one source handle in `try_reuse_slice` (`200c829`).
-- [ ] B2 / C4 — borrowed chunks in `salvage_order` (`58d9cf8`; +1 unit test).
-- [ ] G1 — byte-digest compare in `RangeState::is_ok` (`90746da`).
-- [ ] D3 — cheap tiling check in `build_plan` (`fe69394`; +1 unit test).
-- [ ] D4 — `Arc<str>` URL prefixes (`6ee214b`).
-- [ ] E1 — one `is_visible` per purge file (`c4da9d3`).
+_None._
+
+Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
+`cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
+`cargo clippy --all-targets -- -D warnings` and `cargo fmt --check` are clean,
+and each task's contract was checked against the pre-refactor code:
+
+- B1 — scan tasks get an index and a cloned plan `Arc`; no `PlannedFile` clone.
+- C1 — one scratch buffer per file; piece sizes and the write-ceiling charging
+  points (`copy_within` per piece, `zero_fill` once for the whole length) are
+  unchanged, and the zero block is read-only.
+- C2 — one source handle; an open failure, a read failure, a digest mismatch
+  and a short slice all still fall back to a download with the `_tmp`
+  untouched.
+- B2 / C4 — `salvage_order_refs` shares `order_from` with the owned form;
+  `the_borrowed_form_agrees_with_the_owned_one` pins them together.
+- G1 — the digest is parsed once into bytes; an empty or non-hex expectation
+  is still "never matches" and case is still ignored.
+- D3 — `is_tiled` gates `layout()`; the warning path is unchanged, and
+  `the_cheap_tiling_check_agrees_with_the_layout` covers tiled/hole/overlap/
+  tail/past-size/empty.
+- D4 — one `Arc<str>` per manifest; the first manifest still wins on a
+  duplicate rel.
+- E1 — the scope is matched once; rule 0 stays first, and the `hidden` count
+  and warning are unchanged.
+
+Non-blocking follow-ups: `util::md5_file_slice_with_buf` (added by C1) lost
+its only caller when C2 switched to `md5_reader_slice`, and `md5_file_slice`
+now only wraps it — fold the buffer variant into `md5_file_slice` once it has
+no second caller. `PlannedFile::is_tiled` relies on the plan's sorted chunk
+order (documented); it can be `pub(crate)` until a second caller needs it.
 
 Phase 0 (D1, D6, G7, C3, C7, G3, G4, F3, A3, H3) passed review:
 `cargo test --all-targets` (216 unit + 149 integration passing, 7 ignored),
