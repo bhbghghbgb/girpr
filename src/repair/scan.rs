@@ -164,30 +164,26 @@ fn est_file_download_bytes(
                 n.saturating_add(c.compressed_size.max(0) as u64)
             }),
         Mode::Inplace => {
-            let bad: Vec<&SophonChunk> = chunks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !v.dest_ok[*i])
-                .map(|(_, c)| c)
-                .collect();
-            // The writer's own inputs: only sources the scan found intact,
-            // and the same "does this source survive the direction" rule.
-            // `usable_len = u64::MAX` is sound because `source_ok` already
-            // proved the source range was read from inside the file.
-            let order_chunks: Vec<SophonChunk> = bad.iter().map(|c| (*c).clone()).collect();
-            let srcs: Vec<Option<u64>> = chunks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !v.dest_ok[*i])
-                .map(|(i, _)| {
-                    if v.source_ok[i] {
-                        sources.get(i).copied().flatten()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let order = reuse::salvage_order(&order_chunks, &srcs, u64::MAX);
+            // One pass builds the writer's two inputs: the damaged chunks, in
+            // plan order, and their sources. The writer's rule is the same
+            // one, so the borrowed form avoids cloning the chunks.
+            let mut bad: Vec<&SophonChunk> = Vec::new();
+            let mut srcs: Vec<Option<u64>> = Vec::new();
+            for (i, c) in chunks.iter().enumerate() {
+                if v.dest_ok[i] {
+                    continue;
+                }
+                bad.push(c);
+                // `usable_len = u64::MAX` is sound because `source_ok`
+                // already proved the source range was read from inside the
+                // file.
+                srcs.push(if v.source_ok[i] {
+                    sources.get(i).copied().flatten()
+                } else {
+                    None
+                });
+            }
+            let order = reuse::salvage_order_refs(&bad, &srcs, u64::MAX);
             bad.iter()
                 .enumerate()
                 .filter(|(k, _)| !order.live[*k])

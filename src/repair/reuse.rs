@@ -90,11 +90,32 @@ impl Order {
 /// ascending one writes forward, which is the friendlier pattern for a
 /// spinning disk.
 pub fn salvage_order(chunks: &[SophonChunk], sources: &[Option<u64>], usable_len: u64) -> Order {
-    // Count both directions cheaply, then materialize only the winner: the
-    // two passes share `survives_one`, so the count and the vector cannot
-    // disagree about which sources are live.
-    let kept_ascending = survives_count(chunks, sources, usable_len, true);
-    let kept_descending = survives_count(chunks, sources, usable_len, false);
+    order_from(chunks.iter(), sources, usable_len)
+}
+
+/// [`salvage_order`] over borrowed chunks.
+///
+/// Callers that already hold a selection of chunks (the scan's bad chunks, or
+/// the in-place path's indices into `file.chunks`) can order them without
+/// cloning them first. `sources[i]` is where `chunks[i]`'s bytes live.
+pub fn salvage_order_refs(
+    chunks: &[&SophonChunk],
+    sources: &[Option<u64>],
+    usable_len: u64,
+) -> Order {
+    order_from(chunks.iter().copied(), sources, usable_len)
+}
+
+/// The shared rule: count both directions cheaply, then materialize only the
+/// winner. The two passes share `survives_one`, so the count and the vector
+/// cannot disagree about which sources are live.
+fn order_from<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk> + Clone,
+    sources: &[Option<u64>],
+    usable_len: u64,
+) -> Order {
+    let kept_ascending = survives_count(chunks.clone(), sources, usable_len, true);
+    let kept_descending = survives_count(chunks.clone(), sources, usable_len, false);
     let ascending = kept_descending <= kept_ascending;
     Order {
         ascending,
@@ -124,28 +145,26 @@ fn survives_one(c: &SophonChunk, source: Option<u64>, usable_len: u64, ascending
 }
 
 /// How many sources survive one direction, without materializing a vector.
-fn survives_count(
-    chunks: &[SophonChunk],
+fn survives_count<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk>,
     sources: &[Option<u64>],
     usable_len: u64,
     ascending: bool,
 ) -> usize {
     chunks
-        .iter()
         .enumerate()
         .filter(|(i, c)| survives_one(c, sources.get(*i).copied().flatten(), usable_len, ascending))
         .count()
 }
 
 /// Which sources survive one direction.
-fn survives(
-    chunks: &[SophonChunk],
+fn survives<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk>,
     sources: &[Option<u64>],
     usable_len: u64,
     ascending: bool,
 ) -> Vec<bool> {
     chunks
-        .iter()
         .enumerate()
         .map(|(i, c)| survives_one(c, sources.get(i).copied().flatten(), usable_len, ascending))
         .collect()
@@ -217,10 +236,10 @@ mod tests {
     fn a_source_at_the_destination_counts_for_both() {
         // r == o: the chunk is already correct where it belongs, and it is
         // safe in either direction.
-        let chunks = vec![chunk("c", 4, 4)];
-        let sources = vec![Some(4u64)];
-        assert_eq!(survives(&chunks, &sources, 64, true), vec![true]);
-        assert_eq!(survives(&chunks, &sources, 64, false), vec![true]);
+        let chunks = [chunk("c", 4, 4)];
+        let sources = [Some(4u64)];
+        assert_eq!(survives(chunks.iter(), &sources, 64, true), vec![true]);
+        assert_eq!(survives(chunks.iter(), &sources, 64, false), vec![true]);
     }
 
     #[test]
@@ -294,6 +313,22 @@ mod tests {
         assert!(!order.ascending);
         assert_eq!(order.live, vec![false, true, true, true]);
         assert_eq!(order.live_count(), 3);
+    }
+
+    #[test]
+    fn the_borrowed_form_agrees_with_the_owned_one() {
+        let chunks = vec![
+            chunk("a", 0, 4),
+            chunk("b", 4, 4),
+            chunk("c", 8, 4),
+            chunk("d", 12, 4),
+        ];
+        let sources = vec![None, Some(0u64), Some(4), Some(8)];
+        let refs: Vec<&SophonChunk> = chunks.iter().collect();
+        assert_eq!(
+            salvage_order_refs(&refs, &sources, 16),
+            salvage_order(&chunks, &sources, 16)
+        );
     }
 
     #[test]

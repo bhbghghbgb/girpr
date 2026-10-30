@@ -260,14 +260,14 @@ async fn attempt_inplace_inner(
     let order = match tier {
         Tier::Staged => None,
         Tier::Ordered => {
-            let chunks: Vec<SophonChunk> = bad.iter().map(|&i| file.chunks[i].clone()).collect();
+            let chunks: Vec<&SophonChunk> = bad.iter().map(|&i| &file.chunks[i]).collect();
             let srcs: Vec<Option<u64>> = bad
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
                 .collect();
             let usable = handle_len(&handle)
                 .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
-            let o = reuse::salvage_order(&chunks, &srcs, usable);
+            let o = reuse::salvage_order_refs(&chunks, &srcs, usable);
             tracing::info!(
                 file = %file.rel,
                 ascending = o.ascending,
