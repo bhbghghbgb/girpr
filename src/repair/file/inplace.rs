@@ -331,16 +331,7 @@ async fn attempt_inplace_inner(
     // per-chunk verdicts name the culprit when it does not match.
     let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
     if after.file_md5.eq_ignore_ascii_case(&file.md5) {
-        tracing::info!(
-            chunks_total = stats.chunks_total,
-            chunks_kept = stats.chunks_kept,
-            chunks_reused = stats.chunks_reused,
-            chunks_downloaded = stats.chunks_downloaded,
-            download_bytes = stats.download_bytes,
-            final_md5 = %after.file_md5,
-            "repaired in place"
-        );
-        return Ok(Inplace::Repaired(stats.clone()));
+        return Ok(repaired_in_place(stats, &after.file_md5));
     }
 
     // Redo only the chunks that are still wrong. A chunk that fails here
@@ -377,16 +368,25 @@ async fn attempt_inplace_inner(
             final_scan.file_md5
         );
     }
+    Ok(repaired_in_place(stats, &final_scan.file_md5))
+}
+
+/// The success settle shared by the first verify and the redo.
+///
+/// Both paths end the same way: one `repaired in place` line carrying the
+/// file's chunk accounting, then the stats the caller promotes. Keeping it in
+/// one place stops the two paths' log blocks from drifting apart.
+fn repaired_in_place(stats: &ChunkStats, md5: &str) -> Inplace {
     tracing::info!(
         chunks_total = stats.chunks_total,
         chunks_kept = stats.chunks_kept,
         chunks_reused = stats.chunks_reused,
         chunks_downloaded = stats.chunks_downloaded,
         download_bytes = stats.download_bytes,
-        final_md5 = %final_scan.file_md5,
+        final_md5 = %md5,
         "repaired in place"
     );
-    Ok(Inplace::Repaired(stats.clone()))
+    Inplace::Repaired(stats.clone())
 }
 
 /// What one `File::metadata()` call said about the in-place target.
