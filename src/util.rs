@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 const MD5_BUF: usize = 512 * 1024;
 
@@ -265,73 +265,402 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
     Ok(format!("{:x}", ctx.compute()))
 }
 
-pub fn file_len(path: &Path) -> Option<u64> {
-    std::fs::metadata(path).ok().map(|m| m.len())
+/// What a file-length probe found.
+///
+/// `Absent` is exactly `NotFound`. Every other `metadata` error — a denied
+/// attribute read, a sharing violation, an invalid component — is
+/// `Unreadable`, not "absent" and not "zero": collapsing the two makes a
+/// present file look missing and a check report a size mismatch for a file it
+/// never managed to stat.
+#[derive(Debug)]
+pub enum FileLen {
+    /// The file exists; this is its length.
+    Present(u64),
+    /// The path is not there.
+    Absent,
+    /// The path could not be statted.
+    Unreadable(std::io::Error),
 }
 
-/// Turn a `/`-separated manifest rel path into a native one.
+/// Classify one `metadata` result.
 ///
-/// Manifests always use `/`; every comparison in this crate (plan, reuse map,
-/// purge classification) is done on the `/` form, and the conversion happens
-/// only at the filesystem boundary.
-pub fn normalize_rel(rel: &str) -> String {
-    rel.replace(['/', '\\'], std::path::MAIN_SEPARATOR_STR)
+/// Split from [`file_len`] so the absent/unreadable split can be pinned with
+/// an injected `io::Error`, the way `post::classify_deprecated` is.
+fn classify_len(stat: std::io::Result<std::fs::Metadata>) -> FileLen {
+    match stat {
+        Ok(m) => FileLen::Present(m.len()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => FileLen::Absent,
+        Err(e) => FileLen::Unreadable(e),
+    }
+}
+
+/// Length of a path with absence and an unreadable stat kept distinct.
+pub fn file_len(path: &Path) -> FileLen {
+    classify_len(std::fs::metadata(path))
+}
+
+/// Validate a **server-controlled relative path** and return it in `/` form.
+///
+/// The manifest, the deprecated-files list and the audio directory names are
+/// all strings a server chose. [`Path::join`] **replaces** the base for an
+/// absolute path, for a Windows drive-relative path (`C:evil`), and for a UNC
+/// path, and `..` walks out of it. This refuses all of those spellings before
+/// any sink sees them:
+///
+/// - empty, a drive prefix (`C:`), a root (`/x`, `\\server\share`), or any
+///   `ParentDir` component;
+/// - anything that names no file (only `.` components);
+/// - a trailing separator (`game/`): every caller expects the rel to name one
+///   object, and a spelling that also says "directory" cannot be both;
+/// - Windows name rules, because the install is a Windows tree even when the
+///   checker runs elsewhere: a reserved device name (`NUL`, `con.dat`,
+///   `COM1`, `CONIN$`, …), a component ending in `.` or a space (Windows
+///   strips those and aliases the name), or a `:` other than the drive prefix
+///   (an NTFS alternate data stream).
+///
+/// The check is lexical and platform-independent: `C:evil` is a `Prefix`
+/// component on Windows but a plain component on Unix, so the drive spelling is
+/// rejected explicitly rather than left to `std`.
+///
+/// This is not a filesystem check; [`contained_join`] adds that.
+pub fn contained_rel(rel: &str) -> Result<PathBuf> {
+    let normalized = rel.replace('\\', "/");
+    anyhow::ensure!(!normalized.is_empty(), "path is empty");
+    anyhow::ensure!(
+        !normalized.ends_with('/'),
+        "path has a trailing separator: {rel}"
+    );
+    let bytes = normalized.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        anyhow::bail!("path has a drive prefix: {rel}");
+    }
+    let path = Path::new(&normalized);
+    anyhow::ensure!(
+        !path.has_root() && !path.is_absolute(),
+        "path is absolute: {rel}"
+    );
+    let mut named = false;
+    // Build the cleaned form rather than returning the input: `a/./b` is
+    // accepted but must not survive as `a/./b`, because the plan stores this
+    // string and every later comparison (the purge's expected set, the reuse
+    // map, the scope) works on the plain form. A leading `.` in particular
+    // would make `expected_paths()` disagree with the purge walk — which
+    // reports `game/foo.dat` — and the cleanup would delete the file this run
+    // just repaired.
+    let mut clean = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::Normal(part) => {
+                let part = part
+                    .to_str()
+                    .with_context(|| format!("path is not UTF-8: {rel}"))?;
+                anyhow::ensure!(
+                    !part.ends_with('.') && !part.ends_with(' '),
+                    "path has a Windows-trailing dot or space: {rel}"
+                );
+                anyhow::ensure!(
+                    !part.contains(':'),
+                    "path has a Windows alternate-stream separator: {rel}"
+                );
+                anyhow::ensure!(
+                    !is_windows_device_name(part),
+                    "path names a Windows device: {rel}"
+                );
+                named = true;
+                clean.push(part);
+            }
+            // `a/./b` is still contained; it just says nothing.
+            Component::CurDir => {}
+            _ => anyhow::bail!("path is not a plain relative path: {rel}"),
+        }
+    }
+    anyhow::ensure!(named, "path names no file: {rel}");
+    Ok(clean)
+}
+
+/// Validate a server-controlled relative path and return the `/`-separated
+/// string every gate and sink shares.
+///
+/// This is the lexical half of [`contained_join`] with no filesystem step. It
+/// exists so a caller normalises a server or config spelling **once**, at the
+/// boundary where it enters the run, and then reuses that exact string for the
+/// path-scope decision and for the filesystem operation. Cleaning only at the
+/// sink (as `contained_join` does) leaves the gate comparing a different
+/// spelling, so `./a/b` can pass a scope that hides `a/b`.
+pub fn clean_rel(rel: &str) -> Result<String> {
+    Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
+}
+
+/// Is this component a name Windows reserves for a device in every directory?
+///
+/// The comparison uses the part before the first `.` — `NUL.txt` is still the
+/// `NUL` device — and ignores case, which NTFS does for these names too.
+fn is_windows_device_name(part: &str) -> bool {
+    let stem = part.split('.').next().unwrap_or_default();
+    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) {
+        return true;
+    }
+    ["COM", "LPT"].iter().any(|prefix| {
+        upper
+            .strip_prefix(prefix)
+            .is_some_and(|n| n.len() == 1 && ('1'..='9').contains(&n.chars().next().unwrap()))
+    })
+}
+
+/// Join a server-controlled relative path under `base`, refusing anything that
+/// resolves outside it.
+///
+/// The lexical check is [`contained_rel`]. The filesystem check resolves the
+/// **nearest existing ancestor** of both sides — so a missing `game_dir` (a
+/// `--print-plan` run, a fresh install) still works — and requires the joined
+/// path to stay under the base. That is what catches a symlink inside the
+/// install that points out of it, which a lexical `starts_with` cannot.
+pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
+    let rel = contained_rel(rel)?;
+    let joined = base.join(rel);
+    let base_resolved = resolve_existing_prefix(base)
+        .with_context(|| format!("resolve the game dir {}", base.display()))?;
+    let joined_resolved = resolve_existing_prefix(&joined)
+        .with_context(|| format!("resolve {}", joined.display()))?;
+    anyhow::ensure!(
+        joined_resolved.starts_with(&base_resolved),
+        "path escapes {}: {}",
+        base.display(),
+        joined.display()
+    );
+    Ok(joined)
+}
+
+/// Canonicalize `path` as far as it exists, then append the missing tail.
+///
+/// `canonicalize` fails on a path that is not there yet, and the plan runs
+/// before `game_dir` is created; resolving the longest existing prefix keeps
+/// the symlink resolution where it matters without requiring the leaf (or the
+/// whole tree) to exist.
+///
+/// Only [`ErrorKind::NotFound`] means "this component is not there yet". Every
+/// other error means the component **could not be resolved** — a denied
+/// attribute read, a sharing violation, a regular file used as a directory —
+/// and is returned instead of being swallowed. Treating such a component as a
+/// literal name and continuing lexically is exactly the "filesystem check that
+/// silently became a lexical check" failure this helper exists to prevent: a
+/// symlink whose target cannot be canonicalized would pass the containment
+/// comparison.
+fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = path;
+    loop {
+        match std::fs::canonicalize(cur) {
+            Ok(mut resolved) => {
+                for part in missing.iter().rev() {
+                    resolved.push(part);
+                }
+                return Ok(resolved);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match (cur.parent(), cur.file_name()) {
+                    (Some(parent), Some(name)) => {
+                        missing.push(name.to_os_string());
+                        cur = parent;
+                    }
+                    // No existing prefix at all (or a root): the lexical form is
+                    // the best answer, and both sides use the same rule.
+                    _ => return Ok(path.to_path_buf()),
+                }
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("canonicalize {}", cur.display()));
+            }
+        }
+    }
 }
 
 /// Parse `config.ini` last `game_version=` match.
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
 /// (`matches[^1]` over `game_version=(.+)`); missing file means fresh install.
 /// Do not "fix" to first-match.
+///
+/// `Ok(None)` is the documented fresh-install/absent case (and a file with no
+/// match). A read error other than `NotFound` is `Err`: an unreadable
+/// `config.ini` must not silently look like a fresh install and overwrite the
+/// version on the next bump.
 /// See <https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GamePackageService.cs#L47-L70>
-pub fn read_game_version(game_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(game_dir.join("config.ini")).ok()?;
-    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$").ok()?;
-    re.captures_iter(&text)
+pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
+    let p = game_dir.join("config.ini");
+    let text = match std::fs::read_to_string(&p) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
+    };
+    let re = regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
+        .expect("the game_version pattern is a literal");
+    Ok(re
+        .captures_iter(&text)
         .last()
-        .map(|c| c[1].trim().to_string())
+        .map(|c| c[1].trim().to_string()))
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
-pub fn read_ignore_categories(path: &Path) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return set;
+///
+/// `Ok(None)` means the file is not there (the launcher did not configure
+/// it); `Err` means it is there but could not be read **or** its text could
+/// not be parsed into any entry, which must not become an empty ignore set
+/// without a trace. One leading UTF-8 BOM is stripped; a mixed file warns per
+/// bad line and keeps the well-formed entries (see [`parse_config_list`]).
+///
+/// A line is an entry only when `is_delete` is `true`; an absent or `false`
+/// `is_delete` is the launcher's explicit no-op. A wrong-typed `is_delete`,
+/// or `is_delete: true` without a string `category`, is a malformed entry —
+/// not a silent skip: ignoring it would leave a category the user excluded
+/// repaired.
+pub fn read_ignore_categories(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
+    let Some(text) = read_config_list(path, "ignore categories")? else {
+        return Ok(None);
     };
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    let set = parse_config_list(path, "ignore categories", &text, |v| {
+        let Some(is_delete) = v.get("is_delete") else {
+            // `{}` and an absent `is_delete` are the launcher's no-op.
+            return Ok(None);
+        };
+        let is_delete = is_delete.as_bool().ok_or_else(|| {
+            anyhow::anyhow!(
+                "`is_delete` must be a boolean, found {}",
+                json_kind(is_delete)
+            )
+        })?;
+        if !is_delete {
+            return Ok(None);
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && v.get("is_delete")
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false)
-            && let Some(c) = v.get("category").and_then(|c| c.as_str())
-        {
-            set.insert(c.to_string());
-        }
-    }
-    set
+        let category = v.get("category").and_then(|c| c.as_str()).ok_or_else(|| {
+            anyhow::anyhow!("`category` must be a string when `is_delete` is true")
+        })?;
+        Ok(Some(category.to_string()))
+    })?;
+    Ok(Some(set))
 }
 
 /// Read blacklist file: JSON-lines {"fileName":"..."}.
-pub fn read_blacklist(path: &Path) -> std::collections::HashSet<String> {
-    let mut set = std::collections::HashSet::new();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return set;
+///
+/// Entries are normalised once, here at the boundary, through
+/// [`clean_rel`]: the plan compares them against the cleaned manifest rel, so
+/// a `./`- or `//`-spelled entry must become the same string or it protects
+/// nothing. An entry that cannot be a contained rel is a broken explicit
+/// configuration and is refused with the entry in the error, not dropped
+/// (silently ignoring it is the fail-open this normalisation closes).
+///
+/// The absent/unreadable/parse split is the same as
+/// [`read_ignore_categories`]: a missing file is an empty blacklist; a file
+/// that cannot be read, or whose only text is unparseable or malformed, is an
+/// error. A line without a string `fileName` is a malformed entry, not a
+/// silent no-op (the case where an explicit exclusion protects nothing).
+pub fn read_blacklist(path: &Path) -> anyhow::Result<Option<HashSet<String>>> {
+    let Some(text) = read_config_list(path, "blacklist")? else {
+        return Ok(None);
     };
-    for line in text.lines() {
+    let raw = parse_config_list(path, "blacklist", &text, |v| {
+        let name = v.get("fileName").and_then(|n| n.as_str()).ok_or_else(|| {
+            anyhow::anyhow!(
+                "`fileName` must be a string, found {}",
+                v.get("fileName").map_or("nothing", json_kind)
+            )
+        })?;
+        Ok(Some(name.to_string()))
+    })?;
+    raw.into_iter()
+        .map(|entry| clean_rel(&entry).with_context(|| format!("blacklist entry {entry:?}")))
+        .collect::<anyhow::Result<HashSet<_>>>()
+        .map(Some)
+}
+
+/// Parse one of the launcher's JSON-lines lists.
+///
+/// One leading UTF-8 BOM is stripped first, as in
+/// [`crate::repair::audio::read_scan_file`]: the launcher may write one, and
+/// U+FEFF is not whitespace, so `trim` would leave it glued to the first `{`
+/// and make that line unparseable.
+///
+/// A line that is not JSON is warned with its 1-based line number and skipped.
+/// So is a parseable line that is not a JSON object or whose required fields
+/// are missing or wrong-typed: the reader's closure returns `Err`, which is
+/// the same malformed-entry state (a `{"fileName":123}` must not silently
+/// disable an explicit exclusion). Skipping bad lines keeps the well-formed
+/// entries usable when the launcher wrote a crash-truncated or corrupt tail.
+/// But a file whose non-blank text produced no entry **and** had at least one
+/// bad line is refused: degrading an explicit configuration to "delete
+/// nothing" (ignore categories) or "no blacklist" would silently change what
+/// the run repairs and keeps, which is what R-6 fixed for the read errors. A
+/// valid but entryless line (`{}`) and a genuinely blank file stay empty
+/// selections.
+fn parse_config_list(
+    path: &Path,
+    what: &str,
+    text: &str,
+    mut entry: impl FnMut(&serde_json::Value) -> anyhow::Result<Option<String>>,
+) -> anyhow::Result<HashSet<String>> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut set = HashSet::new();
+    let mut first_failure: Option<(usize, String)> = None;
+    for (i, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(line)
-            && let Some(n) = v.get("fileName").and_then(|n| n.as_str())
-        {
-            set.insert(n.replace('\\', "/"));
+        let failure = match serde_json::from_str::<serde_json::Value>(line) {
+            Ok(v) if !v.is_object() => Some(anyhow::anyhow!("the line is not a JSON object")),
+            Ok(v) => match entry(&v) {
+                Ok(Some(entry)) => {
+                    set.insert(entry);
+                    None
+                }
+                Ok(None) => None,
+                Err(e) => Some(e),
+            },
+            Err(e) => Some(e.into()),
+        };
+        if let Some(e) = failure {
+            tracing::warn!(
+                path = %path.display(),
+                line = i + 1,
+                error = %e,
+                "invalid entry in the {what} list; ignored"
+            );
+            first_failure.get_or_insert((i + 1, e.to_string()));
         }
     }
-    set
+    if set.is_empty()
+        && let Some((line, e)) = first_failure
+    {
+        return Err(anyhow::anyhow!(
+            "{what} file {} has no usable entry: line {line}: {e}",
+            path.display()
+        ));
+    }
+    Ok(set)
+}
+
+/// A short name for a JSON value's type, for a malformed-entry message.
+fn json_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "a boolean",
+        serde_json::Value::Number(_) => "a number",
+        serde_json::Value::String(_) => "a string",
+        serde_json::Value::Array(_) => "an array",
+        serde_json::Value::Object(_) => "an object",
+    }
+}
+
+/// The shared absent/error split for the launcher's JSON-lines config files.
+fn read_config_list(path: &Path, what: &str) -> anyhow::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("read {what} file {}", path.display())),
+    }
 }
 
 /// Whether the test-only `GIRPR_TEST_NO_FSYNC` hook is on.
@@ -528,12 +857,29 @@ pub fn write_config_ini(
         return Ok(());
     }
     let tmp = path.with_extension("ini.girpr_tmp");
-    {
+    let write = (|| -> Result<()> {
         let mut f = File::create(&tmp)?;
         f.write_all(out.as_bytes())?;
         if !test_no_fsync() {
-            f.sync_all().ok();
+            // `write_all` only reaches the page cache. Publishing the rename
+            // over a config whose version bump is not durable is exactly the
+            // failure this sync exists to prevent, so its error is fatal.
+            f.sync_all()
+                .with_context(|| format!("sync {}", tmp.display()))?;
         }
+        Ok(())
+    })();
+    if let Err(e) = write {
+        match std::fs::remove_file(&tmp) {
+            Ok(()) => {}
+            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
+            Err(cleanup) => tracing::debug!(
+                path = %tmp.display(),
+                error = %cleanup,
+                "could not remove the config.ini temp after a failed write"
+            ),
+        }
+        return Err(e);
     }
     std::fs::rename(&tmp, &path)?;
     Ok(())
@@ -587,6 +933,201 @@ mod tests {
     #[test]
     fn the_empty_md5_constant_is_the_empty_files_md5() {
         assert_eq!(hex(b""), EMPTY_MD5);
+    }
+
+    // -----------------------------------------------------------------------
+    // server-controlled path containment
+    // -----------------------------------------------------------------------
+
+    /// The spellings a hostile/corrupt server can send. Every one of them must
+    /// be refused; `a/b.dat` is the only legitimate shape.
+    #[test]
+    fn contained_rel_accepts_only_plain_relative_paths() {
+        assert!(contained_rel("a/b.dat").is_ok());
+        assert!(contained_rel("a\\b.dat").is_ok());
+        // Accepted, but returned in the plain `/` form: a leading `.` would
+        // make the plan's expected set disagree with the purge walk.
+        assert_eq!(
+            contained_rel("./a/b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
+        assert_eq!(
+            contained_rel("a/./b.dat").unwrap(),
+            PathBuf::from("a/b.dat")
+        );
+
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../outside.dat",
+            "a/../outside.dat",
+            "/abs/evil.dat",
+            "//server/share/evil.dat",
+            "\\\\server\\share\\evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            "C:\\evil.dat",
+            "c:/evil.dat",
+            "game/",
+            "game\\",
+            "game/./",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
+    /// N-14: Windows name rules are checked on every host, because the install
+    /// is a Windows tree. A device name writes to a device (or, for `NUL`,
+    /// nowhere) and a trailing dot/space aliases another name; neither is a
+    /// file a manifest can legitimately name.
+    #[test]
+    fn contained_rel_refuses_windows_device_and_alias_names() {
+        for bad in [
+            "NUL",
+            "nul",
+            "game/CON",
+            "game/con.dat",
+            "game/PRN.txt",
+            "game/AUX",
+            "game/COM1",
+            "game/com9.dat",
+            "game/lpt1.tar.gz",
+            "game/CONIN$",
+            "game/CONOUT$",
+            "game/CLOCK$",
+            "game/trailing.",
+            "game/trailing ",
+            "dir./file.dat",
+            "dir /file.dat",
+            "game/a:b",
+            "game/a:stream.dat",
+        ] {
+            let got = contained_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+        // Near-misses stay legal: only the exact reserved stem is a device.
+        for good in [
+            "game/conifer.dat",
+            "game/nullable.bin",
+            "game/console",
+            "game/com10.dat",
+            "game/lpt",
+        ] {
+            assert!(contained_rel(good).is_ok(), "{good:?} must be accepted");
+        }
+    }
+
+    #[test]
+    fn contained_join_keeps_a_legitimate_path_under_the_base() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
+        let joined = contained_join(&dir, "game/foo.dat").unwrap();
+        assert_eq!(joined, dir.join("game/foo.dat"));
+        // The base does not need to exist: `--print-plan` runs before it does.
+        let missing = dir.join("not-created-yet");
+        let joined = contained_join(&missing, "game/foo.dat").unwrap();
+        assert_eq!(joined, missing.join("game/foo.dat"));
+        // A traversal attempt cannot reach the sibling file.
+        assert!(contained_join(&dir, "../outside.dat").is_err());
+        // A trailing separator does not name a file, so it is refused here too.
+        assert!(contained_join(&dir, "game/").is_err());
+    }
+
+    /// A symlink inside the install that points out of it is an escape even
+    /// though the path is lexically relative. Windows needs a privilege to
+    /// create one, so the case only runs where it can be made.
+    #[cfg(unix)]
+    #[test]
+    fn contained_join_resolves_a_symlink_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "outside");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "link");
+        std::os::unix::fs::symlink(&outside, dir.join("game")).unwrap();
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(got.is_err(), "a symlink out of the base must be refused");
+        // A symlink that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// A component that cannot be **resolved** is not a missing component: the
+    /// containment check must fail closed instead of falling back to a lexical
+    /// comparison.
+    ///
+    /// A NUL in a path component is the portable way to make `canonicalize`
+    /// return an error that is not `NotFound` (`InvalidInput` on both
+    /// platforms). Unix additionally reports `NotADirectory` for a regular
+    /// file used as a parent; Windows reports `NotFound` there, which is a
+    /// missing path rather than an unresolvable one.
+    #[test]
+    fn contained_join_fails_closed_when_a_component_cannot_be_resolved() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "unresolvable");
+        let got = contained_join(&dir, "bad\0name");
+        assert!(
+            got.is_err(),
+            "an unresolvable component must be refused, got {got:?}"
+        );
+        // The error surfaced from the resolver itself, not from the
+        // `starts_with` comparison.
+        let direct = resolve_existing_prefix(&dir.join("bad\0name"));
+        assert!(
+            direct.is_err(),
+            "a non-NotFound canonicalize error must be propagated"
+        );
+
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("blocker"), b"not a directory").unwrap();
+            let got = contained_join(&dir, "blocker/child.dat");
+            assert!(
+                got.is_err(),
+                "a file used as a parent is NotADirectory, not missing: {got:?}"
+            );
+        }
+    }
+
+    /// A directory junction inside the install that points out of it is an
+    /// escape, exactly like a Unix symlink, so the resolution path needs a
+    /// test on the platform whose reparse points it will meet.
+    ///
+    /// Junctions need no privilege (unlike symlinks), but a host that refuses
+    /// to create one cannot confirm the escape here, so the case is skipped
+    /// rather than failed. Link support is host-dependent — see
+    /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
+    /// only, exFAT has no hard links).
+    #[cfg(windows)]
+    #[test]
+    fn contained_join_resolves_a_junction_and_refuses_the_escape() {
+        let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_out");
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
+        let link = dir.join("game");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&*outside)
+            .status();
+        let made = matches!(status, Ok(s) if s.success()) && link.exists();
+        if !made {
+            eprintln!("skipping: this host cannot create a directory junction");
+            return;
+        }
+        let got = contained_join(&dir, "game/evil.dat");
+        assert!(
+            got.is_err(),
+            "a junction out of the base must be refused: {got:?}"
+        );
+        // A junction that stays inside is still fine.
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        let alias = dir.join("alias");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&alias)
+            .arg(dir.join("real"))
+            .status();
+        if matches!(status, Ok(s) if s.success()) {
+            assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+        }
     }
 
     #[test]
@@ -747,7 +1288,7 @@ mod tests {
             "[General]\ngame_version=4.0.0\ngame_version=5.1.0\n",
         )
         .unwrap();
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
     }
 
     #[test]
@@ -758,9 +1299,322 @@ mod tests {
             "{\"category\":\"10302\",\"is_delete\":true}\n{}\n",
         )
         .unwrap();
-        assert!(read_ignore_categories(&dir.join("rc")).contains("10302"));
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .contains("10302")
+        );
         std::fs::write(dir.join("bl"), "{\"fileName\":\"a/b.dat\"}\n").unwrap();
-        assert!(read_blacklist(&dir.join("bl")).contains("a/b.dat"));
+        assert!(
+            read_blacklist(&dir.join("bl"))
+                .unwrap()
+                .unwrap()
+                .contains("a/b.dat")
+        );
+    }
+
+    /// V-2: the plan compares the blacklist against the **cleaned** manifest
+    /// rel, so the reader must hand it cleaned entries too. A `./`- or
+    /// `//`-spelled entry from the launcher is the same file; normalising only
+    /// at the plan would make those spellings protect nothing (fail-open). An
+    /// entry that cannot be a contained rel is a broken explicit
+    /// configuration, not a line to drop silently: the error names it.
+    #[test]
+    fn blacklist_entries_are_cleaned_and_bad_ones_are_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "blacklist_clean");
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":\"./game/foo.dat\"}\n\
+             {\"fileName\":\"game//bar.dat\"}\n\
+             {\"fileName\":\"game\\\\baz.dat\"}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_blacklist(&dir.join("bl")).unwrap().unwrap(),
+            HashSet::from([
+                "game/foo.dat".to_string(),
+                "game/bar.dat".to_string(),
+                "game/baz.dat".to_string(),
+            ])
+        );
+
+        std::fs::write(dir.join("bl"), "{\"fileName\":\"../outside.dat\"}\n").unwrap();
+        let err = read_blacklist(&dir.join("bl")).expect_err("an escape must be refused");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("blacklist entry") && msg.contains("../outside.dat"),
+            "the refusal names the entry: {msg}"
+        );
+    }
+
+    /// R-6: absent is a documented default (`None`); an unreadable file is an
+    /// error that names the file, never an empty set that silently changes
+    /// what the run repairs or ignores. A directory at the path is the
+    /// portable way to force something other than `NotFound`.
+    #[test]
+    fn unreadable_config_lists_are_errors_and_absent_ones_are_none() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "unreadable");
+        for name in ["rc", "bl", "config.ini"] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+        }
+
+        let err = read_game_version(&dir).expect_err("a directory is not config.ini");
+        assert!(format!("{err:#}").contains("config.ini"), "{err:#}");
+        let err = read_ignore_categories(&dir.join("rc")).expect_err("a directory is not a list");
+        assert!(format!("{err:#}").contains("rc"), "{err:#}");
+        let err = read_blacklist(&dir.join("bl")).expect_err("a directory is not a list");
+        assert!(format!("{err:#}").contains("bl"), "{err:#}");
+
+        let empty = girpr_tempdir::TempDir::new("girpr_test_lists", "absent");
+        assert!(read_game_version(&empty).unwrap().is_none());
+        assert!(read_ignore_categories(&empty.join("rc")).unwrap().is_none());
+        assert!(read_blacklist(&empty.join("bl")).unwrap().is_none());
+    }
+
+    /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.
+    /// The classifier is split out so an injected ACL-style error is pinned
+    /// without a permission fixture (S-3's shape), and a NUL path covers the
+    /// real syscall boundary on both platforms.
+    #[test]
+    fn file_len_separates_present_absent_and_unreadable() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_len", "states");
+        std::fs::write(dir.join("f"), b"12345").unwrap();
+        assert!(matches!(file_len(&dir.join("f")), FileLen::Present(5)));
+        assert!(matches!(file_len(&dir.join("missing")), FileLen::Absent));
+
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(matches!(classify_len(Err(denied)), FileLen::Unreadable(_)));
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert!(matches!(classify_len(Err(gone)), FileLen::Absent));
+
+        // A NUL cannot be statted (`InvalidInput` on Unix and Windows), so it
+        // reaches the unreadable arm without a deny ACL.
+        let err = match file_len(Path::new("bad\0name")) {
+            FileLen::Unreadable(e) => e,
+            other => panic!("a NUL path is not absent: {other:?}"),
+        };
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
+
+        #[cfg(unix)]
+        {
+            // Unix: a regular file used as a parent is `ENOTDIR`, which is
+            // unreadable, not missing. Windows reports `NotFound` for the
+            // same shape, so this arm is platform-specific.
+            std::fs::write(dir.join("blocker"), b"x").unwrap();
+            match file_len(&dir.join("blocker/child.dat")) {
+                FileLen::Unreadable(e) => {
+                    assert_eq!(e.kind(), std::io::ErrorKind::NotADirectory);
+                }
+                other => panic!("ENOTDIR is unreadable, not absent: {other:?}"),
+            }
+        }
+    }
+
+    /// A BOM is not whitespace: one leading BOM is stripped; a mixed file
+    /// warns with the path and line number and keeps the well-formed entry.
+    #[test]
+    fn config_lists_strip_a_bom_and_warn_per_unparseable_line() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "bom_mixed");
+        std::fs::write(
+            dir.join("bl"),
+            "\u{feff}{\"fileName\":\"a/b.dat\"}\n{\"fileName\":\"c/d",
+        )
+        .unwrap();
+
+        let mut blacklist = HashSet::new();
+        let logs = crate::repair::test_support::logs_of(|| {
+            blacklist = read_blacklist(&dir.join("bl")).unwrap().unwrap();
+        });
+        assert_eq!(blacklist, HashSet::from(["a/b.dat".to_string()]));
+        assert!(
+            logs.contains("invalid entry in the blacklist list"),
+            "the dropped line must be logged: {logs}"
+        );
+        assert!(logs.contains("line=2"), "the log names the line: {logs}");
+        assert!(
+            logs.contains(&dir.join("bl").display().to_string()),
+            "the log names the file: {logs}"
+        );
+
+        std::fs::write(
+            dir.join("rc"),
+            "\u{feff}{\"category\":\"10302\",\"is_delete\":true}\n{\"category\":",
+        )
+        .unwrap();
+        let mut ignore = HashSet::new();
+        let logs = crate::repair::test_support::logs_of(|| {
+            ignore = read_ignore_categories(&dir.join("rc")).unwrap().unwrap();
+        });
+        assert_eq!(ignore, HashSet::from(["10302".to_string()]));
+        assert!(
+            logs.contains("invalid entry in the ignore categories list") && logs.contains("line=2"),
+            "the dropped line must be logged with its line: {logs}"
+        );
+    }
+
+    /// E-1: a line that is valid JSON but whose entry field is missing or
+    /// wrong-typed is a malformed entry, not a silent no-op. The two shapes
+    /// from the review are pinned here; a mixed file keeps the well-formed
+    /// entries and warns per bad line, and an all-malformed file is refused
+    /// instead of reading as an empty selection.
+    #[test]
+    fn malformed_config_list_entries_are_refused_not_dropped() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "malformed_entries");
+
+        // The first review shape: `{"fileName":123}` protects nothing. Alone
+        // it is a refused file, naming the path, the line and the field.
+        std::fs::write(dir.join("bl"), "{\"fileName\":123}\n").unwrap();
+        let mut err = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", err.expect("the probe ran"));
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1")
+                && msg.contains("fileName"),
+            "the refusal names the file, line and field: {msg}"
+        );
+        assert!(
+            logs.contains("invalid entry in the blacklist list")
+                && logs.contains("line=1")
+                && logs.contains("a number"),
+            "the malformed entry is warned with its line and type: {logs}"
+        );
+
+        // Mixed: the well-formed entry survives, the bad line is warned.
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":\"a/b.dat\"}\n{\"fileName\":null}\n",
+        )
+        .unwrap();
+        let mut got = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            got = Some(read_blacklist(&dir.join("bl")).unwrap().unwrap());
+        });
+        assert_eq!(got.unwrap(), HashSet::from(["a/b.dat".to_string()]));
+        assert!(
+            logs.contains("invalid entry in the blacklist list")
+                && logs.contains("line=2")
+                && logs.contains("null"),
+            "the bad line is warned, the good one kept: {logs}"
+        );
+
+        // The second review shape: `is_delete` as the string `"true"` is not
+        // a boolean and must not silently ignore a category.
+        std::fs::write(
+            dir.join("rc"),
+            "{\"category\":\"10302\",\"is_delete\":\"true\"}\n",
+        )
+        .unwrap();
+        let mut err = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", err.expect("the probe ran"));
+        assert!(
+            msg.contains("ignore categories")
+                && msg.contains(&dir.join("rc").display().to_string())
+                && msg.contains("line 1")
+                && msg.contains("is_delete"),
+            "the refusal names the file, line and field: {msg}"
+        );
+        assert!(
+            logs.contains("invalid entry in the ignore categories list") && logs.contains("line=1"),
+            "the malformed entry is warned with its line: {logs}"
+        );
+
+        // `is_delete: true` without a string `category` is malformed too.
+        std::fs::write(dir.join("rc"), "{\"is_delete\":true}\n").unwrap();
+        let err = read_ignore_categories(&dir.join("rc")).expect_err("missing category");
+        assert!(
+            format!("{err:#}").contains("category"),
+            "the refusal names the missing field: {err:#}"
+        );
+
+        // A no-op entry (`is_delete` absent or false) stays a valid empty
+        // selection, as does the entryless `{}`.
+        std::fs::write(dir.join("rc"), "{\"category\":\"10302\"}\n{}\n").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+
+        // All-malformed: a parseable but wrong-typed line is refused even
+        // though every line was valid JSON.
+        std::fs::write(
+            dir.join("bl"),
+            "{\"fileName\":123}\n{\"FileName\":\"x/y.dat\"}\n",
+        )
+        .unwrap();
+        let err = read_blacklist(&dir.join("bl")).expect_err("no usable entry");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and first bad line: {msg}"
+        );
+    }
+
+    /// T-1: a list whose only text is unparseable is an error naming the path
+    /// and line, not an empty set that silently disables the configuration.
+    /// A valid but entryless `{}` and a blank file keep their old meaning.
+    #[test]
+    fn an_all_malformed_config_list_is_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lists", "all_malformed");
+        std::fs::write(dir.join("rc"), "not json\n{\"category\":\n").unwrap();
+        // Keep a subscriber installed while the warning callsite is hit: the
+        // mixed-file test asserts the log, and tracing's callsite interest is
+        // global, so a concurrent subjective hit from a thread without one
+        // must not cache the callsite as disabled.
+        let mut rc_err = None;
+        crate::repair::test_support::logs_of(|| {
+            rc_err = Some(read_ignore_categories(&dir.join("rc")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", rc_err.expect("the probe ran"));
+        assert!(
+            msg.contains("ignore categories")
+                && msg.contains(&dir.join("rc").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and first bad line: {msg}"
+        );
+
+        std::fs::write(dir.join("bl"), "{\"fileName\":\n").unwrap();
+        let mut bl_err = None;
+        crate::repair::test_support::logs_of(|| {
+            bl_err = Some(read_blacklist(&dir.join("bl")).expect_err("no usable entry"));
+        });
+        let msg = format!("{:#}", bl_err.expect("the probe ran"));
+        assert!(
+            msg.contains("blacklist")
+                && msg.contains(&dir.join("bl").display().to_string())
+                && msg.contains("line 1"),
+            "the refusal names the file and line: {msg}"
+        );
+
+        std::fs::write(dir.join("rc"), "{}\n\n").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a valid but entryless line stays an empty selection"
+        );
+        std::fs::write(dir.join("rc"), "\u{feff}").unwrap();
+        assert!(
+            read_ignore_categories(&dir.join("rc"))
+                .unwrap()
+                .unwrap()
+                .is_empty(),
+            "a BOM-only file is blank after the BOM is stripped"
+        );
+        std::fs::write(dir.join("bl"), "").unwrap();
+        assert!(read_blacklist(&dir.join("bl")).unwrap().unwrap().is_empty());
     }
 
     #[test]
@@ -792,7 +1646,7 @@ mod tests {
         assert!(lines.contains(&"channel=1"));
         assert!(lines.contains(&"sub_channel=0"));
         assert!(lines.contains(&"cps=hyp_hoyoverse"));
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Keys within the section are sorted (Collapse SaveInner parity).
         let sorted = lines
             .iter()
@@ -901,7 +1755,7 @@ mod tests {
         assert!(lower.contains("\nplugin_sdk_version=9.0\n"), "{text}");
         // sdk_version created empty when missing.
         assert!(lower.contains("\nsdk_version=\n"), "{text}");
-        assert_eq!(read_game_version(&dir).unwrap(), "5.1.0");
+        assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Rerun byte-identical.
         let snapshot = text.clone();
         write_config_ini(

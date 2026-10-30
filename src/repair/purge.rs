@@ -25,7 +25,9 @@ use crate::repair::scope::PathScope;
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeCandidate {
-    /// `/`-separated rel path, i.e. exactly what `classify_purge_path` saw.
+    /// `/`-separated rel path in the on-disk (walk) spelling. Classification
+    /// compares its `purge_key`, so the spelling can differ in case from the
+    /// manifest entry that kept it.
     pub rel: String,
     /// Absolute-or-game-relative path to remove.
     pub path: PathBuf,
@@ -44,10 +46,19 @@ pub struct PurgePlan {
     pub dirs: Vec<PathBuf>,
     /// `files` summed — the number a delete-bytes ceiling is checked against.
     pub total_bytes: u64,
-    /// On-disk files kept **only** because the path scope hides them. Zero on
-    /// an unflagged run; the "scope and a purge flag agree" warn is driven off
-    /// this.
+    /// On-disk paths (files **and** directories) kept **only** because the
+    /// path scope hides them. Zero on an unflagged run; the "scope and a purge
+    /// flag agree" warn is driven off this.
     pub hidden: u64,
+    /// Walk or metadata failures that made the candidate list incomplete.
+    ///
+    /// A purge that could not read part of the install still deletes what it
+    /// can see, but `total_bytes` is then a lower bound: the caller must not
+    /// treat it as the whole delete set. `--max-delete-bytes` therefore
+    /// refuses an incomplete plan instead of comparing that lower bound. Zero
+    /// for a complete plan, and for the documented "`game_dir` is not there
+    /// yet" case, which is an empty plan rather than a failure.
+    pub errors: u64,
 }
 
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
@@ -69,29 +80,76 @@ pub struct PurgePlan {
 /// `server_keep` comes from [`keep_set`]: files that live inside `game_dir` but
 /// NEVER appear in chunk manifests.
 ///
+/// `blacklist` is the launcher's `blacklist_dir` set (already cleaned at its
+/// reader). A blacklisted path is excluded from the *repair work list*, not
+/// from the install: it is still an expected file and is **never** deleted
+/// (docs/01). It is a separate input from `server_keep` so the two keep rules
+/// keep their distinct provenance.
+///
 /// Pure with respect to the walk's contents: it reads the filesystem and
 /// decides, but deletes nothing.
 pub fn plan_purge(
     game_dir: &Path,
     plan: &RepairPlan,
     server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
     scope: &PathScope,
 ) -> PurgePlan {
-    let expected = plan.expected_paths();
+    // Fold the three keep sets once, here, rather than rebuilding a set for
+    // every walked file. `classify_purge_path` folds only the walked rel, so
+    // the purge compares the same key the plan dedup uses on Windows.
+    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| purge_key(r)).collect();
+    let server_keep: HashSet<String> = server_keep.iter().map(|r| purge_key(r)).collect();
+    let blacklist: HashSet<String> = blacklist.iter().map(|r| purge_key(r)).collect();
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     // Ancestors of every `Keep`-classified file: anything else is left empty by
     // the purge and eligible for the emptied-dir sweep.
     let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
     let mut hidden = 0u64;
+    let mut errors = 0u64;
 
-    for e in WalkDir::new(game_dir)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for e in WalkDir::new(game_dir).follow_links(false) {
+        let e = match e {
+            Ok(e) => e,
+            // The documented missing-`game_dir` case: nothing to plan, not a
+            // failure. Every other error means part of the install could not
+            // be read — that is one candidate set the plan does not have, so
+            // it is counted and logged, never dropped silently.
+            Err(err)
+                if err
+                    .io_error()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                continue;
+            }
+            Err(err) => {
+                errors = errors.saturating_add(1);
+                tracing::warn!(
+                    path = ?err.path(),
+                    error = %err,
+                    "purge walk: a path could not be read; the candidate list may be incomplete"
+                );
+                continue;
+            }
+        };
         if e.file_type().is_dir() {
-            all_dirs.push(e.path().to_path_buf());
+            let path = e.path();
+            // `game_dir` itself is never swept, and it is not an
+            // out-of-scope path either.
+            if path == game_dir {
+                continue;
+            }
+            // A directory is a path like any other. The scope hides it, so the
+            // sweep must not take it: without this, an empty directory has no
+            // kept file to mark its ancestors (`mark_kept_ancestors` walks up
+            // from *files*) and the sweep would delete an out-of-scope path.
+            let rel = rel_path(path, game_dir);
+            if !scope.is_visible(&rel) {
+                hidden += 1;
+                continue;
+            }
+            all_dirs.push(path.to_path_buf());
             continue;
         }
         if !e.file_type().is_file() {
@@ -100,11 +158,25 @@ pub fn plan_purge(
         let path = e.path();
         let rel = rel_path(path, game_dir);
         let outside = !scope.is_visible(&rel);
-        match classify_purge_path(&rel, &expected, server_keep, scope) {
+        match classify_purge_path(&rel, &expected, &server_keep, &blacklist, scope) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
                 debug_assert!(!outside, "a hidden path must classify Keep");
-                let bytes = e.metadata().map(|m| m.len()).unwrap_or(0);
+                // A candidate that cannot be stat'd is still a candidate: the
+                // delete does not need its size. Counting it as zero would
+                // understate the ceiling, so say so and count the failure.
+                let bytes = match e.metadata() {
+                    Ok(m) => m.len(),
+                    Err(err) => {
+                        errors = errors.saturating_add(1);
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %err,
+                            "purge: cannot stat a delete candidate; its bytes are not counted"
+                        );
+                        0
+                    }
+                };
                 files.push(PurgeCandidate {
                     rel,
                     path: path.to_path_buf(),
@@ -124,7 +196,7 @@ pub fn plan_purge(
         .filter(|d| *d != game_dir && !kept_dirs.contains(d))
         .collect();
     dirs.sort_by_key(|a| std::cmp::Reverse(a.components().count()));
-    let total_bytes = files.iter().map(|c| c.bytes).sum();
+    let total_bytes = files.iter().fold(0u64, |n, c| n.saturating_add(c.bytes));
     // The scope and a purge flag agreeing is correct, but it should be
     // visible. `plan_purge` runs once per purge pass, so a run with both
     // `--purge-before` and `--purge-after` says this twice — one line per
@@ -134,11 +206,18 @@ pub fn plan_purge(
             "{hidden} on-disk paths are outside the active --include/--exclude scope and will not be deleted"
         );
     }
+    if errors > 0 {
+        tracing::warn!(
+            errors,
+            "purge plan is incomplete: the delete total is a lower bound"
+        );
+    }
     PurgePlan {
         files,
         dirs,
         total_bytes,
         hidden,
+        errors,
     }
 }
 
@@ -171,9 +250,23 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
         if dry_run {
             would_be += c.bytes;
             tracing::info!("would purge extra {} ({} bytes)", c.path.display(), c.bytes);
-        } else if std::fs::remove_file(&c.path).is_ok() {
-            deleted_bytes += c.bytes;
-            tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
+        } else {
+            match std::fs::remove_file(&c.path) {
+                Ok(()) => {
+                    deleted_bytes += c.bytes;
+                    tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
+                }
+                Err(e) => {
+                    // Best effort: a locked file is not a reason to fail a run
+                    // whose repair already succeeded, but it must not be
+                    // counted as freed space either.
+                    tracing::warn!(
+                        path = %c.path.display(),
+                        error = %e,
+                        "cleanup could not delete a candidate; left in place"
+                    );
+                }
+            }
         }
     }
     if dry_run {
@@ -187,12 +280,24 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
 }
 
 /// Remove the directories the purge emptied, deepest first. The set comes from
-/// the walk ([`PurgePlan::dirs`]), so no second walk is needed; the `remove_dir`
-/// calls still fail harmlessly if something appeared since the plan was built.
-/// `game_dir` is never in the set.
+/// the walk ([`PurgePlan::dirs`]), so no second walk is needed. A `remove_dir`
+/// that fails — usually because something appeared since the plan was built,
+/// but also a sharing violation or an ACL — is best effort and logged with its
+/// reason; the plan's job here is only to shrink the tree. `game_dir` is never
+/// in the set.
 fn remove_emptied_dirs(dirs: &[PathBuf]) {
     for d in dirs {
-        let _ = std::fs::remove_dir(d);
+        // A re-appearing file is the expected failure, but a sharing
+        // violation, an ACL or a read-only parent is not — and after `let _`
+        // the two were indistinguishable. The directory the plan said it
+        // would remove is state: keep the reason it is still there.
+        if let Err(e) = std::fs::remove_dir(d) {
+            tracing::debug!(
+                dir = %d.display(),
+                error = %e,
+                "the emptied dir was not removed"
+            );
+        }
     }
 }
 
@@ -204,17 +309,38 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The key the purge compares on. Mirrors `dedup_key` in
+/// [`crate::repair::phases::plan`]: Windows paths are case-insensitive, so the
+/// walked on-disk spelling and the manifest spelling must compare equal there.
+/// On Unix they are distinct paths and the key is the path itself.
+fn purge_key(rel: &str) -> String {
+    if cfg!(windows) {
+        rel.to_lowercase()
+    } else {
+        rel.to_string()
+    }
+}
+
 /// Metadata files the files-cleanup must keep.
 ///
-/// v1: `config.ini` ONLY. It lives inside `game_dir` but NEVER appears in
-/// Sophon chunk manifests, and the tool rewrites it after patching — purging
-/// it would break the version bookkeeping. Everything else (exe, blacklist /
-/// res-category / audio-scan bookkeeping, `ScreenShot/`, logs, temps) is
-/// intentionally NOT kept: Collapse's `GenshinInstall.GetUnusedFileInfoList`
-/// protects only `FilesCleanupIgnoreList` (empty for Genshin) plus the
+/// `config.ini` and the single-writer lock. `config.ini` lives inside
+/// `game_dir` but NEVER appears in Sophon chunk manifests, and the tool
+/// rewrites it after patching — purging it would break the version
+/// bookkeeping. The lock is the other root-level file that is not in the
+/// manifest: a run that holds it must not lose its exclusion to the sweep.
+///
+/// Everything else in this set's sense (exe, res-category / audio-scan
+/// bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT kept:
+/// Collapse's `GenshinInstall.GetUnusedFileInfoList` protects only
+/// `FilesCleanupIgnoreList` (empty for Genshin) plus the
 /// `Audio_*_pkg_version` regexes, and this tool maximizes free space — if the
 /// user wants anything else kept, that needs an explicit `--keep` flag
 /// (not implemented in v1).
+///
+/// Blacklisted paths are a **separate** keep input to [`plan_purge`] (rule 3),
+/// not part of this set: they come from the launcher's `blacklist_dir`, while
+/// these two are files the tool itself owns. The doc for [`keep_set`] is not
+/// the whole expected set; [`classify_purge_path`] is.
 ///
 /// NOTE: the game flags unknown executables inside the game folder, so the
 /// tool binary itself must never live there; the exe needs no keep rule.
@@ -243,6 +369,12 @@ pub enum PurgeVerdict {
 /// Decide the fate of one `/`-separated rel path for the files-cleanup.
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
+/// `expected`, `server_keep` and `blacklist` must already be keyed with
+/// `purge_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
+/// once per file. That keeps the classification case-insensitive on Windows
+/// (the plan's dedup and the scope already are) while leaving Unix paths
+/// distinct.
+///
 /// Rule order matters (first match wins); each rule names its provenance:
 /// 0. **Path scope**: a path outside `--include`/`--exclude`
 ///    does not exist, so it is kept — *before* the manifest check, not after.
@@ -251,8 +383,12 @@ pub enum PurgeVerdict {
 ///    here would leave the cleanup with a *narrower* keep set than an
 ///    unfiltered run, and the fixture `gircap` hands us would be eaten.
 /// 1. Manifest membership (Collapse expected set).
-/// 2. `config.ini` ([`keep_set`] — the only metadata keep).
-/// 3. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
+/// 2. `config.ini` and the single-writer lock ([`keep_set`] — the metadata
+///    keeps the tool itself owns).
+/// 3. Blacklist membership (the launcher's `blacklist_dir`): a blacklisted
+///    path is excluded from the work list but is still part of the expected
+///    install, so the cleanup must never delete it (docs/01).
+/// 4. Collapse audio pkg-version parity (`audio_lang_*` + case-insensitive
 ///    `Audio_*_pkg_version`, `GenshinInstall.cs:232-241`). v1 matches broadly
 ///    by pattern rather than per-`audio_lang_14`-line exact regexes.
 ///
@@ -263,21 +399,27 @@ pub fn classify_purge_path(
     rel: &str,
     expected: &HashSet<String>,
     server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
     scope: &PathScope,
 ) -> PurgeVerdict {
     // 0. Out of scope → does not exist.
     if !scope.is_visible(rel) {
         return PurgeVerdict::Keep;
     }
+    let key = purge_key(rel);
     // 1. In the live manifest → keep.
-    if expected.contains(rel) {
+    if expected.contains(&key) {
         return PurgeVerdict::Keep;
     }
     // 2. config.ini → keep.
-    if server_keep.contains(rel) {
+    if server_keep.contains(&key) {
         return PurgeVerdict::Keep;
     }
-    // 3. Collapse audio pkg-version parity → keep.
+    // 3. Blacklisted → excluded from repair, still part of the install.
+    if blacklist.contains(&key) {
+        return PurgeVerdict::Keep;
+    }
+    // 4. Collapse audio pkg-version parity → keep.
     if is_audio_version_file(file_name(rel)) {
         return PurgeVerdict::Keep;
     }
@@ -301,6 +443,7 @@ fn file_name(rel: &str) -> &str {
 mod tests {
     use super::*;
     use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::scope::{LimitHit, Limits, Preflight};
     use girpr_tempdir::TempDir;
     use std::collections::HashMap;
 
@@ -308,6 +451,11 @@ mod tests {
         let expected: HashSet<String> = ["game.dat".to_string()].into_iter().collect();
         let server_keep = keep_set();
         (expected, server_keep)
+    }
+
+    /// No blacklist, for the tests that predate it.
+    fn no_blacklist() -> HashSet<String> {
+        HashSet::new()
     }
 
     fn plan_of(rel: &str) -> RepairPlan {
@@ -332,7 +480,13 @@ mod tests {
 
     fn purge_now(dir: &Path, plan: &RepairPlan, dry_run: bool) -> u64 {
         apply_purge(
-            &plan_purge(dir, plan, &keep_set(), &PathScope::default()),
+            &plan_purge(
+                dir,
+                plan,
+                &keep_set(),
+                &no_blacklist(),
+                &PathScope::default(),
+            ),
             dry_run,
         )
         .unwrap()
@@ -345,13 +499,60 @@ mod tests {
         PathScope::new(&inc, &exc).unwrap()
     }
 
+    fn keyed(rels: &[&str]) -> HashSet<String> {
+        rels.iter().map(|r| purge_key(r)).collect()
+    }
+
+    /// N-5: the walked rel is the **on-disk** spelling, which on Windows can
+    /// differ in case from the manifest (and from `server_keep`/`blacklist`).
+    /// `plan_purge` keys all three keep sets once; the classifier keys the
+    /// walked rel, so the two spellings meet. On Unix they are distinct paths
+    /// and the case variant must purge.
+    #[test]
+    fn the_purge_folds_case_on_windows_only() {
+        let open = PathScope::default();
+        let on_disk = "game/foo.dat";
+        let manifest = "Game/Foo.dat";
+        assert_eq!(
+            purge_key(manifest) == purge_key(on_disk),
+            cfg!(windows),
+            "the purge key folds exactly where Windows paths are case-insensitive"
+        );
+        let none = HashSet::new();
+        for (rule, expected, server_keep, blacklist) in [
+            ("expected", keyed(&[manifest]), none.clone(), none.clone()),
+            (
+                "server_keep",
+                none.clone(),
+                keyed(&[manifest]),
+                none.clone(),
+            ),
+            ("blacklist", none.clone(), none.clone(), keyed(&[manifest])),
+        ] {
+            let verdict = classify_purge_path(on_disk, &expected, &server_keep, &blacklist, &open);
+            if cfg!(windows) {
+                assert_eq!(
+                    verdict,
+                    PurgeVerdict::Keep,
+                    "{rule}: the case variant names the same on-disk file"
+                );
+            } else {
+                assert_eq!(
+                    verdict,
+                    PurgeVerdict::Purge,
+                    "{rule}: on Unix the case variant is a distinct path"
+                );
+            }
+        }
+    }
+
     #[test]
     fn purge_keeps_manifest_and_config_only() {
         let (expected, keep) = purge_fixture();
         let open = PathScope::default();
         for rel in ["game.dat", "config.ini"] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Keep,
                 "{rel} must be kept"
             );
@@ -368,11 +569,46 @@ mod tests {
             "login.dat",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Purge,
                 "{rel} must be purged"
             );
         }
+    }
+
+    /// V-1: a blacklisted path is dropped from the **repair** plan but is
+    /// still part of the expected install. The cleanup must keep it even when
+    /// the manifest no longer lists it (the "never deleted" claim in docs/01).
+    #[test]
+    fn a_blacklisted_path_is_kept_by_the_cleanup() {
+        let (expected, keep) = purge_fixture();
+        let blacklist: HashSet<String> = ["game/foo.dat".to_string()].into_iter().collect();
+        let open = PathScope::default();
+        assert_eq!(
+            classify_purge_path("game/foo.dat", &expected, &keep, &blacklist, &open),
+            PurgeVerdict::Keep
+        );
+
+        let dir = TempDir::new("girpr_test_purge", "blacklist");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"keep").unwrap();
+        std::fs::write(dir.join("stale.dat"), b"drop").unwrap();
+        // The file is not in this plan: the blacklist is the only keep rule
+        // that names it, which is exactly the shape the plan's blacklist test
+        // (`build_plan`) produces.
+        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &blacklist, &open);
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        assert_eq!(
+            rels,
+            vec!["stale.dat"],
+            "only the stale file is a candidate"
+        );
+        apply_purge(&pp, false).unwrap();
+        assert!(
+            dir.join("game/foo.dat").exists(),
+            "blacklisted file survives"
+        );
+        assert!(!dir.join("stale.dat").exists(), "the stale file is deleted");
     }
 
     #[test]
@@ -387,7 +623,7 @@ mod tests {
             "AUDIO_JAPANESE_PKG_VERSION",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Keep,
                 "{rel} must be kept"
             );
@@ -411,7 +647,7 @@ mod tests {
             "patch.deletefiles.txt",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &open),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &open),
                 PurgeVerdict::Purge,
                 "{rel} must be purged"
             );
@@ -434,14 +670,14 @@ mod tests {
             "YuanShen.exe",
         ] {
             assert_eq!(
-                classify_purge_path(rel, &expected, &keep, &scoped),
+                classify_purge_path(rel, &expected, &keep, &no_blacklist(), &scoped),
                 PurgeVerdict::Keep,
                 "{rel} is outside the scope and must not be touched"
             );
         }
         // ...and the one admitted path is classified exactly as unfiltered.
         assert_eq!(
-            classify_purge_path("game/foo.dat", &expected, &keep, &scoped),
+            classify_purge_path("game/foo.dat", &expected, &keep, &no_blacklist(), &scoped),
             PurgeVerdict::Purge
         );
     }
@@ -451,11 +687,17 @@ mod tests {
         let (expected, keep) = purge_fixture();
         let scoped = scope(&[], &["ScreenShot/*"]);
         assert_eq!(
-            classify_purge_path("ScreenShot/s.png", &expected, &keep, &scoped),
+            classify_purge_path(
+                "ScreenShot/s.png",
+                &expected,
+                &keep,
+                &no_blacklist(),
+                &scoped
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("login.dat", &expected, &keep, &scoped),
+            classify_purge_path("login.dat", &expected, &keep, &no_blacklist(), &scoped),
             PurgeVerdict::Purge
         );
     }
@@ -500,7 +742,13 @@ mod tests {
         std::fs::write(dir.join("deep/nested/game.dat"), b"keep").unwrap();
         std::fs::write(dir.join("orphan.dat"), b"x").unwrap();
         let plan = plan_of("deep/nested/game.dat");
-        let pp = plan_purge(&dir, &plan, &keep_set(), &PathScope::default());
+        let pp = plan_purge(
+            &dir,
+            &plan,
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
         // `deep` has a kept descendant, so neither it nor `deep/nested` may be
         // swept, even though every sibling of the kept file is being purged.
         assert!(
@@ -524,6 +772,7 @@ mod tests {
             &dir,
             &plan_of("game.dat"),
             &keep_set(),
+            &no_blacklist(),
             &PathScope::default(),
         );
         let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
@@ -556,10 +805,14 @@ mod tests {
             &dir,
             &plan_of_all(&["game/foo.dat", "game/bar.dat"]),
             &keep_set(),
+            &no_blacklist(),
             &scoped,
         );
         assert_eq!(pp.total_bytes, 0, "nothing is a delete candidate");
-        assert_eq!(pp.hidden, 3, "bar.dat + stray.dat + login.dat hidden");
+        assert_eq!(
+            pp.hidden, 5,
+            "bar.dat + stray.dat + login.dat and the game/ + adopted/ dirs hidden"
+        );
         apply_purge(&pp, false).unwrap();
 
         assert_eq!(std::fs::read(dir.join("game/foo.dat")).unwrap(), b"f");
@@ -577,6 +830,122 @@ mod tests {
     }
 
     #[test]
+    fn a_scope_keeps_an_empty_out_of_scope_directory_out_of_the_sweep() {
+        // `mark_kept_ancestors` only protects directories reached from a kept
+        // *file*. An empty directory has no file to mark it, so an
+        // `--include`-hidden empty directory stays out of the sweep.
+        let dir = TempDir::new("girpr_test_purge", "scope_empty_dir");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::create_dir_all(dir.join("mods/nested")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"f").unwrap();
+
+        let scoped = scope(&["game/foo.dat"], &[]);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game/foo.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
+        assert!(
+            pp.dirs.is_empty(),
+            "no directory is inside the scope: {:?}",
+            pp.dirs
+        );
+        assert_eq!(
+            pp.hidden, 3,
+            "game/, mods/ and mods/nested/ are hidden paths"
+        );
+        apply_purge(&pp, false).unwrap();
+
+        assert!(dir.join("mods").is_dir(), "the hidden dir survives");
+        assert!(dir.join("mods/nested").is_dir());
+        assert!(dir.join("game/foo.dat").is_file());
+    }
+
+    #[test]
+    fn a_scope_still_sweeps_a_directory_it_admits() {
+        // The control: a directory the scope admits is still swept when the
+        // purge empties it. Only hidden paths are protected.
+        let dir = TempDir::new("girpr_test_purge", "scope_visible_dir");
+        std::fs::create_dir_all(dir.join("game/emptied")).unwrap();
+        std::fs::write(dir.join("game/emptied/orphan.dat"), b"x").unwrap();
+
+        let scoped = scope(&["*"], &[]);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
+        assert_eq!(pp.hidden, 0);
+        assert_eq!(pp.total_bytes, 1);
+        apply_purge(&pp, false).unwrap();
+        assert!(
+            !dir.join("game/emptied").exists(),
+            "an admitted emptied dir is swept"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_cannot_be_read_is_counted_not_silently_dropped() {
+        // An invalid root path (an embedded NUL) is not "not there yet": the
+        // walk yields an error rather than a tree. The plan is empty, but it
+        // says so instead of reporting a complete, zero-byte delete set. A
+        // permission failure takes the same branch; this seam is the one that
+        // is deterministic on every platform without an ACL.
+        let dir = TempDir::new("girpr_test_purge", "walk_error");
+        let pp = plan_purge(
+            &dir.join("bad\0name"),
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
+        assert!(pp.files.is_empty(), "{:?}", pp.files);
+        assert_eq!(pp.total_bytes, 0);
+        assert!(pp.errors >= 1, "the unreadable walk is counted");
+
+        // N-19: the same real counted failure refuses a delete ceiling instead
+        // of being compared as the complete delete set.
+        let ceiling = Limits {
+            delete_bytes: Some(u64::MAX),
+            ..Default::default()
+        };
+        let plan = plan_of("game.dat");
+        let hits = ceiling.check_preflight(Preflight {
+            plan: &plan,
+            est_download_bytes: 0,
+            purge: Some(&pp),
+        });
+        assert!(
+            matches!(hits.as_slice(), [LimitHit::IncompletePurge { .. }]),
+            "the walk failure must refuse the ceiling: {hits:?}"
+        );
+        assert!(ceiling.check_delete(&pp).is_some());
+        // Without a ceiling the plan stays diagnostic, exactly as before.
+        assert!(Limits::default().check_delete(&pp).is_none());
+    }
+
+    #[test]
+    fn a_missing_game_dir_is_an_empty_plan_and_not_an_error() {
+        // The documented case: `--print-plan` before `game_dir` exists. It is
+        // an empty plan, not a walk failure.
+        let dir = TempDir::new("girpr_test_purge", "missing_root");
+        let pp = plan_purge(
+            &dir.join("not_there_yet"),
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
+        assert!(pp.files.is_empty());
+        assert_eq!(pp.total_bytes, 0);
+        assert_eq!(pp.errors, 0);
+    }
+
+    #[test]
     fn a_scope_that_admits_an_orphan_still_deletes_it() {
         let dir = TempDir::new("girpr_test_purge", "scope_purge");
         std::fs::write(dir.join("game.dat"), b"keep").unwrap();
@@ -584,7 +953,13 @@ mod tests {
         // `--include "*.dat"` admits the orphan; it is still not in the
         // manifest, so it purges.
         let scoped = scope(&["*.dat"], &[]);
-        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &scoped);
+        let pp = plan_purge(
+            &dir,
+            &plan_of("game.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &scoped,
+        );
         assert_eq!(pp.total_bytes, 4);
         assert_eq!(pp.hidden, 0);
         assert_eq!(apply_purge(&pp, false).unwrap(), 4);
@@ -623,16 +998,56 @@ mod tests {
         let (expected, server_keep) = purge_fixture();
         let scope = PathScope::default();
         assert_eq!(
-            classify_purge_path("girpr.lock", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "girpr.lock",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("config.ini", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "config.ini",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Keep
         );
         assert_eq!(
-            classify_purge_path("stray/orphan.dat", &expected, &server_keep, &scope),
+            classify_purge_path(
+                "stray/orphan.dat",
+                &expected,
+                &server_keep,
+                &no_blacklist(),
+                &scope
+            ),
             PurgeVerdict::Purge
+        );
+    }
+
+    /// The sweep's expected failure — something appeared after the plan was
+    /// built — must surface its reason rather than being discarded like a
+    /// sharing violation or an ACL.
+    #[test]
+    fn a_dir_the_sweep_could_not_remove_is_logged_with_the_reason() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_purge", "sweep");
+        let d = dir.join("emptied");
+        std::fs::create_dir_all(&d).unwrap();
+        // Non-empty: `remove_dir` fails, which is the failure the sweep meets.
+        std::fs::write(d.join("appeared.dat"), b"raced").unwrap();
+
+        let logs =
+            crate::repair::test_support::logs_of(|| remove_emptied_dirs(std::slice::from_ref(&d)));
+
+        assert!(d.is_dir(), "the sweep does not force what it cannot remove");
+        assert!(
+            logs.contains("the emptied dir was not removed")
+                && logs.contains(&d.display().to_string()),
+            "the directory and the reason are logged: {logs}"
         );
     }
 }

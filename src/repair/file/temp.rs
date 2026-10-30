@@ -33,11 +33,18 @@ pub(super) async fn attempt_temp(
     writes: &mut FileWrites,
 ) -> Result<Inplace> {
     match util::file_len(final_path) {
-        None => tracing::debug!("check: missing local file"),
-        Some(n) if n != file.size as u64 => {
+        util::FileLen::Absent => {
+            tracing::debug!(path = %final_path.display(), "check: missing local file");
+        }
+        util::FileLen::Unreadable(e) => tracing::warn!(
+            path = %final_path.display(),
+            error = %e,
+            "check: cannot stat the local file -> needs repair"
+        ),
+        util::FileLen::Present(n) if n != file.size as u64 => {
             tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
         }
-        Some(_) => match util::md5_file(final_path) {
+        util::FileLen::Present(_) => match util::md5_file(final_path) {
             Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
                 tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
                 return Ok(Inplace::Skipped);
@@ -50,7 +57,7 @@ pub(super) async fn attempt_temp(
         tracing::info!("would repair");
         return Ok(Inplace::DryRun);
     }
-    let stats = repair_attempt(ctx, file, prefix, tmp_path, writes).await?;
+    let stats = repair_attempt(ctx, file, prefix, tmp_path, final_path, writes).await?;
     Ok(Inplace::Repaired(stats))
 }
 
@@ -60,6 +67,7 @@ async fn repair_attempt(
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
     let mut stats = ChunkStats {
@@ -71,7 +79,7 @@ async fn repair_attempt(
     // not part of the install, so the reported `download_bytes` — "the bytes
     // of the files that were actually repaired" — does not count them. The
     // settle happens where the file is promoted, in `repair_all`.
-    repair_attempt_inner(ctx, file, prefix, tmp_path, &mut stats, writes).await
+    repair_attempt_inner(ctx, file, prefix, tmp_path, final_path, &mut stats, writes).await
 }
 
 /// One full pass over a file's chunks, then verify + promote. The caller
@@ -81,6 +89,7 @@ async fn repair_attempt_inner(
     file: &PlannedFile,
     prefix: &str,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     stats: &mut ChunkStats,
     writes: &mut FileWrites,
 ) -> Result<ChunkStats> {
@@ -91,19 +100,25 @@ async fn repair_attempt_inner(
         .truncate(false) // keep tmp resume data; explicit to satisfy clippy::suspicious_open_options
         .open(tmp_path)
         .with_context(|| format!("open tmp {}", tmp_path.display()))?;
-    let have = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let have = f
+        .metadata()
+        .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+        .len();
     if have > file.size as u64 {
         tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
     }
     tracing::debug!(
-        tmp_bytes = f.metadata().map(|m| m.len()).unwrap_or(0),
+        tmp_bytes = f
+            .metadata()
+            .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+            .len(),
         expect_size = file.size,
         "tmp resume point"
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
     for c in &file.chunks {
-        match try_reuse_slice(ctx, file, c, reuse_entries, &mut f, writes)? {
+        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, tmp_path, writes)? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -117,7 +132,9 @@ async fn repair_attempt_inner(
                     // chunk's offset makes the resume honest — the chunks
                     // before it were each digest-checked when they were
                     // written, and everything from it on is gone.
-                    rollback_tmp(&mut f, c.offset.max(0) as u64)?;
+                    if let Err(rollback) = rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64) {
+                        return Err(chunk_failure_after_rollback(tmp_path, rollback, e));
+                    }
                     return Err(e);
                 }
             }
@@ -125,7 +142,7 @@ async fn repair_attempt_inner(
     }
     f.flush()?;
     drop(f);
-    promote_tmp(ctx, file, tmp_path, stats, writes)
+    promote_tmp(file, tmp_path, final_path, stats, writes)
 }
 
 /// What one chunk needed. `Resumed` (already complete) and `Reused` (copied
@@ -158,8 +175,15 @@ enum ChunkOutcome {
 ///
 /// The truncation never extends: a `_tmp` shorter than the offset is left
 /// alone.
-fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
-    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+fn rollback_tmp(f: &mut File, tmp_path: &std::path::Path, offset: u64) -> Result<()> {
+    // The handle is already open, so a stat failure here is a real I/O error,
+    // not "empty". Treating it as 0 would skip the truncate and let the next
+    // attempt resume the failed chunk's partial bytes by length — a corrupt
+    // `_tmp` that only the final MD5 gate catches, with nothing logged.
+    let len = f
+        .metadata()
+        .with_context(|| format!("stat tmp {} before rollback", tmp_path.display()))?
+        .len();
     if len <= offset {
         return Ok(());
     }
@@ -170,6 +194,23 @@ fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
         "the failed chunk is rolled back out of the tmp"
     );
     Ok(())
+}
+
+/// Compose the two failures of one chunk attempt: the chunk error stays the
+/// reported cause, and a rollback failure is attached as context.
+///
+/// The rollback is the urgent condition — a `_tmp` left past the failed chunk
+/// would be trusted by the next length-based resume — but replacing the chunk
+/// error with it hides which chunk failed and why. Keep both.
+fn chunk_failure_after_rollback(
+    tmp_path: &std::path::Path,
+    rollback: anyhow::Error,
+    chunk: anyhow::Error,
+) -> anyhow::Error {
+    chunk.context(format!(
+        "rolling the tmp back to the failed chunk also failed ({}): {rollback:#}",
+        tmp_path.display()
+    ))
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
@@ -184,14 +225,29 @@ fn rollback_tmp(f: &mut File, offset: u64) -> Result<()> {
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
 fn try_reuse_slice(
     ctx: &FileCtx,
-    file: &PlannedFile,
+    src: &std::path::Path,
     c: &SophonChunk,
     reuse_entries: Option<&Vec<(String, i64, i64)>>,
     out: &mut File,
+    tmp_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
-    let end = (c.offset + c.uncompressed_size) as u64;
-    let cur_len = out.metadata().map(|m| m.len()).unwrap_or(0);
+    // The manifest controls both numbers; a corrupt pair must fail this file
+    // normally rather than panic (release builds would wrap here).
+    let end = u64::try_from(c.offset)
+        .ok()
+        .zip(u64::try_from(c.uncompressed_size).ok())
+        .and_then(|(offset, size)| offset.checked_add(size))
+        .with_context(|| {
+            format!(
+                "chunk {} has an invalid offset/size: {} + {}",
+                c.id, c.offset, c.uncompressed_size
+            )
+        })?;
+    let cur_len = out
+        .metadata()
+        .with_context(|| format!("stat tmp {} before reuse", tmp_path.display()))?
+        .len();
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
     // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
@@ -214,11 +270,10 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     };
 
-    let src = ctx.game_dir.join(util::normalize_rel(&file.rel));
-    match util::md5_file_slice(&src, *ro as u64, c.uncompressed_size as u64) {
+    match util::md5_file_slice(src, *ro as u64, c.uncompressed_size as u64) {
         Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            let mut sf = File::open(&src)?;
+            let mut sf = File::open(src)?;
             sf.seek(SeekFrom::Start(*ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
             let mut buf = vec![0u8; COPY_BUF];
@@ -351,29 +406,35 @@ pub(super) async fn write_downloaded_chunk(
     }
     let expected = c.uncompressed_size.max(0) as u64;
     let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
-    // A failed fetch delivers nothing, so the reservation goes straight back.
-    // Without this the `?` below would leak `compressed_size` per attempt, for
-    // bytes that never arrived — and with no ceiling set the sentinel is
-    // `u64::MAX`, so the leak is not gated on `--max-download-bytes`.
+    // What the fetch really spent, across every attempt: the checks below run
+    // after the stream ends, so on failure the bytes of the attempt that died
+    // mid-body would otherwise be lost. They crossed the wire, and the
+    // ceiling is a ceiling: a settle that pushes the live figure past it trips
+    // the stop right there, even if this was the run's last chunk.
+    let mut consumed = 0u64;
     let digest = match sophon::stream_chunk_to(
         &ctx.http,
         ctx.sleep.as_ref(),
         prefix,
         &c.id,
         expected,
+        reserved,
+        &mut consumed,
         &mut sink,
     )
     .await
     {
         Ok(d) => d,
         Err(e) => {
-            ctx.summary.adjust_download_bytes(-(reserved as i64));
+            settle_reservation(ctx, reserved, consumed);
             return Err(e).with_context(|| format!("chunk {}", c.id));
         }
     };
+    // The body may not exceed its reservation (`stream_chunk_to` refuses one
+    // that does), and a failed attempt's partial body is in `consumed` too, so
+    // the live figure is what crossed the wire rather than the manifest's claim.
+    settle_reservation(ctx, reserved, consumed);
     let actual = digest.compressed_bytes;
-    ctx.summary
-        .adjust_download_bytes(actual as i64 - reserved as i64);
     stats.download_bytes += actual;
     tracing::trace!(chunk = %c.id, compressed_bytes = actual, decompressed_bytes = digest.bytes, "chunk decoded");
     // The size and the digest are checked **after** the stream ends, which is
@@ -402,6 +463,44 @@ pub(super) async fn write_downloaded_chunk(
     Ok(())
 }
 
+/// Fold the bytes a fetch really spent into the live download meter.
+///
+/// The reservation was the manifest's `compressed_size`; `consumed` is what
+/// crossed the wire for this chunk in this call. `stream_chunk_to` retries up
+/// to `ATTEMPTS` times and each attempt can deliver a partial body before it
+/// fails, so a failed chunk is charged for those bodies and refunded only the
+/// part of the reservation that never arrived. A chunk can therefore spend up
+/// to `ATTEMPTS × reserved` in one call, and — because a file is attempted up
+/// to `MAX_ATTEMPTS` times — up to `ATTEMPTS × MAX_ATTEMPTS` partial bodies per
+/// chunk per run.
+///
+/// The reservation before the *next* fetch is what normally stops the run, but
+/// a partial body can push the live figure over the line between two
+/// reservations — including on the last chunk of the run. The bytes are
+/// already spent, so the stop is tripped here, as soon as the real figure is
+/// known. The overrun is bounded by the body that was already in flight: it is
+/// the bytes of the piece that crossed the line, not a whole new reservation.
+fn settle_reservation(ctx: &FileCtx, reserved: u64, consumed: u64) {
+    use std::cmp::Ordering;
+
+    let delta = match consumed.cmp(&reserved) {
+        Ordering::Greater => i64::try_from(consumed - reserved).unwrap_or(i64::MAX),
+        Ordering::Less => -i64::try_from(reserved - consumed).unwrap_or(i64::MAX),
+        Ordering::Equal => 0,
+    };
+    ctx.summary.adjust_download_bytes(delta);
+    if let Some(limit) = ctx.summary.max_download_bytes()
+        && ctx.summary.download.live() > limit
+    {
+        ctx.summary.stop(StoppedBy::Download);
+        tracing::warn!(
+            limit,
+            have = ctx.summary.download.live(),
+            "download-bytes ceiling crossed by a body already in flight -> stopping the run"
+        );
+    }
+}
+
 /// Final gate: length + whole-file MD5, then the atomic promote. On mismatch the
 /// tmp is deleted so the next attempt starts from a clean state and a bad file
 /// can never be promoted partially.
@@ -410,20 +509,30 @@ pub(super) async fn write_downloaded_chunk(
 /// deleted and the file is retried/failed, never promoted partially.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
 fn promote_tmp(
-    ctx: &FileCtx,
     file: &PlannedFile,
     tmp_path: &std::path::Path,
+    final_path: &std::path::Path,
     stats: &ChunkStats,
     writes: &FileWrites,
 ) -> Result<ChunkStats> {
-    let len = util::file_len(tmp_path).unwrap_or(0);
+    let len = std::fs::metadata(tmp_path)
+        .with_context(|| format!("stat tmp {}", tmp_path.display()))?
+        .len();
     if len != file.size as u64 {
         anyhow::bail!("tmp length {} != expected {}", len, file.size);
     }
     let h = util::md5_file(tmp_path)?;
     tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
     if !h.eq_ignore_ascii_case(&file.md5) {
-        std::fs::remove_file(tmp_path).ok();
+        if let Err(e) = std::fs::remove_file(tmp_path) {
+            // The next attempt resumes by length, so a `_tmp` that cannot be
+            // deleted only costs work: the final MD5 gate refuses it again.
+            tracing::warn!(
+                tmp = %tmp_path.display(),
+                error = %e,
+                "cannot delete the corrupt temp file; the next attempt will re-check it"
+            );
+        }
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel,
@@ -431,8 +540,7 @@ fn promote_tmp(
             h
         );
     }
-    let final_path = ctx.game_dir.join(util::normalize_rel(&file.rel));
-    std::fs::rename(tmp_path, &final_path).with_context(|| format!("promote {}", file.rel))?;
+    std::fs::rename(tmp_path, final_path).with_context(|| format!("promote {}", file.rel))?;
     tracing::info!(chunks_total = stats.chunks_total, chunks_reused = stats.chunks_reused, chunks_downloaded = stats.chunks_downloaded, chunks_resumed = stats.chunks_resumed, download_bytes = stats.download_bytes, final_md5 = %h, "repaired");
     Ok(ChunkStats {
         download_bytes: stats.download_bytes,
@@ -444,4 +552,72 @@ fn promote_tmp(
         settled_writes: writes.settled,
         mode: Mode::Temp,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stat failure on the `_tmp` must name the stat and the path:
+    /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
+    /// and that `io::Error` must surface instead of a zero length.
+    #[test]
+    fn a_tmp_that_cannot_be_statted_is_reported_as_a_stat_failure() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "promote_stat");
+        let blocker = dir.join("game");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        let tmp = blocker.join("foo.dat_tmp");
+        let final_path = dir.join("foo.dat");
+        let file = PlannedFile {
+            rel: "game/foo.dat".into(),
+            size: 64,
+            md5: String::new(),
+            chunks: Vec::new(),
+        };
+
+        let err = promote_tmp(
+            &file,
+            &tmp,
+            &final_path,
+            &ChunkStats::default(),
+            &FileWrites::default(),
+        )
+        .expect_err("the tmp path cannot be statted");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("stat tmp") && chain.contains(&tmp.display().to_string()),
+            "the real cause must be named, not `tmp length 0`: {chain}"
+        );
+    }
+
+    /// R-3: when the rollback fails as well, the report must name the chunk
+    /// failure *and* the rollback. The old `?` returned the rollback error and
+    /// dropped the chunk error entirely.
+    ///
+    /// The seam is a read-only handle: truncation needs write access, so
+    /// `rollback_tmp` fails while the original chunk error — the fault the run
+    /// was cleaning up after — is still in hand.
+    #[test]
+    fn a_failed_rollback_keeps_the_chunk_error_as_the_cause() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "rollback_failure");
+        let tmp = dir.join("foo.dat_tmp");
+        std::fs::write(&tmp, b"0123456789").unwrap();
+        let mut read_only = File::open(&tmp).unwrap();
+        let rollback =
+            rollback_tmp(&mut read_only, &tmp, 0).expect_err("a read-only handle cannot truncate");
+        let err = chunk_failure_after_rollback(
+            &tmp,
+            rollback,
+            anyhow::anyhow!("chunk 7: digest mismatch"),
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("chunk 7: digest mismatch"),
+            "the original chunk failure must survive: {chain}"
+        );
+        assert!(
+            chain.contains(&tmp.display().to_string()) && chain.contains("rolling the tmp back"),
+            "the rollback failure must be attached with the path: {chain}"
+        );
+    }
 }

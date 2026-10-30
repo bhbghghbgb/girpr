@@ -29,9 +29,14 @@ use crate::repair::phases::plan::RepairPlan;
 use crate::repair::purge;
 use crate::repair::scope::PathScope;
 
-/// Run the post-phase. Every failure here is fatal (`exit 3`): by this point
-/// the bytes are already repaired, so a half-finished bookkeeping write would
-/// desync the launcher from the game.
+/// Run the post-phase.
+///
+/// Failures in the bookkeeping the launcher depends on are fatal (`exit 3`):
+/// by that point the bytes are already repaired, so a half-finished
+/// `config.ini` write would desync the launcher from the game. The
+/// best-effort housekeeping steps — deprecated deletes, the audio cache move,
+/// the cleanup's directory sweep — cannot be retried into success by failing
+/// the run, so a refused delete or move is logged and the phase carries on.
 ///
 /// `deprecated` is the server's deprecated-file list, already fetched (and
 /// already possibly empty, if the call failed) during the plan phase.
@@ -52,7 +57,13 @@ pub async fn run(
     delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
     move_audio_cache(game_dir, &meta.config, &ctx.path_scope, dry);
     if ctx.purge_after || ctx.purge_only {
-        let purge_plan = purge::plan_purge(game_dir, plan, &purge::keep_set(), &ctx.path_scope);
+        let purge_plan = purge::plan_purge(
+            game_dir,
+            plan,
+            &purge::keep_set(),
+            &meta.blacklist,
+            &ctx.path_scope,
+        );
         // The post-repair re-plan is the only purge pass whose candidates were
         // not computed at assert time, so `--max-delete-bytes` is checked
         // against it again here. It can only be *smaller* than the
@@ -61,6 +72,8 @@ pub async fn run(
         // stopped (`5`), both of which skip this phase. That is a property of
         // the pipeline, not a property of the ceiling, so the check is here
         // rather than assumed: deletion is the one irreversible act in the tool.
+        // The same check refuses an incomplete plan (`purge.errors > 0`) when a
+        // ceiling is set, because its byte total is only a lower bound.
         if let Some(hit) = ctx.limits.check_delete(&purge_plan) {
             tracing::error!("limit exceeded: {hit}");
             if dry {
@@ -126,6 +139,10 @@ pub enum PostOutcome {
 /// simply means there is nothing to do. A path outside the active scope does
 /// not exist, so it is not deleted either.
 ///
+/// The names were normalised to the `/` form in `repair::fetch_deprecated`, at
+/// the boundary where the server list enters the run, so this gate and the
+/// `contained_join` sink below see one spelling.
+///
 /// `dry_run` lists instead of deleting, and adds nothing to the byte counter.
 fn delete_deprecated(
     game_dir: &Path,
@@ -139,18 +156,106 @@ fn delete_deprecated(
             tracing::debug!("deprecated path out of scope, kept: {n}");
             continue;
         }
-        let p = game_dir.join(util::normalize_rel(n));
-        if !p.is_file() {
-            continue;
-        }
-        let sz = util::file_len(&p).unwrap_or(0);
+        let p = match util::contained_join(game_dir, n) {
+            Ok(p) => p,
+            Err(e) => {
+                // The list is server data and this is a **delete** sink: an
+                // escape is skipped, never followed, and the skip is visible.
+                tracing::warn!(
+                    path = %n,
+                    error = %format!("{e:#}"),
+                    "deprecated path escapes the game dir; kept"
+                );
+                continue;
+            }
+        };
+        // One stat, four answers. The old `if !p.is_file()` collapsed "not a
+        // file" with every stat failure: an ACL or a sharing violation took
+        // the same silent `continue` as a directory, so the deprecated file was
+        // left in place with no log and no counter, while the comment below
+        // claimed the stat had succeeded.
+        let sz = match stat_deprecated(&p) {
+            DeprecatedStat::File(len) => Some(len),
+            DeprecatedStat::AlreadyGone => {
+                tracing::debug!(path = %n, "deprecated file is already gone");
+                continue;
+            }
+            DeprecatedStat::NotAFile => {
+                tracing::debug!(path = %n, "deprecated path is not a file; kept");
+                continue;
+            }
+            DeprecatedStat::Failed(e) => {
+                // A stat failure is not "0 bytes" and not "not a file": the
+                // delete still runs (the entry is server-named and contained),
+                // but the figure is left out of the counter instead of being
+                // under-reported, and the dry-run line says the size is
+                // unknown rather than 0.
+                tracing::warn!(
+                    path = %n,
+                    error = %e,
+                    "deprecated file could not be stat'd; deleting without its size"
+                );
+                None
+            }
+        };
         if dry_run {
-            tracing::info!("would delete deprecated {n} ({sz} bytes)");
-        } else if std::fs::remove_file(&p).is_ok() {
-            summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
-            tracing::info!("deleted deprecated {n}");
+            match sz {
+                Some(sz) => tracing::info!("would delete deprecated {n} ({sz} bytes)"),
+                None => tracing::info!("would delete deprecated {n} (size unavailable)"),
+            }
+        } else {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    if let Some(sz) = sz {
+                        summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+                    }
+                    tracing::info!("deleted deprecated {n}");
+                }
+                Err(e) => {
+                    // Not fatal: a locked or vanished file is not something a
+                    // retry of the whole run would fix, but it must not look
+                    // like a delete either.
+                    tracing::warn!(
+                        path = %n,
+                        error = %e,
+                        "deprecated file could not be deleted; left in place"
+                    );
+                }
+            }
         }
     }
+}
+
+/// What a deprecated entry's one `metadata` call said.
+///
+/// Keeping the four states apart is the point: `Path::is_file()` is
+/// `metadata().map(|m| m.is_file()).unwrap_or(false)`, which reads a stat
+/// failure as "not a file" and loses the reason.
+#[derive(Debug)]
+enum DeprecatedStat {
+    /// A regular file, with the size the delete can report.
+    File(u64),
+    /// A directory or other non-file: never a delete candidate.
+    NotAFile,
+    /// The path is already absent, which is the delete's desired end state.
+    AlreadyGone,
+    /// The path exists but could not be stat'd (ACL, sharing violation, …).
+    Failed(std::io::Error),
+}
+
+/// Classify the entry's stat result. Split from [`stat_deprecated`] so the
+/// error-vs-not-a-file distinction is unit-testable without an injection seam.
+fn classify_deprecated(stat: std::io::Result<std::fs::Metadata>) -> DeprecatedStat {
+    match stat {
+        Ok(m) if m.is_file() => DeprecatedStat::File(m.len()),
+        Ok(_) => DeprecatedStat::NotAFile,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DeprecatedStat::AlreadyGone,
+        Err(e) => DeprecatedStat::Failed(e),
+    }
+}
+
+fn stat_deprecated(path: &Path) -> DeprecatedStat {
+    classify_deprecated(std::fs::metadata(path))
 }
 
 /// Move `audio_pkg_cache_dir/**/*` into `audio_pkg_res_dir`, Starward parity
@@ -165,6 +270,12 @@ fn delete_deprecated(
 /// scope may not have admitted.
 ///
 /// `dry_run` logs the move and does none of it.
+///
+/// The summary line at the end is **derived from the outcomes**, not emitted
+/// because the function was reached: `moved` counts the sources that are gone
+/// from the cache (renamed, or copied and then removed) and `kept` counts the
+/// ones still there. An empty cache and a move that was refused both end
+/// without a success claim.
 fn move_audio_cache(
     game_dir: &Path,
     config: &crate::hyp::GameConfig,
@@ -175,21 +286,51 @@ fn move_audio_cache(
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
         return;
     }
-    // Rel paths are `/`-separated everywhere except at the filesystem boundary.
-    let cache_rel = cache_dir.replace('\\', "/");
-    let res_rel = res_dir.replace('\\', "/");
-    if !scope.is_visible(&cache_rel) || !scope.is_visible(&res_rel) {
+    // `metadata::fetch` normalised both spellings to the `/` form the scope
+    // matches on, at the boundary where `getGameConfigs` enters the run, so the
+    // gate below and `contained_join` see one string.
+    let cache_rel = cache_dir.as_str();
+    let res_rel = res_dir.as_str();
+    if !scope.is_visible(cache_rel) || !scope.is_visible(res_rel) {
         tracing::debug!("audio cache->res out of scope, skipped");
         return;
     }
-    let cache = game_dir.join(util::normalize_rel(cache_dir));
-    let res = game_dir.join(util::normalize_rel(res_dir));
+    let (cache, res) = match (
+        util::contained_join(game_dir, cache_dir),
+        util::contained_join(game_dir, res_dir),
+    ) {
+        (Ok(cache), Ok(res)) => (cache, res),
+        (cache, res) => {
+            // Both are server data and this sink **moves files**: an escape is
+            // skipped, never followed. `--print-plan`/`--dry-run` cannot reach
+            // this (the post-phase is not run), but a real race would.
+            tracing::warn!(
+                cache = %cache_dir,
+                res = %res_dir,
+                cache_ok = cache.is_ok(),
+                res_ok = res.is_ok(),
+                "audio cache/res dir escapes the game dir; skipped"
+            );
+            return;
+        }
+    };
     if !cache.is_dir() {
         return;
     }
     let files: Vec<std::path::PathBuf> = WalkDir::new(&cache)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(e) => Some(e),
+            Err(e) => {
+                // The move is best effort: an unreadable entry is logged and
+                // the rest of the cache still moves.
+                tracing::warn!(
+                    error = %format!("{e:#}"),
+                    "audio cache walk: entry unreadable; skipped"
+                );
+                None
+            }
+        })
         .filter(|e| e.file_type().is_file())
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -198,31 +339,76 @@ fn move_audio_cache(
             let Ok(rel) = src.strip_prefix(&cache) else {
                 continue;
             };
-            if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+            if !scope.is_visible(&join_rel(cache_rel, rel)) {
                 continue;
             }
             tracing::info!("would move audio cache {} -> res", rel.display());
         }
         return;
     }
+    let mut moved = 0u64;
+    let mut kept = 0u64;
     for src in files {
         let Ok(rel) = src.strip_prefix(&cache) else {
             continue;
         };
-        if !scope.is_visible(&join_rel(&cache_rel, rel)) {
+        if !scope.is_visible(&join_rel(cache_rel, rel)) {
             continue;
         }
         let target = res.join(rel);
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
-        if std::fs::create_dir_all(target.parent().unwrap_or(&res)).is_ok()
-            && std::fs::rename(&src, &target).is_err()
-        {
-            let _ = std::fs::copy(&src, &target);
-            let _ = std::fs::remove_file(&src);
+        if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
+            tracing::warn!(
+                src = %src.display(),
+                error = %e,
+                "audio cache move: destination directory could not be created; source kept"
+            );
+            kept += 1;
+            continue;
+        }
+        match std::fs::rename(&src, &target) {
+            Ok(()) => moved += 1,
+            Err(rename_err) => {
+                match std::fs::copy(&src, &target) {
+                    Ok(_) => {
+                        // Only now is there a destination: the source is
+                        // removed **after** a successful copy, never before.
+                        // Removing it unconditionally would delete a cache
+                        // file that had no copy if the copy failed.
+                        match std::fs::remove_file(&src) {
+                            Ok(()) => moved += 1,
+                            Err(e) => {
+                                kept += 1;
+                                tracing::warn!(
+                                    src = %src.display(),
+                                    error = %e,
+                                    "audio cache move: copied, but the source could not be removed"
+                                );
+                            }
+                        }
+                    }
+                    Err(copy_err) => {
+                        // Keep the source when the copy fails, and say why.
+                        kept += 1;
+                        tracing::warn!(
+                            src = %src.display(),
+                            target = %target.display(),
+                            rename_error = %rename_err,
+                            error = %copy_err,
+                            "audio cache move failed; source kept"
+                        );
+                    }
+                }
+            }
         }
     }
-    tracing::info!("moved audio cache -> res");
+    // The one line an operator greps for: only when a relocation was
+    // attempted, and with both halves of the outcome, so "moved" cannot stand
+    // for a run that moved nothing.
+    if moved + kept > 0 {
+        tracing::info!(moved, kept, "audio cache -> res");
+    }
 }
 
 /// Join two rel path fragments into the `/`-separated form the scope matches on.
@@ -232,5 +418,157 @@ fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
         name
     } else {
         format!("{dir_rel}/{name}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hyp::GameConfig;
+    use crate::repair::test_support::logs_of;
+
+    fn config(cache: &str, res: &str) -> GameConfig {
+        serde_json::from_value(serde_json::json!({
+            "audio_pkg_cache_dir": cache,
+            "audio_pkg_res_dir": res,
+        }))
+        .unwrap()
+    }
+
+    /// The source is removed only after a successful copy: a locked
+    /// destination or a cross-volume refusal never deletes the cache file
+    /// without a destination.
+    ///
+    /// A directory at the destination makes both `rename` and `copy` fail on
+    /// every platform, which is the deterministic shape of that failure.
+    #[test]
+    fn a_failed_copy_keeps_the_audio_cache_source() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "copy_fail");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::write(base.join("Audio/cache/a.pck"), b"cache bytes").unwrap();
+        std::fs::create_dir_all(base.join("Audio/res/a.pck")).unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
+
+        assert_eq!(
+            std::fs::read(base.join("Audio/cache/a.pck")).unwrap(),
+            b"cache bytes",
+            "the source must survive a failed copy"
+        );
+        assert!(
+            base.join("Audio/res/a.pck").is_dir(),
+            "the destination that made the move fail is untouched"
+        );
+
+        // The summary line must not claim a move: the source is still there,
+        // and the counts say so.
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=0")
+                && logs.contains("kept=1"),
+            "a refused move is reported as kept, not moved: {logs}"
+        );
+    }
+
+    /// The other half of the same line: a relocation that did happen is
+    /// reported with its counts.
+    #[test]
+    fn a_completed_audio_move_logs_the_count() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "moved");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache/sub")).unwrap();
+        std::fs::write(base.join("Audio/cache/sub/a.pck"), b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
+
+        assert!(
+            !base.join("Audio/cache/sub/a.pck").exists(),
+            "the source moved"
+        );
+        assert_eq!(
+            std::fs::read(base.join("Audio/res/sub/a.pck")).unwrap(),
+            b"cache bytes"
+        );
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=1")
+                && logs.contains("kept=0"),
+            "the summary names what happened: {logs}"
+        );
+    }
+
+    /// An empty cache relocates nothing, so there is nothing to report.
+    #[test]
+    fn an_empty_audio_cache_logs_no_relocation() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "empty");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+            )
+        });
+
+        assert!(
+            !logs.contains("audio cache -> res"),
+            "nothing moved, so no move is claimed: {logs}"
+        );
+    }
+
+    /// S-3: `Path::is_file()` folded "not a file" and every stat error into
+    /// `false`, so an ACL or sharing violation skipped the deprecated delete
+    /// silently. The classifier keeps the error a separate state.
+    #[test]
+    fn a_failed_deprecated_stat_is_not_a_non_file() {
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        assert!(
+            matches!(classify_deprecated(Err(denied)), DeprecatedStat::Failed(_)),
+            "an ACL failure is a stat failure, not a non-file"
+        );
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        assert!(matches!(
+            classify_deprecated(Err(gone)),
+            DeprecatedStat::AlreadyGone
+        ));
+    }
+
+    /// The three real filesystem answers the delete turns on.
+    #[test]
+    fn stat_deprecated_separates_file_non_file_and_absent() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_deprecated", "stat");
+        std::fs::write(dir.join("old.dll"), b"12345").unwrap();
+        std::fs::create_dir_all(dir.join("old_dir")).unwrap();
+
+        assert!(matches!(
+            stat_deprecated(&dir.join("old.dll")),
+            DeprecatedStat::File(5)
+        ));
+        assert!(matches!(
+            stat_deprecated(&dir.join("old_dir")),
+            DeprecatedStat::NotAFile
+        ));
+        assert!(matches!(
+            stat_deprecated(&dir.join("gone.dll")),
+            DeprecatedStat::AlreadyGone
+        ));
     }
 }

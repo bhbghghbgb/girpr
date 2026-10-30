@@ -174,10 +174,19 @@ impl RunCtx {
         self.limits.ram_bytes
     }
 
-    /// Read-only modes must not write anything: `--dry-run` logs actions only,
-    /// `--check-only` verifies only. Every delete/write in the pipeline is
-    /// gated on this, which covers `--purge-before` as well as the phases
-    /// `--check-only` never reaches.
+    /// `--dry-run` and `--check-only` must not write anything: `--dry-run`
+    /// logs actions only, `--check-only` verifies only. Every delete/write in
+    /// the pipeline is gated on this, which covers `--purge-before` as well as
+    /// the phases `--check-only` never reaches.
+    ///
+    /// This is **not** the whole read-only story: `--print-plan` is read-only
+    /// by construction (it returns before the execution phase), but it does
+    /// reach the metadata phase, where the explicit-`--audio` scan path is
+    /// **validated** under `!readonly() && !print_plan`. The scan file itself
+    /// is not written there: since R-7 the write lives in the execution phase
+    /// (`repair::mod`), which `--print-plan` never reaches. A new write site
+    /// must ask `!readonly()` (and must be unreachable from the plan-only
+    /// returns), not trust this method alone.
     pub fn readonly(&self) -> bool {
         self.dry_run || self.check_only
     }

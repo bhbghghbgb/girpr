@@ -2,16 +2,8 @@
 //! and removed when the test ends however it ends.
 //!
 //! One crate, three projects: the repair binary (`girpr`), the capture tool
-//! (`gircap`) and the mirror (`girsync`). Each of them used to carry its own
-//! copy of this helper — six copies in all, two in each project — and they
-//! had to be kept in step by hand, because a helper that drifts is a helper
-//! whose two halves fail in different ways. They are all here now: one name,
-//! one construction, one cleanup, for all three.
-//!
-//! And they had already drifted: girsync's second copy was not a copy at all
-//! but a `TempRoot` with a name of its own
-//! (`girsync_run_<pid>_<nanos>_<n>_<tag>`) and a cleanup of its own, which is
-//! the sentence this crate exists to end.
+//! (`gircap`) and the mirror (`girsync`) share this helper — one name, one
+//! construction, one cleanup, for all three.
 //!
 //! It is a **dev-dependency** of every project that uses it. Nothing that
 //! ships links against it: a scratch directory is a thing for a test, not for

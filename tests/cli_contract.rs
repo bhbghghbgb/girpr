@@ -252,6 +252,19 @@ fn help_text_lists_every_documented_flag() {
 }
 
 #[test]
+fn plan_out_help_documents_every_serialized_field() {
+    // R-9: `RepairEntry` serializes `mode` and `extra_bytes` too. The help is
+    // the operator-facing description of the document, so it must name the
+    // whole shape the binary writes. `help_text_lists_every_documented_flag`
+    // only checks flag names and cannot catch a stale JSON shape.
+    let (_, stdout, _) = run(&["--help"]);
+    assert!(
+        stdout.contains("mode,extra_bytes"),
+        "the --plan-out help omits the serialized fields:\n{stdout}"
+    );
+}
+
+#[test]
 fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // `logging::init_tracing` is infallible by contract: an unwritable log is a
     // stderr warning, because a run must not be able to end differently just
@@ -621,11 +634,8 @@ fn the_log_file_level_flag_beats_the_environment() {
     );
 }
 
-/// `RUST_LOG` adds to the console; it cannot silence the program.
-///
-/// A `RUST_LOG` that names some unrelated crate used to replace the console's
-/// whole spec, and the program then said nothing at all. The program's own
-/// level is `--log-level`, and `RUST_LOG` only adds to it.
+/// `RUST_LOG` adds to the console; it cannot silence the program. The
+/// program's own level is `--log-level`, and `RUST_LOG` only adds to it.
 #[test]
 fn an_unrelated_rust_log_does_not_silence_the_program() {
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))

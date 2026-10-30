@@ -27,19 +27,19 @@ src/report.rs         # Summary counters + REPORT / PROGRESS / SUMMARY formattin
 src/biz.rs            # biz/channel/launcher/game-id mapping + config.ini channel values
 src/hyp.rs            # HoYoPlay client: getGameConfigs/getGameBranches/getBuild/getDeprecated
 src/sophon.rs         # prost chunk-manifest structs, manifest fetch+verify+parse, the streamed chunk fetch, filtering, local chunk map
-src/util.rs           # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, rel-path normalization
+src/util.rs           # md5 helpers, the one-read file scan, config.ini read/write, ignore/blacklist files, server-path containment
 src/repair/mod.rs     # phase coordinator + exit-code contract: run()
-src/repair/metadata.rs# local config.ini version, ignore/blacklist files, server metadata (step 1-2)
-src/repair/manifest.rs# select+fetch latest manifests, build the local chunk-reuse map (step 3)
-src/repair/plan/mod.rs# RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
-src/repair/plan/purge.rs # Collapse files-cleanup: plan_purge, apply_purge, keep_set, classify_purge_path (step 5, 7)
+src/repair/phases/metadata.rs # local config.ini version, ignore/blacklist files, server metadata (step 1-2)
+src/repair/phases/manifest.rs # select+fetch latest manifests, build the local chunk-reuse map (step 3)
+src/repair/phases/plan.rs    # RepairPlan / PlannedFile, sorted+deduped+blacklist-filtered work list, chunk layout (step 4)
+src/repair/purge.rs          # Collapse files-cleanup: plan_purge, apply_purge, keep_set, classify_purge_path (step 5, 7)
 src/repair/scope/     # the path scope and the byte ceilings: filter, ledger, limits, report (step 4, ceilings)
-src/repair/check.rs   # --check-only size+MD5 verification loop (step 6.5)
-src/repair/file.rs    # per-file repair: the in-place tiers, the temp mode, reuse vs download (step 6)
+src/repair/phases/check.rs   # --check-only size+MD5 verification loop (step 6.5)
+src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mode, reuse vs download (step 6)
 src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
 src/repair/lock.rs    # the single-writer lock (girpr.lock)
-src/repair/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
+src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 src/repair/audio.rs   # audio scan-file read/write + effective selection
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
 tests/cli_contract.rs     # binary-level argument handling and exit codes
@@ -86,16 +86,16 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Server metadata (`game_config`/`game_branch`/`chunk_build` latest + optional local) | `repair::metadata::fetch` + `hyp::HypClient` (2) | Starward |
 | Effective audio + scan-file write | `repair::audio::{resolve_effective_audio,write_scan_file}` (1) | Starward |
 | Begin `REPORT` | `report::format_report_line` (2.5) | Starward |
-| Manifest fetch/verify/parse | `repair::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
-| Work list + reuse map | `repair::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
+| Manifest fetch/verify/parse | `repair::phases::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
+| Work list + reuse map | `repair::phases::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
 | Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `io_threads`, giving the download estimate and the damaged-chunk count (4) | — |
 | Deprecated-file list (lazy, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
-| Files-cleanup before | `repair::plan::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
+| Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
 | Single-writer lock | `repair::lock::Lock::acquire` — `{game_dir}/girpr.lock`, created with `create_new`; a live lock refuses the run with exit 1 (6) | — |
 | Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode **streamed straight into the file**, digested on the way past → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
-| Check-only | `repair::check::verify_plan` (6.5) | Starward |
-| Post deletes/config | `repair::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
-| Files-cleanup after | `repair::plan::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` only) |
+| Check-only | `repair::phases::check::verify_plan` (6.5) | Starward |
+| Post deletes/config | `repair::phases::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
+| Files-cleanup after | `repair::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` + the single-writer lock + the cleaned blacklist) |
 | Summary | `report::format_summary_line`, emitted by `main` (8) | — |
 
 Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with fixed

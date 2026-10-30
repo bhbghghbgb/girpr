@@ -56,27 +56,45 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     }
 }
 
+/// Normalise one server/config directory spelling to the `/` form every gate
+/// and sink shares, and validate its containment at the boundary.
+///
+/// The path scope matches the cleaned form (`./Audio/scan.txt` and
+/// `Audio/scan.txt` are the same file), so the scope decision must not be made
+/// on the raw spelling while the filesystem sink cleans it. Empty stays empty:
+/// every caller treats an empty config value as "not configured".
+fn clean_config_dir(game_dir: &Path, name: &str, dir: &str) -> Result<String, RunFailure> {
+    if dir.is_empty() {
+        return Ok(String::new());
+    }
+    let rel = util::clean_rel(dir)
+        .with_context(|| name.to_string())
+        .map_err(RunFailure::metadata)?;
+    // The lexical cleaning above is what the gate uses; this also resolves the
+    // nearest existing ancestor, so a symlink escape is refused here too.
+    util::contained_join(game_dir, &rel)
+        .with_context(|| name.to_string())
+        .map_err(RunFailure::metadata)?;
+    Ok(rel)
+}
+
 /// Read local state, then fetch the server metadata that defines the target.
 pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
-    // 1. local state
-    let local_version = util::read_game_version(game_dir);
+    // 1. local state. An absent `config.ini` is a fresh install; an unreadable
+    // one is an error, not a fresh install that the post-phase would then
+    // overwrite the version of.
+    let local_version = util::read_game_version(game_dir)
+        .context("read local game version")
+        .map_err(RunFailure::usage)?;
     tracing::info!("local game_version: {local_version:?}");
 
     // 2. server metadata (up to 5 calls)
     let hyp = hyp_client_for(ctx).map_err(RunFailure::metadata)?;
-    let config = hyp
+    let mut config = hyp
         .game_config()
         .await
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)?;
-    tracing::info!(
-        "game config: exe={} audio_scan={} audio_res={} audio_cache={} mode={}",
-        config.exe_file_name,
-        config.audio_pkg_scan_dir,
-        config.audio_pkg_res_dir,
-        config.audio_pkg_cache_dir,
-        config.default_download_mode
-    );
     // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
     // have no per-file chunk manifests to patch from, so refuse rather than
     // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
@@ -88,6 +106,24 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             config.default_download_mode
         )));
     }
+    // These three dirs feed both a path-scope gate and a filesystem sink. Clean
+    // each spelling once, here, so the gate and the sink compare the same
+    // string; cleaning only inside `contained_join` would let a `./`-spelled
+    // path pass a scope that hides its plain spelling.
+    config.audio_pkg_scan_dir =
+        clean_config_dir(game_dir, "audio_pkg_scan_dir", &config.audio_pkg_scan_dir)?;
+    config.audio_pkg_cache_dir =
+        clean_config_dir(game_dir, "audio_pkg_cache_dir", &config.audio_pkg_cache_dir)?;
+    config.audio_pkg_res_dir =
+        clean_config_dir(game_dir, "audio_pkg_res_dir", &config.audio_pkg_res_dir)?;
+    tracing::info!(
+        "game config: exe={} audio_scan={} audio_res={} audio_cache={} mode={}",
+        config.exe_file_name,
+        config.audio_pkg_scan_dir,
+        config.audio_pkg_res_dir,
+        config.audio_pkg_cache_dir,
+        config.default_download_mode
+    );
 
     let game_branch = hyp
         .game_branch()
@@ -120,27 +156,53 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let ignore = if config.res_category_dir.is_empty() {
         HashSet::new()
     } else {
-        util::read_ignore_categories(&game_dir.join(util::normalize_rel(&config.res_category_dir)))
+        let p = util::contained_join(game_dir, &config.res_category_dir)
+            .context("res_category_dir")
+            .map_err(RunFailure::metadata)?;
+        util::read_ignore_categories(&p)
+            .context("read res_category ignore list")
+            .map_err(RunFailure::usage)?
+            .unwrap_or_default()
     };
     let blacklist = if config.enable_resource_blacklist && !config.blacklist_dir.is_empty() {
-        util::read_blacklist(&game_dir.join(util::normalize_rel(&config.blacklist_dir)))
+        let p = util::contained_join(game_dir, &config.blacklist_dir)
+            .context("blacklist_dir")
+            .map_err(RunFailure::metadata)?;
+        util::read_blacklist(&p)
+            .context("read blacklist")
+            .map_err(RunFailure::usage)?
+            .unwrap_or_default()
     } else {
         HashSet::new()
     };
-
+    // The audio dirs were normalised and validated at the top of this function,
+    // where `getGameConfigs` enters the run. They feed a **move** sink and the
+    // `--audio` pre-flight below, so the gate there and the sink use the cleaned
+    // string rather than the raw server spelling.
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
-    // and overwrites the scan file; omitted flag keeps the detected set,
-    // defaulting to `en-us` when undetectable.
+    // and overwrites the scan file; omitted flag keeps the detected set. An
+    // absent scan file falls back to `en-us`; an unreadable one fails the run
+    // rather than silently replacing the selection (R-2).
     let explicit = ctx.audio_explicit.then_some(&ctx.audio);
-    let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit);
-    if ctx.audio_explicit && !ctx.readonly() && !config.audio_pkg_scan_dir.is_empty() {
-        // An explicit `--audio` under an active path scope is a
-        // contradiction, not a merge — the flag would mutate a path the scope
-        // may not have admitted. The escape hatch is to include the scan
-        // file's own rel path; it is never hardcoded, it comes from
-        // `getGameConfigs`, and it is in scope like anything else.
-        let scan_rel = config.audio_pkg_scan_dir.replace('\\', "/");
-        if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(&scan_rel) {
+    let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit)
+        .context("resolve audio selection")
+        .map_err(RunFailure::usage)?;
+    // The write itself is deferred to the execution phase: the repair reads
+    // the in-memory `audio` above, never the file.
+    //
+    // An explicit `--audio` under an active path scope is a contradiction, not
+    // a merge — the flag would mutate a path the scope may not have admitted.
+    // The escape hatch is to include the scan file's own rel path; it is never
+    // hardcoded, it comes from `getGameConfigs`, and it is in scope like
+    // anything else. This stays here because it is validation, and a refusal
+    // must happen before the execution phase.
+    if ctx.audio_explicit
+        && !ctx.readonly()
+        && !ctx.print_plan
+        && !config.audio_pkg_scan_dir.is_empty()
+    {
+        let scan_rel = &config.audio_pkg_scan_dir;
+        if ctx.path_scope.is_active() && !ctx.path_scope.is_visible(scan_rel) {
             return Err(RunFailure::usage(anyhow::anyhow!(
                 "--audio writes the scan file at '{scan_rel}', which is outside the active \
                  path scope (--include '{}' / --exclude '{}'); include it or drop one of the two flags",
@@ -148,9 +210,6 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
                 ctx.path_scope.describe_excludes(),
             )));
         }
-        audio::write_scan_file(game_dir, &config.audio_pkg_scan_dir, &audio)
-            .context("write audio scan file")
-            .map_err(RunFailure::write)?;
     }
 
     Ok(Meta {

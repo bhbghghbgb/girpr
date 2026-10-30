@@ -46,6 +46,8 @@ pub mod purge;
 pub mod reuse;
 pub mod scan;
 pub mod scope;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 pub use phases::metadata::Meta;
 pub use phases::plan::{PlannedFile, RepairPlan};
@@ -60,6 +62,7 @@ use anyhow::Context;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
+use crate::util;
 
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
 
@@ -141,12 +144,10 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // 4. work list. The plan outlives the repair loop (the post-phase purge
     // needs it), so it is shared rather than moved into the tasks.
     let scope = &ctx.path_scope;
-    let plan = Arc::new(phases::plan::build_plan(
-        per_manifest,
-        &meta.blacklist,
-        &meta.latest,
-        scope,
-    ));
+    let plan = Arc::new(
+        phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
+            .map_err(RunFailure::metadata)?,
+    );
     tracing::info!(
         "work list: {} files{}",
         plan.files.len(),
@@ -173,7 +174,7 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
     let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), scope));
+        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), &meta.blacklist, scope));
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
@@ -260,18 +261,21 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // slice fails its MD5, so a file estimated at 0 bytes can still download its
     // whole body. That is why the runtime hard stop exists alongside this.
     //
-    // Under `--scan` the estimate is the **exact** figure for the in-place
-    // path: the chunks that are wrong where they belong and have no intact
-    // source to copy from. The temp path's figure is the one above (it
-    // writes every chunk of a file it repairs), so the two modes are
-    // estimated by their own rules.
-    let est_download_bytes = match (&scan, ctx.repair_mode) {
-        // The temp path writes every chunk of a file it repairs, so its
-        // figure is the reuse map's one.
-        (Some(_), crate::config::RepairMode::Temp) => plan.est_download_bytes(&local_map),
-        (Some(s), _) => s.est_download_bytes(&plan),
-        (None, _) => plan.est_download_bytes(&local_map),
+    // Under `--scan` the estimate is the **exact** figure for the write path
+    // each file takes: the chunks that are wrong where they belong and have no
+    // intact source the chosen direction keeps. It resolves the mode itself,
+    // including a requested `temp`, so this is one rule for every mode.
+    //
+    // The split is computed once, per file, and both consumers fold it: the
+    // `PLAN` total below and the `--plan-out` document further down. A second
+    // derivation would be a second answer.
+    let est_download_by_file: Vec<u64> = match &scan {
+        Some(s) => s.est_download_bytes_by_file(&plan, &game_dir, ctx.repair_mode, &local_map),
+        None => plan.est_download_bytes_by_file(&local_map),
     };
+    let est_download_bytes = est_download_by_file
+        .iter()
+        .fold(0u64, |total, n| total.saturating_add(*n));
     if ctx.limits.download_bytes.is_some() {
         tracing::info!("estimated download: {est_download_bytes} bytes");
         summary.flags.plan_download_bytes = Some(est_download_bytes);
@@ -305,32 +309,41 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     //
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
+    // Both consumers of the disk figures need the same table: the `PLAN` line
+    // and the `--plan-out` document. Compute it when either was asked for, so
+    // the document is written for a run that does the work as well as for
+    // `--print-plan`.
+    let disk = (ctx.print_plan || ctx.plan_out.is_some())
+        .then(|| scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs));
     if ctx.print_plan {
-        // The disk figures: one `stat` per planned file, and the same
-        // resolution table the repair uses — so the plan and the repair
-        // cannot disagree about which path a file takes.
-        let disk = scope::report::DiskPlan::new(&game_dir, &plan, ctx.repair_mode, ctx.jobs);
         let totals = scope::report::PlanTotals::new(
             &plan,
             purge_plan.as_ref(),
             est_download_bytes,
             scope.is_active(),
-            &disk,
+            disk.as_ref().expect("the print-plan branch asks for it"),
             scan.as_ref().map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
         report::emit(&scope::report::plan_record(&totals), ctx.output);
-        if let Some(out) = ctx.plan_out.as_deref() {
-            let doc = scope::report::PlanDocument::new(
-                &plan,
-                purge_plan.as_ref(),
-                est_download_bytes,
-                &disk,
-            );
-            doc.write_to(std::path::Path::new(out))
-                .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
-        }
+    }
+    // A requested artifact is never silently omitted: the flag promises the
+    // plan of a run that does the work, and the same document is written for
+    // `--print-plan`. It lands before the execution phase, so a write failure
+    // is exit `3` with nothing mutated, the same class as the `--print-plan`
+    // write.
+    if let Some(out) = ctx.plan_out.as_deref() {
+        let doc = scope::report::PlanDocument::new(
+            &plan,
+            purge_plan.as_ref(),
+            &est_download_by_file,
+            disk.as_ref().expect("the plan-out branch asks for it"),
+        );
+        doc.write_to(std::path::Path::new(out))
+            .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
+    }
+    if ctx.print_plan {
         return Ok((summary, 0));
     }
 
@@ -361,6 +374,18 @@ pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
         } else {
             None
         };
+
+    // 5.1 the explicit `--audio` selection, written now rather than in
+    // `metadata`: the plan half is documented to leave the install untouched,
+    // and this write creates the scan file and its parent. Every refusal is
+    // already behind us, and the repair reads the in-memory `meta.audio`, so
+    // the timing changes nothing else. The path itself was validated
+    // (containment and scope) in `metadata`.
+    if ctx.audio_explicit && !readonly && !meta.config.audio_pkg_scan_dir.is_empty() {
+        audio::write_scan_file(&game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
+            .context("write audio scan file")
+            .map_err(RunFailure::write)?;
+    }
 
     // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
     // space for the repair itself. Skipped entirely in `--check-only`
@@ -527,9 +552,27 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
 /// The server's deprecated-file list, fetched with the rest of the plan.
 /// Best-effort: the list is advisory, so a failed call only warns and the run
 /// continues with nothing to delete.
+///
+/// Each name is normalised to the `/` form once, here, because the post-phase
+/// scope gate and the delete sink must compare the same string. A name that is
+/// not a plain relative path is dropped with a warning: it is a delete sink, so
+/// it is never followed.
 async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
     match hyp.deprecated_files().await {
-        Ok(l) => l,
+        Ok(list) => list
+            .into_iter()
+            .filter_map(|name| match util::clean_rel(&name) {
+                Ok(rel) => Some(rel),
+                Err(e) => {
+                    tracing::warn!(
+                        path = %name,
+                        error = %format!("{e:#}"),
+                        "deprecated path is not a plain relative path; ignored"
+                    );
+                    None
+                }
+            })
+            .collect(),
         Err(e) => {
             tracing::warn!("deprecated list unavailable: {e:#}");
             Vec::new()

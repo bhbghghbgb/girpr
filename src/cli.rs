@@ -87,7 +87,8 @@ pub struct Args {
     pub max_download_bytes: Option<u64>,
 
     /// Hard-stop mid-flight (exit `5`, `SUMMARY stopped=--max-write-bytes`)
-    /// once this many bytes have been written into `*_tmp`. Unlike
+    /// once this many bytes have been written into the install — the target
+    /// itself on the in-place path, `{path}_tmp` on the temp path. Unlike
     /// `download_bytes`, this is the disk cost: every reuse-copy and every
     /// chunk write is counted, so a zero-reuse run is bounded too. Cannot be a
     /// pre-flight refusal — reuse success is decided per chunk at runtime.
@@ -174,7 +175,9 @@ pub struct Args {
     pub print_plan: bool,
 
     /// Also write the per-file plan detail to this file as JSON
-    /// `{repair:[{rel,size,chunks_total,est_download_bytes}],purge:[{rel,size}]}`.
+    /// `{repair:[{rel,size,chunks_total,est_download_bytes,mode,extra_bytes}],purge:[{rel,size}]}`.
+    /// `mode` is `inplace` or `temp`; `extra_bytes` is the extra disk the file
+    /// needs beyond the install.
     /// Implies nothing: use it with `--print-plan`, or on its own to dump the
     /// plan of a run that does the work.
     #[arg(long, value_name = "FILE")]

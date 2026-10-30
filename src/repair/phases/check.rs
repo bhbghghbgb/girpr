@@ -35,30 +35,83 @@ pub fn verify_plan(
     let mut damaged_chunks = 0u64;
     let mut last_emit = std::time::Instant::now();
     for (i, f) in plan.files.iter().enumerate() {
+        // Resolve once. A containment failure is a *diagnostic*: `build_plan`
+        // already refused an escaping rel, so this is defence in depth, and it
+        // must not be mislabelled as a size mismatch (which is what `.ok()`
+        // did here).
+        let path = util::contained_join(game_dir, &f.rel);
         match scan.and_then(|s| s.files.get(&f.rel)) {
-            Some(v) => {
-                if v.file_md5.eq_ignore_ascii_case(&f.md5) {
-                    // intact
-                } else {
+            Some(v) => match &path {
+                Err(e) => {
                     bad += 1;
-                    damaged_chunks += v.damaged_chunks();
                     tracing::warn!(
                         file = %f.rel,
-                        expect_md5 = %f.md5,
-                        actual_md5 = %v.file_md5,
-                        damaged_chunks = v.damaged_chunks(),
-                        "CHECK fail: md5"
+                        error = %format!("{e:#}"),
+                        "CHECK fail: path escapes the game dir"
                     );
                 }
-            }
-            None => {
-                let p = game_dir.join(util::normalize_rel(&f.rel));
-                let actual_len = util::file_len(&p);
-                if actual_len != Some(f.size as u64) {
+                Ok(path) => {
+                    // The scan is a shortcut for the *read*, not for the "is
+                    // it there" answer: an absent or unreadable file's scan
+                    // verdict carries the empty digest, and a legitimate empty
+                    // file's manifest entry has exactly that digest. Presence
+                    // and length are therefore checked here too, the same way
+                    // the fallback below does it, so the two spellings of
+                    // `--check-only` agree on a missing empty file.
+                    match util::file_len(path) {
+                        util::FileLen::Unreadable(e) => {
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, error = %e, "CHECK fail: unreadable");
+                        }
+                        util::FileLen::Absent => {
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?Option::<u64>::None, "CHECK fail: size");
+                        }
+                        util::FileLen::Present(n) if n != f.size as u64 => {
+                            bad += 1;
+                            tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?Some(n), "CHECK fail: size");
+                        }
+                        util::FileLen::Present(_) => {
+                            if v.file_md5.eq_ignore_ascii_case(&f.md5) {
+                                // intact
+                            } else {
+                                bad += 1;
+                                damaged_chunks += v.damaged_chunks();
+                                tracing::warn!(
+                                    file = %f.rel,
+                                    expect_md5 = %f.md5,
+                                    actual_md5 = %v.file_md5,
+                                    damaged_chunks = v.damaged_chunks(),
+                                    "CHECK fail: md5"
+                                );
+                            }
+                        }
+                    }
+                }
+            },
+            None => match &path {
+                Err(e) => {
                     bad += 1;
-                    tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?actual_len, "CHECK fail: size");
-                } else {
-                    match util::md5_file(&p) {
+                    tracing::warn!(
+                        file = %f.rel,
+                        error = %format!("{e:#}"),
+                        "CHECK fail: path escapes the game dir"
+                    );
+                }
+                Ok(path) => match util::file_len(path) {
+                    util::FileLen::Unreadable(e) => {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, error = %e, "CHECK fail: unreadable");
+                    }
+                    util::FileLen::Absent => {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?Option::<u64>::None, "CHECK fail: size");
+                    }
+                    util::FileLen::Present(n) if n != f.size as u64 => {
+                        bad += 1;
+                        tracing::warn!(file = %f.rel, expect_size = f.size, actual_size = ?Some(n), "CHECK fail: size");
+                    }
+                    util::FileLen::Present(_) => match util::md5_file(path) {
                         Ok(h) if h.eq_ignore_ascii_case(&f.md5) => {}
                         Ok(h) => {
                             bad += 1;
@@ -68,9 +121,9 @@ pub fn verify_plan(
                             bad += 1;
                             tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e:#}");
                         }
-                    }
-                }
-            }
+                    },
+                },
+            },
         }
         // Keep the counters live so PROGRESS reflects work done so far.
         summary
