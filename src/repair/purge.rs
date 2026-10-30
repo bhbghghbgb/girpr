@@ -21,12 +21,13 @@ use walkdir::WalkDir;
 
 use crate::repair::phases::plan::RepairPlan;
 use crate::repair::scope::PathScope;
+use crate::util::path::path_key;
 
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeCandidate {
     /// `/`-separated rel path in the on-disk (walk) spelling. Classification
-    /// compares its `purge_key`, so the spelling can differ in case from the
+    /// compares its `path_key`, so the spelling can differ in case from the
     /// manifest entry that kept it.
     pub rel: String,
     /// Absolute-or-game-relative path to remove.
@@ -97,10 +98,10 @@ pub fn plan_purge(
 ) -> PurgePlan {
     // Fold the three keep sets once, here, rather than rebuilding a set for
     // every walked file. `classify_purge_path` folds only the walked rel, so
-    // the purge compares the same key the plan dedup uses on Windows.
-    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| purge_key(r)).collect();
-    let server_keep: HashSet<String> = server_keep.iter().map(|r| purge_key(r)).collect();
-    let blacklist: HashSet<String> = blacklist.iter().map(|r| purge_key(r)).collect();
+    // the purge compares the same `path_key` the plan dedups on.
+    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| path_key(r)).collect();
+    let server_keep: HashSet<String> = server_keep.iter().map(|r| path_key(r)).collect();
+    let blacklist: HashSet<String> = blacklist.iter().map(|r| path_key(r)).collect();
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     // Ancestors of every `Keep`-classified file: anything else is left empty by
@@ -309,18 +310,6 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// The key the purge compares on. Mirrors `dedup_key` in
-/// [`crate::repair::phases::plan`]: Windows paths are case-insensitive, so the
-/// walked on-disk spelling and the manifest spelling must compare equal there.
-/// On Unix they are distinct paths and the key is the path itself.
-fn purge_key(rel: &str) -> String {
-    if cfg!(windows) {
-        rel.to_lowercase()
-    } else {
-        rel.to_string()
-    }
-}
-
 /// Metadata files the files-cleanup must keep.
 ///
 /// `config.ini` and the single-writer lock. `config.ini` lives inside
@@ -370,7 +359,7 @@ pub enum PurgeVerdict {
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
 /// `expected`, `server_keep` and `blacklist` must already be keyed with
-/// `purge_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
+/// `path_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
 /// once per file. That keeps the classification case-insensitive on Windows
 /// (the plan's dedup and the scope already are) while leaving Unix paths
 /// distinct.
@@ -406,7 +395,7 @@ pub fn classify_purge_path(
     if !scope.is_visible(rel) {
         return PurgeVerdict::Keep;
     }
-    let key = purge_key(rel);
+    let key = path_key(rel);
     // 1. In the live manifest → keep.
     if expected.contains(&key) {
         return PurgeVerdict::Keep;
@@ -500,7 +489,7 @@ mod tests {
     }
 
     fn keyed(rels: &[&str]) -> HashSet<String> {
-        rels.iter().map(|r| purge_key(r)).collect()
+        rels.iter().map(|r| path_key(r)).collect()
     }
 
     /// N-5: the walked rel is the **on-disk** spelling, which on Windows can
@@ -514,7 +503,7 @@ mod tests {
         let on_disk = "game/foo.dat";
         let manifest = "Game/Foo.dat";
         assert_eq!(
-            purge_key(manifest) == purge_key(on_disk),
+            path_key(manifest) == path_key(on_disk),
             cfg!(windows),
             "the purge key folds exactly where Windows paths are case-insensitive"
         );

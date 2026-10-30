@@ -127,6 +127,24 @@ pub fn clean_rel(rel: &str) -> Result<String> {
     Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
 }
 
+/// The key a path comparison uses when two spellings may name one file.
+///
+/// Windows paths are case-insensitive, so the plan's dedup and the purge's
+/// keep comparison both fold case there; on Unix they name distinct files and
+/// the key is the path itself. The two must agree, so the rule lives here
+/// instead of once per module.
+///
+/// The choice is compile-time (`cfg!`), so both branches are type-checked on
+/// every host while the behavior stays exactly "fold where Windows paths are
+/// case-insensitive".
+pub(crate) fn path_key(rel: &str) -> String {
+    if cfg!(windows) {
+        rel.to_lowercase()
+    } else {
+        rel.to_string()
+    }
+}
+
 /// Is this component a name Windows reserves for a device in every directory?
 ///
 /// The comparison uses the part before the first `.` — `NUL.txt` is still the

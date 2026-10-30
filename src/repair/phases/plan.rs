@@ -22,6 +22,7 @@ use crate::sophon::{SophonChunk, SophonChunkFile};
 use super::manifest::LocalChunkMap;
 use crate::repair::scope::PathScope;
 use crate::util;
+use crate::util::path::path_key;
 
 /// One target file, plus the chunk URL prefix its chunks live under.
 #[derive(Clone)]
@@ -226,19 +227,6 @@ pub(crate) fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
     Ok(())
 }
 
-/// The key the plan dedups on.
-///
-/// On Windows two paths that differ only in case are the same file, so they
-/// must not both be planned: the transform is case folding. On Unix they are
-/// distinct files, so the key is the path itself.
-fn dedup_key(rel: &str) -> String {
-    if cfg!(windows) {
-        rel.to_lowercase()
-    } else {
-        rel.to_string()
-    }
-}
-
 /// Build sorted, deduped, blacklist-filtered, scope-filtered plan.
 /// `per_manifest`: (chunk_url_prefix, files).
 ///
@@ -276,8 +264,7 @@ pub fn build_plan(
             // matched case-insensitively too. Two manifest spellings that
             // differ only in case therefore name **one** file; planning both
             // would hand the same target to two workers at once.
-            if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(dedup_key(&rel))
-            {
+            if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(path_key(&rel)) {
                 continue;
             }
             prefix.insert(rel.clone(), url_prefix.clone());
