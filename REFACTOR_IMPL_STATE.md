@@ -17,7 +17,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] G3 — `OnceLock` the version regex. (`ef47fb9`)
 - [x] G4 — direct `writeln!` into the config buffer. (`655301d`)
 - [x] F3 — allocation-free record rendering. (`34792e0`)
-- [ ] A3 — count-then-materialize salvage order.
+- [x] A3 — count-then-materialize salvage order. (`8d05154`)
 - [ ] H3 — one `stopped` setter.
 
 ### Phase 1 — low-risk performance
@@ -61,6 +61,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - G3 — `ef47fb9` · `OnceLock<Regex>` in `src/util/ini.rs` via `game_version_re()`, plus a new anchored-shape test; verify last-match-wins and the absent-vs-unreadable split are untouched.
 - G4 — `655301d` · `writeln!` serializer + single `read_to_string` with `NotFound => empty` in `src/util/ini.rs`. Reviewer note: an unreadable-but-existing config path now errors instead of being treated as empty (findings-sanctioned); confirm that is acceptable.
 - F3 — `34792e0` · `Cow` bare values and push-based JSON in `src/report/record.rs`, incl. a new `push_json_event`; verify text/JSON output is byte-identical (UInt vs Int, escaping).
+- A3 — `8d05154` · `survives_one`/`survives_count` + single winning-vector materialization in `src/repair/reuse.rs`; verify tie-goes-to-ascending and the `live` vectors are unchanged by the existing tests.
 
 ## Skipped
 
