@@ -60,6 +60,25 @@ pub fn file_len(path: &Path) -> FileLen {
 ///
 /// This is not a filesystem check; [`contained_join`] adds that.
 pub fn contained_rel(rel: &str) -> Result<PathBuf> {
+    let mut clean = PathBuf::new();
+    walk_rel_components(rel, |part| clean.push(part))?;
+    Ok(clean)
+}
+
+/// Validate the lexical shape of a server-controlled relative path and hand
+/// each component that names a file to `emit`.
+///
+/// The normalisation (`\` → `/`) and the whole-path checks happen once, here;
+/// `emit` only ever sees plain component names, so `a/./b` is accepted but
+/// `emit` receives `a` and `b` and never `.`.
+///
+/// The caller builds the cleaned form rather than returning the input: `a/./b`
+/// must not survive as `a/./b`, because the plan stores this string and every
+/// later comparison (the purge's expected set, the reuse map, the scope) works
+/// on the plain form. A leading `.` in particular would make `expected_paths()`
+/// disagree with the purge walk — which reports `game/foo.dat` — and the
+/// cleanup would delete the file this run just repaired.
+fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
     let normalized = rel.replace('\\', "/");
     anyhow::ensure!(!normalized.is_empty(), "path is empty");
     anyhow::ensure!(
@@ -76,14 +95,6 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
         "path is absolute: {rel}"
     );
     let mut named = false;
-    // Build the cleaned form rather than returning the input: `a/./b` is
-    // accepted but must not survive as `a/./b`, because the plan stores this
-    // string and every later comparison (the purge's expected set, the reuse
-    // map, the scope) works on the plain form. A leading `.` in particular
-    // would make `expected_paths()` disagree with the purge walk — which
-    // reports `game/foo.dat` — and the cleanup would delete the file this run
-    // just repaired.
-    let mut clean = PathBuf::new();
     for c in path.components() {
         match c {
             Component::Normal(part) => {
@@ -103,7 +114,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
                     "path names a Windows device: {rel}"
                 );
                 named = true;
-                clean.push(part);
+                emit(part);
             }
             // `a/./b` is still contained; it just says nothing.
             Component::CurDir => {}
@@ -111,7 +122,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
         }
     }
     anyhow::ensure!(named, "path names no file: {rel}");
-    Ok(clean)
+    Ok(())
 }
 
 /// Validate a server-controlled relative path and return the `/`-separated
@@ -124,7 +135,16 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// sink (as `contained_join` does) leaves the gate comparing a different
 /// spelling, so `./a/b` can pass a scope that hides `a/b`.
 pub fn clean_rel(rel: &str) -> Result<String> {
-    Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
+    // Share the component walk with `contained_rel` and build the `/` form as
+    // it goes: no `PathBuf`, and no second pass over the result.
+    let mut clean = String::new();
+    walk_rel_components(rel, |part| {
+        if !clean.is_empty() {
+            clean.push('/');
+        }
+        clean.push_str(part);
+    })?;
+    Ok(clean)
 }
 
 /// The key a path comparison uses when two spellings may name one file.
@@ -148,21 +168,26 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// Is this component a name Windows reserves for a device in every directory?
 ///
 /// The comparison uses the part before the first `.` — `NUL.txt` is still the
-/// `NUL` device — and ignores case, which NTFS does for these names too.
+/// `NUL` device — and ignores case, which NTFS does for these names too. It is
+/// allocation-free: no uppercased copy of the component is made.
 fn is_windows_device_name(part: &str) -> bool {
-    let stem = part.split('.').next().unwrap_or_default();
-    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
-    if matches!(
-        upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
-    ) {
+    let stem = part
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|name| stem.eq_ignore_ascii_case(name))
+    {
         return true;
     }
-    ["COM", "LPT"].iter().any(|prefix| {
-        upper
-            .strip_prefix(prefix)
-            .is_some_and(|n| n.len() == 1 && ('1'..='9').contains(&n.chars().next().unwrap()))
-    })
+    // `COM1`..`COM9` and `LPT1`..`LPT9`. Compare bytes, so a multi-byte UTF-8
+    // stem can never be sliced through a character boundary.
+    let bytes = stem.as_bytes();
+    bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
 }
 
 /// Join a server-controlled relative path under `base`, refusing anything that
@@ -314,6 +339,53 @@ mod tests {
             "game/lpt",
         ] {
             assert!(contained_rel(good).is_ok(), "{good:?} must be accepted");
+        }
+    }
+
+    /// G6: `clean_rel` builds the `/` form straight from the component walk, so
+    /// both separators, doubled separators and `.` components all collapse to
+    /// the same plain string, and the refusals still hold on that path.
+    #[test]
+    fn clean_rel_returns_the_plain_slash_form() {
+        for (input, want) in [
+            ("a/b.dat", "a/b.dat"),
+            ("a\\b.dat", "a/b.dat"),
+            ("a//b.dat", "a/b.dat"),
+            ("a\\\\b.dat", "a/b.dat"),
+            ("./a/b.dat", "a/b.dat"),
+            ("a/./b.dat", "a/b.dat"),
+            ("./a//./b.dat", "a/b.dat"),
+            ("game/conifer.dat", "game/conifer.dat"),
+            ("game/com10.dat", "game/com10.dat"),
+        ] {
+            assert_eq!(clean_rel(input).unwrap(), want, "{input:?}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../outside.dat",
+            "a/../outside.dat",
+            "/abs/evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            "game/",
+            "a\\",
+            "a/./",
+            "game/./",
+            "NUL",
+            "nul",
+            "Game/Aux.txt",
+            "game/CoM1",
+            "game/lpt9",
+            "game/trailing.",
+            "game/trailing ",
+            "dir./file.dat",
+            "dir /file.dat",
+            "game/a:b",
+        ] {
+            let got = clean_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
         }
     }
 
