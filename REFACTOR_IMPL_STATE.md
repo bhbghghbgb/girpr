@@ -48,7 +48,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 ### Phase 3 — structural / broad API
 
 - [x] H1 — split `repair::run` into plan/execute (mechanical move first). (`d64df4f`)
-- [ ] G2 — `Md5` digest newtype across the gates (separate series).
+- [x] G2 — `Md5` digest newtype across the gates. (`d8808dc`, `3300f08`, `2b70d45`)
 - [ ] H4 — `RunMode` enum (optional, after H1).
 
 ## Pending review tasks
@@ -63,6 +63,14 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
   execute_phase`; `Summary` owned by `run` and lent to both halves; plan-only
   state (estimates, `DiskPlan`, plan-phase root) stays in the plan half; execute
   re-derives `game_dir`/root after `create_dir_all`. Baseline 229 + 149 holds.
+
+- [ ] G2 — `Md5` digest newtype (`d8808dc`, `3300f08`, `2b70d45`). Scan,
+  writer, check-only, manifest-checksum and reuse gates compare 16 bytes;
+  wire/report/JSON fields stay `String` and output is unchanged. Three public
+  surfaces changed type (`ReuseEntry.md5`, `ChunkDigest.md5`,
+  `HashingWriter::md5()`); `tests/peak_heap.rs` adjusted for the type. +3 unit
+  tests (232). Note: non-digest labels (hand-built test data only) no longer
+  compare equal, so such data never matches a gate.
 
 Phase 3 (H1, G2, H4) is not implemented yet.
 
