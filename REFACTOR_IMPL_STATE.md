@@ -37,7 +37,7 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [x] A1 — one chunk-identity predicate, normalized MD5. (`28f5869`)
 - [x] A2 — indexed per-file reuse entries. (`0fec9bc`)
 - [x] B3 — shared scan-range construction; fix the in-place offset-0 sources. (`5e49a7b`)
-- [ ] D5 — deduplicate `verify_plan`'s branches.
+- [x] D5 — deduplicate `verify_plan`'s branches. (`1783069`)
 - [ ] F1 / F2 — `Ceiling` newtype + `Extras` builder.
 - [ ] G6 — single-pass `clean_rel`.
 - [ ] G5 — `PathRoot` cached base resolution.
@@ -62,6 +62,10 @@ Status legend: `[ ]` pending · `[~]` in progress · `[x]` done · `[-]` skipped
 - [ ] B3 — shared scan-range construction; in-place `source_ok` remapped per
   chunk (`5e49a7b`; correctness fix, no new test — existing integration
   guards cover it).
+- [ ] D5 — deduplicate `verify_plan`'s branches (`1783069`; +2 unit tests,
+  222). `DigestSource::Scanned(&Verdict)` and unit `Read` deviate slightly
+  from the finding's sketch, to keep `damaged_chunks()` single-call and avoid
+  reading an absent file.
 
 Phase 1 (B1, C1, C2, B2/C4, G1, D3, D4, E1) passed review:
 `cargo test --all-targets` (218 unit + 149 integration passing, 7 ignored),
