@@ -587,6 +587,57 @@ fn satisfied(selection: &select::Selection) -> u64 {
     selection.matrix.iter().filter(|r| r.is_satisfied()).count() as u64
 }
 
+/// What `verify` and `materialize` both decide about a re-derived bundle.
+///
+/// The two commands describe different work on their summaries, but they reach
+/// the same verdict over the same [`crate::verify::Report`] and translate it into
+/// the same exit code. Keeping that decision here means the rule "a headline is
+/// exit `3`" is stated once, and cannot drift between the commands.
+struct Verdict {
+    total: u64,
+    passed: u64,
+    failed: u64,
+    agrees: bool,
+    headline: Option<String>,
+}
+
+impl Verdict {
+    fn of(report: &crate::verify::Report) -> Self {
+        let (total, passed, failed) = report.counts();
+        Self {
+            total,
+            passed,
+            failed,
+            agrees: report.agrees,
+            headline: report.headline(),
+        }
+    }
+
+    /// `pass` when every re-derived row held and the recording agreed.
+    fn ok(&self) -> bool {
+        self.failed == 0 && self.agrees
+    }
+
+    /// The code the summary records: the verdict itself, before the headline.
+    fn recorded_exit_code(&self) -> ExitCode {
+        if self.ok() {
+            ExitCode::Ok
+        } else {
+            ExitCode::AssertionFailed
+        }
+    }
+
+    /// The code the command exits with: a headline means `3` even when the
+    /// verdict is `ok`, because the line it carries is the reason to look.
+    fn exit_code(&self) -> ExitCode {
+        if self.headline.is_some() {
+            ExitCode::AssertionFailed
+        } else {
+            self.recorded_exit_code()
+        }
+    }
+}
+
 /// `gircap verify` — re-check a bundle from its stored bytes, no network.
 ///
 /// Exits `0` when every re-derived row holds and `3` when one does not; there is
@@ -604,7 +655,6 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
     })?;
     tracing::info!(artifact = %plan.artifact.display(), bundle = %bundle.describe(), "opened");
     let report = crate::verify::reverify(bundle);
-    let (total, passed, failed) = report.counts();
     for r in report.failures() {
         tracing::error!(
             assertion = %r.id,
@@ -623,9 +673,9 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
              the bundle has changed since it was written"
         );
     }
-    let ok = failed == 0 && report.agrees;
+    let verdict = Verdict::of(&report);
     let summary = Record::summary("verify")
-        .set("result", if ok { "pass" } else { "fail" })
+        .set("result", if verdict.ok() { "pass" } else { "fail" })
         .set("artifact", plan.artifact.as_path())
         .set("bundle", report.bundle.manifest.capture.id.clone())
         .set("old_tag", report.bundle.manifest.versions.old.tag.clone())
@@ -642,31 +692,17 @@ pub async fn verify(plan: VerifyPlan) -> Result<Outcome, Failure> {
             "checks_covered_by_recording",
             covered_ids(&report.bundle.recorded),
         )
-        .set("checks_total", total)
-        .set("checks_passed", passed)
-        .set("checks_failed", failed)
-        .set("agrees_with_recording", report.agrees)
+        .set("checks_total", verdict.total)
+        .set("checks_passed", verdict.passed)
+        .set("checks_failed", verdict.failed)
+        .set("agrees_with_recording", verdict.agrees)
         .set("findings", report.findings.len() as u64)
         .set("recorded_result", selfcheck_slug(&report.bundle.recorded))
-        .set(
-            "exit_code",
-            if ok {
-                ExitCode::Ok.code()
-            } else {
-                ExitCode::AssertionFailed.code()
-            },
-        );
-    if let Some(h) = report.headline() {
-        return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
+        .set("exit_code", verdict.recorded_exit_code().code());
+    if let Some(h) = &verdict.headline {
+        return Ok((summary.set("detail", h.clone()), verdict.exit_code()));
     }
-    Ok((
-        summary,
-        if ok {
-            ExitCode::Ok
-        } else {
-            ExitCode::AssertionFailed
-        },
-    ))
+    Ok((summary, verdict.exit_code()))
 }
 
 /// `gircap materialize` — rebuild both files from `chunks/`, no network.
@@ -753,10 +789,9 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
         bytes,
         "rebuilt both files from chunks/"
     );
-    let (total, passed, failed) = report.counts();
-    let ok = failed == 0 && report.agrees;
+    let verdict = Verdict::of(&report);
     let summary = Record::summary("materialize")
-        .set("result", if ok { "pass" } else { "fail" })
+        .set("result", if verdict.ok() { "pass" } else { "fail" })
         .set("artifact", plan.artifact.as_path())
         .set("out", out.as_path())
         .set("captures_rebuilt", report.rebuilt.len() as u64)
@@ -764,29 +799,15 @@ pub async fn materialize(plan: MaterializePlan) -> Result<Outcome, Failure> {
         .set("bytes_written", bytes)
         .set("first_file", written.first().cloned().unwrap_or_default())
         .set("last_file", written.last().cloned().unwrap_or_default())
-        .set("checks_total", total)
-        .set("checks_passed", passed)
-        .set("checks_failed", failed)
-        .set("agrees_with_recording", report.agrees)
-        .set(
-            "exit_code",
-            if ok {
-                ExitCode::Ok.code()
-            } else {
-                ExitCode::AssertionFailed.code()
-            },
-        );
-    if let Some(h) = report.headline() {
-        return Ok((summary.set("detail", h), ExitCode::AssertionFailed));
+        .set("checks_total", verdict.total)
+        .set("checks_passed", verdict.passed)
+        .set("checks_failed", verdict.failed)
+        .set("agrees_with_recording", verdict.agrees)
+        .set("exit_code", verdict.recorded_exit_code().code());
+    if let Some(h) = &verdict.headline {
+        return Ok((summary.set("detail", h.clone()), verdict.exit_code()));
     }
-    Ok((
-        summary,
-        if ok {
-            ExitCode::Ok
-        } else {
-            ExitCode::AssertionFailed
-        },
-    ))
+    Ok((summary, verdict.exit_code()))
 }
 
 /// `gircap list` — index every capture under a root.
