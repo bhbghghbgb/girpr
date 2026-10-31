@@ -8,7 +8,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 0 — pure cleanup
 
-- [ ] I1 — correct `DigestSet::merge`'s documented winner
+- [x] I1 — correct `DigestSet::merge`'s documented winner
 - [ ] D2 — add `ScanMode::new`
 - [ ] D1 — share the link-disjoint validation loop
 - [ ] E1 — gate `why_tag` behind `why`
@@ -46,7 +46,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 Tasks finished but not yet reviewed by hand:
 
-_None._
+- I1 — `girsync: document the merge write direction` (`1844e29`)
 
 ## Skipped
 
