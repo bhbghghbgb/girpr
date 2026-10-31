@@ -44,7 +44,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Pending review
 
-- Final follow-up batch — `24fb8b8`, `5c1ea8f`, `3c6a5a7` (see Follow-up batches).
+_None._
 
 ## Review notes
 
@@ -257,6 +257,10 @@ The follow-ups below are non-blocking.
   rows, one of them beside a path with several stale alternates that must still
   be pruned, would harden the per-key exclusion. The exclusion is a set over
   unique keys, so this is coverage only.
+  **Addressed in `24fb8b8`:** two adopted rows plus a path with two stale
+  alternates and an orphan; `pruned` is pinned at three in both modes, which
+  also fails if the exclusion ever skips a whole lowercase group instead of the
+  adopted keys.
 - **F1 — the `others` filter is defensive.** On an exact-case miss `alts`
   cannot contain `e.rel`, so `filter(|k| *k != &e.rel)` is redundant; it does
   keep the "exact match wins" invariant if the enclosing branch broadens.
@@ -266,6 +270,9 @@ The follow-ups below are non-blocking.
   through to the lossy Unicode fold, but no test builds an `OsStr` with an
   unpaired surrogate (for example `OsStringExt::from_wide`). A unit test there
   would hold the branch the finding said must not be replaced.
+  **Addressed in `5c1ea8f`:** a Windows-only test builds `C:\a<0xD800>b`, proves
+  `to_str()` is `None` so the fixture really enters the fallback, and pins both
+  the equal-lossy and the different-tail answers. Implementation untouched.
 - **I3 — this is an allocation win, not a single-pass comparison.** `to_str`
   plus two `is_ascii` checks still walk the component before
   `eq_ignore_ascii_case`; the two `String`s are what disappeared. The fast path
@@ -301,6 +308,12 @@ follow-ups below are non-blocking.
   directory with a no-op child. No fixture renames a directory *and* changes a
   descendant's leaf casing and then asserts the `dm`/cache re-key, which is the
   part A1 moved. One integration fixture would close the gap; coverage only.
+  **Addressed in `3c6a5a7`:** the fixture seeds dst's real cache with
+  `cmd_update`, then asserts the two rename steps (parent first, the
+  parent-only child silent), no copy/delete/mkdir/rmdir/fix-dir follow, the
+  filesystem and cache rows end on the new spelling with no old rows, and
+  `compare-self` exits `0`. Removing the `dm` re-key makes it fail with exactly
+  `missing`/`extra`/`copy`/`delete`, reproduced during review.
 - **A1 — duplicate pairs cannot drift.** A renamed directory is inserted by
   both its `renames` entry and its `dir_moves` entry; the old scan kept the
   first and the map keeps the last, but the `(old, new)` pair is identical, so
@@ -340,11 +353,19 @@ Review follow-ups from the notes above, addressed in one batch per phase.
   first (for example with `cmd_update` over `dst`) and asserting the descendant
   rows exist before the sync would keep the fixture from passing vacuously if
   the walk ever stops reporting link descendants.
-- Final batch (F1, I3, A1 coverage) — done, awaiting review: `24fb8b8`
-  (multiple adopted keys and a multi-alternate prune), `5c1ea8f` (non-UTF-8
-  lossy fold), `3c6a5a7` (nested parent plus leaf rename re-key). Tests only;
-  production code unchanged. The other notes in those sections were left as-is
-  (no action, or explicitly optional).
+- Final batch (F1, I3, A1 coverage) — reviewed, accepted: `24fb8b8` (multiple
+  adopted keys and a multi-alternate prune), `5c1ea8f` (non-UTF-8 lossy fold),
+  `3c6a5a7` (nested parent plus leaf rename re-key). Tests only: the only
+  `tools/sync/src` change is the new test module in `util.rs`, and
+  `git diff 8f819fb..HEAD -- tools/sync/src/commands` is empty. Checked at
+  `95e80c4`: `cargo nextest run -p girsync` is green (448 passed, 1 skipped),
+  and clippy and `cargo fmt --check` are clean. All three new tests were run by
+  name, and the A1 fixture was re-checked against a temporary removal of the
+  `dm` re-key: it failed with exactly `missing`/`extra`/`copy`/`delete`, so the
+  coverage is not vacuous. The deliberately skipped items (F1's second keys-only
+  pass and the defensive `others` filter, F1's lazy decode of an orphan row, the
+  I3 allocation-only and Windows-only notes, and the A1 memory/allocation and
+  duplicate-pair notes) were accepted as no-action.
 
 ## Skipped
 
