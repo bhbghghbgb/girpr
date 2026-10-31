@@ -478,26 +478,29 @@ impl Fetcher {
         f: F,
     ) -> Vec<Result<R, String>>
     where
-        T: Clone + Send + 'static,
+        T: Clone + Send + Sync + 'static,
         R: Send + 'static,
         F: Fn(Fetcher, usize, T) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = (usize, Result<R, String>)> + Send + 'static,
     {
-        crate::tasks::join_ordered(items, jobs, "request", |i, item| f(self.clone(), i, item))
-            .await
-            .into_iter()
-            .enumerate()
-            .map(|(i, outcome)| match outcome {
-                Ok(value) => Ok(value),
-                Err(crate::tasks::JoinOutcome::Failed(why)) => Err(why),
-                Err(crate::tasks::JoinOutcome::Lost { why: Some(why) }) => {
-                    Err(format!("item {i} did not return: {why}"))
-                }
-                Err(crate::tasks::JoinOutcome::Lost { why: None }) => Err(format!(
-                    "item {i}: a request task panicked and its index could not be recovered"
-                )),
-            })
-            .collect()
+        let items: std::sync::Arc<[T]> = items.into();
+        crate::tasks::join_ordered(&items, jobs, "request", |i, items| {
+            f(self.clone(), i, items[i].clone())
+        })
+        .await
+        .into_iter()
+        .enumerate()
+        .map(|(i, outcome)| match outcome {
+            Ok(value) => Ok(value),
+            Err(crate::tasks::JoinOutcome::Failed(why)) => Err(why),
+            Err(crate::tasks::JoinOutcome::Lost { why: Some(why) }) => {
+                Err(format!("item {i} did not return: {why}"))
+            }
+            Err(crate::tasks::JoinOutcome::Lost { why: None }) => Err(format!(
+                "item {i}: a request task panicked and its index could not be recovered"
+            )),
+        })
+        .collect()
     }
 
     /// Build a fetcher with the real clock.

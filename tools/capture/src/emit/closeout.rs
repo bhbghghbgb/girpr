@@ -155,7 +155,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // and the call writes to the tree, so the pass sees the same bytes it
     // always did — but the manifest is now built whole, instead of being handed
     // back with an empty `files[]` for two later statements to fill in.
-    let (listed, seeded) = super::write_manifest_files(i.dir).map_err(|e| write_err(i.dir, e))?;
+    let listed = super::write_manifest_files(i.dir).map_err(|e| write_err(i.dir, e))?;
     let manifest = index::build_manifest(&i.manifest, &listed)
         .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
 
@@ -204,7 +204,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     written
         .push(super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?);
     let (_, checksums) =
-        super::write_checksums_reusing(i.dir, &seeded, &[]).map_err(|e| write_err(i.dir, e))?;
+        super::write_checksums_reusing(i.dir, &listed, &[]).map_err(|e| write_err(i.dir, e))?;
     // The independent half of A16: re-reads every listed file from disk and
     // compares. This is deliberately **not** folded into the scan above — a
     // re-hash that reuses the digests it is checking would be a tautology.

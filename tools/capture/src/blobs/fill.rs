@@ -14,6 +14,7 @@
 //! them has to exist in both cases.
 
 use crate::http::Fetcher;
+use std::sync::Arc;
 
 use super::chunks::Want;
 use super::{IndexedBlob, Set, Store};
@@ -50,7 +51,7 @@ pub struct Filled {
 pub async fn fill_or_plan(
     store: &Store,
     fetcher: &Fetcher,
-    wants: &[Want],
+    wants: &Arc<[Want]>,
     jobs: usize,
     no_chunk_blobs: bool,
     projected: u64,

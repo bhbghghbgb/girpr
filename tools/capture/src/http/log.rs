@@ -107,6 +107,22 @@ impl RequestLog {
         v
     }
 
+    /// Every record matching `f`, in `seq` order.
+    ///
+    /// The filter runs under the one lock and only the matches are cloned and
+    /// sorted, so a caller looking for a handful of rows in a log that holds
+    /// every request pays for the handful rather than for the log. The order is
+    /// [`RequestLog::records`]'s, for the same reason: `seq` is assigned at
+    /// reserve time, so completion order is not the order a reader expects.
+    pub fn records_matching(&self, f: impl Fn(&RequestRecord) -> bool) -> Vec<RequestRecord> {
+        let mut v: Vec<RequestRecord> = {
+            let s = self.lock();
+            s.records.iter().filter(|r| f(r)).cloned().collect()
+        };
+        v.sort_by_key(|r| r.seq);
+        v
+    }
+
     /// Total bytes received across the run.
     pub fn bytes_in(&self) -> u64 {
         self.lock().records.iter().map(|r| r.bytes_in).sum()

@@ -217,23 +217,20 @@ pub fn write_selfcheck(root: &Path, s: &selfcheck::Selfcheck) -> std::io::Result
     write_doc(root, "verify/selfcheck.json", s)
 }
 
-/// Digest every file under `root`, returning both the list for
-/// `MANIFEST.json → files[]` and the same entries as the seed for
-/// `verify/checksums.json`.
+/// Digest every file under `root`, returning the list for
+/// `MANIFEST.json → files[]` and the seed for `verify/checksums.json`.
 ///
 /// Two consumers, one read of each file. The seed exists so the close-out's
 /// later `checksums.json` can carry the digests it already holds instead of
 /// re-hashing a whole bundle to re-list a tree that has not changed — see
-/// [`write_checksums_reusing`].
+/// [`write_checksums_reusing`]. Both consumers only borrow the list, so it is
+/// returned once rather than duplicated.
 ///
 /// This replaces a private `run.rs` helper that walked the tree a second time
 /// and inlined `encoding_of`, so a third encoding would have taught
 /// `MANIFEST.json` the wrong rule while `checksums.json` learned the right one.
-pub fn write_manifest_files(
-    root: &Path,
-) -> std::io::Result<(Vec<index::FileEntry>, Vec<index::FileEntry>)> {
-    let c = index::Checksums::scan(root)?;
-    Ok((c.entries.clone(), c.entries))
+pub fn write_manifest_files(root: &Path) -> std::io::Result<Vec<index::FileEntry>> {
+    Ok(index::Checksums::scan(root)?.entries)
 }
 
 /// Digest everything under `root` and write `verify/checksums.json`.

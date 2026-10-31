@@ -51,27 +51,32 @@ pub(crate) enum JoinOutcome<E> {
 
 /// Run `f` over `items`, at most `jobs` at a time, **in input order**.
 ///
-/// `f` receives the item's index and a clone of the item, and returns
+/// `f` receives the item's index and a clone of the shared slice, and returns
 /// `(index, result)`. The index has to come back even when the work failed, or
 /// a failed task is indistinguishable from one that died. A `JoinSet` does not
 /// carry it through a panic — it names the failing task by id — so the loop
 /// records each spawn's id and maps it back. That is what lets a panic keep
 /// both its slot and its payload instead of collapsing into one generic string.
 ///
+/// **The slice is shared rather than copied per task.** A task receives an
+/// `Arc<[T]>` and indexes it by the slot it was given, so an item that owns
+/// several allocations — a whole `Want` per chunk — is cloned once into the
+/// `Arc` by the caller instead of once per spawn.
+///
 /// A slot no task ever reported becomes [`JoinOutcome::Lost`] with `why: None`,
 /// so the caller can still produce a row for the item rather than dropping it.
 /// `task` names the work in [`join_failure`]'s text and in the log.
 pub(crate) async fn join_ordered<T, R, E, F, Fut>(
-    items: &[T],
+    items: &std::sync::Arc<[T]>,
     jobs: usize,
     task: &str,
     f: F,
 ) -> Vec<Result<R, JoinOutcome<E>>>
 where
-    T: Clone + Send + 'static,
+    T: Send + Sync + 'static,
     R: Send + 'static,
     E: Send + 'static,
-    F: Fn(usize, T) -> Fut,
+    F: Fn(usize, std::sync::Arc<[T]>) -> Fut,
     Fut: std::future::Future<Output = (usize, Result<R, E>)> + Send + 'static,
 {
     let n = items.len();
@@ -86,7 +91,7 @@ where
     while next < n && set.len() < jobs.max(1) {
         let i = next;
         next += 1;
-        slots.insert(set.spawn(f(i, items[i].clone())).id(), i);
+        slots.insert(set.spawn(f(i, std::sync::Arc::clone(items))).id(), i);
     }
     while let Some(joined) = set.join_next_with_id().await {
         match joined {
@@ -121,7 +126,7 @@ where
         if next < n {
             let i = next;
             next += 1;
-            slots.insert(set.spawn(f(i, items[i].clone())).id(), i);
+            slots.insert(set.spawn(f(i, std::sync::Arc::clone(items))).id(), i);
         }
     }
 
@@ -179,12 +184,12 @@ mod tests {
 
     #[tokio::test]
     async fn results_keep_input_order_when_jobs_is_more_than_one() {
-        let items: Vec<usize> = (0..8).collect();
-        let got = join_ordered(&items, 3, "probe", |i, item| async move {
+        let items: std::sync::Arc<[usize]> = (0..8).collect::<Vec<_>>().into();
+        let got = join_ordered(&items, 3, "probe", |i, items| async move {
             // Later items finish first, so completion order is the reverse of
             // input order unless each result stays in its own slot.
-            tokio::time::sleep(std::time::Duration::from_millis((8 - item) as u64)).await;
-            (i, Ok::<usize, String>(item * 2))
+            tokio::time::sleep(std::time::Duration::from_millis((8 - items[i]) as u64)).await;
+            (i, Ok::<usize, String>(items[i] * 2))
         })
         .await;
         let values: Vec<usize> = got
@@ -196,12 +201,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_panicking_item_keeps_its_slot_and_cause() {
-        let items = [0usize, 1, 2];
-        let got = join_ordered(&items, 2, "probe", |i, item| async move {
+        let items: std::sync::Arc<[usize]> = [0usize, 1, 2].into();
+        let got = join_ordered(&items, 2, "probe", |i, items| async move {
             if i == 1 {
                 panic!("probe exploded");
             }
-            (i, Ok::<usize, String>(item * 10))
+            (i, Ok::<usize, String>(items[i] * 10))
         })
         .await;
 

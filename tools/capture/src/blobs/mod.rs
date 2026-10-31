@@ -331,6 +331,10 @@ impl Store {
     /// of which download finished first, so a capture with `--jobs 8` and one
     /// with `--jobs 1` produce the same index.
     ///
+    /// **`wants` is shared, not copied.** The caller owns the plan, and each
+    /// task receives the same `Arc<[Want]>` and indexes its own slot, so a want
+    /// — several allocations per chunk — is never cloned into a task.
+    ///
     /// One failure does not abandon the rest: each fetch's evidence is recorded
     /// on its blob and the store returns the index either way. A bundle with
     /// seven good blobs and one failed fetch is far more useful than no bundle,
@@ -343,13 +347,13 @@ impl Store {
     pub async fn fill(
         &self,
         fetcher: &Fetcher,
-        wants: &[Want],
+        wants: &Arc<[Want]>,
         jobs: usize,
     ) -> (Vec<(IndexedBlob, Vec<Set>)>, Vec<String>) {
-        let outcomes = crate::tasks::join_ordered(wants, jobs, "chunk fetch", |i, want| {
+        let outcomes = crate::tasks::join_ordered(wants, jobs, "chunk fetch", |i, wants| {
             let store = self.clone();
             let fetcher = fetcher.clone();
-            async move { Store::one(store, i, fetcher, want).await }
+            async move { Store::one(store, i, fetcher, wants).await }
         })
         .await;
 
@@ -426,8 +430,9 @@ impl Store {
         this: Store,
         slot: usize,
         fetcher: Fetcher,
-        want: Want,
+        wants: Arc<[Want]>,
     ) -> (usize, Result<(IndexedBlob, Vec<Set>), FetchError>) {
+        let want = &wants[slot];
         let self_ = &this;
         let mut last: Option<FetchError> = None;
         let mut candidate: Option<PartialCandidate> = None;
@@ -444,7 +449,7 @@ impl Store {
                 }
             };
             match self_
-                .stream_from(&fetcher, &url, &want, &src.tag, slot)
+                .stream_from(&fetcher, &url, want, &src.tag, slot)
                 .await
             {
                 Ok(Attempt::Complete {
@@ -461,9 +466,10 @@ impl Store {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
                     fetcher.log().set_stored_as(seq, rel);
-                    self_.warn_conflicts(&want);
-                    // The two fields are moved rather than cloned: this is the last use of `want`.
-                    return (slot, Ok(indexed_from(props, &want)));
+                    self_.warn_conflicts(want);
+                    // `props` moves into the row; the want is borrowed from the
+                    // shared plan rather than consumed.
+                    return (slot, Ok(indexed_from(props, want)));
                 }
                 Ok(Attempt::Partial {
                     props,
@@ -518,9 +524,9 @@ impl Store {
             let mut props = winner.props;
             props.set_stored(winner.rel.clone());
             fetcher.log().set_stored_as(winner.seq, winner.rel);
-            self_.warn_conflicts(&want);
+            self_.warn_conflicts(want);
             props.mark_partial(winner.error);
-            return (slot, Ok(indexed_from(props, &want)));
+            return (slot, Ok(indexed_from(props, want)));
         }
 
         (

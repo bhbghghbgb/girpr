@@ -271,7 +271,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         plan.no_chunk_blobs,
     )?;
     let pairs = chunk_plan.pairs;
-    let wants = chunk_plan.wants;
+    let wants: std::sync::Arc<[blobs::chunks::Want]> = chunk_plan.wants.into();
     let projected = chunk_plan.projected;
 
     // 7. The tree. All four writes happen even though the run is incomplete:
