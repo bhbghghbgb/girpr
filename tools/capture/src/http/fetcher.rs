@@ -1015,29 +1015,31 @@ impl Fetcher {
         // materialises it. The two differ only here — the status check above and
         // the record below are shared, which is the reason this is one function
         // with a parameter rather than two functions.
+
+        // One record for both outcomes — the failure and the size are both about
+        // the same request. The count comes from the error, because a body that
+        // failed mid-read still crossed the wire and `bytes_in` prices what
+        // crossed it. Both destinations fail the same way, so this is the one
+        // site that decides what a failed attempt records.
+        let fail = |err: ApiError, bytes_in: u64| {
+            let record = self.record(
+                seq,
+                kind,
+                url,
+                range,
+                status,
+                resp_headers.clone(),
+                &final_url,
+                redirected,
+                bytes_in,
+                attempts,
+                started,
+            );
+            (err, record)
+        };
         let bytes_in: u64;
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
-                // One record for both outcomes, as before — the failure and the
-                // size are both about the same request. The count comes from the
-                // error, because a body that failed mid-read still crossed the
-                // wire and `bytes_in` prices what crossed it.
-                let fail = |err: ApiError, bytes_in: u64| {
-                    let record = self.record(
-                        seq,
-                        kind,
-                        url,
-                        range,
-                        status,
-                        resp_headers.clone(),
-                        &final_url,
-                        redirected,
-                        bytes_in,
-                        attempts,
-                        started,
-                    );
-                    (err, record)
-                };
                 let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
                     resp.content_length(),
                     self.max_response_bytes,
@@ -1054,23 +1056,6 @@ impl Fetcher {
                 // Discard whatever a failed attempt left before this one writes.
                 // Without this the digests cover both responses — see
                 // `HashingFile::restart`.
-                let fail = |err: ApiError, bytes_in: u64| {
-                    let record = self.record(
-                        seq,
-                        kind,
-                        url,
-                        range,
-                        status,
-                        resp_headers.clone(),
-                        &final_url,
-                        redirected,
-                        bytes_in,
-                        attempts,
-                        started,
-                    );
-                    (err, record)
-                };
-
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
                     // not truncate is a disk that will not write either. No body
