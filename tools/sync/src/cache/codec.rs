@@ -91,14 +91,15 @@ fn push_hash(v: &mut Vec<u8>, name: &str, digest: &[u8]) -> Result<()> {
 
 pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
     let mut cur = bytes;
-    let take = |cur: &mut &[u8], n: usize| -> Result<Vec<u8>> {
+    // Borrow each field from `bytes`; only the destinations that own data copy.
+    fn take<'a>(cur: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
         if cur.len() < n {
             bail!("truncated cache entry");
         }
-        let (h, t) = cur.split_at(n);
-        *cur = t;
-        Ok(h.to_vec())
-    };
+        let (head, tail) = cur.split_at(n);
+        *cur = tail;
+        Ok(head)
+    }
     let fmt = take(&mut cur, 1)?[0];
     if fmt != FMT_V1 {
         bail!("unsupported entry format {fmt}");
@@ -110,7 +111,7 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
     let mut hashes = DigestSet::default();
     for _ in 0..n {
         let nl = take(&mut cur, 1)?[0] as usize;
-        let name = String::from_utf8(take(&mut cur, nl)?).context("non-UTF8 algo name")?;
+        let name = std::str::from_utf8(take(&mut cur, nl)?).context("non-UTF8 algo name")?;
         let dl = take(&mut cur, 1)?[0] as usize;
         let digest = take(&mut cur, dl)?;
         // **Never `bail!` on an algorithm name.** This is the whole forward-compat
@@ -119,7 +120,7 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
         // routing is `DigestSet::insert_named`'s, and it is the only place that rule
         // is written — including the case of a *known* name with an unexpected length,
         // which is carried rather than refused because that is what a map did.
-        hashes.insert_named(&name, &digest);
+        hashes.insert_named(name, digest);
     }
     if !cur.is_empty() {
         bail!("trailing bytes in cache entry");
