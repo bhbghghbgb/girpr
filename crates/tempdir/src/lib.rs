@@ -17,15 +17,10 @@
 //! one process, and both failure modes are silent:
 //!
 //! - one test's `remove_dir_all` deletes the tree another test is halfway
-//!   through writing, which fails intermittently and reads like a bug in the
-//!   code under test;
+//!   through writing, which fails intermittently;
 //! - a directory left behind by a run that was killed mid-test is inherited by
 //!   the next run, so the second run asserts against the first run's
 //!   leftovers.
-//!
-//! The second one is not hypothetical: a `temp_dir` the tests removed by hand
-//! on the happy path and not at all when a case panicked was found leaving
-//! one directory per run behind in the system temp dir.
 //!
 //! So the name carries the process id, a wall-clock timestamp and a
 //! per-process counter — the three things that, together, separate two tests
@@ -235,10 +230,9 @@ mod tests {
     ///
     /// `cargo nextest` — the runner this workspace uses — does not support
     /// doctests at all, so the example above would be checked by nothing: the
-    /// suite would stay green against a `TempDir` that no longer took those
-    /// arguments, and the documentation would be the only place left claiming
-    /// otherwise. Mirroring the example here is what keeps it honest under the
-    /// runner that is actually used.
+    /// suite would stay green, and the documentation would be the only place
+    /// left claiming otherwise. Mirroring the example here is what keeps it
+    /// honest under the runner that is actually used.
     #[test]
     fn the_documented_usage_writes_into_the_scratch_directory() {
         let dir = TempDir::new("girpr_tempdir_example", "one_case");

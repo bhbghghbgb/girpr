@@ -334,10 +334,10 @@ fn try_reuse_slice(
 /// target file, at the chunk's offset.
 ///
 /// **The write ceiling is charged per piece**, the way the reuse copy charges
-/// it (`copy_within`): a chunk is no longer one indivisible write, so a
-/// ceiling that trips in the middle of a chunk stops the run in the middle of
-/// a chunk. The README already documents that a runtime hard stop leaves the
-/// work done in place, and the next run re-verifies and continues.
+/// it (`copy_within`): a chunk is written piece by piece, so a ceiling that
+/// trips in the middle of a chunk stops the run in the middle of a chunk. The
+/// README already documents that a runtime hard stop leaves the work done in
+/// place, and the next run re-verifies and continues.
 struct ChunkFileSink<'a> {
     ctx: &'a FileCtx,
     file: &'a mut File,
