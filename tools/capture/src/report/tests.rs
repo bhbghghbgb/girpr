@@ -289,6 +289,15 @@ fn a_malformed_percent_sequence_passes_through() {
     assert_eq!(percent_decode("100%"), "100%");
 }
 
+/// The scan is over bytes, so the two bytes after a `%` are read as text even
+/// when they are the middle of a multi-byte character. There is no char
+/// boundary there, and a slice of the string would panic.
+#[test]
+fn a_percent_before_a_multibyte_character_passes_through() {
+    assert_eq!(percent_decode("%中"), "%中");
+    assert_eq!(percent_decode("%zz中"), "%zz中");
+}
+
 /// A name with a space is the reader's problem, and the tool must not paper
 /// over it by inserting a quote that changes the bytes. Only *values* are
 /// encoded; keys are `&'static str`s this crate chose.
@@ -303,6 +312,24 @@ fn duplicate_names_are_kept_not_merged() {
     let s = Record::summary("x").set("n", 1_i32).set("n", 2_i32);
     assert_eq!(s.get("n"), Some(&Val::Int(1)));
     assert!(s.to_text_line().ends_with("n=1 n=2"));
+}
+
+/// A count too large for `i64` clamps, and does not wrap negative.
+///
+/// Counts and byte totals are `u64` while a field value is `i64`. An `as i64`
+/// cast would turn the largest count into a negative one, so a summary would
+/// report a run that downloaded fewer than zero bytes; the clamp is the whole
+/// point of the conversion, so it is pinned rather than left to the comment
+/// above it.
+#[test]
+fn a_count_too_large_for_i64_clamps_instead_of_wrapping_negative() {
+    assert_eq!(Val::from(u64::MAX), Val::Int(i64::MAX));
+    // On a 32-bit target `usize::MAX` fits in `i64` and must not be clamped.
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(Val::from(usize::MAX), Val::Int(i64::MAX));
+    // The clamp must not touch a value that already fits.
+    assert_eq!(Val::from(7_u64), Val::Int(7));
+    assert_eq!(Val::from(7_usize), Val::Int(7));
 }
 
 #[test]
@@ -399,8 +426,8 @@ fn zeroed() -> CaptureSummary<'static> {
 fn the_capture_summary_key_list_is_the_contract_and_does_not_drift() {
     // `girpr` and anything else reading this line parse these names in this
     // order. Moving the builder out of `capture()` is only safe if the line
-    // it produces is the line that was there before, so the key list is
-    // pinned here rather than left to the builder's own doc comment.
+    // it produces matches the contract, so the key list is pinned here rather
+    // than left to the builder's own doc comment.
     //
     // The first three are [`Record::summary`]'s own preamble, not this
     // function's - they are listed so that a change to *them* also fails

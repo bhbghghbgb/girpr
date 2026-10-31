@@ -14,9 +14,8 @@ pub struct RequestLog(pub(crate) Arc<Mutex<LogState>>);
 impl RequestLog {
     /// Take the lock, **recovering from poisoning**.
     ///
-    /// This was `.lock().expect("request log is not poisoned")` at eight sites,
-    /// and poisoning is genuinely reachable rather than theoretical: the lock
-    /// sits inside the concurrent chunk fetcher, so one task panicking while it
+    /// Poisoning is genuinely reachable rather than theoretical: the lock sits
+    /// inside the concurrent chunk fetcher, so one task panicking while it
     /// holds this lock poisons it for every other task — and a poisoned lock
     /// makes every subsequent `.expect` panic too, so one panic anywhere turns
     /// into a run that cannot even record its own failure.
@@ -103,6 +102,22 @@ impl RequestLog {
         // happen today; the sort is what keeps that from being load-bearing.
         //
         // `reserve()` makes `seq` unique, so this is a total order.
+        v.sort_by_key(|r| r.seq);
+        v
+    }
+
+    /// Every record matching `f`, in `seq` order.
+    ///
+    /// The filter runs under the one lock and only the matches are cloned and
+    /// sorted, so a caller looking for a handful of rows in a log that holds
+    /// every request pays for the handful rather than for the log. The order is
+    /// [`RequestLog::records`]'s, for the same reason: `seq` is assigned at
+    /// reserve time, so completion order is not the order a reader expects.
+    pub fn records_matching(&self, f: impl Fn(&RequestRecord) -> bool) -> Vec<RequestRecord> {
+        let mut v: Vec<RequestRecord> = {
+            let s = self.lock();
+            s.records.iter().filter(|r| f(r)).cloned().collect()
+        };
         v.sort_by_key(|r| r.seq);
         v
     }

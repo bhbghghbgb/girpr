@@ -61,13 +61,11 @@ pub type SleepFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 
 /// Something that can be waited on, so tests can count delays instead of
 /// spending them.
 ///
-/// **Async on purpose.** This was `fn sleep(&self, d: Duration)` and the real
-/// implementation was [`std::thread::sleep`], called from inside
-/// [`super::Fetcher::get`] — an `async fn` whose tasks are spawned onto the runtime.
-/// So a retry backoff *blocked a tokio worker thread* rather than yielding it:
-/// with `--retries 10` the schedule is 0.5+1+2+4+8+10+10+10+10 = 55.5 s of
-/// thread-blocked time per failing request, and on a 4-core box at `--jobs 64`
-/// all four workers can be asleep at once with nothing able to make progress.
+/// **Async on purpose.** A blocking `std::thread::sleep` would stall a tokio
+/// worker thread for the whole backoff — with `--retries 10` the schedule is
+/// 0.5+1+2+4+8+10+10+10+10 = 55.5 s of thread-blocked time per failing
+/// request, and on a 4-core box at `--jobs 64` all four workers can be asleep
+/// at once with nothing able to make progress.
 ///
 /// [`tokio::time::sleep`] yields the worker instead, so the requests that *are*
 /// in flight keep going while this one waits.

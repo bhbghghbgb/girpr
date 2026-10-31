@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{CaptureArgs, CommonArgs};
+use crate::report::OutputFormat;
 
 fn args_with(mutate: impl FnOnce(&mut CaptureArgs)) -> CaptureArgs {
     let mut a = CaptureArgs {
@@ -28,7 +29,7 @@ fn args_with(mutate: impl FnOnce(&mut CaptureArgs)) -> CaptureArgs {
             log_file_level: None,
             log_file: None,
             no_log_file: false,
-            output: "text".into(),
+            output: OutputFormat::Text,
         },
     };
     mutate(&mut a);
@@ -429,7 +430,7 @@ fn verify_and_materialize_resolve_their_own_arguments() {
             log_file_level: None,
             log_file: None,
             no_log_file: false,
-            output: "json".into(),
+            output: OutputFormat::Json,
         },
     })
     .unwrap();
@@ -443,7 +444,7 @@ fn verify_and_materialize_resolve_their_own_arguments() {
             log_file_level: None,
             log_file: None,
             no_log_file: false,
-            output: "text".into(),
+            output: OutputFormat::Text,
         },
     })
     .unwrap();
@@ -457,7 +458,7 @@ fn verify_and_materialize_resolve_their_own_arguments() {
             log_file_level: None,
             log_file: None,
             no_log_file: false,
-            output: "text".into(),
+            output: OutputFormat::Text,
         },
     })
     .unwrap_err();
@@ -471,7 +472,7 @@ fn verify_and_materialize_resolve_their_own_arguments() {
             log_file_level: None,
             log_file: None,
             no_log_file: false,
-            output: "text".into(),
+            output: OutputFormat::Text,
         },
     };
     assert_eq!(l.root, PathBuf::from("artifacts"));

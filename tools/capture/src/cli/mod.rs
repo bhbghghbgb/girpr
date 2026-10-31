@@ -109,8 +109,14 @@ pub struct CommonArgs {
     pub no_log_file: bool,
 
     /// How the single stdout summary is rendered.
-    #[arg(long, value_name = "FORMAT", default_value = "text", global = true)]
-    pub output: String,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = OutputFormat::Text,
+        global = true
+    )]
+    pub output: OutputFormat,
 }
 
 /// `--gzip-threshold`'s default, in bytes.
@@ -356,21 +362,16 @@ pub type Result<T> = std::result::Result<T, UsageError>;
 
 /// Resolve `--log-level` and `--output` into their typed forms.
 ///
-/// `--log-level` is typed by `clap` itself — a bad level is an argument-level
-/// failure, and it fails where every other bad argument fails. `--output` is
-/// resolved here, once, so no command re-parses it and no command can disagree
-/// about what `default_value` meant.
-pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
-    Ok(CommonResolved {
+/// Both flags are typed by `clap` itself — a bad value is an argument-level
+/// failure, and it fails where every other bad argument fails.
+pub fn resolve_common(common: &CommonArgs) -> CommonResolved {
+    CommonResolved {
         level: common.log_level,
         file_level: common.log_file_level,
-        output: common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
+        output: common.output,
         log_file: common.log_file.clone(),
         no_log_file: common.no_log_file,
-    })
+    }
 }
 
 /// The typed form of [`CommonArgs`].
@@ -603,36 +604,7 @@ mod tests {
         use std::os::windows::ffi::OsStringExt as _;
 
         let bad = OsString::from_wide(&[0xD800]);
-        // (argv before the value, whether clap's value type accepts non-Unicode)
-        let cases: &[(&[&str], bool)] = &[
-            // PathBuf: the realistic carrier, accepted.
-            (&["capture", "--out"], true),
-            (&["capture", "--log-file"], true),
-            (&["verify", "--artifact"], true),
-            (&["materialize", "--artifact", "a", "--out"], true),
-            (&["list", "--root"], true),
-            // String, enums and numbers: not representable, refused by clap.
-            (&["capture", "--new-tag"], false),
-            (&["capture", "--old-tag"], false),
-            (&["capture", "--require-class"], false),
-            (&["capture", "--files"], false),
-            (&["capture", "--audio"], false),
-            (&["capture", "--probe-tags"], false),
-            (&["capture", "--hyp-base"], false),
-            (&["capture", "--sophon-base"], false),
-            (&["capture", "--output"], false),
-            (&["capture", "--biz"], false),
-            (&["capture", "--manifest-detail"], false),
-            (&["capture", "--per-class"], false),
-            (&["capture", "--max-download-bytes"], false),
-            (&["capture", "--gzip-threshold"], false),
-            (&["capture", "--jobs"], false),
-            (&["capture", "--retries"], false),
-            (&["capture", "--timeout"], false),
-            (&["capture", "--max-response-bytes"], false),
-            (&["capture", "--max-decompressed-bytes"], false),
-        ];
-        for (prefix, accepted) in cases {
+        for (prefix, accepted) in NON_UNICODE_CASES {
             let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
             argv.extend(prefix.iter().map(OsString::from));
             argv.push(bad.clone());
@@ -663,6 +635,96 @@ mod tests {
                         "{prefix:?}: the refusal does not name the cause: {text}"
                     );
                 }
+            }
+        }
+    }
+
+    /// The cases
+    /// [`every_value_flag_either_parses_or_refuses_a_non_unicode_value_but_records_its_bytes`]
+    /// drives, and whether the flag's type can hold a non-Unicode value.
+    ///
+    /// [`every_value_flag_has_a_non_unicode_case`] reads the same table, so a
+    /// value-taking flag cannot be added without a row here.
+    const NON_UNICODE_CASES: &[(&[&str], bool)] = &[
+        // PathBuf: the realistic carrier, accepted.
+        (&["capture", "--out"], true),
+        (&["capture", "--log-file"], true),
+        (&["verify", "--artifact"], true),
+        (&["materialize", "--artifact", "a", "--out"], true),
+        (&["list", "--root"], true),
+        // String, enums, numbers and level names: not representable, refused by
+        // clap.
+        (&["capture", "--log-level"], false),
+        (&["capture", "--log-file-level"], false),
+        (&["capture", "--new-tag"], false),
+        (&["capture", "--old-tag"], false),
+        (&["capture", "--require-class"], false),
+        (&["capture", "--files"], false),
+        (&["capture", "--audio"], false),
+        (&["capture", "--probe-tags"], false),
+        (&["capture", "--hyp-base"], false),
+        (&["capture", "--sophon-base"], false),
+        (&["capture", "--output"], false),
+        (&["capture", "--biz"], false),
+        (&["capture", "--manifest-detail"], false),
+        (&["capture", "--per-class"], false),
+        (&["capture", "--max-download-bytes"], false),
+        (&["capture", "--gzip-threshold"], false),
+        (&["capture", "--jobs"], false),
+        (&["capture", "--retries"], false),
+        (&["capture", "--timeout"], false),
+        (&["capture", "--max-response-bytes"], false),
+        (&["capture", "--max-decompressed-bytes"], false),
+    ];
+
+    /// The table above covers the whole surface: every value-taking flag clap
+    /// knows has a row, and every row names a real flag of its subcommand.
+    ///
+    /// The non-Unicode test can only prove what its table names, so a flag added
+    /// without a row would pass while never being looked at. This is what turns
+    /// that gap into a red test. Booleans are out of scope: they have no value
+    /// that could be non-Unicode.
+    #[test]
+    fn every_value_flag_has_a_non_unicode_case() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let command = Cli::command();
+        let mut value_flags: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for sub in command.get_subcommands() {
+            let longs: BTreeSet<String> = sub
+                .get_arguments()
+                .filter(|arg| arg.get_action().takes_values())
+                .filter_map(|arg| arg.get_long())
+                .map(|long| format!("--{long}"))
+                .collect();
+            value_flags.insert(sub.get_name().to_string(), longs);
+        }
+
+        // A row is only meaningful if its subcommand exists and its flag is a
+        // value-taking flag of that subcommand.
+        for (prefix, _) in NON_UNICODE_CASES {
+            let sub = prefix.first().copied().expect("a row names its subcommand");
+            let flag = prefix.last().copied().expect("a row names its flag");
+            let longs = value_flags
+                .get(sub)
+                .unwrap_or_else(|| panic!("{prefix:?}: {sub} is not a subcommand"));
+            assert!(
+                longs.contains(flag),
+                "{prefix:?}: {flag} is not a value-taking flag of {sub}"
+            );
+        }
+
+        // And every flag is driven by at least one row.
+        let tested: BTreeSet<&str> = NON_UNICODE_CASES
+            .iter()
+            .map(|(prefix, _)| *prefix.last().expect("a row names its flag"))
+            .collect();
+        for (sub, longs) in &value_flags {
+            for flag in longs {
+                assert!(
+                    tested.contains(flag.as_str()),
+                    "{sub} {flag} has no non-Unicode case"
+                );
             }
         }
     }
@@ -769,7 +831,7 @@ mod tests {
         assert_eq!(a.common.log_level, Level::Debug);
         assert_eq!(a.common.log_file_level, None);
         assert_eq!(a.common.log_file, Some(PathBuf::from("run.log")));
-        assert_eq!(a.common.output, "json");
+        assert_eq!(a.common.output, OutputFormat::Json);
     }
 
     #[test]
@@ -778,7 +840,7 @@ mod tests {
             panic!("expected verify")
         };
         assert_eq!(v.artifact, PathBuf::from("a"));
-        assert_eq!(v.common.output, "json");
+        assert_eq!(v.common.output, OutputFormat::Json);
 
         let Cmd::Materialize(m) = parse(&[
             "materialize",
@@ -917,24 +979,21 @@ mod tests {
             log_file_level: Some(Level::Trace),
             log_file: Some("x.log".into()),
             no_log_file: false,
-            output: "json".into(),
-        })
-        .unwrap();
+            output: OutputFormat::Json,
+        });
         assert_eq!(ok.level, Level::Debug);
         assert_eq!(ok.file_level, Some(Level::Trace));
         assert_eq!(ok.output, OutputFormat::Json);
         assert_eq!(ok.log_file, Some(PathBuf::from("x.log")));
         assert!(!ok.no_log_file);
 
-        let bad_output = resolve_common(&CommonArgs {
-            log_level: Level::Info,
-            log_file_level: None,
-            log_file: None,
-            no_log_file: false,
-            output: "yaml".into(),
-        })
-        .unwrap_err();
-        assert_eq!(bad_output.exit_code(), ExitCode::Usage);
+        // `--output` is an argument, so a bad value is refused by the parser,
+        // with the set of spellings it would have accepted.
+        let e = parse_err(&["capture", "--output", "yaml"]);
+        assert_eq!(e.kind(), clap::error::ErrorKind::InvalidValue);
+        let text = e.to_string();
+        assert!(text.contains("yaml"), "{text}");
+        assert!(text.contains("text") && text.contains("json"), "{text}");
     }
 
     /// A bad level is an *argument* failure, so it is rejected by the parser

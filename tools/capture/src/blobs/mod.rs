@@ -331,6 +331,10 @@ impl Store {
     /// of which download finished first, so a capture with `--jobs 8` and one
     /// with `--jobs 1` produce the same index.
     ///
+    /// **`wants` is shared, not copied.** The caller owns the plan, and each
+    /// task receives the same `Arc<[Want]>` and indexes its own slot, so a want
+    /// — several allocations per chunk — is never cloned into a task.
+    ///
     /// One failure does not abandon the rest: each fetch's evidence is recorded
     /// on its blob and the store returns the index either way. A bundle with
     /// seven good blobs and one failed fetch is far more useful than no bundle,
@@ -343,81 +347,52 @@ impl Store {
     pub async fn fill(
         &self,
         fetcher: &Fetcher,
-        wants: &[Want],
+        wants: &Arc<[Want]>,
         jobs: usize,
     ) -> (Vec<(IndexedBlob, Vec<Set>)>, Vec<String>) {
-        let mut out: Vec<Option<(IndexedBlob, Vec<Set>)>> =
-            (0..wants.len()).map(|_| None).collect();
-        let mut errors: Vec<String> = Vec::new();
-        let mut next = 0_usize;
-        let mut set = tokio::task::JoinSet::new();
+        let outcomes = crate::tasks::join_ordered(wants, jobs, "chunk fetch", |i, wants| {
+            let store = self.clone();
+            let fetcher = fetcher.clone();
+            async move { Store::one(store, i, fetcher, wants).await }
+        })
+        .await;
 
-        // Prime the set, then keep one job in flight per worker. A plain
-        // `for want in wants` would serialise; this does not need `futures`.
-        while next < wants.len() && set.len() < jobs.max(1) {
-            let i = next;
-            next += 1;
-            set.spawn(Store::one(
-                self.clone(),
-                i,
-                fetcher.clone(),
-                wants[i].clone(),
-            ));
-        }
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((i, Ok(entry))) => {
+        let mut entries = Vec::with_capacity(wants.len());
+        let mut errors: Vec<String> = Vec::new();
+        for (i, outcome) in outcomes.into_iter().enumerate() {
+            let entry = match outcome {
+                Ok(entry) => {
                     // A partial row succeeded at preserving bytes but failed to
                     // fetch the chunk. The run's failed-fetch count must see it
                     // once, through the structured reason it carries.
                     if let Some(e) = &entry.0.props.fetch_error {
                         errors.push(e.detail.clone());
                     }
-                    out[i] = Some(entry);
+                    entry
                 }
                 // **The index and the error are recorded together.** The slot is
                 // known, so the row that says the chunk is absent can also say
                 // why -- and the failure is pushed exactly once.
-                Ok((i, Err(e))) => {
-                    out[i] = Some(self.unfilled(&wants[i], &e));
+                Err(crate::tasks::JoinOutcome::Failed(e)) => {
+                    let row = self.unfilled(&wants[i], &e);
                     errors.push(e.detail);
+                    row
                 }
-                // A panicking task takes its slot number with it, so its hole is
-                // filled below. Pushing a second, slotless error here would count
-                // the same failure twice, which is the bug this function had.
-                // The JoinError itself would be dropped here, so name the panic
-                // in the log before falling through to the generic row text.
-                Err(e) => {
-                    tracing::error!(
-                        error = %crate::tasks::join_failure(e, "chunk fetch"),
-                        "a chunk fetch task did not report; its slot is filled below"
-                    );
+                // A task that did not report still keeps its slot, so the row
+                // and the error name the chunk it belonged to. The payload is in
+                // `why` whenever the shared loop could map the task id back;
+                // only an unrecoverable id leaves the generic sentence.
+                Err(crate::tasks::JoinOutcome::Lost { why }) => {
+                    let why = why
+                        .unwrap_or_else(|| "the chunk fetch task panicked while storing it".into());
+                    let failure = FetchError::local(format!("{}: {why}", wants[i].chunk.id));
+                    errors.push(failure.detail.clone());
+                    self.unfilled(&wants[i], &failure)
                 }
-            }
-            if next < wants.len() {
-                let i = next;
-                next += 1;
-                set.spawn(Store::one(
-                    self.clone(),
-                    i,
-                    fetcher.clone(),
-                    wants[i].clone(),
-                ));
-            }
+            };
+            entries.push(entry);
         }
-
-        // A `None` slot is a fetch that neither succeeded nor reported, which can
-        // only be the panic above. Fill it so the index has no holes, and record
-        // it once, with the chunk id the task could not report.
-        for (i, o) in out.iter_mut().enumerate() {
-            if o.is_none() {
-                let why = "the chunk fetch task panicked while storing it";
-                let failure = FetchError::local(why);
-                errors.push(format!("{}: {why}", wants[i].chunk.id));
-                *o = Some(self.unfilled(&wants[i], &failure));
-            }
-        }
-        (out.into_iter().flatten().collect(), errors)
+        (entries, errors)
     }
 
     /// The index for a run that stored no blobs at all (`--no-chunk-blobs`).
@@ -455,8 +430,9 @@ impl Store {
         this: Store,
         slot: usize,
         fetcher: Fetcher,
-        want: Want,
+        wants: Arc<[Want]>,
     ) -> (usize, Result<(IndexedBlob, Vec<Set>), FetchError>) {
+        let want = &wants[slot];
         let self_ = &this;
         let mut last: Option<FetchError> = None;
         let mut candidate: Option<PartialCandidate> = None;
@@ -473,7 +449,7 @@ impl Store {
                 }
             };
             match self_
-                .stream_from(&fetcher, &url, &want, &src.tag, slot)
+                .stream_from(&fetcher, &url, want, &src.tag, slot)
                 .await
             {
                 Ok(Attempt::Complete {
@@ -490,9 +466,10 @@ impl Store {
                     props.set_stored(rel.clone());
                     // Provenance: which request produced these bytes.
                     fetcher.log().set_stored_as(seq, rel);
-                    self_.warn_conflicts(&want);
-                    // The two fields are moved rather than cloned: this is the last use of `want`.
-                    return (slot, Ok(indexed_from(props, &want)));
+                    self_.warn_conflicts(want);
+                    // `props` moves into the row; the want is borrowed from the
+                    // shared plan rather than consumed.
+                    return (slot, Ok(indexed_from(props, want)));
                 }
                 Ok(Attempt::Partial {
                     props,
@@ -547,9 +524,9 @@ impl Store {
             let mut props = winner.props;
             props.set_stored(winner.rel.clone());
             fetcher.log().set_stored_as(winner.seq, winner.rel);
-            self_.warn_conflicts(&want);
+            self_.warn_conflicts(want);
             props.mark_partial(winner.error);
-            return (slot, Ok(indexed_from(props, &want)));
+            return (slot, Ok(indexed_from(props, want)));
         }
 
         (

@@ -1172,9 +1172,8 @@ async fn a_declared_length_far_beyond_the_ceiling_is_a_typed_refusal_not_an_allo
     // overflow) instead of returning the promised typed refusal.
     //
     // Both cases matter: the first is the review's 10 GiB header, the second
-    // is the value that made the old conversion a panic rather than an
-    // allocation attempt. The reservation is now clamped, so neither reaches
-    // the allocator as a size.
+    // the declaration at or above `isize::MAX`. The reservation is now clamped,
+    // so neither reaches the allocator as a size.
     let cases = [(isize::MAX as u64) + 1, 10 * 1024 * 1024 * 1024];
     for claim in cases {
         let Ok(claim) = usize::try_from(claim) else {

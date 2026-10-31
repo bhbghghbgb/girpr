@@ -401,8 +401,7 @@ fn two_forced_paths_of_one_class_get_distinct_ids() {
 ///
 /// A one-chunk file with no reuse is a degenerate patch: `added` already
 /// covers "the file is created whole", so the class set is legitimately
-/// empty. The old loop `continue`d past it, and a caller who named it saw
-/// `requested: 1` and nothing else.
+/// empty. The row is still recorded as unscored, with nothing else under it.
 #[test]
 fn a_forced_path_that_answers_no_class_is_recorded_as_unscored() {
     let pool = candidates(&[field(

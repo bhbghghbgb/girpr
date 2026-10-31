@@ -486,7 +486,6 @@ mod tests {
     }
 
     /// The one decision that shapes the tree, asserted in both directions.
-    /// The one decision that shapes the tree, asserted in both directions.
     ///
     /// Each threshold gets its **own** root, because that is what a run does:
     /// one capture writes one tree with one threshold. Writing twice into one

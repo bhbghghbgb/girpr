@@ -155,7 +155,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // and the call writes to the tree, so the pass sees the same bytes it
     // always did — but the manifest is now built whole, instead of being handed
     // back with an empty `files[]` for two later statements to fill in.
-    let (listed, seeded) = super::write_manifest_files(i.dir).map_err(|e| write_err(i.dir, e))?;
+    let listed = super::write_manifest_files(i.dir).map_err(|e| write_err(i.dir, e))?;
     let manifest = index::build_manifest(&i.manifest, &listed)
         .map_err(|e| apierr("build MANIFEST.json", &ApiError::shape("manifest", e)))?;
 
@@ -204,7 +204,7 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     written
         .push(super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?);
     let (_, checksums) =
-        super::write_checksums_reusing(i.dir, &seeded, &[]).map_err(|e| write_err(i.dir, e))?;
+        super::write_checksums_reusing(i.dir, &listed, &[]).map_err(|e| write_err(i.dir, e))?;
     // The independent half of A16: re-reads every listed file from disk and
     // compares. This is deliberately **not** folded into the scan above — a
     // re-hash that reuses the digests it is checking would be a tautology.
@@ -495,10 +495,9 @@ mod tests {
     #[test]
     fn two_passes_converge_and_the_pass_the_comment_claims_would_change_nothing() {
         // **The claim this module exists to make checkable.** `close`'s doc says
-        // two passes converge exactly and that a third would find nothing new.
-        // While this was inline in `capture()` that was a sentence in a comment
-        // with no way to test it — the only way to reach the second pass was to
-        // run a whole capture against a live API.
+        // two passes converge exactly and that a third would find nothing new —
+        // and until `close` existed there was no way to test it: the only way to
+        // reach the second pass was to run a whole capture against a live API.
         //
         // Two halves, because either alone would pass on a broken fixpoint:
         //

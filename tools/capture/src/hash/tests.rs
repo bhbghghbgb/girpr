@@ -207,9 +207,8 @@ fn a_restart_discards_the_bytes_and_the_digests_of_the_failed_attempt() {
 #[test]
 fn a_restart_without_one_leaves_the_failed_bytes_in_the_digest() {
     // The bug itself, pinned so the property above is not satisfied by
-    // accident. This is what `restart` exists to prevent, written out as a
-    // passing test of the *absence* of the fix so a future refactor cannot
-    // make `restart` look optional.
+    // accident. This is what `restart` exists to prevent: a passing test of the
+    // absence of the fix, so `restart` cannot quietly become optional.
     let dir = tmp("hashing-no-restart");
     let path = dir.join("blob.bin");
     let first = b"partial";

@@ -91,10 +91,8 @@ struct Run {
 /// A write that fails is the disk's, and retrying it would spend the whole budget
 /// discovering that a full disk stays full — so it is a [`ApiError::Shape`], which
 /// the policy stops on.
-///
-/// This was a branch inside the pump, and then a test that needed a genuinely
-/// full disk to reach it. Extracted so the decision can be read in one place and
-/// tested without contriving a filesystem failure.
+/// Extracted so the decision can be read in one place and tested without
+/// contriving a filesystem failure.
 pub(crate) fn body_failure(
     url: &str,
     attempts: u32,
@@ -446,12 +444,9 @@ pub struct Fetcher {
 impl Fetcher {
     /// Run `f` over `items`, at most `jobs` at a time, **in input order**.
     ///
-    /// The pattern [`crate::blobs::Store::fill`] already uses: prime a
-    /// `JoinSet` with `jobs` entries and refill it as each completes. Four
-    /// callers had hand-written serial loops where only one of the requests had
-    /// a dependency on an earlier one, so a `--no-chunk-blobs` metadata run
-    /// spent six round trips where two would do, probed seven tags one after
-    /// another, and fetched four ~9 MB manifests strictly one at a time.
+    /// The shared ordered-join loop in `tasks` owns the concurrency and the
+    /// panic attribution; this adds the fetcher handle each task needs and turns
+    /// a task that did not report into the text `fetch_errors` expects.
     ///
     /// **Results come back in input order, not completion order.** That is the
     /// whole reason this is safe for anything that writes a document: a caller
@@ -467,12 +462,8 @@ impl Fetcher {
     /// carrying the panic's own message. A missing blob is better evidence than
     /// no bundle.
     ///
-    /// `f` returns `(index, result)` and **never** an outer `Err`. The index has
-    /// to come back even when the work failed, or a failed task is
-    /// indistinguishable from one that died. A `JoinSet` does not carry our
-    /// index through a panic — it names the failing task by id — so the loop
-    /// records each spawned task's id and maps it back. That is what lets the
-    /// payload reach its own slot instead of every failure sharing one string.
+    /// `f` returns `(index, result)` and **never** an outer `Err`: the index is
+    /// how a failed task is told apart from one that died.
     ///
     /// `f` receives a clone of this fetcher rather than a borrow, because
     /// `JoinSet::spawn` needs a `'static` future. Cloning is three `Arc`s and
@@ -485,78 +476,29 @@ impl Fetcher {
         f: F,
     ) -> Vec<Result<R, String>>
     where
-        T: Clone + Send + 'static,
+        T: Clone + Send + Sync + 'static,
         R: Send + 'static,
         F: Fn(Fetcher, usize, T) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = (usize, Result<R, String>)> + Send + 'static,
     {
-        let n = items.len();
-        let mut out: Vec<Option<Result<R, String>>> = (0..n).map(|_| None).collect();
-        // Task id -> item index. `JoinSet` reports which task failed by id, not
-        // by our index, so recording each spawn's id is what lets a panic keep
-        // both its index and its cause instead of collapsing into one generic
-        // slot text. The map holds at most `jobs` entries: a completion removes
-        // its id and the replacement inserts a new one.
-        let mut slots: std::collections::HashMap<tokio::task::Id, usize> =
-            std::collections::HashMap::new();
-        let mut set = tokio::task::JoinSet::new();
-        let mut next = 0_usize;
-
-        while next < n && set.len() < jobs.max(1) {
-            let i = next;
-            next += 1;
-            slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
-        }
-        while let Some(joined) = set.join_next_with_id().await {
-            match joined {
-                Ok((id, (i, r))) => {
-                    slots.remove(&id);
-                    out[i] = Some(r);
-                }
-                Err(e) => {
-                    // Recover the index *before* `join_failure` consumes the
-                    // error, so the cause can travel with the item it belongs
-                    // to rather than only into the log.
-                    let id = e.id();
-                    let why = crate::tasks::join_failure(e, "request");
-                    match slots.remove(&id) {
-                        Some(i) => {
-                            tracing::error!(
-                                item = i,
-                                error = %why,
-                                "a request task did not report"
-                            );
-                            out[i] = Some(Err(format!("item {i} did not return: {why}")));
-                        }
-                        // Unreachable while every spawn's id is recorded, but a
-                        // failure must still be visible rather than silently
-                        // lost if that ever stops being true.
-                        None => tracing::error!(
-                            error = %why,
-                            "a request task did not report and its index could not be recovered"
-                        ),
-                    }
-                }
+        let items: std::sync::Arc<[T]> = items.into();
+        crate::tasks::join_ordered(&items, jobs, "request", |i, items| {
+            f(self.clone(), i, items[i].clone())
+        })
+        .await
+        .into_iter()
+        .enumerate()
+        .map(|(i, outcome)| match outcome {
+            Ok(value) => Ok(value),
+            Err(crate::tasks::JoinOutcome::Failed(why)) => Err(why),
+            Err(crate::tasks::JoinOutcome::Lost { why: Some(why) }) => {
+                Err(format!("item {i} did not return: {why}"))
             }
-            if next < n {
-                let i = next;
-                next += 1;
-                slots.insert(set.spawn(f(self.clone(), i, items[i].clone())).id(), i);
-            }
-        }
-
-        out.into_iter()
-            .enumerate()
-            .map(|(i, r)| {
-                r.unwrap_or_else(|| {
-                    // A hole means no task ever reported and no id was left to
-                    // blame; keep the index rather than dropping the item.
-                    Err(format!(
-                        "item {i}: a request task panicked and its index could not be recovered"
-                    ))
-                })
-            })
-            .collect()
+            Err(crate::tasks::JoinOutcome::Lost { why: None }) => Err(format!(
+                "item {i}: a request task panicked and its index could not be recovered"
+            )),
+        })
+        .collect()
     }
 
     /// Build a fetcher with the real clock.
@@ -1015,29 +957,31 @@ impl Fetcher {
         // materialises it. The two differ only here — the status check above and
         // the record below are shared, which is the reason this is one function
         // with a parameter rather than two functions.
+
+        // One record for both outcomes — the failure and the size are both about
+        // the same request. The count comes from the error, because a body that
+        // failed mid-read still crossed the wire and `bytes_in` prices what
+        // crossed it. Both destinations fail the same way, so this is the one
+        // site that decides what a failed attempt records.
+        let fail = |err: ApiError, bytes_in: u64| {
+            let record = self.record(
+                seq,
+                kind,
+                url,
+                range,
+                status,
+                resp_headers.clone(),
+                &final_url,
+                redirected,
+                bytes_in,
+                attempts,
+                started,
+            );
+            (err, record)
+        };
         let bytes_in: u64;
         let body: Option<Vec<u8>> = match dest {
             Destination::Memory => {
-                // One record for both outcomes, as before — the failure and the
-                // size are both about the same request. The count comes from the
-                // error, because a body that failed mid-read still crossed the
-                // wire and `bytes_in` prices what crossed it.
-                let fail = |err: ApiError, bytes_in: u64| {
-                    let record = self.record(
-                        seq,
-                        kind,
-                        url,
-                        range,
-                        status,
-                        resp_headers.clone(),
-                        &final_url,
-                        redirected,
-                        bytes_in,
-                        attempts,
-                        started,
-                    );
-                    (err, record)
-                };
                 let mut buf: Vec<u8> = Vec::with_capacity(body_reservation(
                     resp.content_length(),
                     self.max_response_bytes,
@@ -1054,23 +998,6 @@ impl Fetcher {
                 // Discard whatever a failed attempt left before this one writes.
                 // Without this the digests cover both responses — see
                 // `HashingFile::restart`.
-                let fail = |err: ApiError, bytes_in: u64| {
-                    let record = self.record(
-                        seq,
-                        kind,
-                        url,
-                        range,
-                        status,
-                        resp_headers.clone(),
-                        &final_url,
-                        redirected,
-                        bytes_in,
-                        attempts,
-                        started,
-                    );
-                    (err, record)
-                };
-
                 if let Err(e) = out.restart() {
                     // Not retryable, and not a transport failure: a disk that will
                     // not truncate is a disk that will not write either. No body

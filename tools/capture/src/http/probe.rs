@@ -365,10 +365,9 @@ pub struct ErrorShape {
 /// One row of `api/error_shapes.json`, from one observation.
 ///
 /// **A function, because the row is a claim about policy and policy must be
-/// testable.** This was built inline in a closure inside
-/// [`probe_error_shapes`], which meant [`ErrorShape::retryable`] — the one field
-/// that states what the retry policy would do — could only be checked against the
-/// statuses the mock happens to answer. Those are `200` and `404`, neither of
+/// testable.** [`ErrorShape::retryable`] — the one field that states what the
+/// retry policy would do — could only be checked against the statuses the mock
+/// happens to answer. Those are `200` and `404`, neither of
 /// which is in the retry set, so the `true` branch had no test at all: a
 /// hardcoded `false` and a correct derivation were indistinguishable.
 ///

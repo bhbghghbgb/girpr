@@ -30,7 +30,7 @@ use crate::encoding;
 // lives in `crate::encoding` and is re-exported here so the path is stable.
 pub use crate::encoding::percent_decode;
 /// How a record is rendered on stdout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     /// `SUMMARY k=v k=v`, human-readable.
     #[default]
@@ -141,14 +141,16 @@ impl From<i64> for Val {
 }
 impl From<u64> for Val {
     fn from(v: u64) -> Self {
-        // Byte counts are `u64` in the API types; the wire form is JSON, where a
-        // negative number cannot appear, so the narrowing is exact.
-        Val::Int(v as i64)
+        // Counts and byte totals are `u64` while a field value is `i64`. No real
+        // run gets near `i64::MAX`, so clamping is the honest answer for one
+        // that does: the record stays readable instead of wrapping negative.
+        Val::Int(i64::try_from(v).unwrap_or(i64::MAX))
     }
 }
 impl From<usize> for Val {
     fn from(v: usize) -> Self {
-        Val::Int(v as i64)
+        // Same rule as `From<u64>`: a count that does not fit `i64` clamps.
+        Val::Int(i64::try_from(v).unwrap_or(i64::MAX))
     }
 }
 impl From<u32> for Val {
@@ -592,10 +594,9 @@ pub const STAGE_CAPTURE: &str = "artifact";
 ///
 /// **The key list is the contract.** `girpr` and anything else reading this
 /// line parse these names in this order; a rename or a reorder is a breaking
-/// change, not a refactor. That is why this is one function with a flat,
-/// commented key list rather than something derived - a derived key set would be
-/// tidier right up until the day it silently renamed a field a caller depended
-/// on.
+/// change. That is why this is one function with a flat, commented key list
+/// rather than something derived - a derived key set would be tidier right up
+/// until the day it silently renamed a field a caller depended on.
 ///
 /// The order below is the order the numbers were appended in, not a grouping: it
 /// is preserved so that a diff of two summaries over the same run shows only
@@ -752,7 +753,7 @@ pub fn emit(line: &str) {
     // producer — one `BUNDLE` per bundle under a root — and for the
     // single-record commands this is noise. The handle is flushed by the
     // `LineWriter` behind stdout on `drop`, and `exit_with` flushes too.
-    let _guard = STDOUT_LOCK.lock();
+    let _guard = STDOUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
     if let Some(rest) = line.strip_prefix("SUMMARY ") {

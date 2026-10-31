@@ -608,7 +608,9 @@ async fn a_chunk_the_cdn_will_not_serve_is_one_failure_with_its_reason_in_the_ro
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
 
     assert_eq!(
         errors.len(),
@@ -754,7 +756,9 @@ async fn an_undecodable_body_is_stored_and_measured_rather_than_a_failed_fetch()
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     server.join().expect("the mock served the body");
 
     assert!(
@@ -874,7 +878,9 @@ async fn a_successful_empty_body_is_stored_and_measured_as_undecodable() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     server.join().expect("the mock served the empty body");
 
     assert!(
@@ -1002,7 +1008,9 @@ async fn a_truncated_response_keeps_its_prefix_and_marks_the_row_partial() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     server.join().expect("the mock served the prefix");
 
     assert_eq!(errors.len(), 1, "the failed fetch is reported once");
@@ -1082,7 +1090,9 @@ async fn a_complete_older_source_wins_over_a_truncated_newer_one() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     new_server
         .join()
         .expect("the newest server served its prefix");
@@ -1176,7 +1186,9 @@ async fn the_longest_prefix_wins_when_no_source_completes() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     new_server
         .join()
         .expect("the newest server served its prefix");
@@ -1267,7 +1279,9 @@ async fn a_shorter_later_prefix_keeps_the_newest_candidate() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     new_server
         .join()
         .expect("the newest server served its prefix");
@@ -1353,7 +1367,9 @@ async fn a_zero_byte_failure_after_a_prefix_keeps_the_prefix() {
     )
     .expect("a fetcher with no configured headers to reject");
 
-    let (entries, errors) = store.fill(&fetcher, &w, 1).await;
+    let (entries, errors) = store
+        .fill(&fetcher, &std::sync::Arc::from(w.as_slice()), 1)
+        .await;
     new_server
         .join()
         .expect("the newest server served its prefix");

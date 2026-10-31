@@ -3,7 +3,7 @@
 //! Everything here spawns the built binary. The unit tests in `src/` can only
 //! reach `clap_error_code`, because the remapping lives in `main.rs` — a shim
 //! with no other logic, and still the only place the process's exit status is
-//! decided. Asserting it here is what stops a future refactor from moving it
+//! decided. Asserting it here is what stops a future change from moving it
 //! back into clap's default.
 //!
 //! **No case touches a network.** `capture` really does reach the live APIs, so
@@ -205,10 +205,6 @@ fn a_usage_error_prints_a_summary_on_stdout_too() {
     // does not have to special-case a crash. `--materialize --artifact a --out
     // a` is such a failure: the request is well-formed and the plan refuses
     // it.
-    //
-    // It is also the only failure that cannot honour `--output`, since
-    // `--output` is what failed alongside it — so this pins the one case that
-    // always prints text.
     let r = assert_code(&["materialize", "--artifact", "a", "--out", "a"], 1);
     assert!(r.stdout.starts_with("SUMMARY "), "{:?}", r.stdout);
     assert!(r.stdout.contains("exit_code=1"), "{:?}", r.stdout);

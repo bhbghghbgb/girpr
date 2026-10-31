@@ -64,10 +64,9 @@ impl State {
 /// Keyed by both because MD5 alone cannot distinguish a truncated chunk from a
 /// whole one, and a patch that reused a truncated chunk would be silently wrong.
 ///
-/// **Borrowed, not owned.** This was `(String, i64)` built by an `into_key()`
-/// helper, so every chunk lookup allocated a `String` for a key that already
-/// existed inside the manifest — roughly 454 000 of them for a `game` field
-/// diff. `(&str, i64)` is already `Hash + Eq`, so the helper is gone.
+/// **Borrowed, not owned.** `(&str, i64)` is already `Hash + Eq`, so a chunk
+/// lookup never allocates a `String` for a key that already exists inside the
+/// manifest — roughly 454 000 of them for a `game` field diff.
 type ChunkKey<'a> = (&'a str, i64);
 
 /// One common path's score (spec §5).

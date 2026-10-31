@@ -283,9 +283,9 @@ impl<'a> HypClient<'a> {
 
     /// Fetch all six bodies and resolve the version pair.
     ///
-    /// **Six bodies, two round trips.** This was six consecutive `.await`s,
-    /// which is the entire network cost of a `--no-chunk-blobs` metadata run.
-    /// The dependency is narrower than the sequence implied: four of the six
+    /// **Six bodies, two round trips.** A sequential `.await` per body would be
+    /// the entire network cost of a `--no-chunk-blobs` metadata run. The
+    /// dependency is narrower than the sequence implied: four of the six URLs
     /// URLs depend only on `biz` and the capture language, so all four go at
     /// once, and of the remaining two — `getBuild` for each tag — neither
     /// depends on the other.
@@ -431,7 +431,6 @@ impl<'a> HypClient<'a> {
 /// under `api/`. The manifest rows are correct either way, because
 /// `manifest::mark_stored` receives a real `seq` from the fetch.
 pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
-    let records = log.records();
     for b in bodies.iter_mut() {
         // The endpoint name appears in the URL path, with or without a trailing
         // slash and with or without a query after it. Matched on the last
@@ -453,12 +452,15 @@ pub fn attach_seq(log: &RequestLog, bodies: &mut [&mut CapturedBody]) {
         let tag = b
             .file
             .strip_prefix(&format!("{}.", b.endpoint))
-            .and_then(|rest| rest.strip_suffix(".json"));
-        let hit = records.iter().rev().find(|r| {
-            r.url.contains(b.endpoint)
-                && r.status == 200
-                && tag.is_none_or(|t| r.url.contains(&format!("tag={t}")))
-        });
+            .and_then(|rest| rest.strip_suffix(".json"))
+            .map(|t| format!("tag={t}"));
+        let hit = log
+            .records_matching(|r| {
+                r.url.contains(b.endpoint)
+                    && r.status == 200
+                    && tag.as_deref().is_none_or(|t| r.url.contains(t))
+            })
+            .pop();
         b.seq = hit.map(|r| r.seq).unwrap_or(0);
     }
 }

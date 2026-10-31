@@ -238,6 +238,25 @@ pub struct MatrixRow {
 }
 
 impl MatrixRow {
+    /// A row for `class` before phase 3 has resolved which capture answers it.
+    pub fn new(class: Class, status: MatrixStatus, considered: u64) -> Self {
+        MatrixRow {
+            class,
+            status,
+            capture_id: None,
+            covered_by: None,
+            path: None,
+            reason: None,
+            candidates_considered: considered,
+        }
+    }
+
+    /// The row with its reason set.
+    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
+        self.reason = Some(reason.into());
+        self
+    }
+
     /// Whether this class is answered, one way or another.
     ///
     /// `over_budget` does **not** count: the caller was told to take it and the
@@ -402,23 +421,24 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     out
 }
 
-/// How many pool candidates satisfy each class, indexed by [`Class::ALL`].
+/// The pool indices that satisfy each class, indexed by [`Class::ALL`].
 ///
-/// One walk of the pool instead of one per class. The numbers are the same ones
-/// the per-class `filter().count()` produced.
-fn considered_counts(pool: &[SizedCandidate]) -> [u64; Class::ALL.len()] {
-    let mut counts = [0_u64; Class::ALL.len()];
-    for c in pool {
-        for (i, class) in Class::ALL.iter().enumerate() {
-            if c.candidate.satisfies(*class) {
-                counts[i] += 1;
+/// One walk of the pool instead of one per class. The per-class lists are in
+/// pool order — cheapest first — so a class's picks are read straight off its
+/// list, and `considered` is the list's length.
+fn candidates_by_class(pool: &[SizedCandidate]) -> [Vec<usize>; Class::ALL.len()] {
+    let mut out: [Vec<usize>; Class::ALL.len()] = std::array::from_fn(|_| Vec::new());
+    for (i, c) in pool.iter().enumerate() {
+        for (list, class) in out.iter_mut().zip(Class::ALL) {
+            if c.candidate.satisfies(class) {
+                list.push(i);
             }
         }
     }
-    counts
+    out
 }
 
-/// Where a class sits in [`Class::ALL`], for indexing [`considered_counts`].
+/// Where a class sits in [`Class::ALL`], for indexing [`candidates_by_class`].
 fn class_idx(class: Class) -> usize {
     Class::ALL
         .iter()
@@ -484,6 +504,18 @@ enum Coverage {
     },
     /// Nothing in the pool satisfies it.
     None,
+}
+
+/// One class's matrix row and how it was answered, before the budget's verdict.
+///
+/// A single value rather than two index-aligned vectors: the row and its
+/// coverage are one fact, and phase 3 resolves them together.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingRow {
+    /// The row phase 3 fills in.
+    row: MatrixRow,
+    /// What answered the class in phase 1.
+    cover: Coverage,
 }
 
 /// Run the three admission phases.
@@ -577,33 +609,30 @@ pub fn select(
     // `reuse_moved+7` would be a true statement about a global cost
     // order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
-    let mut notes: Vec<MatrixRow> = Vec::new();
-    // How each class was answered, before the budget had its say. The budget
-    // is what turns a plan into a fate, and the two are kept apart because a
-    // `covered_by` row whose covering capture is refused has to become
-    // `over_budget` — a decision about the *budget*, not about the class.
-    let mut coverage: Vec<Coverage> = Vec::new();
-    // `candidates_considered` for every class, in **one** pass over the pool.
-    // Nine passes — one per class — each re-walking 2 921 candidates would
-    // recompute the same counts nine times.
-    let considered_by_class = considered_counts(pool);
+    // One entry per class, in `Class::REQUIRED_ORDER`: the row phase 3 will
+    // resolve, and the answer the class had before the budget's verdict. The
+    // budget is what turns a plan into a fate, so a `covered_by` row whose
+    // covering capture is refused has to become `over_budget` — a decision
+    // about the *budget*, not about the class.
+    let mut pending: Vec<PendingRow> = Vec::new();
+    // Every class's candidates, in **one** pass over the pool, and the paths
+    // already spoken for. A pick walks its class's list once; re-walking the
+    // pool per pick would make `--per-class 50` quadratic.
+    let by_class = candidates_by_class(pool);
+    let mut taken: std::collections::HashSet<&str> =
+        admitted.iter().map(|a| a.path.as_str()).collect();
     for class in Class::REQUIRED_ORDER {
-        let considered = considered_by_class[class_idx(class)];
+        let candidates = &by_class[class_idx(class)];
+        let considered = candidates.len() as u64;
 
         // Already answered by something captured for another reason?
         if let Some(cover) = admitted.iter().find(|a| a.satisfies(class)) {
-            notes.push(MatrixRow {
-                class,
-                status: MatrixStatus::CoveredBy,
-                capture_id: None,
-                covered_by: None,
-                path: None,
-                reason: None,
-                candidates_considered: considered,
-            });
-            coverage.push(Coverage::ByAdmission {
-                capture_id: cover.capture_id.clone(),
-                path: cover.path.clone(),
+            pending.push(PendingRow {
+                row: MatrixRow::new(class, MatrixStatus::CoveredBy, considered),
+                cover: Coverage::ByAdmission {
+                    capture_id: cover.capture_id.clone(),
+                    path: cover.path.clone(),
+                },
             });
             continue;
         }
@@ -627,57 +656,39 @@ pub fn select(
             .min_by_key(|(_, (_, _, w))| w.budget_cost())
             .map(|(i, _)| i);
         if let Some(want) = cover {
-            notes.push(MatrixRow {
-                class,
-                status: MatrixStatus::CoveredBy,
-                capture_id: None,
-                covered_by: None,
-                path: None,
-                reason: None,
-                candidates_considered: considered,
+            pending.push(PendingRow {
+                row: MatrixRow::new(class, MatrixStatus::CoveredBy, considered),
+                cover: Coverage::ByWant { want },
             });
-            coverage.push(Coverage::ByWant { want });
             continue;
         }
 
-        let mut taken = 0_usize;
-        let mut picked_any = false;
-        while taken < per_class {
-            let pick = pool.iter().find(|c| {
-                c.candidate.satisfies(class)
-                    && !admitted.iter().any(|a| a.path == c.candidate.path)
-                    && !wants
-                        .iter()
-                        .any(|(_, _, w)| w.candidate.path == c.candidate.path)
-            });
-            let Some(pick) = pick else { break };
-            picked_any = true;
-            wants.push((class, taken, pick.clone()));
-            taken += 1;
+        let mut picked = 0_usize;
+        for &i in candidates {
+            if picked == per_class {
+                break;
+            }
+            let c = &pool[i];
+            // A path taken by an earlier class, or by an earlier pick here,
+            // cannot be taken again.
+            if !taken.insert(c.candidate.path.as_str()) {
+                continue;
+            }
+            wants.push((class, picked, c.clone()));
+            picked += 1;
         }
 
-        if picked_any {
-            notes.push(MatrixRow {
-                class,
-                status: MatrixStatus::Captured,
-                capture_id: None,
-                covered_by: None,
-                path: None,
-                reason: None,
-                candidates_considered: considered,
+        if picked > 0 {
+            pending.push(PendingRow {
+                row: MatrixRow::new(class, MatrixStatus::Captured, considered),
+                cover: Coverage::Own,
             });
-            coverage.push(Coverage::Own);
         } else {
-            notes.push(MatrixRow {
-                class,
-                status: MatrixStatus::Unavailable,
-                capture_id: None,
-                covered_by: None,
-                path: None,
-                reason: Some(unavailable_reason(class, considered)),
-                candidates_considered: considered,
+            pending.push(PendingRow {
+                row: MatrixRow::new(class, MatrixStatus::Unavailable, considered)
+                    .with_reason(unavailable_reason(class, considered)),
+                cover: Coverage::None,
             });
-            coverage.push(Coverage::None);
         }
     }
 
@@ -737,8 +748,8 @@ pub fn select(
     );
 
     // Phase 3 — the matrix, with ids resolved.
-    let mut matrix = Vec::with_capacity(notes.len());
-    for (mut row, cover) in notes.into_iter().zip(coverage) {
+    let mut matrix = Vec::with_capacity(pending.len());
+    for PendingRow { mut row, cover } in pending {
         match cover {
             // Nothing in the pool satisfies it: the row said so in phase 1.
             Coverage::None => {}
