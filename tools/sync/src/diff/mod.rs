@@ -14,7 +14,7 @@ mod verdict;
 pub use crate::planner::StatField;
 pub use verdict::Verdict;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::effective::EffRec;
 use crate::hash::{AlgoSet, DigestSet};
@@ -234,19 +234,15 @@ pub fn diff_maps(
 ) -> Diff {
     let mut d = Diff::default();
     if pairing == CasePairing::Exact {
-        let mut keys: HashSet<&String> = HashSet::new();
-        for k in src.keys().chain(dst.keys()) {
-            keys.insert(k);
-        }
-        for k in keys {
-            match (src.get(k), dst.get(k)) {
-                (Some(_s), None) => {
-                    d.missing.push(k.clone());
-                }
-                (None, Some(_)) => {
-                    d.extra.push(k.clone());
-                }
-                (Some(s), Some(t)) => {
+        // Walk src once — each key is either missing from dst or a both-sides pair
+        // classified here — then walk dst for the keys src does not hold. Both maps
+        // are keyed by the same spelling, so the dst pass needs one membership test
+        // and never revisits a pair: every both-sides key is classified exactly once,
+        // under the spelling both sides share.
+        for (k, s) in src {
+            match dst.get(k) {
+                None => d.missing.push(k.clone()),
+                Some(t) => {
                     if s.kind != t.kind {
                         d.type_conflict.push(k.clone());
                     } else {
@@ -259,7 +255,11 @@ pub fn diff_maps(
                         d.verdicts.insert(k.clone(), v);
                     }
                 }
-                (None, None) => {}
+            }
+        }
+        for k in dst.keys() {
+            if !src.contains_key(k) {
+                d.extra.push(k.clone());
             }
         }
     } else {
