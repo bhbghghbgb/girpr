@@ -9,7 +9,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 ## Phase 0 — pure cleanup
 
 - [x] I1 — correct `DigestSet::merge`'s documented winner
-- [ ] D2 — add `ScanMode::new`
+- [x] D2 — add `ScanMode::new`
 - [ ] D1 — share the link-disjoint validation loop
 - [ ] E1 — gate `why_tag` behind `why`
 - [ ] E3 — allocation-free `Record` rendering, sorted JSON keys
@@ -47,6 +47,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 Tasks finished but not yet reviewed by hand:
 
 - I1 — `girsync: document the merge write direction` (`1844e29`)
+- D2 — `girsync: add ScanMode constructor` (`7e6b1e2`)
 
 ## Skipped
 
