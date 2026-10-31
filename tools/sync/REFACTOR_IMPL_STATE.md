@@ -32,7 +32,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 ## Phase 2 — behavior-adjacent
 
 - [x] B1 — one key snapshot for link pre-drops
-- [ ] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
+- [x] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
 - [ ] C2 — copy/fix membership sets in the link-storage guards
 - [ ] D3 — shared compare/compare-self tail
 - [ ] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
@@ -64,6 +64,7 @@ Tasks finished but not yet reviewed by hand:
 - J1 — `girsync: reuse copy buffer per worker` (`867f9a9`)
 - E2 — `girsync: stream verdict records` (`5e1dc78`)
 - B1 — `girsync: snapshot cache keys once for link pre-drops` (`84edec5`)
+- B2 — `girsync: share wiped-subtree prefix checks` (`173e54d`)
 
 ## Skipped
 
