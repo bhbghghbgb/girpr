@@ -1,11 +1,10 @@
 //! Live filesystem scan: one entry per file and dir, with cache dirs pruned.
 
 use anyhow::{Context, Result, bail};
-use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use crate::util::{elapsed_s, is_cache_rel, mtime_ns_of};
+use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 
 /// One entry as found on disk, before any cache consultation.
 ///
@@ -146,37 +145,6 @@ pub fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> 
         return Ok(());
     }
     check_mixed_case_keys(live.iter().map(|e| e.rel.as_str()), "", label)
-}
-
-/// Group `keys` by lowercase spelling and abort when a group has more than one
-/// spelling.
-///
-/// An exact duplicate is not a collision, so each group is sorted and
-/// deduplicated before it is measured. The reported spellings are sorted for
-/// the same reason: an error message must not depend on map iteration order.
-/// `prefix` and `label` are joined to name the side in the message.
-pub(crate) fn check_mixed_case_keys<'a>(
-    keys: impl IntoIterator<Item = &'a str>,
-    prefix: &str,
-    label: &str,
-) -> Result<()> {
-    let mut groups: HashMap<String, Vec<&'a str>> = HashMap::new();
-    for key in keys {
-        groups.entry(key.to_lowercase()).or_default().push(key);
-    }
-    for (_, mut group) in groups {
-        group.sort_unstable();
-        group.dedup();
-        if group.len() > 1 {
-            bail!(
-                "mixed-case collision in {}{}: {}",
-                prefix,
-                label,
-                group.join(" vs ")
-            );
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

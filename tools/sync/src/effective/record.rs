@@ -12,8 +12,7 @@ use std::collections::HashMap;
 use crate::cache::CacheDb;
 use crate::config::CommonOpts;
 use crate::filter::is_excluded;
-use crate::scan::check_mixed_case_keys;
-use crate::util::is_cache_rel;
+use crate::util::{check_mixed_case_keys, is_cache_rel};
 
 use super::entry::{SideEntry, SideScan};
 

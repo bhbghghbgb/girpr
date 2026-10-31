@@ -1,6 +1,7 @@
 //! Small path, time, and filesystem helpers with no girsync-specific state.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::cache::CACHE_PREFIX;
@@ -144,6 +145,40 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     {
         a == b
     }
+}
+
+/// Group `keys` by lowercase spelling and abort when a group has more than one
+/// spelling.
+///
+/// An exact duplicate is not a collision, so each group is sorted and
+/// deduplicated before it is measured. The reported spellings are sorted for
+/// the same reason: an error message must not depend on map iteration order.
+/// `prefix` and `label` are joined to name the side in the message.
+///
+/// Shared by the disk walk and the record read: both compare paths by name, and
+/// neither owns the rule.
+pub(crate) fn check_mixed_case_keys<'a>(
+    keys: impl IntoIterator<Item = &'a str>,
+    prefix: &str,
+    label: &str,
+) -> Result<()> {
+    let mut groups: HashMap<String, Vec<&'a str>> = HashMap::new();
+    for key in keys {
+        groups.entry(key.to_lowercase()).or_default().push(key);
+    }
+    for (_, mut group) in groups {
+        group.sort_unstable();
+        group.dedup();
+        if group.len() > 1 {
+            bail!(
+                "mixed-case collision in {}{}: {}",
+                prefix,
+                label,
+                group.join(" vs ")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Modification time as nanoseconds since the epoch (0 if unavailable).
