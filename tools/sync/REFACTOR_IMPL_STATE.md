@@ -176,9 +176,15 @@ unimplemented. The follow-ups below are non-blocking.
   with followed descendants, but the change's point is that one key snapshot
   serves *every* link. Add a fixture with two deleted links (siblings, and one
   nested under the other) whose descendants have cache rows, then assert
-  `compare-self` is clean and each descendant row is gone. Without it, a future
-  edit that moves `load_keys` back inside a per-link loop would still pass the
-  suite and reintroduce the N×cache scan.
+  `compare-self` is clean and each descendant row is gone. A result-based
+  fixture cannot observe the scan count, so a per-link `load_keys` loop would
+  remove the same rows and pass; the comment in `predrop_cache_entries` is the
+  guard for that part, and the fixture's job is the multi-link result.
+  **Addressed in `a5bae82`:**
+  `a_sync_that_removes_several_links_prunes_every_descendant_row` removes two
+  sibling links plus a link nested in the first target and asserts every
+  descendant row is gone, the mirrored `real/x.txt` row survives, and
+  `compare-self` is clean.
 - **B2 — the `dm`-kind filter is only covered end-to-end.** The new unit test
   pins strict descendant matching and the component boundary, and the three
   call sites keep their integration guards
@@ -188,8 +194,11 @@ unimplemented. The follow-ups below are non-blocking.
   not directly pinned is `wiped_by_copy`'s "copy whose dst is a directory"
   filter: a unit test with a file-kind `dm` entry would hold it. The helper's
   placement in `plan/build.rs` and its re-export to `apply` follow the finding;
-  `util.rs` remains the option if more path helpers land. No action for
-  acceptance.
+  `util.rs` remains the option if more path helpers land.
+  **Addressed in `07db98c`:**
+  `a_copy_wipes_a_subtree_only_when_its_dst_is_a_directory` builds a file-kind
+  and a directory-kind `dm` entry and asserts that only the latter wipes its
+  subtree, plus the root-is-not-under-itself case.
 - **C2 — one comment names the wrong set.** The new comment above `copy_rels`
   says "copy and type-conflict sets", but the second set is `fix_dirs`; fix the
   sentence to "copy and fix-dir sets". The rest is faithful: the first
@@ -198,6 +207,10 @@ unimplemented. The follow-ups below are non-blocking.
   change makes `terminals` large, build `copy_rels` once in
   `spare_link_storage` and pass it to `ensure_shared_storage_safe` rather than
   building it twice; today both are O(copies), so this is style only.
+  **Addressed in `d026655`:** the comment now says "copy and fix-dir sets". The
+  shared-set style point was deliberately skipped and accepted: threading the
+  set through would widen the `pub(super)` helper's signature, and its unit test
+  calls it directly, for no measured gain.
 - **D3 — no direct test, but the commands hold it.** `report_and_finish` has no
   unit test of its own; the two exit paths and the JSON `SUMMARY` are covered by
   `a_case_only_pair_exits_four_with_total_diff_zero`,
@@ -206,6 +219,8 @@ unimplemented. The follow-ups below are non-blocking.
   removes the drift risk the finding named. An optional direct test could assert
   the helper returns `0` for an empty `Diff` and `4` otherwise, but that would
   duplicate what the command tests already do.
+  **Declined in the follow-up batch:** skipped as optional; the three command
+  tests above remain the guard. Accepted.
 
 ## Follow-up batches
 
@@ -228,9 +243,19 @@ Review follow-ups from the notes above, addressed in one batch per phase.
   and the E2 summary-skip variant were deliberately skipped and accepted as such.
   Checked at `a27cd1d`: `cargo test -p girsync` green on every target, and
   clippy and `cargo fmt --check` clean.
-- Phase 2 (B1–D3) batch — done, awaiting review: `a5bae82` (B1 multi-link
+- Phase 2 (B1–D3) batch — reviewed, accepted: `a5bae82` (B1 multi-link
   pruning), `07db98c` (B2 copy-wiped kind filter), `d026655` (C2 comment);
-  the C2 shared-set style point and the D3 direct test deliberately skipped.
+  the C2 shared-set style point and the D3 direct test were deliberately
+  skipped and accepted. Checked at `d026655` in its own worktree: `cargo test
+  -p girsync` is green on every target (180 unit tests plus all integration
+  suites), clippy and `cargo fmt --check` are clean, and both new tests were run
+  in place. One residual, non-blocking: the B1 fixture pins the rows removed,
+  not the number of key scans, so it cannot catch a return to a per-link
+  `load_keys` loop; the comment in `predrop_cache_entries` is the guard for
+  that part. It also inspects only the post-run cache, so seeding the cache
+  first (for example with `cmd_update` over `dst`) and asserting the descendant
+  rows exist before the sync would keep the fixture from passing vacuously if
+  the walk ever stops reporting link descendants.
 
 ## Skipped
 
