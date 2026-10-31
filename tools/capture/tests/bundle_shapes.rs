@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use common::{File, Mock, World, blob};
+use gircap::report::percent_decode;
 use girpr_tempdir::TempDir;
 use serde_json::Value;
 
@@ -87,26 +88,6 @@ impl Run {
             .map(|(k, v)| (k, percent_decode(v)))
             .collect()
     }
-}
-
-fn percent_decode(s: &str) -> String {
-    let b = s.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            b'%' if i + 2 < b.len() => {
-                let hex = std::str::from_utf8(&b[i + 1..i + 3]).unwrap_or("");
-                out.push(u8::from_str_radix(hex, 16).unwrap_or(b'%'));
-                i += 3;
-            }
-            c => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn run(args: &[&str]) -> Run {
