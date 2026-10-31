@@ -1,6 +1,6 @@
 //! The [`Plan`] work list and [`build_plan`], pure over the two effective maps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diff::Diff;
 use crate::effective::EffRec;
@@ -155,6 +155,9 @@ pub(crate) fn build_plan(
 
     let mut delete_files: Vec<String> = Vec::new();
     let mut shared_link_extras: Vec<(String, String)> = Vec::new();
+    // Every link-extra path asks the same question of the same list, so answer it
+    // once for the whole loop.
+    let type_conflicts: HashSet<&str> = diff.type_conflict.iter().map(String::as_str).collect();
     if !keep_extra {
         for r in &diff.extra {
             // A path *under* a dst link resolves through it: `remove_file` on
@@ -173,7 +176,7 @@ pub(crate) fn build_plan(
                 // A type conflict *at* the link replaces it, which takes
                 // the followed subtree with it: those extras are not left
                 // behind, so this is not the non-convergence case below.
-                let replaced = diff.type_conflict.iter().any(|t| t.as_str() == link);
+                let replaced = type_conflicts.contains(link);
                 if sm.contains_key(link) && !replaced {
                     // Shared: removing the link would delete a directory `src`
                     // is mirroring into, and removing the descendant would reach
