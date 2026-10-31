@@ -951,6 +951,33 @@ fn two_kept_links_on_one_storage_refuse_when_either_is_copied() {
     ensure_shared_storage_safe(&terminals, &Plan::default()).expect("no write, no conflict");
 }
 
+/// Only a copy whose dst is a **directory** wipes a subtree: `copy_one` removes
+/// a blocking directory recursively, while a file at the same path is merely
+/// overwritten and the paths the walk reported under it are still there.
+#[test]
+fn a_copy_wipes_a_subtree_only_when_its_dst_is_a_directory() {
+    let mut dm = HashMap::new();
+    dm.insert("blocked".to_string(), file());
+    dm.insert("tree".to_string(), dir());
+    let p = plan(&[], &["blocked", "tree"], &[]);
+
+    let wiped = DirPrefixes::wiped_by_copy(&p.copy, &dm);
+    assert!(
+        !wiped.has_ancestor("blocked/x.txt"),
+        "a file-kind dst is overwritten, not wiped: {:?}",
+        wiped
+    );
+    assert!(
+        wiped.has_ancestor("tree/x.txt"),
+        "a directory-kind dst is removed recursively: {:?}",
+        wiped
+    );
+    assert!(
+        !wiped.has_ancestor("tree"),
+        "the directory at the root of the wipe is not under itself"
+    );
+}
+
 /// Wiped subtrees are matched strictly and by whole component: the directory at
 /// the root of a wipe is not under itself, and a shared name prefix is not an
 /// ancestor.
