@@ -60,6 +60,10 @@ pub(crate) fn spare_link_storage(
     on_disk: Option<&super::super::rename::DiskSpelling>,
 ) -> Result<()> {
     let mut storage = LinkStorage::default();
+    // The plan is not mutated until `storage.apply` at the end, so membership
+    // in its copy and type-conflict sets can be read once up front.
+    let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
+    let fix_dirs: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
     // Nothing to spare when no copy or delete could meet a link target.
     let mut rels: Vec<&String> = dm.keys().collect();
     rels.sort();
@@ -144,11 +148,7 @@ pub(crate) fn spare_link_storage(
                     }
                     match sm.get(tr) {
                         Some(trec) if trec.kind == "file" => {
-                            if plan
-                                .copy
-                                .iter()
-                                .any(|item| item.rel == *rel || item.rel == tr)
-                            {
+                            if copy_rels.contains(rel.as_str()) || copy_rels.contains(tr) {
                                 bail!(
                                     "refusing to sync `{rel}`: dst `{rel}` is a link to \
                                      `{tr}`, which src also has; copying either path would \
@@ -158,7 +158,7 @@ pub(crate) fn spare_link_storage(
                             }
                         }
                         Some(_) => {
-                            if plan.fix_dirs.iter().any(|f| f == tr) {
+                            if fix_dirs.contains(tr) {
                                 bail!(
                                     "refusing to sync `{rel}`: dst `{rel}` is a link to \
                                      `{tr}`, which this plan replaces with a directory; the \
@@ -225,29 +225,27 @@ pub(super) fn ensure_shared_storage_safe(
     terminals: &[(String, String, String)],
     plan: &Plan,
 ) -> Result<()> {
-    let mut by_storage: HashMap<&str, Vec<&str>> = HashMap::new();
-    for (rel, key, _) in terminals {
-        by_storage.entry(key.as_str()).or_default().push(rel);
+    let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
+    // Each group keeps the first label recorded for its key, so the refusal
+    // needs no second pass over `terminals`.
+    let mut by_storage: HashMap<&str, (&str, Vec<&str>)> = HashMap::new();
+    for (rel, key, label) in terminals {
+        by_storage
+            .entry(key.as_str())
+            .or_insert_with(|| (label.as_str(), Vec::new()))
+            .1
+            .push(rel);
     }
     let mut groups: Vec<_> = by_storage
         .into_iter()
-        .filter(|(_, rels)| rels.len() > 1)
+        .filter(|(_, (_, rels))| rels.len() > 1)
         .collect();
     // Deterministic message when several groups qualify.
     groups.sort_by(|a, b| a.0.cmp(b.0));
-    for (key, rels) in groups {
-        if !plan
-            .copy
-            .iter()
-            .any(|item| rels.contains(&item.rel.as_str()))
-        {
+    for (_, (label, rels)) in groups {
+        if !rels.iter().any(|r| copy_rels.contains(*r)) {
             continue;
         }
-        let label = terminals
-            .iter()
-            .find(|(_, k, _)| k.as_str() == key)
-            .map(|(_, _, label)| label.as_str())
-            .unwrap_or(key);
         bail!(
             "refusing to sync: dst links `{}` and `{}` both resolve to the same file \
              `{label}`; copying either would give one inode two contents (remove one \
