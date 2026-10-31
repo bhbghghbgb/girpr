@@ -35,12 +35,16 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [r] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
 - [r] C2 — copy/fix membership sets in the link-storage guards
 - [r] D3 — shared compare/compare-self tail
-- [ ] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
+- [x] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
 - [ ] I3 — Windows ASCII fast path with the Unicode fallback
 
 ## Phase 3 — rename path
 
 - [ ] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
+
+## Pending review
+
+- F1 — `girsync: index alternate cache keys and count adoptions once` (`71452b6`)
 
 ## Review notes
 
