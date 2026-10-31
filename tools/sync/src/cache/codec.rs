@@ -59,12 +59,11 @@ pub(super) fn encode_rec(rec: &FileRec) -> Result<Vec<u8>> {
     // Known algorithms in canonical order, then foreign names sorted by name.
     //
     // Both halves are deterministic, which is the point: the bytes of a row are
-    // reproducible for the same content. For a row whose names are all known this is
-    // byte-for-byte the sorted-by-name layout the previous implementation produced,
-    // because canonical order (`md5`, `sha256`) is also alphabetical order. A row
-    // carrying an unknown name moves that name after the known ones instead of
-    // interleaving it — the meaning does not change, and nothing compares encoded
-    // values for equality (`CacheWrite::put` only inserts).
+    // reproducible for the same content. Known algorithms are emitted in canonical
+    // order (`md5`, `sha256`), which is also alphabetical order. A row carrying an
+    // unknown name moves that name after the known ones instead of interleaving it
+    // — the meaning does not change, and nothing compares encoded values for
+    // equality (`CacheWrite::put` only inserts).
     let mut foreign: Vec<(&str, &[u8])> = rec.hashes.foreign_iter().collect();
     foreign.sort_by_key(|(n, _)| *n);
     v.push(rec.hashes.len() as u8);
@@ -199,11 +198,10 @@ mod tests {
     /// two encodings that agree with each other, which is not the property that
     /// matters here.
     ///
-    /// These are exactly the bytes the previous, map-based implementation
-    /// produced for this row: names sorted, which for `md5` and `sha256` is also
-    /// canonical order, so the two layouts coincide and **every cache written by
-    /// an earlier build stays readable**. If this ever changes, that stops being
-    /// true, and nothing else in the suite would notice.
+    /// Names are sorted, which for `md5` and `sha256` is also canonical order, so
+    /// the layouts coincide and **every cache written by an earlier build stays
+    /// readable**. If this ever changes, that stops being true, and nothing else
+    /// in the suite would notice.
     #[test]
     fn the_wire_format_is_byte_identical_to_what_a_map_produced() {
         let mut want: Vec<u8> = vec![FMT_V1, KIND_FILE];
@@ -222,10 +220,10 @@ mod tests {
     }
 
     /// An unknown name is carried, and it lands **after** the known ones rather
-    /// than interleaving them — the one place the new layout differs from the old.
-    /// The meaning does not change, the bytes stay deterministic, and nothing
-    /// compares encoded values for equality; this says so out loud rather than
-    /// leaving a reader to wonder whether the reordering was intended.
+    /// than interleaving them — the one place this layout reorders entries. The
+    /// meaning does not change, the bytes stay deterministic, and nothing compares
+    /// encoded values for equality; this says so out loud rather than leaving a
+    /// reader to wonder whether the reordering was intended.
     #[test]
     fn an_unknown_name_is_carried_and_lands_after_the_known_ones() {
         let mut rec = file_rec();

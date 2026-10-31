@@ -1738,7 +1738,7 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(rfile(&dst, "a.txt"), b"payload");
-    // Both caches still open; before the fix the dst one could be unreadable.
+    // Both caches still open; a dst cache readable before the run stays readable.
     assert_eq!(cmd_update(update(src.clone()), &log()).unwrap(), 0);
     assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
 }

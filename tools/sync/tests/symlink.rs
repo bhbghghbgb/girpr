@@ -369,7 +369,7 @@ fn sync_removes_a_dst_directory_link_without_deleting_its_inside_target() {
     assert_eq!(
         rfile(&dst, "real/x.txt"),
         b"shared content",
-        "the target's file survives: it was deleted through the link before the fix"
+        "the target's file survives: it was not deleted through the link"
     );
     assert!(!dst.join("link").exists(), "the link itself is gone");
     let deleted = paths(&recs, "delete");

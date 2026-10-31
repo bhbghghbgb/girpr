@@ -58,9 +58,7 @@ use super::side::{OpenSide, Side};
 /// whatever order they were inserted in. What it does drop is byte-for-byte
 /// reproducibility of `girpr-cache`: redb's physical layout can depend on insertion
 /// order. Nothing consumes those bytes as a contract — the byte-identity promises
-/// are about dry runs doing no writes at all — and the old windowed form bought the
-/// property by holding a whole window's digests in memory until its last hash
-/// finished.
+/// are about dry runs doing no writes at all.
 ///
 /// A failure is the first one to finish rather than the lowest path: the run aborts,
 /// and the rows in the uncommitted batch are dropped with it.
