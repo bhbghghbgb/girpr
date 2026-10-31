@@ -31,25 +31,16 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 2 — behavior-adjacent
 
-- [x] B1 — one key snapshot for link pre-drops
-- [x] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
-- [x] C2 — copy/fix membership sets in the link-storage guards
-- [x] D3 — shared compare/compare-self tail
+- [r] B1 — one key snapshot for link pre-drops
+- [r] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
+- [r] C2 — copy/fix membership sets in the link-storage guards
+- [r] D3 — shared compare/compare-self tail
 - [ ] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
 - [ ] I3 — Windows ASCII fast path with the Unicode fallback
 
 ## Phase 3 — rename path
 
 - [ ] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
-
-## Pending review
-
-Phase 2 tasks finished but not yet reviewed by hand:
-
-- B1 — `girsync: snapshot cache keys once for link pre-drops` (`84edec5`)
-- B2 — `girsync: share wiped-subtree prefix checks` (`173e54d`)
-- C2 — `girsync: precompute link storage membership` (`08707f6`)
-- D3 — `girsync: share compare finish path` (`82e81f6`)
 
 ## Review notes
 
@@ -143,6 +134,58 @@ they stay in the pending list. The follow-ups below are non-blocking.
   `sync` still builds the `SUMMARY` record and drops it in the closure;
   harmless, but a summary-skipping variant would avoid the work if that path
   grows.
+
+### Phase 2 — behavior-adjacent, B1–D3 — accepted
+
+Reviewed the batch at `82e81f6`, which is code-identical to `HEAD`:
+`git diff 82e81f6..HEAD -- tools/sync/src` is empty, and only this state file
+changed after it. Each commit was checked out in a separate worktree, reusing
+the main target directory, and passed `cargo check -p girsync --all-targets`.
+`cargo test -p girsync` is green for every target at the batch tip, and
+`cargo clippy -p girsync --all-targets -- -D warnings` and
+`cargo fmt -p girsync -- --check` are clean. Each commit's own guards were also
+run in place: the link-removal `compare-self` case at `84edec5`, `DirPrefixes`
+and the three wiped-subtree sites at `173e54d`, the shared-storage refusals at
+`08707f6`, and the compare/compare-self exit codes and JSON summary at
+`82e81f6`. B1, B2, C2 and D3 preserve the documented contracts; nothing needs a
+revert or a code fix. F1 and I3 are still phase 2 `[ ]` tasks and remain
+unimplemented. The follow-ups below are non-blocking.
+
+- **B1 — one deleted link is pinned, several are not.** The existing
+  `a_sync_that_removes_a_link_leaves_compare_self_clean` covers a single link
+  with followed descendants, but the change's point is that one key snapshot
+  serves *every* link. Add a fixture with two deleted links (siblings, and one
+  nested under the other) whose descendants have cache rows, then assert
+  `compare-self` is clean and each descendant row is gone. Without it, a future
+  edit that moves `load_keys` back inside a per-link loop would still pass the
+  suite and reintroduce the N×cache scan.
+- **B2 — the `dm`-kind filter is only covered end-to-end.** The new unit test
+  pins strict descendant matching and the component boundary, and the three
+  call sites keep their integration guards
+  (`rows_for_a_subtree_a_copy_wiped_are_dropped`,
+  `a_folder_prunes_its_own_cache_before_the_planner_sees_it`,
+  `a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal`). What is
+  not directly pinned is `wiped_by_copy`'s "copy whose dst is a directory"
+  filter: a unit test with a file-kind `dm` entry would hold it. The helper's
+  placement in `plan/build.rs` and its re-export to `apply` follow the finding;
+  `util.rs` remains the option if more path helpers land. No action for
+  acceptance.
+- **C2 — one comment names the wrong set.** The new comment above `copy_rels`
+  says "copy and type-conflict sets", but the second set is `fix_dirs`; fix the
+  sentence to "copy and fix-dir sets". The rest is faithful: the first
+  `terminals` entry per key supplies the label, matching the old
+  `terminals.iter().find`, and group order is still sorted by key. If a future
+  change makes `terminals` large, build `copy_rels` once in
+  `spare_link_storage` and pass it to `ensure_shared_storage_safe` rather than
+  building it twice; today both are O(copies), so this is style only.
+- **D3 — no direct test, but the commands hold it.** `report_and_finish` has no
+  unit test of its own; the two exit paths and the JSON `SUMMARY` are covered by
+  `a_case_only_pair_exits_four_with_total_diff_zero`,
+  `compare_json_is_one_object_per_line_with_a_single_summary` and the
+  compare-self drift tests. The `"end"` field list is now one definition, which
+  removes the drift risk the finding named. An optional direct test could assert
+  the helper returns `0` for an empty `Diff` and `4` otherwise, but that would
+  duplicate what the command tests already do.
 
 ## Skipped
 
