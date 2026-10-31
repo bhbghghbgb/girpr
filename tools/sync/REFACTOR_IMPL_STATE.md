@@ -59,6 +59,8 @@ needs a revert or a code fix. The follow-ups below are non-blocking.
   destination`, `write into its own source`, and the two `contains` variants),
   plus the `resolve src link` / `resolve dst link` context, so a future edit to
   `LinkSide` cannot silently change the advice a user acts on.
+  **Addressed in `5359071`:** both sides and both relations are asserted end to
+  end, and the unresolvable-link context is pinned by a unit test.
 - **E3 — latent duplicate-key divergence.** `Record::write_json` matches
   `Record::json().to_string()` byte-for-byte for every record built today (the
   new unit tests cover key order, the `UInt`/`Int` split, arrays, and escaping).
@@ -66,15 +68,20 @@ needs a revert or a code fix. The follow-ups below are non-blocking.
   last value, the writer emits both members. Keys are static and unique today,
   so this is latent only; a `debug_assert!` on uniqueness, or skipping an
   `event` field in `write_json`, would close it.
+  **Addressed in `dce87a2`:** `put` now rejects a reserved or repeated key with
+  one test per guard (debug builds only).
 - **F2 — helper placement.** `check_mixed_case_keys` lives in `scan` and is
   imported by `effective::record`, whose module doc says the disk walk and the
   table read deliberately do not share a module. `util.rs` would keep that
   layering, the same move B2's `DirPrefixes` makes.
+  **Addressed in `ff1d76c`:** moved unchanged in behavior and message.
 - **D2 — adopt the constructor in tests.** Production call sites all use
   `ScanMode::new`; the integration-test helpers still build the literal
   (`tests/common/mod.rs`, `tests/lazy/*`, `tests/hash_mode/*`,
   `tests/compare.rs`, ...). Test-only and optional, but it is what makes one
   edit enough when a field is added.
+  **Addressed in `3655645`:** every test-side literal calls the constructor,
+  including the `const OPEN_MODE` initialiser.
 
 ### Phase 1 — local performance and reporting — accepted
 
@@ -191,9 +198,17 @@ unimplemented. The follow-ups below are non-blocking.
 
 Review follow-ups from the notes above, addressed in one batch per phase.
 
-- Phase 0 batch — done, awaiting review: `5359071` (D1 diagnostics pinned),
+- Phase 0 batch — reviewed, accepted: `5359071` (D1 diagnostics pinned),
   `3655645` (D2 test constructors), `dce87a2` (E3 field-key guard),
-  `ff1d76c` (F2 helper moved to `util`).
+  `ff1d76c` (F2 helper moved to `util`). Checked at `5359071` in its own
+  worktree: `cargo test -p girsync` green on every target, and clippy and
+  `cargo fmt --check` clean. The suite is green at HEAD too
+  (`cargo nextest run -p girsync`: 439 passed, 1 skipped). One residual,
+  non-blocking: the E3 guard is a `debug_assert!`, so a release-mode test run
+  would not panic and the two `#[should_panic]` tests would fail. The project
+  runner is nextest in the dev profile, where they pass; gate those tests on
+  `debug_assertions` (or make the guard a hard `assert!`) if a release-mode
+  suite is ever added.
 - Phase 1 batch — done, awaiting review: `6f11ee3` (I2 lookup caveat doc),
   `b89c189` (E2 visitor export), `b647505` (G3 `dst_all` scoped to `AllOf`);
   G4 optional struct and the E2 summary-skip variant deliberately skipped.
