@@ -35,18 +35,16 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [r] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
 - [r] C2 — copy/fix membership sets in the link-storage guards
 - [r] D3 — shared compare/compare-self tail
-- [x] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
-- [x] I3 — Windows ASCII fast path with the Unicode fallback
+- [r] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
+- [r] I3 — Windows ASCII fast path with the Unicode fallback
 
 ## Phase 3 — rename path
 
-- [x] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
+- [r] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
 
 ## Pending review
 
-- F1 — `girsync: index alternate cache keys and count adoptions once` (`71452b6`)
-- I3 — `girsync: fast-path ASCII component comparison` (`3b05b69`)
-- A1 — `girsync: index rename move rewrites` (`bf16258`)
+_None._
 
 ## Review notes
 
@@ -227,6 +225,86 @@ unimplemented. The follow-ups below are non-blocking.
   duplicate what the command tests already do.
   **Declined in the follow-up batch:** skipped as optional; the three command
   tests above remain the guard. Accepted.
+
+### Phase 2 — behavior-adjacent, F1 and I3 — accepted
+
+Reviewed at `2e6d504`; `git diff bf16258..HEAD -- tools/sync/src` is empty and
+only this state file changed after `bf16258`, so one run covers all three
+pending commits: nothing later touched `effective/phase_a.rs` or `util.rs`.
+`cargo nextest run -p girsync` is green (445 passed, 1 skipped), and
+`cargo clippy -p girsync --all-targets -- -D warnings` and
+`cargo fmt -p girsync -- --check` are clean. The new tests were also run by
+name. F1 and I3 preserve their contracts; nothing needs a revert or a code fix.
+The follow-ups below are non-blocking.
+
+- **F1 — both table passes are keys-only now.** `alt_keys` is loaded before the
+  walk and `cached_keys` again before the prune, so an insensitive run still
+  walks the `entries` table twice, but neither pass decodes a row. That is the
+  shape the finding left: the second read goes through the batch so it sees
+  this run's real removals, which the pre-walk snapshot cannot. Reusing the
+  first snapshot would need a delta set; no action while both passes allocate
+  keys only.
+- **F1 — lazy decode is a small behavior change on a corrupt row.** Before,
+  `load_all` decoded every row up front, so an undecodable row failed phase A
+  even if it was never adopted; now an orphan row is pruned without decoding.
+  Rows the run actually reads — a live exact-case key or an adopted alternate —
+  still go through `get` and still fail loudly. Treating a cache row that is
+  about to be dropped as removable is an improvement, not a data path; if cache
+  corruption should always be fatal, add an explicit check. Otherwise leave it.
+- **F1 — one adoption is pinned, several are not.** The new fixture covers one
+  adopted key plus one orphan and asserts the dry and real `ScanStats` are
+  equal, which is the counter bug the finding named. A fixture with two adopted
+  rows, one of them beside a path with several stale alternates that must still
+  be pruned, would harden the per-key exclusion. The exclusion is a set over
+  unique keys, so this is coverage only.
+- **F1 — the `others` filter is defensive.** On an exact-case miss `alts`
+  cannot contain `e.rel`, so `filter(|k| *k != &e.rel)` is redundant; it does
+  keep the "exact match wins" invariant if the enclosing branch broadens.
+  Harmless.
+- **I3 — the non-UTF-8 fallback is not exercised.** The new test pins ASCII
+  folding and a valid non-ASCII pair; `to_str()` returning `None` still falls
+  through to the lossy Unicode fold, but no test builds an `OsStr` with an
+  unpaired surrogate (for example `OsStringExt::from_wide`). A unit test there
+  would hold the branch the finding said must not be replaced.
+- **I3 — this is an allocation win, not a single-pass comparison.** `to_str`
+  plus two `is_ascii` checks still walk the component before
+  `eq_ignore_ascii_case`; the two `String`s are what disappeared. The fast path
+  is exact for ASCII and the Unicode fallback is unchanged, so there is nothing
+  to change unless profiles say otherwise.
+- **I3 — the test is Windows-only.** It is `#[cfg(windows)]`, matching the
+  branch it guards; non-Windows still compares `Component`s exactly and cannot
+  regress here.
+
+### Phase 3 — rename path, A1 — accepted
+
+Reviewed the same way at `2e6d504`; `commands/sync/rename.rs` is unchanged
+after `bf16258`. The suite, clippy and `cargo fmt --check` are clean, and the
+six rename unit tests plus the nested-rename integration fixture were run by
+name. The longest-prefix rule, exact-before-ancestor precedence, component
+boundary, parent-first steps, no-op steps that still re-key, and the dry-run
+spelling map all survive the rewrite; nothing needs a revert or a code fix. The
+follow-ups below are non-blocking.
+
+- **A1 — the spelling map trades memory for lookup shape.** `DiskSpelling` now
+  keeps two `HashMap<String, String>`s, so each move's two strings are cloned
+  into four where the old single `Vec` held two. The finding asked for two
+  indexes, and only a dry run builds it; if a rename-heavy dry run ever
+  matters, share the strings or key both maps by index into one
+  `Vec<(String, String)>`.
+- **A1 — `apply` still allocates on the no-move path.** It returns
+  `rel.to_string()`, as the old `rewritten_from`/`final_key` did, and every
+  real caller needs an owned key, so this is not a regression. `moved_prefix`
+  is already the borrowed primitive if a `Cow` variant is ever wanted.
+- **A1 — a nested parent plus leaf rename is unit-tested, not end-to-end.**
+  The index test covers exact-beats-ancestor, and
+  `run_sync_case_rename_steps_over_occupied_temporaries` covers a renamed
+  directory with a no-op child. No fixture renames a directory *and* changes a
+  descendant's leaf casing and then asserts the `dm`/cache re-key, which is the
+  part A1 moved. One integration fixture would close the gap; coverage only.
+- **A1 — duplicate pairs cannot drift.** A renamed directory is inserted by
+  both its `renames` entry and its `dir_moves` entry; the old scan kept the
+  first and the map keeps the last, but the `(old, new)` pair is identical, so
+  the direction is the same either way. No action.
 
 ## Follow-up batches
 
