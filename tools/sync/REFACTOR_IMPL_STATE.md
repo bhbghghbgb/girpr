@@ -114,20 +114,10 @@ they stay in the pending list. The follow-ups below are non-blocking.
   `AnyOf` the per-pair `AlgoSet::one(pick)` is used. It is a two-byte value built
   once, so this is clarity only; moving it into the `AllOf` arm would remove the
   unused value if the loop grows.
-  **Not addressed in `b647505`:** the set moved *inside* the per-pair `AllOf`
-  arm, so under `all-of` it is rebuilt for every undecided pair — the exact
-  per-pair construction G3 removed, just moved one branch down. Hoist it to run
-  scope instead, before the pair loop, or restore the once-built value; no
-  behavior change either way:
-
-  ```rust
-  let dst_all = if mode == HashMode::AllOf {
-      AlgoSet::from_iter(dst.algos.iter().copied())
-  } else {
-      AlgoSet::NONE
-  };
-  ```
-
+  **Addressed in `a27cd1d`:** `dst_all` is now built once before the pair loop,
+  under a `match mode` — `AllOf` builds it, `AnyOf` gets `AlgoSet::NONE` — so it
+  is neither rebuilt per pair nor computed where it is unused. `src_all` stays
+  separate and still feeds `fallback`, and plan order is unchanged.
 - **G4 — helper signature is the only rough edge.**
   `record_shortfalls(&mut tally, &[(usize, &SideRequest<'_>, &SideEntry,
   &String)])` mirrors the local `sides` array exactly, and both call sites now
@@ -232,15 +222,12 @@ Review follow-ups from the notes above, addressed in one batch per phase.
   runner is nextest in the dev profile, where they pass; gate those tests on
   `debug_assertions` (or make the guard a hard `assert!`) if a release-mode
   suite is ever added.
-- Phase 1 batch — reviewed: `6f11ee3` (I2 lookup caveat doc) and `b89c189`
-  (E2 visitor export) accepted; `b647505` (G3 `dst_all` scoped to `AllOf`)
-  rejected because it rebuilds `dst_all` inside the per-pair `AllOf` arm. Re-land
-  with the set built once at run scope under `AllOf` (see the G3 note), and the
-  batch is accepted. G4's struct and the E2 summary-skip variant were
-  deliberately skipped and accepted as such. Checked at `b647505` in its own
-  worktree: `cargo test -p girsync` green on every target, and clippy and
-  `cargo fmt --check` clean. Behavior is unchanged; this is G3's performance
-  intent, not a correctness defect.
+- Phase 1 batch — reviewed, accepted: `6f11ee3` (I2 lookup caveat doc),
+  `b89c189` (E2 visitor export), and `a27cd1d` (G3 `dst_all` built once per run,
+  re-landed after `b647505` was rejected for rebuilding it per pair). G4's struct
+  and the E2 summary-skip variant were deliberately skipped and accepted as such.
+  Checked at `a27cd1d`: `cargo test -p girsync` green on every target, and
+  clippy and `cargo fmt --check` clean.
 - Phase 2 (B1–D3) batch — done, awaiting review: `a5bae82` (B1 multi-link
   pruning), `07db98c` (B2 copy-wiped kind filter), `d026655` (C2 comment);
   the C2 shared-set style point and the D3 direct test deliberately skipped.
