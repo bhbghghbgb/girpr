@@ -33,7 +33,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## 5. Concurrency (land alone, verify with a bundle diff)
 
-- [ ] **F3** — `Store::fill` re-implements `Fetcher::map_concurrently`'s ordered-join loop
+- [x] **F3** — `Store::fill` re-implements `Fetcher::map_concurrently`'s ordered-join loop
 
 ## 6. Clone removal
 
@@ -44,6 +44,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F8 — `--output` is a clap `ValueEnum`; `resolve_common` infallible — commit `ec343e9`
 - F9 — every value flag must have a non-Unicode case — commit `783c6f7`
 - F7 — one `PendingRow` per class, `MatrixRow::new`, per-class candidate lists — commit `a8cfd2d`
+- F3 — one `join_ordered` in `tasks.rs`; bundle diff 72/72 identical — commit `84322da`
 
 ## Follow-ups from review (non-blocking)
 
