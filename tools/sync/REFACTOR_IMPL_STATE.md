@@ -23,7 +23,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] G1 — src-then-dst-only exact diff
 - [x] G2 — shared pair classification
 - [x] G3 — precompute the run-wide `AlgoSet`s
-- [ ] G4 — shared shortfall scan and exact-key lookup
+- [x] G4 — shared shortfall scan and exact-key lookup
 - [ ] H1 — borrowed-slice codec decode
 - [ ] I2 — typed digest lookup with the foreign fallback
 - [ ] J1 — per-worker copy scratch buffer
@@ -58,6 +58,7 @@ Tasks finished but not yet reviewed by hand:
 - G1 — `girsync: walk exact diff keys without a union set` (`7cde85c`)
 - G2 — `girsync: share pair classification in diff` (`3877e90`)
 - G3 — `girsync: precompute run-wide algorithm sets` (`9dd10fe`)
+- G4 — `girsync: share shortfall scan in pair planning` (`fbd8e89`)
 
 ## Skipped
 
