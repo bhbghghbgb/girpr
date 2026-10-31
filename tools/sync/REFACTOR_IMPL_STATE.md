@@ -44,7 +44,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Pending review
 
-_None._
+- Final follow-up batch — `24fb8b8`, `5c1ea8f`, `3c6a5a7` (see Follow-up batches).
 
 ## Review notes
 
@@ -340,6 +340,11 @@ Review follow-ups from the notes above, addressed in one batch per phase.
   first (for example with `cmd_update` over `dst`) and asserting the descendant
   rows exist before the sync would keep the fixture from passing vacuously if
   the walk ever stops reporting link descendants.
+- Final batch (F1, I3, A1 coverage) — done, awaiting review: `24fb8b8`
+  (multiple adopted keys and a multi-alternate prune), `5c1ea8f` (non-UTF-8
+  lossy fold), `3c6a5a7` (nested parent plus leaf rename re-key). Tests only;
+  production code unchanged. The other notes in those sections were left as-is
+  (no action, or explicitly optional).
 
 ## Skipped
 
