@@ -109,8 +109,14 @@ pub struct CommonArgs {
     pub no_log_file: bool,
 
     /// How the single stdout summary is rendered.
-    #[arg(long, value_name = "FORMAT", default_value = "text", global = true)]
-    pub output: String,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = OutputFormat::Text,
+        global = true
+    )]
+    pub output: OutputFormat,
 }
 
 /// `--gzip-threshold`'s default, in bytes.
@@ -356,21 +362,16 @@ pub type Result<T> = std::result::Result<T, UsageError>;
 
 /// Resolve `--log-level` and `--output` into their typed forms.
 ///
-/// `--log-level` is typed by `clap` itself — a bad level is an argument-level
-/// failure, and it fails where every other bad argument fails. `--output` is
-/// resolved here, once, so no command re-parses it and no command can disagree
-/// about what `default_value` meant.
-pub fn resolve_common(common: &CommonArgs) -> Result<CommonResolved> {
-    Ok(CommonResolved {
+/// Both flags are typed by `clap` itself — a bad value is an argument-level
+/// failure, and it fails where every other bad argument fails.
+pub fn resolve_common(common: &CommonArgs) -> CommonResolved {
+    CommonResolved {
         level: common.log_level,
         file_level: common.log_file_level,
-        output: common
-            .output
-            .parse::<OutputFormat>()
-            .map_err(UsageError::new)?,
+        output: common.output,
         log_file: common.log_file.clone(),
         no_log_file: common.no_log_file,
-    })
+    }
 }
 
 /// The typed form of [`CommonArgs`].
@@ -769,7 +770,7 @@ mod tests {
         assert_eq!(a.common.log_level, Level::Debug);
         assert_eq!(a.common.log_file_level, None);
         assert_eq!(a.common.log_file, Some(PathBuf::from("run.log")));
-        assert_eq!(a.common.output, "json");
+        assert_eq!(a.common.output, OutputFormat::Json);
     }
 
     #[test]
@@ -778,7 +779,7 @@ mod tests {
             panic!("expected verify")
         };
         assert_eq!(v.artifact, PathBuf::from("a"));
-        assert_eq!(v.common.output, "json");
+        assert_eq!(v.common.output, OutputFormat::Json);
 
         let Cmd::Materialize(m) = parse(&[
             "materialize",
@@ -917,24 +918,21 @@ mod tests {
             log_file_level: Some(Level::Trace),
             log_file: Some("x.log".into()),
             no_log_file: false,
-            output: "json".into(),
-        })
-        .unwrap();
+            output: OutputFormat::Json,
+        });
         assert_eq!(ok.level, Level::Debug);
         assert_eq!(ok.file_level, Some(Level::Trace));
         assert_eq!(ok.output, OutputFormat::Json);
         assert_eq!(ok.log_file, Some(PathBuf::from("x.log")));
         assert!(!ok.no_log_file);
 
-        let bad_output = resolve_common(&CommonArgs {
-            log_level: Level::Info,
-            log_file_level: None,
-            log_file: None,
-            no_log_file: false,
-            output: "yaml".into(),
-        })
-        .unwrap_err();
-        assert_eq!(bad_output.exit_code(), ExitCode::Usage);
+        // `--output` is an argument, so a bad value is refused by the parser,
+        // with the set of spellings it would have accepted.
+        let e = parse_err(&["capture", "--output", "yaml"]);
+        assert_eq!(e.kind(), clap::error::ErrorKind::InvalidValue);
+        let text = e.to_string();
+        assert!(text.contains("yaml"), "{text}");
+        assert!(text.contains("text") && text.contains("json"), "{text}");
     }
 
     /// A bad level is an *argument* failure, so it is rejected by the parser

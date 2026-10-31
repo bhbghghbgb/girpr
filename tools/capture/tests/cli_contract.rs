@@ -205,10 +205,6 @@ fn a_usage_error_prints_a_summary_on_stdout_too() {
     // does not have to special-case a crash. `--materialize --artifact a --out
     // a` is such a failure: the request is well-formed and the plan refuses
     // it.
-    //
-    // It is also the only failure that cannot honour `--output`, since
-    // `--output` is what failed alongside it — so this pins the one case that
-    // always prints text.
     let r = assert_code(&["materialize", "--artifact", "a", "--out", "a"], 1);
     assert!(r.stdout.starts_with("SUMMARY "), "{:?}", r.stdout);
     assert!(r.stdout.contains("exit_code=1"), "{:?}", r.stdout);

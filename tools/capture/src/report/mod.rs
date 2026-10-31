@@ -30,7 +30,7 @@ use crate::encoding;
 // lives in `crate::encoding` and is re-exported here so the path is stable.
 pub use crate::encoding::percent_decode;
 /// How a record is rendered on stdout.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     /// `SUMMARY k=v k=v`, human-readable.
     #[default]

@@ -7,7 +7,6 @@
 
 use gircap::cli::{Cmd, exit_on_clap_error, parse_from, resolve_common};
 use gircap::config::{capture_plan, materialize_plan, verify_plan};
-use gircap::report::OutputFormat;
 use gircap::{exit, logging, run};
 
 #[tokio::main]
@@ -18,27 +17,13 @@ async fn main() {
     };
 
     // Logging first: everything after this point is diagnosable from the file.
-    // A usage error below is reported through `tracing` *and* stderr, because the
-    // message is the only thing the caller has.
     let (event, common) = match &cli.cmd {
-        Cmd::Capture(a) => ("capture", a.common.clone()),
-        Cmd::Verify(a) => ("verify", a.common.clone()),
-        Cmd::Materialize(a) => ("materialize", a.common.clone()),
-        Cmd::List(a) => ("list", a.common.clone()),
+        Cmd::Capture(a) => ("capture", &a.common),
+        Cmd::Verify(a) => ("verify", &a.common),
+        Cmd::Materialize(a) => ("materialize", &a.common),
+        Cmd::List(a) => ("list", &a.common),
     };
-    let common = match resolve_common(&common) {
-        Ok(c) => c,
-        Err(e) => {
-            // The earliest possible failure, and therefore the only one that
-            // cannot honour `--output`: the flag itself is what failed to
-            // resolve. Emitting the text summary anyway is what keeps the
-            // promise that every run prints exactly one, which is what lets a
-            // harness read stdout without special-casing a crash.
-            tracing::error!(error = %e, "usage error");
-            run::failure_summary(event, e.exit_code()).emit(OutputFormat::Text);
-            exit::exit_with(e.exit_code())
-        }
-    };
+    let common = resolve_common(common);
     let mut log_guard = logging::init(
         common.level,
         common.file_level,
