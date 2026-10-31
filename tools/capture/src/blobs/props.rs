@@ -413,6 +413,37 @@ impl BlobProps {
         Self::undecodable_from_digests(hash::md5_sha256(raw), chunk, why)
     }
 
+    /// The fields every row shares, with the compressed side filled from what
+    /// the write measured.
+    ///
+    /// `compressed` is `None` for a blob that was never fetched: `bytes` is then
+    /// zero and both compressed digests are empty rather than zeroed — a zeroed
+    /// digest is a claim and an absent one is not.
+    ///
+    /// `md5_decompressed` is deliberately left empty, because the constructors
+    /// disagree about it: [`BlobProps::undecodable_from_digests`] and
+    /// [`BlobProps::unmeasured`] carry the manifest's declared digest, while
+    /// [`BlobProps::assemble`] carries the measured one or empty. Each supplies
+    /// its own.
+    fn skeleton(chunk: &SophonChunk, compressed: Option<&hash::Digests>) -> BlobProps {
+        BlobProps {
+            chunk_id: chunk.id.clone(),
+            stored_path: None,
+            bytes: compressed.map_or(0, |c| c.bytes),
+            container: "zstd".to_string(),
+            md5_compressed: compressed.map(|c| c.md5.clone()).unwrap_or_default(),
+            md5_decompressed: String::new(),
+            sha256_compressed: compressed.map(|c| c.sha256.clone()).unwrap_or_default(),
+            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
+            unknown_field6: chunk.unknown_field6,
+            verified: None,
+            decode_error: None,
+            fetch_error: None,
+            partial: false,
+            measurement_error: None,
+        }
+    }
+
     /// [`BlobProps::undecodable`] for a body already written and digested.
     ///
     /// The capture path computes `compressed` while streaming to disk, so it must
@@ -423,17 +454,9 @@ impl BlobProps {
         why: String,
     ) -> BlobProps {
         BlobProps {
-            chunk_id: chunk.id.clone(),
-            stored_path: None,
-            bytes: compressed.bytes,
-            container: "zstd".to_string(),
-            sha256_compressed: compressed.sha256,
-            md5_compressed: compressed.md5.clone(),
             // The declared digest, not a computed one: the body cannot be
             // decoded, so there is no decompressed body to compare against.
             md5_decompressed: chunk.uncompressed_md5.clone(),
-            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
-            unknown_field6: chunk.unknown_field6,
             verified: Some(Verified {
                 raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
                 md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
@@ -444,9 +467,7 @@ impl BlobProps {
                 decoded_size_matches: false,
             }),
             decode_error: Some(why),
-            fetch_error: None,
-            partial: false,
-            measurement_error: None,
+            ..Self::skeleton(chunk, Some(&compressed))
         }
     }
 
@@ -468,19 +489,9 @@ impl BlobProps {
         let decoded_size = measured.as_ref().ok().map(|m| m.len);
         let md5_decompressed = measured.as_ref().ok().map(|m| m.md5.clone());
         BlobProps {
-            chunk_id: chunk.id.clone(),
-            stored_path: None,
-            bytes: compressed.bytes,
-            container: "zstd".to_string(),
-            sha256_compressed: compressed.sha256,
-            md5_compressed: compressed.md5.clone(),
             md5_decompressed: md5_decompressed.clone().unwrap_or_default(),
             uncompressed_size: decoded_size.unwrap_or(0),
-            unknown_field6: chunk.unknown_field6,
             decode_error: measured.as_ref().err().cloned(),
-            fetch_error: None,
-            partial: false,
-            measurement_error: None,
             verified: Some(Verified {
                 raw_size_matches: compressed.bytes as i64 == chunk.compressed_size,
                 md5_compressed_matches: compressed.md5 == chunk.compressed_md5,
@@ -488,6 +499,7 @@ impl BlobProps {
                     == Some(&chunk.uncompressed_md5),
                 decoded_size_matches: matches!(decoded_size, Some(n) if n as i64 == chunk.uncompressed_size),
             }),
+            ..Self::skeleton(chunk, Some(&compressed))
         }
     }
 
@@ -503,20 +515,8 @@ impl BlobProps {
     /// reading and is why the spec says that flag breaks A7–A10 by design.
     pub fn unmeasured(chunk: &SophonChunk) -> BlobProps {
         BlobProps {
-            chunk_id: chunk.id.clone(),
-            stored_path: None,
-            bytes: 0,
-            container: "zstd".to_string(),
-            md5_compressed: String::new(),
             md5_decompressed: chunk.uncompressed_md5.clone(),
-            sha256_compressed: String::new(),
-            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
-            unknown_field6: chunk.unknown_field6,
-            verified: None,
-            decode_error: None,
-            fetch_error: None,
-            partial: false,
-            measurement_error: None,
+            ..Self::skeleton(chunk, None)
         }
     }
 
@@ -533,20 +533,9 @@ impl BlobProps {
         why: impl Into<String>,
     ) -> BlobProps {
         BlobProps {
-            chunk_id: chunk.id.clone(),
-            stored_path: None,
-            bytes: compressed.bytes,
-            container: "zstd".to_string(),
-            sha256_compressed: compressed.sha256,
-            md5_compressed: compressed.md5,
             md5_decompressed: chunk.uncompressed_md5.clone(),
-            uncompressed_size: chunk.uncompressed_size.max(0) as u64,
-            unknown_field6: chunk.unknown_field6,
-            verified: None,
-            decode_error: None,
-            fetch_error: None,
-            partial: false,
             measurement_error: Some(why.into()),
+            ..Self::skeleton(chunk, Some(&compressed))
         }
     }
 
