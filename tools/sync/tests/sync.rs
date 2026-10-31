@@ -7,11 +7,12 @@ use std::num::NonZeroUsize;
 use girsync::rw::RwLimits;
 
 use common::{
-    compare, compare_mem, entry_names, has_backup_sibling, is_case_sensitive, log, parse_ndjson,
-    recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+    compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
+    log, parse_ndjson, recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update,
+    update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
-use girsync::{cmd_compare, cmd_sync, cmd_update};
+use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::path::Path;
 
@@ -690,6 +691,98 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
         !dst.join(".girsync_case_tmp.3").exists(),
         "the claimed temporary is consumed by the rename: {:?}",
         entry_names(&dst)
+    );
+}
+
+/// **A directory rename and a descendant's leaf rename in one pass.** The
+/// directory step moves first, so the child step begins at the moved parent and
+/// also changes its own leaf; a sibling that only differed by the parent is a
+/// no-op step that still follows in the cache. Both the dst map and its cache
+/// rows must end on src's casing, or the plan after the pass would copy the new
+/// spelling and delete the old one.
+#[test]
+fn a_nested_case_rename_rekeys_the_destination_map_and_cache() {
+    let t = temp_root("case_rename_nested");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Dir/File.txt", b"payload");
+    wfile(&src, "Dir/keep.txt", b"same");
+    wfile(&dst, "dir/file.txt", b"payload");
+    wfile(&dst, "dir/keep.txt", b"same");
+    sync_mtime(&src.join("Dir/File.txt"), &dst.join("dir/file.txt"));
+    sync_mtime(&src.join("Dir/keep.txt"), &dst.join("dir/keep.txt"));
+
+    // Seed dst's cache on its own casing, so the rename pass has rows to move.
+    assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
+    let before = recs(&dst);
+    for old in ["dir", "dir/file.txt", "dir/keep.txt"] {
+        assert!(
+            before.contains_key(old),
+            "the fixture needs a row for {old}: {:?}",
+            before.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // The binary with the real cache: the rows it leaves are the assertion.
+    let out = run_binary_raw(&src, &dst, &[], &[]);
+    assert!(
+        out.status.success(),
+        "sync failed: {}\n{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let records = parse_ndjson(&out.stdout);
+    let steps: Vec<(&str, &str)> = records
+        .iter()
+        .filter(|r| r["event"] == "rename")
+        .map(|r| {
+            (
+                r["from"].as_str().expect("a rename names its source"),
+                r["to"].as_str().expect("a rename names its target"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        [("dir", "Dir"), ("Dir/file.txt", "Dir/File.txt")],
+        "the parent moves first, and the changed leaf moves at its new parent: {records:?}"
+    );
+    assert!(
+        !records.iter().any(|r| matches!(
+            r["event"].as_str(),
+            Some("copy" | "delete" | "mkdir" | "rmdir" | "fix-dir")
+        )),
+        "a re-keyed map leaves nothing to copy or delete: {records:?}"
+    );
+
+    assert_eq!(rfile(&dst, "Dir/File.txt"), b"payload");
+    assert_eq!(rfile(&dst, "Dir/keep.txt"), b"same");
+    assert_eq!(
+        entry_names(&dst),
+        vec!["Dir".to_string()],
+        "no old spelling of the directory survives"
+    );
+
+    let rows = recs(&dst);
+    for new in ["Dir", "Dir/File.txt", "Dir/keep.txt"] {
+        assert!(
+            rows.contains_key(new),
+            "the cache row follows the rename to {new}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+    for old in ["dir", "dir/file.txt", "dir/keep.txt"] {
+        assert!(
+            !rows.contains_key(old),
+            "the cache row did not follow the rename from {old}: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
+
+    assert_eq!(
+        cmd_compare_self(compare_self_opts(dst), &log()).unwrap(),
+        0,
+        "the moved rows describe the tree the run left"
     );
 }
 
