@@ -31,7 +31,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 2 — behavior-adjacent
 
-- [ ] B1 — one key snapshot for link pre-drops
+- [x] B1 — one key snapshot for link pre-drops
 - [ ] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
 - [ ] C2 — copy/fix membership sets in the link-storage guards
 - [ ] D3 — shared compare/compare-self tail
@@ -63,6 +63,7 @@ Tasks finished but not yet reviewed by hand:
 - I2 — `girsync: add typed digest lookup` (`20802e6`)
 - J1 — `girsync: reuse copy buffer per worker` (`867f9a9`)
 - E2 — `girsync: stream verdict records` (`5e1dc78`)
+- B1 — `girsync: snapshot cache keys once for link pre-drops` (`84edec5`)
 
 ## Skipped
 
