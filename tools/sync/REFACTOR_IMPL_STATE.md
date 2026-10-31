@@ -40,12 +40,13 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 3 — rename path
 
-- [ ] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
+- [x] A1 — `MoveIndex` for `plan_steps`, `final_key`, and `DiskSpelling`
 
 ## Pending review
 
 - F1 — `girsync: index alternate cache keys and count adoptions once` (`71452b6`)
 - I3 — `girsync: fast-path ASCII component comparison` (`3b05b69`)
+- A1 — `girsync: index rename move rewrites` (`bf16258`)
 
 ## Review notes
 
