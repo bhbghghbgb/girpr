@@ -15,7 +15,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] E3 — allocation-free `Record` rendering, sorted JSON keys
 - [x] F2 — one mixed-case collision helper
 - [x] H2 — one backup/snapshot copy-aside helper
-- [ ] C1 — precompute the `type_conflict` set
+- [x] C1 — precompute the `type_conflict` set
 
 ## Phase 1 — local performance and reporting
 
@@ -53,6 +53,7 @@ Tasks finished but not yet reviewed by hand:
 - E3 — `girsync: render records without per-field allocations` (`e30836d`)
 - F2 — `girsync: share mixed-case collision check` (`3628ba6`)
 - H2 — `girsync: share cache copy-aside helper` (`27aee3e`)
+- C1 — `girsync: precompute planned type conflicts` (`938431a`)
 
 ## Skipped
 
