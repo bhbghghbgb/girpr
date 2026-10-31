@@ -102,9 +102,8 @@ IMPL_ADD = """
 
 ANCHOR_ALLOW = "#![allow(dead_code)]"
 # Anchors are whole lines, and are checked as whole lines.  A prefix is not an
-# anchor: an earlier version of this file had `"#![allow(dead_code)"` - the `]`
-# dropped in an edit - and the patch then matched four characters short and
-# produced a brace mismatch 50 lines later, which is not a useful error message.
+# anchor: a truncated prefix matches fewer characters than intended and produces
+# a brace mismatch far from the edit, which is not a useful error message.
 
 # The mock's `serve` had two shapes across the range.  428fc8e made it speak
 # keep-alive, which replaced the `let Some(bytes) = respond(..) else` early return
@@ -165,8 +164,8 @@ def apply(path):
     nl = "\r\n" if "\r\n" in text else "\n"
 
     # Required anchors: each must match exactly one line.  A *shorter* prefix
-    # than intended is how an earlier version of this file silently ate a `]` and
-    # produced a syntax error fifty lines later.
+    # than intended silently drops a `]` and produces a syntax error fifty lines
+    # later.
     # (anchor, block, where).  `where` matters: an inner attribute must stay first
     # in the file and an `impl` header must stay first in its block, so their
     # blocks go *after*.  Only the `serve` dispatch goes *before* its anchor,

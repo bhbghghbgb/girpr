@@ -91,10 +91,8 @@ struct Run {
 /// A write that fails is the disk's, and retrying it would spend the whole budget
 /// discovering that a full disk stays full — so it is a [`ApiError::Shape`], which
 /// the policy stops on.
-///
-/// This was a branch inside the pump, and then a test that needed a genuinely
-/// full disk to reach it. Extracted so the decision can be read in one place and
-/// tested without contriving a filesystem failure.
+/// Extracted so the decision can be read in one place and tested without
+/// contriving a filesystem failure.
 pub(crate) fn body_failure(
     url: &str,
     attempts: u32,

@@ -926,19 +926,10 @@ mod tests {
 
     #[test]
     fn the_manifest_is_whole_when_build_manifest_returns_it() {
-        // **The invariant that `files: Vec::new()` broke.** `build_manifest` used
-        // to hand back a document with an empty `files[]` and
-        // `bytes_on_disk: 0`, leaving the caller to overwrite both afterwards.
-        // For that window the document claimed the bundle held no files at all,
-        // and its own doc comment claimed every field was a measurement the run
-        // already had - false for precisely the two fields that needed the tree
-        // walked.
-        //
-        // So the assertion is deliberately not "the caller filled it in", which
-        // is the only thing the old shape could be tested for at all. It is that
-        // the returned document is *already* correct, leaving no second step
-        // that could be forgotten, skipped, or reordered past something that
-        // reads the document.
+        // **The invariant that `files: Vec::new()` broke.** The assertion is
+        // deliberately not "the caller filled it in". It is that the returned
+        // document is *already* correct, leaving no second step that could be
+        // forgotten, skipped, or reordered past something that reads the document.
         let f = Fixture::new();
         // Uneven, and deliberately not summing to a round number: 1 + 2 048 + 33
         // = 2 082, which a hardcoded total would not match by accident.
@@ -972,9 +963,8 @@ mod tests {
     fn an_empty_listing_yields_a_zero_total_rather_than_an_unset_one() {
         // The other half of the same invariant. A run that admitted nothing still
         // produces a document; the question is whether "no files" reads as "zero
-        // bytes" or as "not counted yet". Under the old two-phase shape those two
-        // were indistinguishable - both were `0` - which is exactly how the bug
-        // hid behind a passing assertion.
+        // bytes" or as "not counted yet". Both readings are now distinct, so the
+        // document cannot pass while being ambiguous about which it means.
         let f = Fixture::new();
         let m = build_manifest(&f.input(), &[]).expect("manifest");
         assert!(

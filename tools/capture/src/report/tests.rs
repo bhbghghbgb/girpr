@@ -426,8 +426,8 @@ fn zeroed() -> CaptureSummary<'static> {
 fn the_capture_summary_key_list_is_the_contract_and_does_not_drift() {
     // `girpr` and anything else reading this line parse these names in this
     // order. Moving the builder out of `capture()` is only safe if the line
-    // it produces is the line that was there before, so the key list is
-    // pinned here rather than left to the builder's own doc comment.
+    // it produces matches the contract, so the key list is pinned here rather
+    // than left to the builder's own doc comment.
     //
     // The first three are [`Record::summary`]'s own preamble, not this
     // function's - they are listed so that a change to *them* also fails

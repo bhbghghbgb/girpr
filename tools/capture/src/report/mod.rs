@@ -594,10 +594,9 @@ pub const STAGE_CAPTURE: &str = "artifact";
 ///
 /// **The key list is the contract.** `girpr` and anything else reading this
 /// line parse these names in this order; a rename or a reorder is a breaking
-/// change, not a refactor. That is why this is one function with a flat,
-/// commented key list rather than something derived - a derived key set would be
-/// tidier right up until the day it silently renamed a field a caller depended
-/// on.
+/// change. That is why this is one function with a flat, commented key list
+/// rather than something derived - a derived key set would be tidier right up
+/// until the day it silently renamed a field a caller depended on.
 ///
 /// The order below is the order the numbers were appended in, not a grouping: it
 /// is preserved so that a diff of two summaries over the same run shows only

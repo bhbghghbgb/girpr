@@ -283,9 +283,9 @@ impl<'a> HypClient<'a> {
 
     /// Fetch all six bodies and resolve the version pair.
     ///
-    /// **Six bodies, two round trips.** This was six consecutive `.await`s,
-    /// which is the entire network cost of a `--no-chunk-blobs` metadata run.
-    /// The dependency is narrower than the sequence implied: four of the six
+    /// **Six bodies, two round trips.** A sequential `.await` per body would be
+    /// the entire network cost of a `--no-chunk-blobs` metadata run. The
+    /// dependency is narrower than the sequence implied: four of the six URLs
     /// URLs depend only on `biz` and the capture language, so all four go at
     /// once, and of the remaining two — `getBuild` for each tag — neither
     /// depends on the other.

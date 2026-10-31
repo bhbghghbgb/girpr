@@ -213,8 +213,8 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     Seven small requests and no blob downloaded. It must not be able to fail
     //     the capture: a negative response *is* the measurement. `negative` owns
     //     the two decisions that decide what gets asked for - which pair, and
-    //     which chunk id - because both are pure and both were previously only
-    //     reachable by running a capture against the live API.
+    //     which chunk id - because both are pure and both are exercised here
+    //     without a live capture.
     let game_pair = negative::game_pair(&fields, &manifests)?;
     let (old_game, new_game) = manifest::fetch::pair_sides(game_pair, "the game manifest pair")?;
     let new_only_chunk_id =
@@ -539,17 +539,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     }
 }
 
-/// Five sums, a max and a count over every manifest the run wrote.
-///
-/// Moved out of `capture()` with the rest of the summary. It was a bare loop
-/// between two `tracing::info!` calls, and it is the only place these five
-/// numbers are computed - so a reader tracing `manifest_bytes` back to its
-/// source had to find it in the middle of the orchestrator rather than beside
-/// the key that reports it.
-///
-/// One walk, as before. It was five walks of the same slice when each number had
-/// its own `iter().flatten()` chain, which is what the old comment on the loop
-/// was correcting.
+/// Five sums, a max and a count over every manifest the run wrote, in one
+/// walk of the flattened slice. It is the only place these five numbers are
+/// computed, beside the key that reports them.
 fn manifest_stats(manifests: &[Vec<CapturedManifest>]) -> report::ManifestStats {
     let mut stats = report::ManifestStats {
         captured: 0,

@@ -14,9 +14,8 @@ pub struct RequestLog(pub(crate) Arc<Mutex<LogState>>);
 impl RequestLog {
     /// Take the lock, **recovering from poisoning**.
     ///
-    /// This was `.lock().expect("request log is not poisoned")` at eight sites,
-    /// and poisoning is genuinely reachable rather than theoretical: the lock
-    /// sits inside the concurrent chunk fetcher, so one task panicking while it
+    /// Poisoning is genuinely reachable rather than theoretical: the lock sits
+    /// inside the concurrent chunk fetcher, so one task panicking while it
     /// holds this lock poisons it for every other task — and a poisoned lock
     /// makes every subsequent `.expect` panic too, so one panic anywhere turns
     /// into a run that cannot even record its own failure.

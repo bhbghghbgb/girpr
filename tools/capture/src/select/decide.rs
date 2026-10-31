@@ -1,17 +1,12 @@
 //! Deciding what to capture, and saying what was decided.
 //!
-//! **The narration moved here with the decision it narrates.** In `run::capture`
-//! this was five lines of arithmetic followed by fifty of `tracing::` — the
-//! admitted list, the refused paths, the unmet classes, the over-budget
-//! rejections, and a one-line summary. Read together they are one thing: what
-//! the run decided and how the operator learns about it. Split across a
-//! function boundary they were a decision with a separate audit trail that
-//! could fall out of step with it.
-//!
-//! Keeping them together is what makes a new field narrate itself: there is one
-//! place where a [`Selection`] is produced and one place where it is reported,
-//! so "we captured something and never said so" is not a state the code can be
-//! in for long.
+//! The narration lives beside the decision it narrates: the admitted list, the
+//! refused paths, the unmet classes, the over-budget rejections, and a one-line
+//! summary. Read together they are one thing: what the run decided and how the
+//! operator learns about it. Keeping them in one place means a new field
+//! narrates itself — one place where a [`Selection`] is produced and one place
+//! where it is reported — so "we captured something and never said so" is not a
+//! state the code can be in for long.
 
 use super::{Budget, Selection, candidates, select};
 use crate::manifest::diff::FieldDiff;

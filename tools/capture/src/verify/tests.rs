@@ -171,11 +171,11 @@ fn a_list_walk_that_cannot_read_a_manifest_fails_instead_of_dropping_the_bundle(
 /// A stat failure that is not `NotFound` is a manifest the walk could not
 /// see, not an absent one.
 ///
-/// The old `is_file()` probe turned any stat failure into `false` and the
-/// directory was treated as "not a bundle at all" before any read happened.
-/// A path holding a NUL cannot be stat'ed for a reason other than absence
-/// on either host; the walk itself only reaches this arm when a share or an
-/// ACL denies the stat, which a unit test cannot set up portably.
+/// Treating any stat failure as "not a bundle at all" would hide a share or
+/// ACL denial behind "no manifest here". A path holding a NUL cannot be
+/// stat'ed for a reason other than absence on either host; the walk itself
+/// only reaches this arm when a share or an ACL denies the stat, which a unit
+/// test cannot set up portably.
 #[test]
 fn a_manifest_that_cannot_be_stat_ed_fails_the_probe() {
     let bad = Path::new("bad\0name").join("MANIFEST.json");
