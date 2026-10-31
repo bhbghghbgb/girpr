@@ -93,7 +93,19 @@ impl Record {
 
     /// Append a field. Declaration order is report order, which is what the text
     /// line renders; JSON consumers read by key.
+    ///
+    /// Keys are unique and never `event`: the value form collapses a repeat to
+    /// its last value while [`Record::write_json`] would emit both members, so a
+    /// record that broke this would render two different objects.
     pub fn put(mut self, key: &'static str, value: impl Into<Value>) -> Self {
+        debug_assert!(
+            key != "event",
+            "`event` is rendered from the label and cannot also be a field"
+        );
+        debug_assert!(
+            !self.fields.iter().any(|(k, _)| *k == key),
+            "duplicate record field `{key}`"
+        );
         self.fields.push((key, value.into()));
         self
     }
@@ -408,5 +420,20 @@ mod tests {
             rec.text(),
             format!("update {awkward} files=3 algos=[md5,sha1]")
         );
+    }
+
+    /// A repeated key is what would let the two renderings diverge, so it is
+    /// rejected where it is added rather than left to the writer.
+    #[test]
+    #[should_panic(expected = "duplicate record field `path`")]
+    fn a_repeated_field_key_is_rejected() {
+        let _ = Record::path("COPY", "a.txt").put("path", "b.txt");
+    }
+
+    /// `event` is the label's slot in the JSON object, not a field name.
+    #[test]
+    #[should_panic(expected = "cannot also be a field")]
+    fn the_event_key_is_reserved() {
+        let _ = Record::keyed("SUMMARY").put("event", "other");
     }
 }
