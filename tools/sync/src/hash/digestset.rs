@@ -137,11 +137,13 @@ impl DigestSet {
         self.foreign = entries.into_boxed_slice();
     }
 
-    /// Fold `other` in, with **`self` winning** on every name both hold.
+    /// Fold `other` in, with **`other` winning** on every name both hold.
     ///
-    /// That direction is the merge-write rule: this run's computed digests replace the
-    /// prior row's, and everything the prior row held that this run did not compute
-    /// rides along. See `crate::effective::merge_row`.
+    /// That direction is the merge-write rule, and it is what `merge_row` relies on:
+    /// it clones the prior row into `self` and passes this run's computed digests as
+    /// `other`, so a recomputed digest replaces the prior one while everything the
+    /// prior row held that this run did not compute rides along.
+    /// See `crate::effective::merge_row`.
     pub fn merge(&mut self, other: &DigestSet) {
         if let Some(d) = other.md5 {
             self.md5 = Some(d);
