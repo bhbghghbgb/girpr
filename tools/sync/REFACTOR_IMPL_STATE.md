@@ -11,7 +11,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] I1 — correct `DigestSet::merge`'s documented winner
 - [x] D2 — add `ScanMode::new`
 - [x] D1 — share the link-disjoint validation loop
-- [ ] E1 — gate `why_tag` behind `why`
+- [x] E1 — gate `why_tag` behind `why`
 - [ ] E3 — allocation-free `Record` rendering, sorted JSON keys
 - [ ] F2 — one mixed-case collision helper
 - [ ] H2 — one backup/snapshot copy-aside helper
@@ -49,6 +49,7 @@ Tasks finished but not yet reviewed by hand:
 - I1 — `girsync: document the merge write direction` (`1844e29`)
 - D2 — `girsync: add ScanMode constructor` (`7e6b1e2`)
 - D1 — `girsync: share link-disjoint validation` (`ecbd519`)
+- E1 — `girsync: render why tags only when requested` (`d378dfd`)
 
 ## Skipped
 
