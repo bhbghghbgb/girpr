@@ -154,7 +154,7 @@ impl<'a> Applier<'a> {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map(|item| -> Result<()> {
+                .map_init(Vec::<u8>::new, |buf, item| -> Result<()> {
                     // The permit covers the copy itself. Writing the row is cache
                     // work, which the rw gate deliberately does not cover, so it is
                     // done after the permit is released rather than stretching the
@@ -168,6 +168,7 @@ impl<'a> Applier<'a> {
                             self.dst,
                             &item.rel,
                             &self.common.algos,
+                            buf,
                         )
                     };
                     let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
