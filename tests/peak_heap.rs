@@ -304,7 +304,7 @@ async fn the_chunk_paths_peak_live_heap() {
     let digest = digest.expect("the streamed fetch");
     assert_eq!(digest.bytes, payload.len() as u64, "the whole chunk landed");
     assert_eq!(
-        digest.md5,
+        digest.md5.to_hex(),
         format!("{:x}", md5::compute(&payload)),
         "and it is the right chunk"
     );

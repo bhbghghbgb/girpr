@@ -52,16 +52,23 @@
 //! - a staged source's MD5 is still checked before it is staged, so that path
 //!   keeps the stronger property it always had.
 //!
-//! Files run in parallel, bounded by a semaphore of `jobs`; chunks inside a
-//! file are strictly sequential.
+//! Files run in parallel, bounded to `jobs` in flight; chunks inside a file
+//! are strictly sequential.
+//!
+//! The bound is a `JoinSet` owned by the driver. Dropping that driver — a
+//! cancelled run, or the future itself being dropped — drops the set and
+//! **aborts every file task still in flight**. That is the one observable
+//! difference from the old semaphore shape, where dropping the handles
+//! detached the tasks and let them finish on their own.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
+use tokio::task::JoinSet;
 use tracing::Instrument;
 
 use crate::config::RepairMode;
@@ -87,6 +94,26 @@ const MAX_ATTEMPTS: u32 = 5;
 
 /// Copy buffer for the local-slice reuse path.
 const COPY_BUF: usize = 512 * 1024;
+
+/// The shared zero block for [`zero_fill`]: [`COPY_BUF`] zero bytes, allocated
+/// once and never written, so every hole is filled in the same pieces a local
+/// copy uses.
+fn zero_block() -> &'static [u8] {
+    static ZEROS: OnceLock<Vec<u8>> = OnceLock::new();
+    ZEROS.get_or_init(|| vec![0u8; COPY_BUF])
+}
+
+/// The per-file scratch buffer for [`copy_within`] and the reuse copy, grown to
+/// at least `want` bytes.
+///
+/// A file's chunks are written one at a time, so one buffer per file is enough;
+/// it is never shrunk, so the next piece reuses the same allocation.
+fn scratch_slice(buf: &mut Vec<u8>, want: usize) -> &mut [u8] {
+    if buf.len() < want {
+        buf.resize(want, 0);
+    }
+    &mut buf[..want]
+}
 
 /// Outcome of one file task.
 // TODO: rename `Repaired::Repaired` (e.g. `Done`) — touches match sites at
@@ -167,6 +194,7 @@ pub enum Mode {
 pub async fn repair_all(
     http: reqwest::Client,
     game_dir: PathBuf,
+    root: Option<util::PathRoot>,
     plan: Arc<RepairPlan>,
     local_map: LocalChunkMap,
     summary: Summary,
@@ -178,12 +206,12 @@ pub async fn repair_all(
 ) -> Summary {
     let summary = Arc::new(summary);
     let total_files = plan.files.len();
-    let sem = Arc::new(tokio::sync::Semaphore::new(jobs.max(1)));
     // NOTE: these are shared by Arc on purpose. `local_map` holds every local
     // chunk (~10^4 entries) and the plan holds every planned file, so a
     // per-task deep clone once cost ~6GB across ~3k tasks.
     let ctx = Arc::new(FileCtx {
         game_dir,
+        root,
         http,
         plan: Arc::clone(&plan),
         local_map,
@@ -194,107 +222,16 @@ pub async fn repair_all(
     });
     let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
 
-    let mut handles = Vec::with_capacity(total_files);
-    for idx in 0..total_files {
-        // `--fail-fast`: once a file has exhausted its retries, no further file
-        // is started. The unstarted ones are simply not counted — the caller
-        // sees `done < total` in `PROGRESS` and `failed > 0` in `SUMMARY`.
-        if ctx.summary.aborted() {
-            tracing::warn!(
-                remaining = total_files - idx,
-                "fail-fast: not starting the remaining files"
-            );
-            break;
-        }
-        let sem = sem.clone();
-        let ctx = ctx.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = sem
-                .acquire_owned()
-                .await
-                .expect("the file semaphore is never closed");
-            // Each file task gets a `file{seq,total,task,path}` span so its
-            // progress can be grouped in logs; `task` is the tokio async-task id
-            // (stable across thread hops), and the `picked up by worker` event
-            // records which worker took the file.
-            let span = tracing::info_span!(
-                "file",
-                seq = idx + 1,
-                total = total_files,
-                task = ?tokio::task::try_id(),
-                path = %ctx.plan.files[idx].rel,
-            );
-            async move {
-                tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
-                match repair_one_file(&ctx, idx).await {
-                    Ok(Repaired::Skipped) => {
-                        ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Ok(Repaired::Repaired(stats)) => {
-                        // The file is repaired, so its downloaded bytes are the
-                        // **settled** ones — the bytes of the files that were
-                        // actually repaired. The live figure already carries
-                        // them, and it carries the abandoned attempts' bytes
-                        // too: those crossed the wire, and a budget is about
-                        // the traffic, not about the install.
-                        if !ctx.summary.settle_download_bytes(stats.download_bytes) {
-                            // The **verified** ceiling bound: the file is
-                            // repaired and counted, and the run stops here.
-                            // The line is crossed by a whole file, because a
-                            // file is the atom the figure is counted in.
-                            ctx.summary.stop(StoppedBy::VerifiedDownload);
-                            tracing::warn!(
-                                limit = ?ctx.summary.max_verified_download_bytes(),
-                                have = ctx.summary.download.settled(),
-                                "verified-download-bytes ceiling reached -> stopping the run"
-                            );
-                        }
-                        ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
-                        // Which path wrote it. The disk claim of the run is
-                        // "how many files were written where they lie", and
-                        // this is the number that says it.
-                        match stats.mode {
-                            Mode::Inplace => {
-                                ctx.summary.files_inplace.fetch_add(1, Ordering::Relaxed);
-                            }
-                            Mode::Temp => {
-                                ctx.summary.files_temp.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-                        // The bytes that did not have to be written: the file's
-                        // size minus what was written. The in-place path
-                        // leaves the correct chunks alone; the temp path
-                        // rewrites every chunk it does not resume, and a `_tmp`
-                        // prefix left by an earlier run is kept and counts
-                        // here.
-                        //
-                        // The subtraction is against the file's **settled**
-                        // writes, accumulated across its attempts: a chunk an
-                        // abandoned attempt wrote is in the install, so it is
-                        // not a byte the repair did not have to touch.
-                        let kept = (ctx.plan.files[idx].size.max(0) as u64)
-                            .saturating_sub(stats.settled_writes);
-                        ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
-                    }
-                    Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
-                    Err(e) => {
-                        ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
-                        tracing::error!("repair failed: {e:#}");
-                        // `--fail-fast`: the file that failed is honestly
-                        // counted and the run now stops instead of grinding
-                        // through hours of retry backoff. No new counter — the
-                        // fact is already visible as `failed > 0` + exit 3.
-                        if ctx.summary.fail_fast() {
-                            ctx.summary.abort();
-                        }
-                    }
-                }
-            }
-            .instrument(span)
-            .await
-        }));
-    }
-    join_file_tasks(handles, &summary).await;
+    // Keep at most `jobs` file tasks alive at once: a task is spawned only when
+    // the in-flight window has room, so a large plan does not allocate one task
+    // (and one `JoinHandle`) per file before the first chunk is fetched. The
+    // window is drained in completion order, so `--fail-fast` sees a failure
+    // before the next file starts.
+    join_file_tasks(total_files, jobs, &summary, |idx| {
+        let ctx = Arc::clone(&ctx);
+        file_task(ctx, idx, total_files)
+    })
+    .await;
     progress.abort();
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
     // its clone yet. Either way `snapshot` reads the live counters.
@@ -303,21 +240,135 @@ pub async fn repair_all(
         .unwrap_or_else(|a| a.snapshot())
 }
 
-/// Await every spawned file task and charge each join error to `files_failed`.
+/// One file task: repair a planned file and fold its outcome into the run.
+///
+/// The task body returns `()`, so its failure is a panic or a cancellation and
+/// surfaces as a [`tokio::task::JoinError`] in [`join_file_tasks`]; an
+/// `anyhow::Error` from the repair itself is counted here, as a failed file.
+async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
+    // Each file task gets a `file{seq,total,task,path}` span so its progress
+    // can be grouped in logs; `task` is the tokio async-task id (stable across
+    // thread hops), and the `picked up by worker` event records which worker
+    // took the file.
+    let span = tracing::info_span!(
+        "file",
+        seq = idx + 1,
+        total = total_files,
+        task = ?tokio::task::try_id(),
+        path = %ctx.plan.files[idx].rel,
+    );
+    async move {
+        tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
+        match repair_one_file(&ctx, idx).await {
+            Ok(Repaired::Skipped) => {
+                ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(Repaired::Repaired(stats)) => {
+                // The file is repaired, so its downloaded bytes are the
+                // **settled** ones — the bytes of the files that were
+                // actually repaired. The live figure already carries
+                // them, and it carries the abandoned attempts' bytes
+                // too: those crossed the wire, and a budget is about
+                // the traffic, not about the install.
+                if !ctx.summary.settle_download_bytes(stats.download_bytes) {
+                    // The **verified** ceiling bound: the file is
+                    // repaired and counted, and the run stops here.
+                    // The line is crossed by a whole file, because a
+                    // file is the atom the figure is counted in.
+                    ctx.summary.stop(StoppedBy::VerifiedDownload);
+                    tracing::warn!(
+                        limit = ?ctx.summary.max_verified_download_bytes(),
+                        have = ctx.summary.download.settled(),
+                        "verified-download-bytes ceiling reached -> stopping the run"
+                    );
+                }
+                ctx.summary.files_repaired.fetch_add(1, Ordering::Relaxed);
+                // Which path wrote it. The disk claim of the run is
+                // "how many files were written where they lie", and
+                // this is the number that says it.
+                match stats.mode {
+                    Mode::Inplace => {
+                        ctx.summary.files_inplace.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Mode::Temp => {
+                        ctx.summary.files_temp.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                // The bytes that did not have to be written: the file's
+                // size minus what was written. The in-place path
+                // leaves the correct chunks alone; the temp path
+                // rewrites every chunk it does not resume, and a `_tmp`
+                // prefix left by an earlier run is kept and counts
+                // here.
+                //
+                // The subtraction is against the file's **settled**
+                // writes, accumulated across its attempts: a chunk an
+                // abandoned attempt wrote is in the install, so it is
+                // not a byte the repair did not have to touch.
+                let kept =
+                    (ctx.plan.files[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
+                ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
+            }
+            Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
+            Err(e) => {
+                ctx.summary.files_failed.fetch_add(1, Ordering::Relaxed);
+                tracing::error!("repair failed: {e:#}");
+                // `--fail-fast`: the file that failed is honestly
+                // counted and the run now stops instead of grinding
+                // through hours of retry backoff. No new counter — the
+                // fact is already visible as `failed > 0` + exit 3.
+                if ctx.summary.fail_fast() {
+                    ctx.summary.abort();
+                }
+            }
+        }
+    }
+    .instrument(span)
+    .await
+}
+
+/// Start and join the file tasks, keeping at most `jobs` of them alive.
+///
+/// `spawn` is called with a file index only when the in-flight window has
+/// room, so a plan of 100k files does not allocate 100k tasks and
+/// `JoinHandle`s up front. The window is drained in **completion order**, not
+/// spawn order: a failure (or a panic) has to be observed before the next file
+/// starts, or `--fail-fast` would keep starting files after the run already
+/// knew it had failed.
 ///
 /// A file task returns `()`, so its only `Err` is a panic or a cancellation —
 /// never an `anyhow::Error`. Dropping it would let a panicked file leave
 /// `files_failed == 0`: the run would bump `config.ini` and exit `0` with that
 /// file unrepaired, which is the launcher-desync failure the post-phase
 /// ordering exists to prevent.
-///
-/// The handles are awaited in **completion order**, not spawn order. A panic
-/// has already finished; waiting for all earlier handles first would let the
-/// queued files keep starting under `--fail-fast`, because the abort flag is
-/// only set once this loop observes the panic.
-async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Summary) {
-    let mut pending: futures::stream::FuturesUnordered<_> = handles.into_iter().collect();
-    while let Some(result) = futures::StreamExt::next(&mut pending).await {
+async fn join_file_tasks<F, Fut>(total_files: usize, jobs: usize, summary: &Summary, mut spawn: F)
+where
+    F: FnMut(usize) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let limit = jobs.max(1);
+    let mut set = JoinSet::new();
+    let mut next = 0;
+    let mut starting = true;
+    loop {
+        // `--fail-fast`: once a file has exhausted its retries, no further file
+        // is started. The unstarted ones are simply not counted — the caller
+        // sees `done < total` in `PROGRESS` and `failed > 0` in `SUMMARY`.
+        while starting && set.len() < limit && next < total_files {
+            if summary.aborted() {
+                tracing::warn!(
+                    remaining = total_files - next,
+                    "fail-fast: not starting the remaining files"
+                );
+                starting = false;
+                break;
+            }
+            set.spawn(spawn(next));
+            next += 1;
+        }
+        let Some(result) = set.join_next().await else {
+            return;
+        };
         if let Err(e) = result {
             summary.files_failed.fetch_add(1, Ordering::Relaxed);
             tracing::error!(error = %e, "repair task failed");
@@ -331,6 +382,12 @@ async fn join_file_tasks(handles: Vec<tokio::task::JoinHandle<()>>, summary: &Su
 /// Read-only inputs shared by every file task.
 struct FileCtx {
     game_dir: PathBuf,
+    /// The install root resolved once for the whole repair loop.
+    ///
+    /// `None` means the base itself could not be resolved; `repair_one_file`
+    /// then falls back to `contained_join`, keeping the per-file refusal and
+    /// its message.
+    root: Option<util::PathRoot>,
     http: reqwest::Client,
     plan: Arc<RepairPlan>,
     local_map: LocalChunkMap,
@@ -377,7 +434,11 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if !ctx.dry_run {
         validate_chunk_ranges(file)?;
     }
-    let final_path = util::contained_join(&ctx.game_dir, &file.rel)?;
+    let joined = ctx.root.as_ref().map_or_else(
+        || util::contained_join(&ctx.game_dir, &file.rel),
+        |root| root.join(&file.rel),
+    );
+    let final_path = joined?;
     if let Some(parent) = final_path.parent()
         && !ctx.dry_run
     {
@@ -399,7 +460,12 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     // default and never creates a `_tmp`.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L330-L331
     // and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L443-L459
-    let tmp_path = PathBuf::from(format!("{}_tmp", final_path.display()));
+    // Append the suffix to the path's `OsString` rather than its `display()`:
+    // `display()` is lossy, so a non-UTF-8 install path would name a different
+    // temp file than the one intended.
+    let mut tmp = final_path.as_os_str().to_owned();
+    tmp.push("_tmp");
+    let tmp_path = PathBuf::from(tmp);
 
     // The mode for this file. `--repair-mode temp` never uses the in-place
     // path; the rest decide from what the target is.
@@ -579,7 +645,25 @@ fn reserve_write(ctx: &FileCtx, n: u64) -> Result<()> {
     anyhow::bail!("write-bytes ceiling reached")
 }
 
-/// Write `bytes` at `offset`.
+/// Write `bytes` at `offset` and settle them.
+///
+/// The reservation is the caller's: the three write paths reserve at
+/// different granularities on purpose (see [`write_at`], [`copy_within`] and
+/// [`zero_fill`]), and the ceiling must be charged at exactly the same points.
+/// This helper is only the part they share — seek, write, [`note_write`].
+fn write_reserved(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    f: &mut File,
+    offset: u64,
+    bytes: &[u8],
+) -> Result<()> {
+    f.seek(SeekFrom::Start(offset))?;
+    f.write_all(bytes)?;
+    note_write(ctx, writes, bytes.len() as u64)
+}
+
+/// Write `bytes` at `offset`, reserving the whole slice up front.
 fn write_at(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -588,21 +672,20 @@ fn write_at(
     bytes: &[u8],
 ) -> Result<()> {
     reserve_write(ctx, bytes.len() as u64)?;
-    f.seek(SeekFrom::Start(offset))?;
-    f.write_all(bytes)?;
-    note_write(ctx, writes, bytes.len() as u64)?;
-    Ok(())
+    write_reserved(ctx, writes, f, offset, bytes)
 }
 
 /// Copy `len` bytes from `src` to `dst` inside the same file.
 ///
-/// The copy is done in pieces, and each piece is read before it is written,
-/// so the source and the destination never have to be disjoint in the
-/// *handle* — only in the *file*, which the write order guarantees.
+/// The copy is done in pieces, and each piece is reserved and written before
+/// the next is read, so the source and the destination never have to be
+/// disjoint in the *handle* — only in the *file*, which the write order
+/// guarantees.
 fn copy_within(
     ctx: &FileCtx,
     writes: &mut FileWrites,
     f: &mut File,
+    scratch: &mut Vec<u8>,
     src: u64,
     dst: u64,
     len: u64,
@@ -610,16 +693,14 @@ fn copy_within(
     if len == 0 {
         return Ok(());
     }
-    let mut buf = vec![0u8; COPY_BUF.min(len as usize)];
+    let buf = scratch_slice(scratch, COPY_BUF.min(len as usize));
     let mut done = 0u64;
     while done < len {
         let n = ((len - done) as usize).min(buf.len());
         f.seek(SeekFrom::Start(src + done))?;
         f.read_exact(&mut buf[..n])?;
         reserve_write(ctx, n as u64)?;
-        f.seek(SeekFrom::Start(dst + done))?;
-        f.write_all(&buf[..n])?;
-        note_write(ctx, writes, n as u64)?;
+        write_reserved(ctx, writes, f, dst + done, &buf[..n])?;
         done += n as u64;
     }
     Ok(())
@@ -629,6 +710,9 @@ fn copy_within(
 ///
 /// A hole in the chunk coverage is a region no chunk claims, so nothing else
 /// would ever write it: without this it would keep the old file's bytes.
+///
+/// The whole length is reserved once, before the first piece lands; the
+/// pieces are then written without touching the ceiling again.
 fn zero_fill(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -642,14 +726,14 @@ fn zero_fill(
     // The zero-fill is a write like any other: it lands in the install and
     // the write ceiling counts it.
     reserve_write(ctx, len)?;
-    out.seek(SeekFrom::Start(offset))?;
-    let zeros = vec![0u8; COPY_BUF.min(len as usize)];
+    let zeros = zero_block();
     let mut left = len;
+    let mut pos = offset;
     while left > 0 {
         let n = (left as usize).min(zeros.len());
-        out.write_all(&zeros[..n])?;
-        note_write(ctx, writes, n as u64)?;
+        write_reserved(ctx, writes, out, pos, &zeros[..n])?;
         left -= n as u64;
+        pos += n as u64;
     }
     Ok(())
 }
@@ -771,6 +855,7 @@ mod tests {
         let summary = repair_all(
             reqwest::Client::new(),
             dir.to_path_buf(),
+            None,
             plan,
             LocalChunkMap::new(),
             Summary::new(),
@@ -790,19 +875,20 @@ mod tests {
 
     /// F-1: a panicked file task is a **failed file**, not a silent success.
     ///
-    /// The task body returns `()`, so the only `Err` from its join handle is a
-    /// panic or a cancellation. The join loop has to count that error: with
+    /// The task body returns `()`, so the only `Err` from its join is a panic
+    /// or a cancellation. The join loop has to count that error: with
     /// `files_failed == 0` the run would reach the post phase, bump
     /// `config.ini`, and exit `0` with the file unrepaired.
     #[tokio::test]
     async fn a_panicked_file_task_is_counted_as_a_failure() {
         let mut summary = Summary::new();
         summary.set_fail_fast(true);
-        let handles = vec![
-            tokio::spawn(async {}),
-            tokio::spawn(async { panic!("injected file-task panic") }),
-        ];
-        join_file_tasks(handles, &summary).await;
+        join_file_tasks(2, 2, &summary, |idx| async move {
+            if idx == 1 {
+                panic!("injected file-task panic");
+            }
+        })
+        .await;
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),
             1,
@@ -813,12 +899,12 @@ mod tests {
 
     /// N-7: the join loop must observe a panic as soon as its task finishes.
     /// Sequential awaiting in spawn order would wait for every earlier (here:
-    /// deliberately slower) handle first, so under `--fail-fast` the queued
+    /// deliberately slower) task first, so under `--fail-fast` the queued
     /// files would keep starting after the run already knew it had failed.
     ///
     /// The slower task samples the abort flag when it finishes: it must
     /// already be set by then. With spawn-order awaiting it is not, because
-    /// the panicked handle comes after it.
+    /// the panicked task comes after it.
     #[tokio::test]
     async fn a_panic_is_observed_before_a_slower_earlier_task() {
         let summary = Arc::new({
@@ -829,16 +915,65 @@ mod tests {
         let saw_abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let slow_summary = Arc::clone(&summary);
         let slow_saw = Arc::clone(&saw_abort);
-        let slow = tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            slow_saw.store(slow_summary.aborted(), Ordering::SeqCst);
-        });
-        let panicking = tokio::spawn(async { panic!("injected file-task panic") });
-        join_file_tasks(vec![slow, panicking], &summary).await;
+        join_file_tasks(2, 2, &summary, move |idx| {
+            let slow_summary = Arc::clone(&slow_summary);
+            let slow_saw = Arc::clone(&slow_saw);
+            async move {
+                if idx == 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    slow_saw.store(slow_summary.aborted(), Ordering::SeqCst);
+                } else {
+                    panic!("injected file-task panic");
+                }
+            }
+        })
+        .await;
         assert!(
             saw_abort.load(Ordering::SeqCst),
             "the panic must be observed before the slower task finishes"
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
+    }
+
+    /// C6: the driver keeps at most `jobs` file tasks alive.
+    ///
+    /// A task is spawned only when the in-flight window has room, so a plan of
+    /// many files does not allocate one task per file up front. The peak is
+    /// sampled where a task is created: `created - finished` can never exceed
+    /// the window, because a task that has not finished still occupies a slot.
+    #[tokio::test]
+    async fn the_file_task_window_is_bounded() {
+        use std::sync::atomic::AtomicUsize;
+
+        let summary = Summary::new();
+        let created = Arc::new(AtomicUsize::new(0));
+        let finished = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let jobs = 3;
+        let total = 20;
+        let created_task = Arc::clone(&created);
+        let finished_task = Arc::clone(&finished);
+        let peak_task = Arc::clone(&peak);
+        join_file_tasks(total, jobs, &summary, move |_idx| {
+            let live = created_task.fetch_add(1, Ordering::SeqCst) + 1
+                - finished_task.load(Ordering::SeqCst);
+            peak_task.fetch_max(live, Ordering::SeqCst);
+            let finished = Arc::clone(&finished_task);
+            async move {
+                tokio::task::yield_now().await;
+                finished.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+        assert_eq!(
+            created.load(Ordering::SeqCst),
+            total,
+            "every file must still run"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= jobs,
+            "at most {jobs} file tasks may be alive at once, saw {}",
+            peak.load(Ordering::SeqCst)
+        );
     }
 }

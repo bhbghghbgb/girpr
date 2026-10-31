@@ -73,11 +73,24 @@ impl DiskPlan {
     /// One `stat` per planned file: the on-disk length is what turns "the
     /// file is this big" into "the file has to *grow* by this much", which is
     /// the whole difference between the two modes.
-    pub fn new(game_dir: &Path, plan: &RepairPlan, requested: RepairMode, jobs: usize) -> Self {
+    ///
+    /// `root` is the run's cached install root. `None` means the base itself
+    /// could not be resolved, and each file falls back to [`util::contained_join`].
+    pub fn new(
+        game_dir: &Path,
+        root: Option<&util::PathRoot>,
+        plan: &RepairPlan,
+        requested: RepairMode,
+        jobs: usize,
+    ) -> Self {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
         for f in &plan.files {
-            let path = match util::contained_join(game_dir, &f.rel) {
+            let joined = root.map_or_else(
+                || util::contained_join(game_dir, &f.rel),
+                |root| root.join(&f.rel),
+            );
+            let path = match joined {
                 Ok(p) => p,
                 Err(e) => {
                     // `build_plan` refused an escaping rel; defence in depth.
@@ -501,7 +514,7 @@ mod tests {
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
 
         let plan = plan();
-        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 4);
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 4);
         assert_eq!(disk.for_file("game/foo.dat").mode, "inplace");
         assert_eq!(
             disk.for_file("game/foo.dat").extra_bytes,
@@ -520,7 +533,7 @@ mod tests {
         assert_eq!(disk.est_write_bytes, 128 + 64);
 
         // The temp path duplicates every file.
-        let disk = DiskPlan::new(&dir, &plan, RepairMode::Temp, 4);
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 4);
         assert_eq!(disk.for_file("game/foo.dat").mode, "temp");
         assert_eq!(disk.for_file("game/foo.dat").extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
@@ -539,7 +552,7 @@ mod tests {
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         std::fs::write(dir.join("game").join("bar.dat"), vec![0u8; 16]).unwrap();
 
-        let disk = DiskPlan::new(&dir, &plan(), RepairMode::Discard, 4);
+        let disk = DiskPlan::new(&dir, None, &plan(), RepairMode::Discard, 4);
         assert_eq!(
             disk.for_file("game/foo.dat").extra_bytes,
             0,
@@ -603,7 +616,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("game")).unwrap();
         std::fs::write(dir.join("game").join("foo.dat"), vec![0u8; 128]).unwrap();
         let plan = plan();
-        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 1);
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 1);
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &disk);
         assert_eq!(doc.repair[0].mode, "inplace");
         assert_eq!(doc.repair[0].extra_bytes, 0);
@@ -665,7 +678,7 @@ mod tests {
                 .collect(),
             url_prefix_by_file: HashMap::new(),
         };
-        let disk = DiskPlan::new(&dir, &plan, RepairMode::Auto, 3);
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 3);
         assert_eq!(disk.est_write_bytes, u64::MAX);
         // The peak is the largest single file (`i64::MAX`); three files in
         // flight overflow the multiplication, so that fold must saturate too.

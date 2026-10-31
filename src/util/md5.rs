@@ -1,5 +1,6 @@
-﻿use anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -11,6 +12,91 @@ const MD5_BUF: usize = 512 * 1024;
 /// Named rather than inlined so the "the file is not there" answer and the
 /// "the file is there and empty" answer cannot drift apart.
 pub const EMPTY_MD5: &str = "d41d8cd98f00b204e9800998ecf8427e";
+
+/// A 16-byte MD5 digest.
+///
+/// The manifest's spelling is not canonical — either case is legal — so the
+/// digest is parsed once at the boundary and compared as bytes from then on.
+/// [`Md5::parse_hex`] is the only way in from a `String`; [`Md5::to_hex`] is
+/// the only way back out. A string that is not 32 hex digits (the empty string
+/// above all) is not a digest, which keeps "an empty MD5 is unknown, not a
+/// match" an `Option<Md5>` rather than a string sentinel.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Md5([u8; 16]);
+
+impl Md5 {
+    /// The MD5 of the empty file, as a digest.
+    pub const EMPTY: Self = Self([
+        0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8, 0x42,
+        0x7e,
+    ]);
+
+    /// Parse a hex MD5 into the 16 bytes it spells.
+    ///
+    /// Either case is accepted. Anything that is not exactly 32 hex digits is
+    /// an error, so a caller that wants "unknown" can turn it into `None`.
+    pub fn parse_hex(s: &str) -> Result<Self> {
+        let bytes = s.as_bytes();
+        if bytes.len() != 32 {
+            anyhow::bail!("an MD5 is 32 hex digits, not {} bytes", bytes.len());
+        }
+        let mut out = [0u8; 16];
+        for (i, byte) in out.iter_mut().enumerate() {
+            let hi =
+                hex_digit(bytes[2 * i]).ok_or_else(|| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
+            let lo = hex_digit(bytes[2 * i + 1])
+                .ok_or_else(|| anyhow::anyhow!("not a hex MD5: {s:?}"))?;
+            *byte = (hi << 4) | lo;
+        }
+        Ok(Self(out))
+    }
+
+    /// The digest as lowercase hex.
+    pub fn to_hex(self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(32);
+        for byte in self.0 {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
+    }
+
+    /// The digest bytes, for a key or a byte comparison.
+    pub fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+
+    /// Does `s` spell this digest?
+    ///
+    /// Either case is accepted; a string that is not a digest (the empty MD5
+    /// above all) matches nothing.
+    pub fn matches_hex(self, s: &str) -> bool {
+        Self::parse_hex(s).is_ok_and(|other| other == self)
+    }
+}
+
+impl fmt::Display for Md5 {
+    /// Lowercase hex, without allocating an intermediate `String`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for Md5 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Md5({self})")
+    }
+}
+
+impl From<md5::Digest> for Md5 {
+    fn from(digest: md5::Digest) -> Self {
+        Self(digest.0)
+    }
+}
 
 /// A byte range of a file, with the MD5 the manifest expects for its content.
 ///
@@ -63,8 +149,10 @@ impl Scan {
 struct RangeState {
     offset: u64,
     len: u64,
-    /// Lowercased expected MD5 — the manifest's spelling is not canonical.
-    expect: String,
+    /// The expected MD5, parsed once — the manifest's spelling is not
+    /// canonical. `None` when the expectation is empty (or otherwise not a
+    /// hex digest): "unknown", not "matches".
+    expect: Option<Md5>,
     ctx: md5::Context,
     /// Bytes of this range actually read. A range that runs past the end of
     /// the file is short, and a short range is never correct.
@@ -74,13 +162,14 @@ struct RangeState {
 impl RangeState {
     /// Is the range exactly what the manifest says it should be?
     ///
-    /// Three things have to hold: every byte of the range was on disk, the
-    /// range hashes to the expected MD5, and the expectation was not empty
-    /// (an empty MD5 is "unknown", not "matches").
+    /// Three things have to hold: every byte of the range was on disk, there
+    /// *is* an expectation (an empty MD5 is "unknown", not "matches"), and the
+    /// range hashes to it.
     fn is_ok(&self) -> bool {
-        self.seen == self.len
-            && !self.expect.is_empty()
-            && format!("{:x}", self.ctx.clone().compute()) == self.expect
+        let Some(expect) = self.expect else {
+            return false;
+        };
+        self.seen == self.len && Md5::from(self.ctx.clone().compute()) == expect
     }
 }
 
@@ -118,7 +207,7 @@ pub fn scan_file(path: &Path, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) 
 pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>]) -> Result<Scan> {
     f.seek(SeekFrom::Start(0))?;
     let mut ranges: Vec<RangeState> = Vec::new();
-    let mut index: HashMap<(u64, u64, String), usize> = HashMap::new();
+    let mut index: HashMap<(u64, u64, Option<Md5>), usize> = HashMap::new();
     let mut dest_idx = Vec::with_capacity(dest.len());
     let mut source_idx = Vec::with_capacity(source.len());
     // The two lists are interned separately, so a range that appears in both
@@ -180,7 +269,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     }
 
     Ok(Scan {
-        file_md5: format!("{:x}", whole.compute()),
+        file_md5: Md5::from(whole.compute()).to_hex(),
         file_len: total,
         dest_ok: dest_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
         source_ok: source_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
@@ -189,18 +278,19 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
 
 /// Find or create the range state for `(offset, len, md5)`.
 ///
-/// Two ranges are the same range when they cover the same bytes **and**
-/// expect the same content; the same bytes with a different expectation are
-/// two different questions, so they get two digests.
+/// Two ranges are the same range when they cover the same bytes **and** expect
+/// the same digest; the same bytes with a different expectation are
+/// two different questions, so they get two digests. An expectation that is
+/// not a digest is "unknown", and every unknown is the same question.
 fn intern(
     ranges: &mut Vec<RangeState>,
-    index: &mut HashMap<(u64, u64, String), usize>,
+    index: &mut HashMap<(u64, u64, Option<Md5>), usize>,
     offset: u64,
     len: u64,
     md5: &str,
 ) -> usize {
-    let expect = md5.to_ascii_lowercase();
-    let key = (offset, len, expect.clone());
+    let expect = Md5::parse_hex(md5).ok();
+    let key = (offset, len, expect);
     if let Some(&i) = index.get(&key) {
         return i;
     }
@@ -216,6 +306,16 @@ fn intern(
     i
 }
 
+/// The value of one ASCII hex digit, in either case.
+fn hex_digit(b: u8) -> Option<u8> {
+    Some(match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => return None,
+    })
+}
+
 /// Read `len` bytes at `offset` into a buffer.
 ///
 /// The in-place repair's capture pass: the bytes of a reuse source, read
@@ -224,13 +324,25 @@ fn intern(
 /// for.
 pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     f.seek(SeekFrom::Start(offset))?;
-    let mut out = vec![0u8; len as usize];
+    // `len` comes from the server's `uncompressed_size`, so convert it instead
+    // of truncating, and reserve fallibly: a corrupt manifest must fail this
+    // read, not abort the process with an allocation failure.
+    let len = usize::try_from(len).with_context(|| format!("range of {len} bytes is too large"))?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .with_context(|| format!("reserve {len} bytes for a file range"))?;
+    out.resize(len, 0);
     f.read_exact(&mut out)?;
     Ok(out)
 }
 
 /// Lowercase hex MD5 of a file.
 pub fn md5_file(path: &Path) -> Result<String> {
+    Ok(md5_file_digest(path)?.to_hex())
+}
+
+/// [`md5_file`] as a digest, for a gate that compares bytes.
+pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut buf = vec![0u8; MD5_BUF];
     let mut ctx = md5::Context::new();
@@ -241,18 +353,43 @@ pub fn md5_file(path: &Path) -> Result<String> {
         }
         ctx.consume(&buf[..n]);
     }
-    Ok(format!("{:x}", ctx.compute()))
+    Ok(Md5::from(ctx.compute()))
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
+///
+/// Opens the file and hashes the range through the shared reader helper; the
+/// read buffer is internal. A caller that already holds the file and wants to
+/// reuse its buffer uses [`md5_reader_slice`] instead.
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
-    use std::io::Seek;
-    use std::io::SeekFrom;
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut buf = Vec::new();
+    md5_reader_slice(&mut f, offset, len, &mut buf)
+}
+
+/// MD5 of a byte slice range of a file the caller already has open, reusing
+/// `buf`.
+///
+/// Seeks `f` to `offset` first and leaves it at the end of the range (or at
+/// end of file, for a short read), so a caller that wants to copy the same
+/// bytes afterwards seeks back once instead of opening the file again.
+pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) -> Result<String> {
+    Ok(md5_reader_slice_digest(f, offset, len, buf)?.to_hex())
+}
+
+/// [`md5_reader_slice`] as a digest, for a gate that compares bytes.
+pub(crate) fn md5_reader_slice_digest(
+    f: &mut File,
+    offset: u64,
+    len: u64,
+    buf: &mut Vec<u8>,
+) -> Result<Md5> {
     f.seek(SeekFrom::Start(offset))?;
+    if buf.len() < MD5_BUF {
+        buf.resize(MD5_BUF, 0);
+    }
     let mut ctx = md5::Context::new();
     let mut remaining = len;
-    let mut buf = vec![0u8; MD5_BUF.min(1 << 20)];
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
         let n = f.read(&mut buf[..want])?;
@@ -262,7 +399,7 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
         ctx.consume(&buf[..n]);
         remaining -= n as u64;
     }
-    Ok(format!("{:x}", ctx.compute()))
+    Ok(Md5::from(ctx.compute()))
 }
 
 #[cfg(test)]
@@ -309,6 +446,31 @@ mod tests {
     #[test]
     fn the_empty_md5_constant_is_the_empty_files_md5() {
         assert_eq!(hex(b""), EMPTY_MD5);
+        assert_eq!(Md5::EMPTY.to_hex(), EMPTY_MD5);
+    }
+
+    #[test]
+    fn a_digest_parses_in_either_case_and_prints_lowercase() {
+        let upper = Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap();
+        let lower = Md5::parse_hex("d41d8cd98f00b204e9800998ecf8427e").unwrap();
+        assert_eq!(upper, lower);
+        assert_eq!(upper.to_hex(), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(upper.to_string(), lower.to_hex());
+        assert_eq!(format!("{upper:?}"), format!("Md5({})", upper.to_hex()));
+        assert!(upper.matches_hex("d41d8cd98f00b204e9800998ecf8427e"));
+        assert!(upper.matches_hex("D41D8CD98F00B204E9800998ECF8427E"));
+        assert!(!upper.matches_hex(""));
+        assert!(!upper.matches_hex("md5-a"));
+    }
+
+    #[test]
+    fn a_non_digest_is_not_an_md5() {
+        // The hand-built manifests in tests use short labels; they are
+        // "unknown", not a digest, and must never compare equal to anything.
+        assert!(Md5::parse_hex("").is_err());
+        assert!(Md5::parse_hex("md5-a").is_err());
+        assert!(Md5::parse_hex(&"g".repeat(32)).is_err());
+        assert!(Md5::parse_hex(&"a".repeat(31)).is_err());
     }
 
     #[test]
@@ -460,5 +622,15 @@ mod tests {
         let mut f = File::open(dir.join("f.dat")).unwrap();
         let got = read_range(&mut f, 64, 8).unwrap();
         assert_eq!(got, &data[64..72]);
+    }
+
+    #[test]
+    fn read_range_refuses_a_length_it_cannot_reserve() {
+        // A server-supplied size must become an error, not an abort: neither
+        // the `usize` conversion nor the fallible reservation may panic.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "read_range_big");
+        std::fs::write(dir.join("f.dat"), b"abc").unwrap();
+        let mut f = File::open(dir.join("f.dat")).unwrap();
+        assert!(read_range(&mut f, 0, u64::MAX).is_err());
     }
 }

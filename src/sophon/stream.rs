@@ -6,6 +6,7 @@ use std::io::Write;
 use crate::hyp::ChunkManifestMeta;
 use crate::sleep::Sleep;
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
+use crate::util::Md5;
 
 /// Download + zstd-decompress + MD5-verify + protobuf-parse one manifest.
 /// NOTE(starward-parity): the checksum is the MD5 of the *decompressed* bytes,
@@ -113,7 +114,7 @@ async fn try_fetch_manifest(
     tracing::debug!(manifest = %meta.manifest.id, decompressed_bytes = digest.bytes, expect_md5 = %meta.manifest.checksum, actual_md5 = %digest.md5, "manifest checksum check");
     // A checksum mismatch is worth another try: the origin may have served a
     // torn body, and the next attempt is a fresh one.
-    if !digest.md5.eq_ignore_ascii_case(&meta.manifest.checksum) {
+    if !digest.md5.matches_hex(&meta.manifest.checksum) {
         return Attempt::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             meta.manifest.id,
@@ -159,8 +160,8 @@ pub struct ChunkDigest {
     pub compressed_bytes: u64,
     /// Decompressed bytes that reached the sink.
     pub bytes: u64,
-    /// The MD5 of the decompressed bytes, lowercase hex.
-    pub md5: String,
+    /// The MD5 of the decompressed bytes.
+    pub md5: Md5,
 }
 
 /// A writer that hashes what passes through it, counts it, and refuses to pass
@@ -200,9 +201,9 @@ impl<W: Write> HashingWriter<W> {
         self.written
     }
 
-    /// The MD5 of the bytes that passed through, lowercase hex.
-    pub fn md5(&self) -> String {
-        format!("{:x}", self.hasher.clone().compute())
+    /// The MD5 of the bytes that passed through.
+    pub fn md5(&self) -> Md5 {
+        Md5::from(self.hasher.clone().compute())
     }
 }
 
@@ -620,7 +621,7 @@ mod tests {
         assert_eq!(sink, buffered, "and they are the buffered decode's bytes");
         assert_eq!(digest.bytes, buffered.len() as u64);
         assert_eq!(
-            digest.md5,
+            digest.md5.to_hex(),
             format!("{:x}", md5::compute(&buffered)),
             "the same digest as the buffered path"
         );
@@ -655,7 +656,7 @@ mod tests {
             "and the length is right"
         );
         assert_ne!(
-            digest.md5,
+            digest.md5.to_hex(),
             format!("{:x}", md5::compute(&payload)),
             "a corrupt payload must not carry the wanted digest"
         );
@@ -794,7 +795,7 @@ mod tests {
             "and they are the buffered decode's bytes"
         );
         assert_eq!(
-            digest.md5,
+            digest.md5.to_hex(),
             format!("{:x}", md5::compute(&raw)),
             "the checksum is of the decompressed bytes"
         );

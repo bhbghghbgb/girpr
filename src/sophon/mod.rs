@@ -16,7 +16,7 @@ pub mod proto;
 pub mod stream;
 
 pub use self::filter::select_manifests;
-pub use self::map::build_local_chunk_map;
+pub use self::map::{FileReuse, ReuseEntry, build_local_chunk_map};
 pub use self::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest, WantedManifest};
 pub use self::stream::{
     ChunkDigest, ChunkSink, HashingWriter, fetch_manifest, join_url, retryable, stream_chunk_to,

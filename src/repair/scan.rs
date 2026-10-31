@@ -93,19 +93,28 @@ impl ScanReport {
     ///
     /// The `PLAN` total and the `--plan-out` document are fed from this one
     /// vector, so the document cannot disagree with the line.
+    ///
+    /// `root` is the run's cached install root. `None` means the base itself
+    /// could not be resolved, and each file falls back to [`util::contained_join`].
     pub fn est_download_bytes_by_file(
         &self,
         plan: &RepairPlan,
         game_dir: &Path,
+        root: Option<&util::PathRoot>,
         requested: RepairMode,
         local_map: &LocalChunkMap,
     ) -> Vec<u64> {
         plan.files
             .iter()
             .map(|f| {
-                let entries = local_map.get(&f.rel).map(|v| v.as_slice()).unwrap_or(&[]);
-                let sources = reuse::sources_for(&f.chunks, entries);
-                let resolved = match util::contained_join(game_dir, &f.rel) {
+                let sources = reuse::sources_for(&f.chunks, local_map.get(&f.rel));
+                // The run's cached root when it has one; otherwise resolve the
+                // base here, exactly as `contained_join` always did.
+                let joined = root.map_or_else(
+                    || util::contained_join(game_dir, &f.rel),
+                    |root| root.join(&f.rel),
+                );
+                let resolved = match joined {
                     Ok(path) => super::file::resolve_mode(requested, &path),
                     // Defence in depth, matching the scan itself: a path that
                     // escapes is not readable, so nothing is reusable.
@@ -164,30 +173,26 @@ fn est_file_download_bytes(
                 n.saturating_add(c.compressed_size.max(0) as u64)
             }),
         Mode::Inplace => {
-            let bad: Vec<&SophonChunk> = chunks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !v.dest_ok[*i])
-                .map(|(_, c)| c)
-                .collect();
-            // The writer's own inputs: only sources the scan found intact,
-            // and the same "does this source survive the direction" rule.
-            // `usable_len = u64::MAX` is sound because `source_ok` already
-            // proved the source range was read from inside the file.
-            let order_chunks: Vec<SophonChunk> = bad.iter().map(|c| (*c).clone()).collect();
-            let srcs: Vec<Option<u64>> = chunks
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !v.dest_ok[*i])
-                .map(|(i, _)| {
-                    if v.source_ok[i] {
-                        sources.get(i).copied().flatten()
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let order = reuse::salvage_order(&order_chunks, &srcs, u64::MAX);
+            // One pass builds the writer's two inputs: the damaged chunks, in
+            // plan order, and their sources. The writer's rule is the same
+            // one, so the borrowed form avoids cloning the chunks.
+            let mut bad: Vec<&SophonChunk> = Vec::new();
+            let mut srcs: Vec<Option<u64>> = Vec::new();
+            for (i, c) in chunks.iter().enumerate() {
+                if v.dest_ok[i] {
+                    continue;
+                }
+                bad.push(c);
+                // `usable_len = u64::MAX` is sound because `source_ok`
+                // already proved the source range was read from inside the
+                // file.
+                srcs.push(if v.source_ok[i] {
+                    sources.get(i).copied().flatten()
+                } else {
+                    None
+                });
+            }
+            let order = reuse::salvage_order_refs(&bad, &srcs, u64::MAX);
             bad.iter()
                 .enumerate()
                 .filter(|(k, _)| !order.live[*k])
@@ -212,20 +217,32 @@ struct Scanned {
 /// concurrency, exactly as it bounds the repair loop.
 pub async fn scan_plan(
     game_dir: &Path,
+    root: Option<&util::PathRoot>,
     plan: Arc<RepairPlan>,
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
 ) -> ScanReport {
-    let mut stream =
-        futures::stream::iter(
-            plan.files.iter().cloned().map(|f| {
-                let game_dir = game_dir.to_path_buf();
-                let local_map = Arc::clone(&local_map);
-                async move {
-                    tokio::task::spawn_blocking(move || scan_one(&game_dir, &f, &local_map)).await
-                }
-            }),
-        )
+    // NOTE: the plan is shared by `Arc` and each task is handed an index, not a
+    // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
+    // per task would deep-clone the whole plan — the same reason
+    // `file::repair_all` shares its `FileCtx` instead of the plan's files.
+    //
+    // The install root is resolved once here, not once per file, and shared by
+    // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
+    let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
+    let mut stream = futures::stream::iter(0..plan.files.len())
+        .map(move |idx| {
+            let plan = Arc::clone(&plan);
+            let game_dir = game_dir.to_path_buf();
+            let local_map = Arc::clone(&local_map);
+            let root = root.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    scan_one(&game_dir, root.as_deref(), &plan.files[idx], &local_map)
+                })
+                .await
+            }
+        })
         .buffer_unordered(jobs.max(1));
 
     let mut out = ScanReport::default();
@@ -258,9 +275,62 @@ pub async fn scan_plan(
     out
 }
 
+/// The scan's two range lists for one file, plus the chunk each source range
+/// belongs to.
+///
+/// `dest` has one range per chunk, in plan order. `source` has a range only
+/// for the chunks that **have** a source: coercing the absent ones to offset
+/// 0 would ask the scan to verify the chunk's bytes at the head of the file,
+/// so unrelated bytes that happen to match (the file reflowed, or the head
+/// holds the content under a different layout) would mark a non-existent
+/// source intact while the writer, which gates on `sources[i].is_some()`,
+/// downloads the chunk anyway. `source_owner[k]` is the chunk `source[k]`
+/// belongs to, so the scan's per-source verdicts can be mapped back to one
+/// verdict per chunk.
+pub(crate) fn scan_ranges<'a>(
+    chunks: &'a [SophonChunk],
+    sources: &[Option<u64>],
+) -> (
+    Vec<util::ScanRange<'a>>,
+    Vec<util::ScanRange<'a>>,
+    Vec<usize>,
+) {
+    let dest_ranges = chunks
+        .iter()
+        .map(|c| {
+            (
+                c.offset.max(0) as u64,
+                c.uncompressed_size.max(0) as u64,
+                c.uncompressed_md5.as_str(),
+            )
+        })
+        .collect();
+    let mut source_ranges: Vec<util::ScanRange<'_>> = Vec::new();
+    let mut source_owner: Vec<usize> = Vec::new();
+    for (i, (c, src)) in chunks.iter().zip(sources.iter()).enumerate() {
+        let Some(offset) = src else { continue };
+        source_owner.push(i);
+        source_ranges.push((
+            *offset,
+            c.uncompressed_size.max(0) as u64,
+            c.uncompressed_md5.as_str(),
+        ));
+    }
+    (dest_ranges, source_ranges, source_owner)
+}
+
 /// Scan one file: one read, every answer.
-fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> Scanned {
-    let path = match util::contained_join(game_dir, &file.rel) {
+fn scan_one(
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    file: &PlannedFile,
+    local_map: &LocalChunkMap,
+) -> Scanned {
+    let joined = root.map_or_else(
+        || util::contained_join(game_dir, &file.rel),
+        |root| root.join(&file.rel),
+    );
+    let path = match joined {
         Ok(p) => p,
         Err(e) => {
             // `build_plan` already refused an escaping rel, so this is defence
@@ -282,36 +352,8 @@ fn scan_one(game_dir: &Path, file: &PlannedFile, local_map: &LocalChunkMap) -> S
             };
         }
     };
-    let entries = local_map.get(&file.rel);
-    let sources = reuse::sources_for(&file.chunks, entries.map(|v| v.as_slice()).unwrap_or(&[]));
-    let dest_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .map(|c| {
-            (
-                c.offset.max(0) as u64,
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
-    // Only chunks that **have** a source get a source range. Coercing the
-    // absent ones to offset 0 would ask the scan to verify the chunk's bytes
-    // at the head of the file, so unrelated bytes that happen to match (the
-    // file reflowed, or the head holds the content under a different layout)
-    // would mark a non-existent source intact while the writer, which gates on
-    // `sources[i].is_some()`, downloads the chunk anyway.
-    let mut source_ranges: Vec<util::ScanRange<'_>> = Vec::new();
-    let mut source_owner: Vec<usize> = Vec::new();
-    for (i, (c, src)) in file.chunks.iter().zip(sources.iter()).enumerate() {
-        let Some(offset) = src else { continue };
-        source_owner.push(i);
-        source_ranges.push((
-            *offset,
-            c.uncompressed_size.max(0) as u64,
-            c.uncompressed_md5.as_str(),
-        ));
-    }
+    let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
+    let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
     let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
         // An unreadable file is not a failed scan: the verdict is "nothing
         // is correct", which is what the repair would find too.
@@ -535,7 +577,7 @@ mod tests {
             "the head copy really would verify at offset 0"
         );
 
-        let scanned = scan_one(&dir, &file, &LocalChunkMap::new());
+        let scanned = scan_one(&dir, None, &file, &LocalChunkMap::new());
         assert_eq!(scanned.verdict.dest_ok, vec![false]);
         assert_eq!(
             scanned.verdict.source_ok,

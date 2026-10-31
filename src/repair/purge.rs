@@ -21,12 +21,13 @@ use walkdir::WalkDir;
 
 use crate::repair::phases::plan::RepairPlan;
 use crate::repair::scope::PathScope;
+use crate::util::path::path_key;
 
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeCandidate {
     /// `/`-separated rel path in the on-disk (walk) spelling. Classification
-    /// compares its `purge_key`, so the spelling can differ in case from the
+    /// compares its `path_key`, so the spelling can differ in case from the
     /// manifest entry that kept it.
     pub rel: String,
     /// Absolute-or-game-relative path to remove.
@@ -97,10 +98,12 @@ pub fn plan_purge(
 ) -> PurgePlan {
     // Fold the three keep sets once, here, rather than rebuilding a set for
     // every walked file. `classify_purge_path` folds only the walked rel, so
-    // the purge compares the same key the plan dedup uses on Windows.
-    let expected: HashSet<String> = plan.expected_paths().iter().map(|r| purge_key(r)).collect();
-    let server_keep: HashSet<String> = server_keep.iter().map(|r| purge_key(r)).collect();
-    let blacklist: HashSet<String> = blacklist.iter().map(|r| purge_key(r)).collect();
+    // the purge compares the same `path_key` the plan dedups on. The expected
+    // set is keyed straight from the plan's rels: the raw-spelling
+    // `expected_paths()` set would be immediately re-keyed into a second one.
+    let expected: HashSet<String> = plan.expected_rels().map(path_key).collect();
+    let server_keep: HashSet<String> = server_keep.iter().map(|r| path_key(r)).collect();
+    let blacklist: HashSet<String> = blacklist.iter().map(|r| path_key(r)).collect();
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     // Ancestors of every `Keep`-classified file: anything else is left empty by
@@ -157,11 +160,13 @@ pub fn plan_purge(
         }
         let path = e.path();
         let rel = rel_path(path, game_dir);
-        let outside = !scope.is_visible(&rel);
-        match classify_purge_path(&rel, &expected, &server_keep, &blacklist, scope) {
+        // Match the scope once and hand the answer to the classifier: rule 0
+        // needs exactly this value, and the `hidden` count needs it too.
+        let visible = scope.is_visible(&rel);
+        match classify_purge_path_visible(&rel, visible, &expected, &server_keep, &blacklist) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
-                debug_assert!(!outside, "a hidden path must classify Keep");
+                debug_assert!(visible, "a hidden path must classify Keep");
                 // A candidate that cannot be stat'd is still a candidate: the
                 // delete does not need its size. Counting it as zero would
                 // understate the ceiling, so say so and count the failure.
@@ -184,7 +189,7 @@ pub fn plan_purge(
                 });
             }
         }
-        if outside {
+        if !visible {
             hidden += 1;
         }
     }
@@ -309,18 +314,6 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// The key the purge compares on. Mirrors `dedup_key` in
-/// [`crate::repair::phases::plan`]: Windows paths are case-insensitive, so the
-/// walked on-disk spelling and the manifest spelling must compare equal there.
-/// On Unix they are distinct paths and the key is the path itself.
-fn purge_key(rel: &str) -> String {
-    if cfg!(windows) {
-        rel.to_lowercase()
-    } else {
-        rel.to_string()
-    }
-}
-
 /// Metadata files the files-cleanup must keep.
 ///
 /// `config.ini` and the single-writer lock. `config.ini` lives inside
@@ -369,8 +362,25 @@ pub enum PurgeVerdict {
 /// Decide the fate of one `/`-separated rel path for the files-cleanup.
 /// Pure function (no I/O) so it can be unit-tested exhaustively.
 ///
+/// Convenience wrapper around [`classify_purge_path_visible`]: it computes
+/// the path-scope verdict itself. [`plan_purge`] already knows whether a
+/// walked path is visible, so it calls the variant directly and matches the
+/// scope once per file.
+pub fn classify_purge_path(
+    rel: &str,
+    expected: &HashSet<String>,
+    server_keep: &HashSet<String>,
+    blacklist: &HashSet<String>,
+    scope: &PathScope,
+) -> PurgeVerdict {
+    classify_purge_path_visible(rel, scope.is_visible(rel), expected, server_keep, blacklist)
+}
+
+/// [`classify_purge_path`] with the path-scope verdict (`visible`) already
+/// computed.
+///
 /// `expected`, `server_keep` and `blacklist` must already be keyed with
-/// `purge_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
+/// `path_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
 /// once per file. That keeps the classification case-insensitive on Windows
 /// (the plan's dedup and the scope already are) while leaving Unix paths
 /// distinct.
@@ -378,7 +388,7 @@ pub enum PurgeVerdict {
 /// Rule order matters (first match wins); each rule names its provenance:
 /// 0. **Path scope**: a path outside `--include`/`--exclude`
 ///    does not exist, so it is kept — *before* the manifest check, not after.
-///    Order is load-bearing: `plan.expected_paths()` is the only
+///    Order is load-bearing: the plan's rels (`expected_rels()`) are the only
 ///    manifest-derived input to the keep set, so a scope applied anywhere but
 ///    here would leave the cleanup with a *narrower* keep set than an
 ///    unfiltered run, and the fixture `gircap` hands us would be eaten.
@@ -395,18 +405,18 @@ pub enum PurgeVerdict {
 ///    Everything else purges — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
 ///    `ldiff/`, `staging/`, `*.diff`, `*deletefiles*`), `ScreenShot/`, logs,
 ///    exe and server bookkeeping files.
-pub fn classify_purge_path(
+pub fn classify_purge_path_visible(
     rel: &str,
+    visible: bool,
     expected: &HashSet<String>,
     server_keep: &HashSet<String>,
     blacklist: &HashSet<String>,
-    scope: &PathScope,
 ) -> PurgeVerdict {
     // 0. Out of scope → does not exist.
-    if !scope.is_visible(rel) {
+    if !visible {
         return PurgeVerdict::Keep;
     }
-    let key = purge_key(rel);
+    let key = path_key(rel);
     // 1. In the live manifest → keep.
     if expected.contains(&key) {
         return PurgeVerdict::Keep;
@@ -500,7 +510,7 @@ mod tests {
     }
 
     fn keyed(rels: &[&str]) -> HashSet<String> {
-        rels.iter().map(|r| purge_key(r)).collect()
+        rels.iter().map(|r| path_key(r)).collect()
     }
 
     /// N-5: the walked rel is the **on-disk** spelling, which on Windows can
@@ -514,7 +524,7 @@ mod tests {
         let on_disk = "game/foo.dat";
         let manifest = "Game/Foo.dat";
         assert_eq!(
-            purge_key(manifest) == purge_key(on_disk),
+            path_key(manifest) == path_key(on_disk),
             cfg!(windows),
             "the purge key folds exactly where Windows paths are case-insensitive"
         );
@@ -543,6 +553,38 @@ mod tests {
                     "{rule}: on Unix the case variant is a distinct path"
                 );
             }
+        }
+    }
+
+    /// D2: the expected keep set is keyed straight from `plan.files`, so a
+    /// plan rel whose spelling differs from the walk only in case still names
+    /// the same file on Windows — and a distinct path on Unix, exactly as the
+    /// classifier's `path_key` fold says.
+    #[test]
+    fn plan_purge_keys_the_keep_set_from_the_plan_rels() {
+        let dir = TempDir::new("girpr_test_purge", "plan_keyed");
+        std::fs::create_dir_all(dir.join("game")).unwrap();
+        std::fs::write(dir.join("game/foo.dat"), b"keep").unwrap();
+
+        let pp = plan_purge(
+            &dir,
+            &plan_of("Game/Foo.dat"),
+            &keep_set(),
+            &no_blacklist(),
+            &PathScope::default(),
+        );
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        if cfg!(windows) {
+            assert!(
+                rels.is_empty(),
+                "the plan rel names the walked file: {rels:?}"
+            );
+        } else {
+            assert_eq!(
+                rels,
+                vec!["game/foo.dat"],
+                "on Unix the case variant is a distinct path"
+            );
         }
     }
 

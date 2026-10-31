@@ -3,13 +3,44 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use super::record::Record;
 use crate::repair::scope::ledger::Meter;
 
+/// A byte ceiling whose "no ceiling" sentinel is `u64::MAX`.
+///
+/// `AtomicU64`'s derived `Default` is **zero**, so a `Summary` that derived
+/// `Default` would start every run at a ceiling of zero — refusing the first
+/// byte. This newtype owns the sentinel so the rest of [`Summary`] can derive
+/// its `Default`.
+#[derive(Debug)]
+pub struct Ceiling(AtomicU64);
+
+impl Default for Ceiling {
+    fn default() -> Self {
+        Self(AtomicU64::new(u64::MAX))
+    }
+}
+
+impl Ceiling {
+    /// The stored ceiling; `u64::MAX` means "no ceiling".
+    ///
+    /// `pub` because [`Summary::ram_limit`] is a public field: an external
+    /// reader that can hold the value must also be able to read it.
+    pub fn load(&self, order: Ordering) -> u64 {
+        self.0.load(order)
+    }
+
+    /// Install a ceiling; `u64::MAX` means "no ceiling".
+    pub fn store(&self, value: u64, order: Ordering) {
+        self.0.store(value, order);
+    }
+
+    /// A plain-value copy, like [`Summary::snapshot`].
+    fn snapshot(&self) -> Self {
+        Self(AtomicU64::new(self.load(Ordering::Relaxed)))
+    }
+}
+
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
-///
-/// `Default` is written by hand rather than derived for exactly one reason: the
-/// ceiling sentinel is `u64::MAX`, and a derived `Default` would start every run
-/// at a ceiling of **zero** — i.e. refusing the first byte.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Summary {
     pub files_total: u64,
     pub files_skipped: AtomicU64,
@@ -55,8 +86,8 @@ pub struct Summary {
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
     pub aborted: AtomicBool,
-    /// `--max-ram-bytes`, same `u64::MAX` sentinel as `download_limit`.
-    pub ram_limit: AtomicU64,
+    /// `--max-ram-bytes`; see [`Ceiling`] for the `u64::MAX` sentinel.
+    pub ram_limit: Ceiling,
     /// RAM currently reserved for staging the bytes a file has to move
     /// inside itself. Live, not cumulative: a file gives its reservation
     /// back when it is done.
@@ -89,34 +120,10 @@ pub struct Summary {
     pub kept_bytes: AtomicU64,
 }
 
-impl Default for Summary {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Summary {
     /// A run with no counters moved and no ceiling requested.
     pub fn new() -> Self {
-        Self {
-            files_total: 0,
-            files_skipped: AtomicU64::new(0),
-            files_repaired: AtomicU64::new(0),
-            files_failed: AtomicU64::new(0),
-            download: Meter::new(),
-            deleted_extra_bytes: AtomicU64::new(0),
-            flags: SummaryFlags::default(),
-            stopped_by: AtomicU8::new(0),
-            write: Meter::new(),
-            fail_fast: AtomicBool::new(false),
-            aborted: AtomicBool::new(false),
-            ram_limit: AtomicU64::new(u64::MAX),
-            ram_reserved: AtomicU64::new(0),
-            ram_bytes: AtomicU64::new(0),
-            files_inplace: AtomicU64::new(0),
-            files_temp: AtomicU64::new(0),
-            kept_bytes: AtomicU64::new(0),
-        }
+        Self::default()
     }
 
     /// Plain-value copy, for handing a shared `Summary` back to the caller.
@@ -136,7 +143,7 @@ impl Summary {
             write: self.write.snapshot(),
             fail_fast: AtomicBool::new(self.fail_fast.load(Ordering::Relaxed)),
             aborted: AtomicBool::new(self.aborted.load(Ordering::Relaxed)),
-            ram_limit: AtomicU64::new(self.ram_limit.load(Ordering::Relaxed)),
+            ram_limit: self.ram_limit.snapshot(),
             ram_reserved: AtomicU64::new(self.ram_reserved.load(Ordering::Relaxed)),
             ram_bytes: AtomicU64::new(self.ram_bytes.load(Ordering::Relaxed)),
             files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
@@ -260,61 +267,79 @@ impl Extra {
     }
 }
 
+/// The conditional tail under construction.
+///
+/// The push order is the order the `SUMMARY` line prints — a contract — so it
+/// is written down once, in [`conditional_extras`], with the `Extra` variant
+/// noise left to these two methods.
+#[derive(Default)]
+struct Extras(Vec<Extra>);
+
+impl Extras {
+    fn num(&mut self, key: &'static str, value: u64) {
+        self.0.push(Extra::Num(key, value));
+    }
+
+    fn word(&mut self, key: &'static str, value: &'static str) {
+        self.0.push(Extra::Word(key, value));
+    }
+}
+
 /// The conditional tail of a `SUMMARY`, in a fixed order so two runs' lines
 /// diff cleanly. Empty (and therefore invisible) on an unflagged run.
 pub(crate) fn conditional_extras(sum: &Summary) -> Vec<Extra> {
     let f = &sum.flags;
-    let mut out = Vec::new();
+    let mut out = Extras::default();
     if f.limited {
-        out.push(Extra::Num("limited", 1));
+        out.num("limited", 1);
     }
     if f.scoped {
-        out.push(Extra::Num("scoped", 1));
+        out.num("scoped", 1);
     }
     if f.scoped || f.config_bumped_zero {
         // A scoped (or `--purge-only`) run deliberately did not put the bytes
         // in place, so it does not advance config.ini. Emitted as a key
         // rather than left to be discovered by reading the file.
-        out.push(Extra::Num("config_bumped", 0));
+        out.num("config_bumped", 0);
     }
     if f.limited || f.scoped {
-        out.push(Extra::Num("plan_files", sum.files_total));
+        out.num("plan_files", sum.files_total);
     }
     if let Some(n) = f.plan_download_bytes {
-        out.push(Extra::Num("plan_download_bytes", n));
+        out.num("plan_download_bytes", n);
     }
     // The spent figure comes before the settled one it belongs to: the pair
     // is one story, and the order says "what it spent, what it got".
     if let Some(n) = f.download_bytes_spent {
-        out.push(Extra::Num("download_bytes_spent", n));
+        out.num("download_bytes_spent", n);
     }
     if let Some(n) = f.write_bytes {
-        out.push(Extra::Num("write_bytes", n));
+        out.num("write_bytes", n);
     }
     if let Some(n) = f.write_bytes_spent {
-        out.push(Extra::Num("write_bytes_spent", n));
+        out.num("write_bytes_spent", n);
     }
     // The repair-mode group: what was asked for, what happened, and how
     // many bytes did not have to be written.
     if let Some(mode) = f.repair_mode {
-        out.push(Extra::Word("repair_mode", mode));
-        out.push(Extra::Num("inplace", f.files_inplace.unwrap_or(0)));
-        out.push(Extra::Num("temp", f.files_temp.unwrap_or(0)));
-        out.push(Extra::Num("kept_bytes", f.kept_bytes.unwrap_or(0)));
+        out.word("repair_mode", mode);
+        out.num("inplace", f.files_inplace.unwrap_or(0));
+        out.num("temp", f.files_temp.unwrap_or(0));
+        out.num("kept_bytes", f.kept_bytes.unwrap_or(0));
     }
     if let Some(n) = f.ram_bytes {
-        out.push(Extra::Num("ram_bytes", n));
+        out.num("ram_bytes", n);
     }
     if let Some(n) = f.damaged_chunks {
-        out.push(Extra::Num("damaged_chunks", n));
+        out.num("damaged_chunks", n);
     }
     if let Some(s) = f.stopped {
-        out.push(Extra::Word("stopped", s));
+        out.word("stopped", s);
     }
     // Last: this is a fact about the run, not a verdict about it, and it is the
     // key a reader needs in order to trust the two byte counts above it.
     if let Some(s) = f.local_manifest {
-        out.push(Extra::Word("local_manifest", s));
+        out.word("local_manifest", s);
     }
-    out
+    out.0
 }

@@ -75,10 +75,9 @@ mod tests {
     ///
     /// `cargo nextest` — the runner this workspace uses — does not support
     /// doctests at all, so the example above would be checked by nothing: the
-    /// suite would stay green against a `LogPlan::resolve` that no longer took
-    /// those arguments, and the documentation would be the only place left
-    /// claiming otherwise. Mirroring the example here is what keeps it honest
-    /// under the runner that is actually used.
+    /// suite would stay green, and the documentation would be the only place
+    /// left claiming otherwise. Mirroring the example here is what keeps it
+    /// honest under the runner that is actually used.
     ///
     /// The environment is read rather than assumed: `env_options` may find a
     /// `GIRPR_LOG_FILE` or a `RUST_LOG` in the shell that ran the test, and

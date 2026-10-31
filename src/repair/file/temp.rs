@@ -11,10 +11,10 @@ use anyhow::{Context, Result};
 
 use super::{
     COPY_BUF, ChunkStats, FileCtx, FileWrites, Inplace, Mode, PlannedFile, note_write,
-    reserve_write,
+    reserve_write, scratch_slice,
 };
 use crate::repair::scope::ledger::StoppedBy;
-use crate::sophon::{self, SophonChunk};
+use crate::sophon::{self, FileReuse, SophonChunk};
 use crate::util;
 
 /// The temp path: the original size + MD5 check, then the attempt.
@@ -44,8 +44,8 @@ pub(super) async fn attempt_temp(
         util::FileLen::Present(n) if n != file.size as u64 => {
             tracing::debug!(actual_size = n, "check: size mismatch -> needs repair");
         }
-        util::FileLen::Present(_) => match util::md5_file(final_path) {
-            Ok(h) if h.eq_ignore_ascii_case(&file.md5) => {
+        util::FileLen::Present(_) => match util::md5::md5_file_digest(final_path) {
+            Ok(h) if h.matches_hex(&file.md5) => {
                 tracing::debug!(actual_md5 = %h, "check: md5 match -> skip");
                 return Ok(Inplace::Skipped);
             }
@@ -117,8 +117,20 @@ async fn repair_attempt_inner(
         "tmp resume point"
     );
     let reuse_entries = ctx.local_map.get(&file.rel);
+    // One scratch buffer for this file: every reuse hash and copy reuses it
+    // instead of allocating a fresh 512 KiB buffer per chunk.
+    let mut scratch = Vec::new();
     for c in &file.chunks {
-        match try_reuse_slice(ctx, final_path, c, reuse_entries, &mut f, tmp_path, writes)? {
+        match try_reuse_slice(
+            ctx,
+            final_path,
+            c,
+            reuse_entries,
+            &mut f,
+            &mut scratch,
+            tmp_path,
+            writes,
+        )? {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => stats.chunks_reused += 1,
             ChunkOutcome::Download => {
@@ -223,12 +235,14 @@ fn chunk_failure_after_rollback(
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
+#[allow(clippy::too_many_arguments)] // the per-file scratch is one more input; a bundle would churn both callers
 fn try_reuse_slice(
     ctx: &FileCtx,
     src: &std::path::Path,
     c: &SophonChunk,
-    reuse_entries: Option<&Vec<(String, i64, i64)>>,
+    reuse_entries: Option<&FileReuse>,
     out: &mut File,
+    scratch: &mut Vec<u8>,
     tmp_path: &std::path::Path,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
@@ -260,23 +274,33 @@ fn try_reuse_slice(
     }
     out.seek(SeekFrom::Start(c.offset as u64))?;
 
-    let candidate = reuse_entries.and_then(|entries| {
-        entries.iter().find(|(md5, sz, _)| {
-            md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
-        })
-    });
-    let Some((_, _, ro)) = candidate else {
+    let candidate = reuse_entries.and_then(|reuse| reuse.get(c));
+    let Some(entry) = candidate else {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download");
         return Ok(ChunkOutcome::Download);
     };
+    let ro = entry.offset;
 
-    match util::md5_file_slice(src, *ro as u64, c.uncompressed_size as u64) {
-        Ok(h) if h.eq_ignore_ascii_case(&c.uncompressed_md5) => {
+    let mut sf = match File::open(src).with_context(|| format!("open {}", src.display())) {
+        Ok(sf) => sf,
+        Err(e) => {
+            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+            return Ok(ChunkOutcome::Download);
+        }
+    };
+    match util::md5::md5_reader_slice_digest(
+        &mut sf,
+        ro as u64,
+        c.uncompressed_size as u64,
+        scratch,
+    ) {
+        Ok(h) if h.matches_hex(&c.uncompressed_md5) => {
             tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            let mut sf = File::open(src)?;
-            sf.seek(SeekFrom::Start(*ro as u64))?;
+            // The same handle: seek back to the slice start and copy the
+            // bytes that were just verified, instead of opening `src` again.
+            sf.seek(SeekFrom::Start(ro as u64))?;
             let mut remaining = c.uncompressed_size as u64;
-            let mut buf = vec![0u8; COPY_BUF];
+            let buf = scratch_slice(scratch, COPY_BUF);
             while remaining > 0 {
                 let want = (remaining as usize).min(buf.len());
                 let n = sf.read(&mut buf[..want])?;
@@ -310,10 +334,10 @@ fn try_reuse_slice(
 /// target file, at the chunk's offset.
 ///
 /// **The write ceiling is charged per piece**, the way the reuse copy charges
-/// it (`copy_within`): a chunk is no longer one indivisible write, so a
-/// ceiling that trips in the middle of a chunk stops the run in the middle of
-/// a chunk. The README already documents that a runtime hard stop leaves the
-/// work done in place, and the next run re-verifies and continues.
+/// it (`copy_within`): a chunk is written piece by piece, so a ceiling that
+/// trips in the middle of a chunk stops the run in the middle of a chunk. The
+/// README already documents that a runtime hard stop leaves the work done in
+/// place, and the next run re-verifies and continues.
 struct ChunkFileSink<'a> {
     ctx: &'a FileCtx,
     file: &'a mut File,
@@ -454,7 +478,7 @@ pub(super) async fn write_downloaded_chunk(
             digest.bytes
         );
     }
-    if !digest.md5.eq_ignore_ascii_case(&c.uncompressed_md5) {
+    if !digest.md5.matches_hex(&c.uncompressed_md5) {
         tracing::debug!(chunk = %c.id, expect_md5 = %c.uncompressed_md5, actual_md5 = %digest.md5, "chunk md5 mismatch");
         anyhow::bail!("chunk {} md5 mismatch", c.id);
     }
@@ -521,9 +545,9 @@ fn promote_tmp(
     if len != file.size as u64 {
         anyhow::bail!("tmp length {} != expected {}", len, file.size);
     }
-    let h = util::md5_file(tmp_path)?;
+    let h = util::md5::md5_file_digest(tmp_path)?;
     tracing::debug!(tmp_size = len, tmp_md5 = %h, "after: tmp ready for promote");
-    if !h.eq_ignore_ascii_case(&file.md5) {
+    if !h.matches_hex(&file.md5) {
         if let Err(e) = std::fs::remove_file(tmp_path) {
             // The next attempt resumes by length, so a `_tmp` that cannot be
             // deleted only costs work: the final MD5 gate refuses it again.

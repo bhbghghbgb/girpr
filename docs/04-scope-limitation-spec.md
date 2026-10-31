@@ -626,14 +626,8 @@ that nothing was written.
 
 **`stopped=` names the flag.** The value is the flag that bound
 (`--max-download-bytes`, `--max-write-bytes`, `--max-delete-bytes`), not a
-vocabulary word. It is a **breaking change** to the `SUMMARY` line: the three
-values `bytes` / `write` / `delete` are gone, replaced by the flags they stood
-for. A consumer that matched on them has to be updated; a consumer that only
-looked for the key's presence is unaffected. The reason is the one the plan
-weighed: the flat vocabulary needed a new word per ceiling, and the words said
-less than the flags do — `stopped=--max-write-bytes` is self-describing, it
-scales with the number of ceilings, and it is the shape a script already has
-to write.
+vocabulary word. `stopped=--max-write-bytes` is self-describing, scales with
+the number of ceilings, and says more than a flat vocabulary word could.
 
 ---
 

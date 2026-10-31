@@ -60,6 +60,25 @@ pub fn file_len(path: &Path) -> FileLen {
 ///
 /// This is not a filesystem check; [`contained_join`] adds that.
 pub fn contained_rel(rel: &str) -> Result<PathBuf> {
+    let mut clean = PathBuf::new();
+    walk_rel_components(rel, |part| clean.push(part))?;
+    Ok(clean)
+}
+
+/// Validate the lexical shape of a server-controlled relative path and hand
+/// each component that names a file to `emit`.
+///
+/// The normalisation (`\` → `/`) and the whole-path checks happen once, here;
+/// `emit` only ever sees plain component names, so `a/./b` is accepted but
+/// `emit` receives `a` and `b` and never `.`.
+///
+/// The caller builds the cleaned form rather than returning the input: `a/./b`
+/// must not survive as `a/./b`, because the plan stores this string and every
+/// later comparison (the purge's expected set, the reuse map, the scope) works
+/// on the plain form. A leading `.` in particular would make `expected_paths()`
+/// disagree with the purge walk — which reports `game/foo.dat` — and the
+/// cleanup would delete the file this run just repaired.
+fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
     let normalized = rel.replace('\\', "/");
     anyhow::ensure!(!normalized.is_empty(), "path is empty");
     anyhow::ensure!(
@@ -76,14 +95,6 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
         "path is absolute: {rel}"
     );
     let mut named = false;
-    // Build the cleaned form rather than returning the input: `a/./b` is
-    // accepted but must not survive as `a/./b`, because the plan stores this
-    // string and every later comparison (the purge's expected set, the reuse
-    // map, the scope) works on the plain form. A leading `.` in particular
-    // would make `expected_paths()` disagree with the purge walk — which
-    // reports `game/foo.dat` — and the cleanup would delete the file this run
-    // just repaired.
-    let mut clean = PathBuf::new();
     for c in path.components() {
         match c {
             Component::Normal(part) => {
@@ -103,7 +114,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
                     "path names a Windows device: {rel}"
                 );
                 named = true;
-                clean.push(part);
+                emit(part);
             }
             // `a/./b` is still contained; it just says nothing.
             Component::CurDir => {}
@@ -111,7 +122,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
         }
     }
     anyhow::ensure!(named, "path names no file: {rel}");
-    Ok(clean)
+    Ok(())
 }
 
 /// Validate a server-controlled relative path and return the `/`-separated
@@ -124,27 +135,117 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// sink (as `contained_join` does) leaves the gate comparing a different
 /// spelling, so `./a/b` can pass a scope that hides `a/b`.
 pub fn clean_rel(rel: &str) -> Result<String> {
-    Ok(contained_rel(rel)?.to_string_lossy().replace('\\', "/"))
+    // Share the component walk with `contained_rel` and build the `/` form as
+    // it goes: no `PathBuf`, and no second pass over the result.
+    let mut clean = String::new();
+    walk_rel_components(rel, |part| {
+        if !clean.is_empty() {
+            clean.push('/');
+        }
+        clean.push_str(part);
+    })?;
+    Ok(clean)
+}
+
+/// The key a path comparison uses when two spellings may name one file.
+///
+/// Windows paths are case-insensitive, so the plan's dedup and the purge's
+/// keep comparison both fold case there; on Unix they name distinct files and
+/// the key is the path itself. The two must agree, so the rule lives here
+/// instead of once per module.
+///
+/// The choice is compile-time (`cfg!`), so both branches are type-checked on
+/// every host while the behavior stays exactly "fold where Windows paths are
+/// case-insensitive".
+pub(crate) fn path_key(rel: &str) -> String {
+    if cfg!(windows) {
+        rel.to_lowercase()
+    } else {
+        rel.to_string()
+    }
 }
 
 /// Is this component a name Windows reserves for a device in every directory?
 ///
 /// The comparison uses the part before the first `.` — `NUL.txt` is still the
-/// `NUL` device — and ignores case, which NTFS does for these names too.
+/// `NUL` device — and ignores case, which NTFS does for these names too. It is
+/// allocation-free: no uppercased copy of the component is made.
 fn is_windows_device_name(part: &str) -> bool {
-    let stem = part.split('.').next().unwrap_or_default();
-    let upper = stem.trim_end_matches([' ', '.']).to_ascii_uppercase();
-    if matches!(
-        upper.as_str(),
-        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
-    ) {
+    let stem = part
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.']);
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
+        .iter()
+        .any(|name| stem.eq_ignore_ascii_case(name))
+    {
         return true;
     }
-    ["COM", "LPT"].iter().any(|prefix| {
-        upper
-            .strip_prefix(prefix)
-            .is_some_and(|n| n.len() == 1 && ('1'..='9').contains(&n.chars().next().unwrap()))
-    })
+    // `COM1`..`COM9` and `LPT1`..`LPT9`. Compare bytes, so a multi-byte UTF-8
+    // stem can never be sliced through a character boundary.
+    let bytes = stem.as_bytes();
+    bytes.len() == 4
+        && (bytes[..3].eq_ignore_ascii_case(b"COM") || bytes[..3].eq_ignore_ascii_case(b"LPT"))
+        && matches!(bytes[3], b'1'..=b'9')
+}
+
+/// A base path resolved once, for callers that join many rel paths under it.
+///
+/// [`contained_join`] resolves the base on every call. A run that joins one rel
+/// per planned file would pay for that same resolution — a `canonicalize` walk
+/// up to the nearest existing ancestor — once per file, so the hot callers
+/// build one `PathRoot` and call [`join`](Self::join) per file instead.
+///
+/// Caching the **base** does not make the check lexical: the joined path is
+/// still resolved on the filesystem and compared with the cached resolved base,
+/// so a symlink inside the install that points out of it is still refused.
+///
+/// A base that does not exist yet (the `--print-plan` run before `game_dir` is
+/// created) resolves to the same "nearest existing ancestor + missing tail"
+/// form as [`contained_join`] uses, so the missing-base lifecycle is unchanged.
+/// The cached form is **not** refreshed implicitly: a caller that creates the
+/// base later must build a fresh `PathRoot` after that.
+#[derive(Debug, Clone)]
+pub struct PathRoot {
+    base: PathBuf,
+    resolved: PathBuf,
+}
+
+impl PathRoot {
+    /// Resolve `base` once.
+    pub fn new(base: &Path) -> Result<Self> {
+        let resolved = resolve_existing_prefix(base)
+            .with_context(|| format!("resolve the game dir {}", base.display()))?;
+        Ok(Self {
+            base: base.to_path_buf(),
+            resolved,
+        })
+    }
+
+    /// Join a server-controlled relative path under this root, refusing
+    /// anything that resolves outside it.
+    ///
+    /// This is the per-file half of [`contained_join`]: the lexical check is
+    /// still [`contained_rel`], and the joined path is still resolved and
+    /// compared with the resolved base.
+    pub fn join(&self, rel: &str) -> Result<PathBuf> {
+        self.join_rel(contained_rel(rel)?)
+    }
+
+    /// The filesystem half of [`join`](Self::join), after the lexical check.
+    fn join_rel(&self, rel: PathBuf) -> Result<PathBuf> {
+        let joined = self.base.join(rel);
+        let joined_resolved = resolve_existing_prefix(&joined)
+            .with_context(|| format!("resolve {}", joined.display()))?;
+        anyhow::ensure!(
+            joined_resolved.starts_with(&self.resolved),
+            "path escapes {}: {}",
+            self.base.display(),
+            joined.display()
+        );
+        Ok(joined)
+    }
 }
 
 /// Join a server-controlled relative path under `base`, refusing anything that
@@ -155,20 +256,14 @@ fn is_windows_device_name(part: &str) -> bool {
 /// `--print-plan` run, a fresh install) still works — and requires the joined
 /// path to stay under the base. That is what catches a symlink inside the
 /// install that points out of it, which a lexical `starts_with` cannot.
+///
+/// This is the one-off form: it resolves `base` on every call. A caller that
+/// joins many rels under one base should build a [`PathRoot`] once instead.
 pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
+    // The lexical refusal comes first, as it always has: a bad rel is reported
+    // without touching the filesystem, even when the base is also unreadable.
     let rel = contained_rel(rel)?;
-    let joined = base.join(rel);
-    let base_resolved = resolve_existing_prefix(base)
-        .with_context(|| format!("resolve the game dir {}", base.display()))?;
-    let joined_resolved = resolve_existing_prefix(&joined)
-        .with_context(|| format!("resolve {}", joined.display()))?;
-    anyhow::ensure!(
-        joined_resolved.starts_with(&base_resolved),
-        "path escapes {}: {}",
-        base.display(),
-        joined.display()
-    );
-    Ok(joined)
+    PathRoot::new(base)?.join_rel(rel)
 }
 
 /// Canonicalize `path` as far as it exists, then append the missing tail.
@@ -299,6 +394,53 @@ mod tests {
         }
     }
 
+    /// G6: `clean_rel` builds the `/` form straight from the component walk, so
+    /// both separators, doubled separators and `.` components all collapse to
+    /// the same plain string, and the refusals still hold on that path.
+    #[test]
+    fn clean_rel_returns_the_plain_slash_form() {
+        for (input, want) in [
+            ("a/b.dat", "a/b.dat"),
+            ("a\\b.dat", "a/b.dat"),
+            ("a//b.dat", "a/b.dat"),
+            ("a\\\\b.dat", "a/b.dat"),
+            ("./a/b.dat", "a/b.dat"),
+            ("a/./b.dat", "a/b.dat"),
+            ("./a//./b.dat", "a/b.dat"),
+            ("game/conifer.dat", "game/conifer.dat"),
+            ("game/com10.dat", "game/com10.dat"),
+        ] {
+            assert_eq!(clean_rel(input).unwrap(), want, "{input:?}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../outside.dat",
+            "a/../outside.dat",
+            "/abs/evil.dat",
+            "C:evil.dat",
+            "C:/evil.dat",
+            "game/",
+            "a\\",
+            "a/./",
+            "game/./",
+            "NUL",
+            "nul",
+            "Game/Aux.txt",
+            "game/CoM1",
+            "game/lpt9",
+            "game/trailing.",
+            "game/trailing ",
+            "dir./file.dat",
+            "dir /file.dat",
+            "game/a:b",
+        ] {
+            let got = clean_rel(bad);
+            assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
     #[test]
     fn contained_join_keeps_a_legitimate_path_under_the_base() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
@@ -312,6 +454,32 @@ mod tests {
         assert!(contained_join(&dir, "../outside.dat").is_err());
         // A trailing separator does not name a file, so it is refused here too.
         assert!(contained_join(&dir, "game/").is_err());
+    }
+
+    /// G5: the cached root resolves the base once, and a base that does not
+    /// exist yet keeps the same "nearest existing ancestor + missing tail"
+    /// form as `contained_join`. A root built after the base is created sees the
+    /// created form; the cached one is the caller's to refresh.
+    #[test]
+    fn path_root_keeps_the_missing_base_lifecycle_and_refreshes_after_creation() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_path_root", "cache");
+        let missing = dir.join("not-created-yet");
+        let before = PathRoot::new(&missing).unwrap();
+        assert_eq!(
+            before.join("game/foo.dat").unwrap(),
+            missing.join("game/foo.dat")
+        );
+        std::fs::create_dir_all(&missing).unwrap();
+        let after = PathRoot::new(&missing).unwrap();
+        assert_eq!(
+            after.join("game/foo.dat").unwrap(),
+            missing.join("game/foo.dat")
+        );
+        // The cached form is still a valid containment check after the base
+        // appears; it just does not carry the new resolution.
+        assert!(before.join("game/foo.dat").is_ok());
+        // And an escape is refused through the cached form too.
+        assert!(after.join("../outside.dat").is_err());
     }
 
     /// A symlink inside the install that points out of it is an escape even

@@ -16,8 +16,9 @@ use super::{
 };
 use crate::config::RepairMode;
 use crate::repair::reuse;
+use crate::repair::scan::scan_ranges;
 use crate::sophon::SophonChunk;
-use crate::util;
+use crate::util::{self, Md5};
 use anyhow::{Context, Result};
 
 /// Repair one file **in place**.
@@ -74,39 +75,13 @@ async fn attempt_inplace_inner(
     writes: &mut FileWrites,
 ) -> Result<Inplace> {
     // The reuse candidates: where each chunk's bytes could be copied from.
-    let entries: &[(String, i64, i64)] = match ctx.local_map.get(&file.rel) {
-        Some(v) => v.as_slice(),
-        None => &[],
-    };
-    let sources = reuse::sources_for(&file.chunks, entries);
+    let sources = reuse::sources_for(&file.chunks, ctx.local_map.get(&file.rel));
 
     // The scan's two lists, both parallel to the chunks: where each chunk
-    // *belongs*, and where its bytes could be copied from. A chunk with no
-    // candidate gets an empty source range, so the two verdicts line up
-    // index for index.
-    let dest_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .map(|c| {
-            (
-                c.offset.max(0) as u64,
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
-    let source_ranges: Vec<util::ScanRange<'_>> = file
-        .chunks
-        .iter()
-        .zip(sources.iter())
-        .map(|(c, src)| {
-            (
-                src.unwrap_or(0),
-                c.uncompressed_size.max(0) as u64,
-                c.uncompressed_md5.as_str(),
-            )
-        })
-        .collect();
+    // *belongs*, and where its bytes could be copied from. Only chunks with a
+    // candidate get a source range (see `scan::scan_ranges`); `source_owner`
+    // maps those verdicts back to the chunk they belong to.
+    let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
 
     // 1. open. A dry run changes nothing: no file is created and no
     // attribute is cleared, so the target is only read.
@@ -139,7 +114,7 @@ async fn attempt_inplace_inner(
         on_disk = scan.file_len,
         "scanned"
     );
-    if scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+    if Md5::parse_hex(&scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
         return Ok(Inplace::Skipped);
     }
@@ -157,9 +132,16 @@ async fn attempt_inplace_inner(
         discard_target(final_path)?;
         handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
         // The file is gone: every chunk has to be written, and there is
-        // nothing left to reuse from.
+        // nothing left to reuse from. `absent` is per range, not per chunk, so
+        // it is remapped below like every other scan.
         scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
     }
+
+    // Back to one source verdict per chunk, in the plan's order: a chunk with
+    // no source has no intact source, by definition. Everything below indexes
+    // `source_ok` by chunk, and the discard scan is per range like the rest.
+    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
+    scan.source_ok = source_ok;
 
     // The chunks that are not correct where they belong. `file.chunks` is
     // sorted by offset (the plan guarantees it), so this list is ascending
@@ -245,8 +227,8 @@ async fn attempt_inplace_inner(
                 .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
             // Every byte written is hash-gated before it lands, and a staged
             // source is a write's source: gate it here too.
-            let h = format!("{:x}", md5::compute(&bytes));
-            if !h.eq_ignore_ascii_case(&c.uncompressed_md5) {
+            let h = Md5::from(md5::compute(&bytes));
+            if !h.matches_hex(&c.uncompressed_md5) {
                 tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
                 continue;
             }
@@ -260,14 +242,14 @@ async fn attempt_inplace_inner(
     let order = match tier {
         Tier::Staged => None,
         Tier::Ordered => {
-            let chunks: Vec<SophonChunk> = bad.iter().map(|&i| file.chunks[i].clone()).collect();
+            let chunks: Vec<&SophonChunk> = bad.iter().map(|&i| &file.chunks[i]).collect();
             let srcs: Vec<Option<u64>> = bad
                 .iter()
                 .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
                 .collect();
             let usable = handle_len(&handle)
                 .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
-            let o = reuse::salvage_order(&chunks, &srcs, usable);
+            let o = reuse::salvage_order_refs(&chunks, &srcs, usable);
             tracing::info!(
                 file = %file.rel,
                 ascending = o.ascending,
@@ -280,7 +262,9 @@ async fn attempt_inplace_inner(
     };
 
     // 4. patch. Ascending in the staged tier (forward writes), in the
-    // salvage order in the ordered tier.
+    // salvage order in the ordered tier. One scratch buffer serves the whole
+    // patch: the chunks are written one at a time, so the copy pieces reuse it.
+    let mut scratch = Vec::new();
     let mut write_order: Vec<usize> = (0..bad.len()).collect();
     if let Some(o) = &order
         && !o.ascending
@@ -304,6 +288,7 @@ async fn attempt_inplace_inner(
                 ctx,
                 writes,
                 &mut handle,
+                &mut scratch,
                 src,
                 dst,
                 c.uncompressed_size.max(0) as u64,
@@ -330,17 +315,8 @@ async fn attempt_inplace_inner(
     // 5. verify. One more read: the whole-file MD5 is the gate, and the
     // per-chunk verdicts name the culprit when it does not match.
     let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if after.file_md5.eq_ignore_ascii_case(&file.md5) {
-        tracing::info!(
-            chunks_total = stats.chunks_total,
-            chunks_kept = stats.chunks_kept,
-            chunks_reused = stats.chunks_reused,
-            chunks_downloaded = stats.chunks_downloaded,
-            download_bytes = stats.download_bytes,
-            final_md5 = %after.file_md5,
-            "repaired in place"
-        );
-        return Ok(Inplace::Repaired(stats.clone()));
+    if Md5::parse_hex(&after.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
+        return Ok(repaired_in_place(stats, &after.file_md5));
     }
 
     // Redo only the chunks that are still wrong. A chunk that fails here
@@ -369,7 +345,7 @@ async fn attempt_inplace_inner(
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
     let final_scan = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if !final_scan.file_md5.eq_ignore_ascii_case(&file.md5) {
+    if !Md5::parse_hex(&final_scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel,
@@ -377,16 +353,45 @@ async fn attempt_inplace_inner(
             final_scan.file_md5
         );
     }
+    Ok(repaired_in_place(stats, &final_scan.file_md5))
+}
+
+/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
+///
+/// `scan.source_ok` is indexed by the range list [`scan_ranges`] built, which
+/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
+/// that range `k` belongs to. A chunk with no source has no intact source, by
+/// definition, so it stays `false`. The discard path replaces a real scan with
+/// [`util::Scan::absent`], whose tuple is `(dest ranges, source ranges)`; this
+/// remap is what keeps that per-range shape from being read as per-chunk.
+fn source_ok_by_chunk(
+    chunks_len: usize,
+    source_owner: &[usize],
+    scan_source_ok: &[bool],
+) -> Vec<bool> {
+    let mut source_ok = vec![false; chunks_len];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
+    }
+    source_ok
+}
+
+/// The success settle shared by the first verify and the redo.
+///
+/// Both paths end the same way: one `repaired in place` line carrying the
+/// file's chunk accounting, then the stats the caller promotes. Keeping it in
+/// one place stops the two paths' log blocks from drifting apart.
+fn repaired_in_place(stats: &ChunkStats, md5: &str) -> Inplace {
     tracing::info!(
         chunks_total = stats.chunks_total,
         chunks_kept = stats.chunks_kept,
         chunks_reused = stats.chunks_reused,
         chunks_downloaded = stats.chunks_downloaded,
         download_bytes = stats.download_bytes,
-        final_md5 = %final_scan.file_md5,
+        final_md5 = %md5,
         "repaired in place"
     );
-    Ok(Inplace::Repaired(stats.clone()))
+    Inplace::Repaired(stats.clone())
 }
 
 /// What one `File::metadata()` call said about the in-place target.
@@ -586,10 +591,14 @@ mod tests {
     }
 
     fn chunk(id: &str, size: i64) -> SophonChunk {
+        chunk_at(id, &format!("md5-{id}"), 0, size)
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
         SophonChunk {
             id: id.into(),
-            uncompressed_md5: format!("md5-{id}"),
-            offset: 0,
+            uncompressed_md5: md5.into(),
+            offset,
             compressed_size: size,
             uncompressed_size: size,
             unknown: 0,
@@ -652,5 +661,71 @@ mod tests {
         let ok = vec![true, true, false];
         let bad = vec![0, 1, 2];
         assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
+    }
+
+    /// B3: the in-place scan must not invent a source at offset 0 for a chunk
+    /// that has none. The same content sits at the head of the file under a
+    /// different layout, so a coerced source range would verify there and the
+    /// writer would believe it can copy the chunk instead of downloading it.
+    #[test]
+    fn an_inplace_scan_never_checks_a_source_less_chunk_at_offset_zero() {
+        let x = vec![0x58u8; 10];
+        let y = vec![0x59u8; 10];
+        let md5_x = format!("{:x}", md5::compute(&x));
+        let mut bytes = x.clone();
+        bytes.extend_from_slice(&y);
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "no_source_offset");
+        std::fs::write(dir.join("a.dat"), &bytes).unwrap();
+        let chunks = vec![chunk_at("c0", &md5_x, 10, 10)];
+
+        let (dest, source, owner) = scan_ranges(&chunks, &[None]);
+        assert!(
+            source.is_empty(),
+            "a chunk with no source contributes no source range"
+        );
+        assert!(owner.is_empty());
+        let scan = util::scan_file(&dir.join("a.dat"), &dest, &source).unwrap();
+        assert_eq!(
+            scan.dest_ok,
+            vec![false],
+            "the destination is the other copy"
+        );
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &scan.source_ok),
+            vec![false],
+            "the in-place path must not invent an intact source"
+        );
+    }
+
+    /// B3: `--repair-mode discard` replaces a real scan with `Scan::absent`
+    /// over the range lists `scan_ranges` built, so its `source_ok` is per
+    /// **range**, not per chunk. The remap has to land each verdict on the
+    /// chunk that owns the range, and a source-less chunk stays false.
+    #[test]
+    fn the_discard_scan_remaps_its_absent_source_verdicts_by_chunk() {
+        let chunks = vec![
+            chunk_at("c0", "md5-c0", 0, 10),
+            chunk_at("c1", "md5-c1", 10, 20),
+        ];
+        let (dest, source, owner) = scan_ranges(&chunks, &[None, Some(30)]);
+        assert_eq!(owner, vec![1], "only the second chunk has a source range");
+        let scan = util::Scan::absent(dest.len(), source.len());
+        assert_eq!(
+            scan.source_ok.len(),
+            1,
+            "absent is per range, not per chunk"
+        );
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &scan.source_ok),
+            vec![false, false],
+            "the deleted target has no intact source, and chunk 0 has none anyway"
+        );
+
+        // The same remap must carry a verdict to the chunk that owns it, so a
+        // later per-chunk leak cannot pass by simply keeping everything false.
+        assert_eq!(
+            source_ok_by_chunk(chunks.len(), &owner, &[true]),
+            vec![false, true]
+        );
     }
 }

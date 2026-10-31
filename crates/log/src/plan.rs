@@ -65,9 +65,8 @@
 //!
 //! **The program's own level is exactly what `--log-level` says.** The
 //! project's directive is always present, so a `RUST_LOG` that names some
-//! unrelated crate cannot silence the program — which is what happened when
-//! `RUST_LOG` *replaced* the spec, and is the difference between "a user has
-//! an environment variable exported" and "a user cannot see the program at
+//! unrelated crate cannot silence the program — the difference between "a user
+//! has an environment variable exported" and "a user cannot see the program at
 //! all". The flag is last in the spec because `EnvFilter` gives a tie on the
 //! same target to the *last* directive, and the flag is what the person
 //! running the tool typed.
@@ -150,8 +149,7 @@ pub struct LogPlan {
     pub project: &'static str,
     /// The console's verbosity, as `--log-level` asked for it.
     ///
-    /// The *effective* console filter is [`LogPlan::console_filter`], which
-    /// `RUST_LOG` may have replaced.
+    /// The *effective* console filter is [`LogPlan::console_filter`].
     pub console_level: Level,
     /// The log file's verbosity.
     pub file_level: Level,

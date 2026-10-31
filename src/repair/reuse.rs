@@ -55,7 +55,7 @@
 //! this one pure function precisely so that it can be swapped without
 //! touching the writer.
 
-use crate::sophon::SophonChunk;
+use crate::sophon::{FileReuse, SophonChunk};
 
 /// The reuse source of each chunk, in the same order as the chunks: the
 /// offset in the same file the chunk's bytes could be copied from, or `None`
@@ -90,71 +90,101 @@ impl Order {
 /// ascending one writes forward, which is the friendlier pattern for a
 /// spinning disk.
 pub fn salvage_order(chunks: &[SophonChunk], sources: &[Option<u64>], usable_len: u64) -> Order {
-    let ascending = survives(chunks, sources, usable_len, true);
-    let descending = survives(chunks, sources, usable_len, false);
-    let kept_ascending = ascending.iter().filter(|b| **b).count();
-    let kept_descending = descending.iter().filter(|b| **b).count();
-    if kept_descending > kept_ascending {
-        Order {
-            ascending: false,
-            live: descending,
-        }
-    } else {
-        Order {
-            ascending: true,
-            live: ascending,
-        }
+    order_from(chunks.iter(), sources, usable_len)
+}
+
+/// [`salvage_order`] over borrowed chunks.
+///
+/// Callers that already hold a selection of chunks (the scan's bad chunks, or
+/// the in-place path's indices into `file.chunks`) can order them without
+/// cloning them first. `sources[i]` is where `chunks[i]`'s bytes live.
+pub fn salvage_order_refs(
+    chunks: &[&SophonChunk],
+    sources: &[Option<u64>],
+    usable_len: u64,
+) -> Order {
+    order_from(chunks.iter().copied(), sources, usable_len)
+}
+
+/// The shared rule: count both directions cheaply, then materialize only the
+/// winner. The two passes share `survives_one`, so the count and the vector
+/// cannot disagree about which sources are live.
+fn order_from<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk> + Clone,
+    sources: &[Option<u64>],
+    usable_len: u64,
+) -> Order {
+    let kept_ascending = survives_count(chunks.clone(), sources, usable_len, true);
+    let kept_descending = survives_count(chunks.clone(), sources, usable_len, false);
+    let ascending = kept_descending <= kept_ascending;
+    Order {
+        ascending,
+        live: survives(chunks, sources, usable_len, ascending),
     }
 }
 
-/// Which sources survive one direction.
+/// Whether one chunk's source survives one direction.
 ///
 /// The whole rule, in one place: a source survives when it is inside the
 /// file and it is not under the region the order has already written.
-fn survives(
-    chunks: &[SophonChunk],
+fn survives_one(c: &SophonChunk, source: Option<u64>, usable_len: u64, ascending: bool) -> bool {
+    let Some(r) = source else {
+        return false;
+    };
+    let o = c.offset.max(0) as u64;
+    let s = c.uncompressed_size.max(0) as u64;
+    // The source must be inside the file being read from.
+    if r.checked_add(s).is_none_or(|end| end > usable_len) {
+        return false;
+    }
+    // Ascending: the region already written is `[0, o)`, so the source has
+    // to be at or after the destination. Descending: the region already
+    // written is `(o+s, size)`, so the source has to be at or before the
+    // destination.
+    if ascending { r >= o } else { r <= o }
+}
+
+/// How many sources survive one direction, without materializing a vector.
+fn survives_count<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk>,
+    sources: &[Option<u64>],
+    usable_len: u64,
+    ascending: bool,
+) -> usize {
+    chunks
+        .enumerate()
+        .filter(|(i, c)| survives_one(c, sources.get(*i).copied().flatten(), usable_len, ascending))
+        .count()
+}
+
+/// Which sources survive one direction.
+fn survives<'a>(
+    chunks: impl Iterator<Item = &'a SophonChunk>,
     sources: &[Option<u64>],
     usable_len: u64,
     ascending: bool,
 ) -> Vec<bool> {
-    let mut live = vec![false; chunks.len()];
-    for (i, c) in chunks.iter().enumerate() {
-        let Some(r) = sources.get(i).copied().flatten() else {
-            continue;
-        };
-        let o = c.offset.max(0) as u64;
-        let s = c.uncompressed_size.max(0) as u64;
-        // The source must be inside the file being read from.
-        if r.checked_add(s).is_none_or(|end| end > usable_len) {
-            continue;
-        }
-        // Ascending: the region already written is `[0, o)`, so the source
-        // has to be at or after the destination. Descending: the region
-        // already written is `(o+s, size)`, so the source has to be at or
-        // before the destination.
-        live[i] = if ascending { r >= o } else { r <= o };
-    }
-    live
+    chunks
+        .enumerate()
+        .map(|(i, c)| survives_one(c, sources.get(i).copied().flatten(), usable_len, ascending))
+        .collect()
 }
 
 /// The reuse source of each chunk, taken from the local reuse map.
 ///
-/// The map is `path -> [(uncompressed_md5, uncompressed_size, offset)]`, and
-/// the **first** entry matching a chunk's `(md5, size)` is its source — the
-/// same choice the temp path's reuse lookup makes, so the two cannot
-/// disagree about where a chunk's bytes are.
+/// The map is `path -> FileReuse`, and the **first** entry matching a
+/// chunk's `(md5, size)` is its source — the same choice the temp path's
+/// reuse lookup makes, so the two cannot disagree about where a chunk's
+/// bytes are.
 ///
 /// A chunk with no matching entry has no source: it has to be downloaded.
-pub fn sources_for(chunks: &[SophonChunk], entries: &[(String, i64, i64)]) -> Sources {
+pub fn sources_for(chunks: &[SophonChunk], reuse: Option<&FileReuse>) -> Sources {
     chunks
         .iter()
         .map(|c| {
-            entries
-                .iter()
-                .find(|(md5, sz, _)| {
-                    md5.eq_ignore_ascii_case(&c.uncompressed_md5) && *sz == c.uncompressed_size
-                })
-                .map(|(_, _, off)| (*off).max(0) as u64)
+            reuse
+                .and_then(|r| r.get(c))
+                .map(|entry| entry.offset.max(0) as u64)
         })
         .collect()
 }
@@ -162,12 +192,19 @@ pub fn sources_for(chunks: &[SophonChunk], entries: &[(String, i64, i64)]) -> So
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sophon::ReuseEntry;
+    use crate::util::Md5;
 
-    /// A chunk with the given destination offset and length.
+    /// A chunk with the given destination offset and length. The salvage rule
+    /// does not read the digest, so a fixed one is enough here.
     fn chunk(id: &str, offset: i64, size: i64) -> SophonChunk {
+        chunk_at(id, "d41d8cd98f00b204e9800998ecf8427e", offset, size)
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
         SophonChunk {
             id: id.into(),
-            uncompressed_md5: format!("md5-{id}"),
+            uncompressed_md5: md5.into(),
             offset,
             compressed_size: size,
             uncompressed_size: size,
@@ -203,10 +240,10 @@ mod tests {
     fn a_source_at_the_destination_counts_for_both() {
         // r == o: the chunk is already correct where it belongs, and it is
         // safe in either direction.
-        let chunks = vec![chunk("c", 4, 4)];
-        let sources = vec![Some(4u64)];
-        assert_eq!(survives(&chunks, &sources, 64, true), vec![true]);
-        assert_eq!(survives(&chunks, &sources, 64, false), vec![true]);
+        let chunks = [chunk("c", 4, 4)];
+        let sources = [Some(4u64)];
+        assert_eq!(survives(chunks.iter(), &sources, 64, true), vec![true]);
+        assert_eq!(survives(chunks.iter(), &sources, 64, false), vec![true]);
     }
 
     #[test]
@@ -283,29 +320,64 @@ mod tests {
     }
 
     #[test]
-    fn sources_for_takes_the_first_entry_matching_the_chunk() {
-        let chunks = vec![chunk("a", 0, 4)];
-        let entries = vec![
-            ("md5-a".to_string(), 4i64, 12i64),
-            ("md5-a".to_string(), 4i64, 99i64),
+    fn the_borrowed_form_agrees_with_the_owned_one() {
+        let chunks = vec![
+            chunk("a", 0, 4),
+            chunk("b", 4, 4),
+            chunk("c", 8, 4),
+            chunk("d", 12, 4),
         ];
-        let sources = sources_for(&chunks, &entries);
+        let sources = vec![None, Some(0u64), Some(4), Some(8)];
+        let refs: Vec<&SophonChunk> = chunks.iter().collect();
+        assert_eq!(
+            salvage_order_refs(&refs, &sources, 16),
+            salvage_order(&chunks, &sources, 16)
+        );
+    }
+
+    #[test]
+    fn sources_for_takes_the_first_entry_matching_the_chunk() {
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let chunks = vec![chunk_at("a", md5, 0, 4)];
+        let reuse = FileReuse::new(vec![
+            ReuseEntry {
+                md5: Md5::parse_hex(md5).unwrap(),
+                size: 4,
+                offset: 12,
+            },
+            // A duplicate key, spelled differently: the index must still keep
+            // the first entry, exactly as the linear scan did.
+            ReuseEntry {
+                md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
+                size: 4,
+                offset: 99,
+            },
+        ]);
+        let sources = sources_for(&chunks, Some(&reuse));
         assert_eq!(sources, vec![Some(12)]);
     }
 
     #[test]
     fn sources_for_matches_the_md5_case_insensitively_and_the_size_exactly() {
-        let chunks = vec![chunk("a", 0, 4)];
-        let entries = vec![("MD5-A".to_string(), 4i64, 12i64)];
-        assert_eq!(sources_for(&chunks, &entries), vec![Some(12)]);
+        let chunks = vec![chunk_at("a", "d41d8cd98f00b204e9800998ecf8427e", 0, 4)];
+        let reuse = FileReuse::new(vec![ReuseEntry {
+            md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
+            size: 4,
+            offset: 12,
+        }]);
+        assert_eq!(sources_for(&chunks, Some(&reuse)), vec![Some(12)]);
         // The same md5 at a different size is a different chunk.
-        let entries = vec![("MD5-A".to_string(), 5i64, 12i64)];
-        assert_eq!(sources_for(&chunks, &entries), vec![None]);
+        let reuse = FileReuse::new(vec![ReuseEntry {
+            md5: Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap(),
+            size: 5,
+            offset: 12,
+        }]);
+        assert_eq!(sources_for(&chunks, Some(&reuse)), vec![None]);
     }
 
     #[test]
     fn sources_for_gives_a_chunk_with_no_entry_no_source() {
         let chunks = vec![chunk("a", 0, 4)];
-        assert_eq!(sources_for(&chunks, &[]), vec![None]);
+        assert_eq!(sources_for(&chunks, None), vec![None]);
     }
 }
