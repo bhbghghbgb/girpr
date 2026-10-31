@@ -8,14 +8,14 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 0 — pure cleanup
 
-- [x] I1 — correct `DigestSet::merge`'s documented winner
-- [x] D2 — add `ScanMode::new`
-- [x] D1 — share the link-disjoint validation loop
-- [x] E1 — gate `why_tag` behind `why`
-- [x] E3 — allocation-free `Record` rendering, sorted JSON keys
-- [x] F2 — one mixed-case collision helper
-- [x] H2 — one backup/snapshot copy-aside helper
-- [x] C1 — precompute the `type_conflict` set
+- [r] I1 — correct `DigestSet::merge`'s documented winner
+- [r] D2 — add `ScanMode::new`
+- [r] D1 — share the link-disjoint validation loop
+- [r] E1 — gate `why_tag` behind `why`
+- [r] E3 — allocation-free `Record` rendering, sorted JSON keys
+- [r] F2 — one mixed-case collision helper
+- [r] H2 — one backup/snapshot copy-aside helper
+- [r] C1 — precompute the `type_conflict` set
 
 ## Phase 1 — local performance and reporting
 
@@ -46,14 +46,6 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 Tasks finished but not yet reviewed by hand:
 
-- I1 — `girsync: document the merge write direction` (`1844e29`)
-- D2 — `girsync: add ScanMode constructor` (`7e6b1e2`)
-- D1 — `girsync: share link-disjoint validation` (`ecbd519`)
-- E1 — `girsync: render why tags only when requested` (`d378dfd`)
-- E3 — `girsync: render records without per-field allocations` (`e30836d`)
-- F2 — `girsync: share mixed-case collision check` (`3628ba6`)
-- H2 — `girsync: share cache copy-aside helper` (`27aee3e`)
-- C1 — `girsync: precompute planned type conflicts` (`938431a`)
 - D4 — `girsync: add count-only cache entry method` (`2c6047e`)
 - G1 — `girsync: walk exact diff keys without a union set` (`7cde85c`)
 - G2 — `girsync: share pair classification in diff` (`3877e90`)
@@ -67,6 +59,40 @@ Tasks finished but not yet reviewed by hand:
 - B2 — `girsync: share wiped-subtree prefix checks` (`173e54d`)
 - C2 — `girsync: precompute link storage membership` (`08707f6`)
 - D3 — `girsync: share compare finish path` (`82e81f6`)
+
+## Review notes
+
+### Phase 0 — pure cleanup — accepted
+
+Reviewed the batch at `938431a` (in its own worktree, so later commits could not
+mask it) and again at `3e32eb38b565`. `cargo test -p girsync` is green for every
+target and `cargo clippy -p girsync --all-targets -- -D warnings` is clean.
+I1, D2, D1, E1, E3, F2, H2 and C1 preserve the documented behavior; nothing
+needs a revert or a code fix. The follow-ups below are non-blocking.
+
+- **D1 — pin the diagnostics.** The shared helper reproduces both wrappers'
+  sentences exactly, but no test holds them: `tests/symlink.rs` and
+  `tests/sync.rs` only assert stderr contains `disjoint` and `link`. Add one
+  assertion per side and direction for the full sentence (`may not read its own
+  destination`, `write into its own source`, and the two `contains` variants),
+  plus the `resolve src link` / `resolve dst link` context, so a future edit to
+  `LinkSide` cannot silently change the advice a user acts on.
+- **E3 — latent duplicate-key divergence.** `Record::write_json` matches
+  `Record::json().to_string()` byte-for-byte for every record built today (the
+  new unit tests cover key order, the `UInt`/`Int` split, arrays, and escaping).
+  It would diverge if a field key were `event` or repeated: the map keeps the
+  last value, the writer emits both members. Keys are static and unique today,
+  so this is latent only; a `debug_assert!` on uniqueness, or skipping an
+  `event` field in `write_json`, would close it.
+- **F2 — helper placement.** `check_mixed_case_keys` lives in `scan` and is
+  imported by `effective::record`, whose module doc says the disk walk and the
+  table read deliberately do not share a module. `util.rs` would keep that
+  layering, the same move B2's `DirPrefixes` makes.
+- **D2 — adopt the constructor in tests.** Production call sites all use
+  `ScanMode::new`; the integration-test helpers still build the literal
+  (`tests/common/mod.rs`, `tests/lazy/*`, `tests/hash_mode/*`,
+  `tests/compare.rs`, ...). Test-only and optional, but it is what makes one
+  edit enough when a field is added.
 
 ## Skipped
 
