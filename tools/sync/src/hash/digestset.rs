@@ -75,6 +75,12 @@ impl DigestSet {
     /// `HashAlg` should not have to spell it back into a string. The fallback is
     /// not optional — a known name whose digest length was unexpected is in
     /// `foreign`, and [`Self::get`] cannot see it.
+    ///
+    /// The `foreign` match is by **canonical name**, `a.as_str()`, whereas
+    /// [`Self::get_named`] parses its argument case-insensitively and then matches
+    /// the exact spelling. `get_named("MD5")` can therefore find a foreign entry
+    /// spelled `MD5` that this lookup, asked for [`HashAlg::Md5`], will not: a caller
+    /// that must also match a mixed-case spelling has to go through `get_named`.
     pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
         self.get(a).or_else(|| {
             self.foreign
