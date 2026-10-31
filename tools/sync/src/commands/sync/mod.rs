@@ -476,6 +476,104 @@ fn validate_inputs(src: &Path, dst: &Path) -> Result<CanonicalRoots> {
     })
 }
 
+/// Which side of the mirror a link check walks.
+#[derive(Clone, Copy)]
+enum LinkSide {
+    Src,
+    Dst,
+}
+
+impl LinkSide {
+    /// The side's own name, as it appears in diagnostics.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Src => "src",
+            Self::Dst => "dst",
+        }
+    }
+
+    /// The name of the root the side must stay clear of.
+    const fn other(self) -> &'static str {
+        match self {
+            Self::Src => "dst",
+            Self::Dst => "src",
+        }
+    }
+
+    /// What the link would wrongly reach, for a target inside the other root.
+    const fn inside_consequence(self) -> &'static str {
+        match self {
+            Self::Src => "read its own destination",
+            Self::Dst => "write into its own source",
+        }
+    }
+
+    /// What the link would wrongly reach, for a target containing the other root.
+    const fn contains_consequence(self) -> &'static str {
+        match self {
+            Self::Src => "reach its own destination",
+            Self::Dst => "reach its own source",
+        }
+    }
+}
+
+/// Refuse an effective tree that reaches the other root through a link.
+///
+/// The walk follows links, so a link inside either root can expose the other
+/// root's files while the two roots still look like siblings. A link is legal
+/// when it points anywhere outside the other root; it is refused when its
+/// resolved target and the other root intersect in either direction:
+///
+/// - the target is the other root or inside it, so the link reaches that side;
+/// - the target contains the other root, so walking the link reaches it from
+///   above.
+///
+/// Every link the effective map kept is checked, not only directories: a file
+/// link can point at a file on the other side just as well. The caller runs
+/// this after its side's phase A and before the plan, the rename and every
+/// apply phase, so nothing in either tree has changed yet. Filters and
+/// `--max-depth` are already applied here, which is why an excluded link is not
+/// refused: it is not part of this run's tree.
+fn validate_links_disjoint(
+    root: &Path,
+    entries: &HashMap<String, SideEntry>,
+    other_canonical: &Path,
+    side: LinkSide,
+) -> Result<()> {
+    for (rel, ent) in entries {
+        if !ent.is_link {
+            continue;
+        }
+        let target = std::fs::canonicalize(root.join(rel))
+            .with_context(|| format!("resolve {} link `{rel}`", side.name()))?;
+        if path_within(&target, other_canonical) {
+            bail!(
+                "src and dst must be disjoint: {} link `{rel}` resolves to `{}`, \
+                 which is inside {} `{}`; a mirror may not {} \
+                 through a link (remove the link, or exclude it with --exclude)",
+                side.name(),
+                target.display(),
+                side.other(),
+                other_canonical.display(),
+                side.inside_consequence()
+            );
+        }
+        if path_within(other_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: {} link `{rel}` resolves to `{}`, \
+                 which contains {} `{}`; a mirror may not {} \
+                 through a link (remove the link, or exclude it with --exclude)",
+                side.name(),
+                target.display(),
+                side.other(),
+                other_canonical.display(),
+                side.contains_consequence()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Refuse an effective source tree that reaches `dst` through a link.
 ///
 /// The root check above canonicalizes only the two roots. The walk follows
@@ -502,32 +600,7 @@ fn validate_src_links(
     entries: &HashMap<String, SideEntry>,
     dst_canonical: &Path,
 ) -> Result<()> {
-    for (rel, ent) in entries {
-        if !ent.is_link {
-            continue;
-        }
-        let target = std::fs::canonicalize(src.join(rel))
-            .with_context(|| format!("resolve src link `{rel}`"))?;
-        if path_within(&target, dst_canonical) {
-            bail!(
-                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
-                 which is inside dst `{}`; a mirror may not read its own destination \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                dst_canonical.display()
-            );
-        }
-        if path_within(dst_canonical, &target) {
-            bail!(
-                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
-                 which contains dst `{}`; a mirror may not reach its own destination \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                dst_canonical.display()
-            );
-        }
-    }
-    Ok(())
+    validate_links_disjoint(src, entries, dst_canonical, LinkSide::Src)
 }
 
 /// Refuse an effective destination tree that reaches `src` through a link.
@@ -556,30 +629,5 @@ fn validate_dst_links(
     entries: &HashMap<String, SideEntry>,
     src_canonical: &Path,
 ) -> Result<()> {
-    for (rel, ent) in entries {
-        if !ent.is_link {
-            continue;
-        }
-        let target = std::fs::canonicalize(dst.join(rel))
-            .with_context(|| format!("resolve dst link `{rel}`"))?;
-        if path_within(&target, src_canonical) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which is inside src `{}`; a mirror may not write into its own source \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
-        }
-        if path_within(src_canonical, &target) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which contains src `{}`; a mirror may not reach its own source \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
-        }
-    }
-    Ok(())
+    validate_links_disjoint(dst, entries, src_canonical, LinkSide::Dst)
 }
