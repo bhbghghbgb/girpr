@@ -19,7 +19,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 ## Phase 1 — local performance and reporting
 
-- [ ] D4 — add `CacheDb::entry_count` for the open log
+- [x] D4 — add `CacheDb::entry_count` for the open log
 - [ ] G1 — src-then-dst-only exact diff
 - [ ] G2 — shared pair classification
 - [ ] G3 — precompute the run-wide `AlgoSet`s
@@ -54,6 +54,7 @@ Tasks finished but not yet reviewed by hand:
 - F2 — `girsync: share mixed-case collision check` (`3628ba6`)
 - H2 — `girsync: share cache copy-aside helper` (`27aee3e`)
 - C1 — `girsync: precompute planned type conflicts` (`938431a`)
+- D4 — `girsync: add count-only cache entry method` (`2c6047e`)
 
 ## Skipped
 
