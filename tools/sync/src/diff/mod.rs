@@ -361,7 +361,7 @@ pub fn hashes_differ(a: &DigestSet, b: &DigestSet, algos: AlgoSet) -> AlgoSet {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
         // not force differ here.
-        if let (Some(x), Some(y)) = (a.get_named(algo.as_str()), b.get_named(algo.as_str()))
+        if let (Some(x), Some(y)) = (a.get_algo(algo), b.get_algo(algo))
             && x != y
         {
             differ.insert(algo);

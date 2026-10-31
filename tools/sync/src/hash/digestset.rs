@@ -59,13 +59,29 @@ impl DigestSet {
     /// `None` means "this row has no digest under that name", **not** "the digest is
     /// zero". That distinction is load-bearing: [`crate::diff::hashes_differ`] is
     /// silent on a missing digest, and a zero digest substituted for `None` would turn
-    /// a false clean back on. A known name sitting in `foreign` also reads as `None` here
-    /// — see [`Self::get_named`] for the by-name lookup that finds it.
+    /// a false clean back on. A known name sitting in `foreign` also reads as `None`
+    /// here — see [`Self::get_algo`] for the typed lookup that finds it.
     pub fn get(&self, a: HashAlg) -> Option<&[u8]> {
         match a {
             HashAlg::Md5 => self.md5.as_ref().map(|d| &d[..]),
             HashAlg::Sha256 => self.sha256.as_ref().map(|d| &d[..]),
         }
+    }
+
+    /// The digest for `a`, including a malformed known-name entry carried in
+    /// `foreign` (a known name with an unexpected length).
+    ///
+    /// The typed counterpart to [`Self::get_named`]: a caller that already has a
+    /// `HashAlg` should not have to spell it back into a string. The fallback is
+    /// not optional — a known name whose digest length was unexpected is in
+    /// `foreign`, and [`Self::get`] cannot see it.
+    pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
+        self.get(a).or_else(|| {
+            self.foreign
+                .iter()
+                .find(|(name, _)| &**name == a.as_str())
+                .map(|(_, digest)| digest.as_slice())
+        })
     }
 
     /// The digest under *any* name, known or not.

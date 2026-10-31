@@ -58,7 +58,7 @@ fn copy_and_digest(
 /// not evidence about this copy either way.
 fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestSet) -> Result<()> {
     for a in algos {
-        if src.get_named(a.as_str()) != dst.get_named(a.as_str()) {
+        if src.get_algo(*a) != dst.get_algo(*a) {
             error!(algo = %a, path = %path.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, path.display());
         }

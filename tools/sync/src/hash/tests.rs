@@ -180,6 +180,11 @@ fn every_subset_of_the_known_algorithms_round_trips() {
         for a in HashAlg::ALL {
             let want = set.contains(a).then(|| vec![0xABu8; a.digest_len()]);
             assert_eq!(d.get(a), want.as_deref(), "{set:?} get({a:?})");
+            assert_eq!(
+                d.get_algo(a),
+                want.as_deref(),
+                "{set:?} typed lookup for {a:?}"
+            );
             assert_eq!(d.get_named(a.as_str()), want.as_deref(), "{set:?} named");
         }
         assert_eq!(
@@ -249,6 +254,28 @@ fn a_known_name_with_the_wrong_length_routes_to_foreign() {
         d,
         DigestSet::default(),
         "and it differs from a row that has nothing, which is the comparison that reports it"
+    );
+}
+
+/// The typed lookup keeps the by-name fallback: a known algorithm whose digest
+/// was carried in `foreign` because its length was unexpected is still the digest
+/// the row holds under that name, and still compares byte-wise.
+#[test]
+fn a_typed_lookup_finds_a_known_name_carried_in_foreign() {
+    let mut d = DigestSet::default();
+    d.insert_named("md5", b"\x01\x02\x03\x04\x05\x06\x07\x08");
+    d.insert_named("sha256", &[3u8; 32]);
+
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "the malformed entry is the digest this row holds under that name"
+    );
+    assert_eq!(d.get_algo(HashAlg::Sha256), Some(&[3u8; 32][..]));
+    assert_eq!(
+        DigestSet::default().get_algo(HashAlg::Md5),
+        None,
+        "a row with no digest under that name still reads as absent"
     );
 }
 
