@@ -6,12 +6,13 @@
 //! the other reads a table, and sharing a module would invite a reader to assume
 //! they can be swapped.
 
-use anyhow::{Result, bail};
-use std::collections::{HashMap, HashSet};
+use anyhow::Result;
+use std::collections::HashMap;
 
 use crate::cache::CacheDb;
 use crate::config::CommonOpts;
 use crate::filter::is_excluded;
+use crate::scan::check_mixed_case_keys;
 use crate::util::is_cache_rel;
 
 use super::entry::{SideEntry, SideScan};
@@ -61,20 +62,7 @@ pub fn load_record_side_from(
         );
     }
     if !common.case_sensitive {
-        let mut map: HashMap<String, Vec<String>> = HashMap::new();
-        for k in out.keys() {
-            map.entry(k.to_lowercase()).or_default().push(k.clone());
-        }
-        for (_, v) in map {
-            let uniq: HashSet<&String> = v.iter().collect();
-            if uniq.len() > 1 {
-                bail!(
-                    "mixed-case collision in record {}: {}",
-                    label,
-                    v.join(" vs ")
-                );
-            }
-        }
+        check_mixed_case_keys(out.keys().map(String::as_str), "record ", label)?;
     }
     // A record's row *is* its stat — there is no disk to disagree with — so
     // every row is fresh and its digests are carried whole.
