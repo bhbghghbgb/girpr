@@ -138,8 +138,19 @@ pub fn path_within(child: &Path, parent: &Path) -> bool {
 fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     #[cfg(windows)]
     {
-        a.as_os_str().to_string_lossy().to_lowercase()
-            == b.as_os_str().to_string_lossy().to_lowercase()
+        let (a, b) = (a.as_os_str(), b.as_os_str());
+        if a == b {
+            return true;
+        }
+        // The usual case: two different ASCII spellings, compared without
+        // allocating. Non-ASCII and non-UTF-8 names keep the Unicode fold.
+        if let (Some(a), Some(b)) = (a.to_str(), b.to_str())
+            && a.is_ascii()
+            && b.is_ascii()
+        {
+            return a.eq_ignore_ascii_case(b);
+        }
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     }
     #[cfg(not(windows))]
     {
@@ -284,5 +295,21 @@ mod tests {
         ));
         assert!(path_within(Path::new("C:/ROOT/Sub"), Path::new("c:/root")));
         assert!(!path_within(Path::new("C:/ROOTER"), Path::new("c:/root")));
+    }
+
+    /// The fast path covers ASCII spelling differences, and names outside
+    /// ASCII still fold exactly as before: the filesystem treats both as one.
+    #[cfg(windows)]
+    #[test]
+    fn component_equality_folds_ascii_and_non_ascii_case() {
+        assert!(same_path(
+            Path::new("C:/Users/ACER/Readme.TXT"),
+            Path::new("c:/users/acer/readme.txt")
+        ));
+        assert!(path_within(
+            Path::new("C:/ROOT/Sub/Ärger"),
+            Path::new("c:/root/sub/ärger")
+        ));
+        assert!(!same_path(Path::new("C:/Ärger"), Path::new("c:/Arger")));
     }
 }
