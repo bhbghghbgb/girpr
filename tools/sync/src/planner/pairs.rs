@@ -246,7 +246,14 @@ pub fn plan_pairs(
         // short of.
         return Ok(plan);
     }
-    plan.required.fallback = AlgoSet::from_iter(src.algos.iter().copied());
+    // The run-wide request as a set, built once: it does not depend on the pair.
+    // src and dst stay separate because a `SideRequest` may name different
+    // algorithms on each side.
+    let src_all = AlgoSet::from_iter(src.algos.iter().copied());
+    let dst_all = AlgoSet::from_iter(dst.algos.iter().copied());
+    // The same value the per-path answer uses, so the fallback and the answer
+    // cannot be built from different inputs.
+    plan.required.fallback = src_all;
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
@@ -315,16 +322,9 @@ pub fn plan_pairs(
                         tally[idx].missing.insert((*rel).clone(), short);
                     }
                 }
-                let want = AlgoSet::from_iter(src.algos.iter().copied());
-                plan.required.by_rel.insert((*srel).clone(), want);
-                plan_one(&src, s, srel, want, &mut plan.src);
-                plan_one(
-                    &dst,
-                    d,
-                    drel,
-                    AlgoSet::from_iter(dst.algos.iter().copied()),
-                    &mut plan.dst,
-                );
+                plan.required.by_rel.insert((*srel).clone(), src_all);
+                plan_one(&src, s, srel, src_all, &mut plan.src);
+                plan_one(&dst, d, drel, dst_all, &mut plan.dst);
             }
             HashMode::AnyOf => {
                 // `None` means no requested algorithm is obtainable on both sides.
