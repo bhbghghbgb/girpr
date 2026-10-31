@@ -950,3 +950,22 @@ fn two_kept_links_on_one_storage_refuse_when_either_is_copied() {
     // Nothing copied: both paths already agree with the one file.
     ensure_shared_storage_safe(&terminals, &Plan::default()).expect("no write, no conflict");
 }
+
+/// Wiped subtrees are matched strictly and by whole component: the directory at
+/// the root of a wipe is not under itself, and a shared name prefix is not an
+/// ancestor.
+#[test]
+fn dir_prefixes_match_strict_descendants_on_a_component_boundary() {
+    let mut dirs = DirPrefixes::default();
+    assert!(dirs.is_empty());
+    dirs.insert("a");
+    assert!(!dirs.is_empty());
+    assert!(!dirs.has_ancestor("a"), "a directory is not under itself");
+    assert!(dirs.has_ancestor("a/f"));
+    assert!(dirs.has_ancestor("a/b/f"));
+    assert!(
+        !dirs.has_ancestor("ab/f"),
+        "a name prefix is not an ancestor"
+    );
+    assert!(!dirs.has_ancestor("x/a"));
+}

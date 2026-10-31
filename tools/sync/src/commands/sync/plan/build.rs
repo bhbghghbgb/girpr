@@ -45,6 +45,52 @@ pub(crate) struct CopyItem {
     pub because: CopyBecause,
 }
 
+/// A set of directories whose subtrees a run destroys, matched by ancestor.
+///
+/// Holds `/`-separated relative directory paths **without** a trailing slash.
+/// Membership is by whole component, so `a` covers `a/b` but neither `a` itself
+/// nor `ab/b`. The strictness is load-bearing: callers handle the directory at
+/// the root of a wipe by name — a copy keeps its own row, a removal drops its
+/// own row — so the test must never match that path itself.
+#[derive(Debug, Default)]
+pub(crate) struct DirPrefixes {
+    dirs: HashSet<Box<str>>,
+}
+
+impl DirPrefixes {
+    pub(crate) fn from_dirs<'a>(dirs: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            dirs: dirs.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The dst directories this run's copies clear out of the way.
+    ///
+    /// `copy_one` removes a blocking dst directory *recursively*, so a copy
+    /// whose dst is a directory takes that directory's whole subtree with it.
+    pub(crate) fn wiped_by_copy(copy: &[CopyItem], dm: &HashMap<String, EffRec>) -> Self {
+        Self::from_dirs(
+            copy.iter()
+                .filter(|item| dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
+                .map(|item| item.rel.as_str()),
+        )
+    }
+
+    pub(crate) fn insert(&mut self, dir: &str) {
+        self.dirs.insert(dir.into());
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.dirs.is_empty()
+    }
+
+    /// True only for a strict descendant, never the directory itself.
+    pub(crate) fn has_ancestor(&self, rel: &str) -> bool {
+        rel.match_indices('/')
+            .any(|(i, _)| self.dirs.contains(&rel[..i]))
+    }
+}
+
 /// The complete work list for one sync, computed before anything is written.
 ///
 /// Every list holds `/`-separated relative paths with src's casing.
@@ -109,7 +155,6 @@ pub(crate) fn build_plan(
     let src_is_file = |rel: &String| sm.get(rel).map(|e| e.kind == "file").unwrap_or(false);
     let src_is_dir = |rel: &String| sm.get(rel).map(|e| e.kind == "dir").unwrap_or(false);
     let dst_is_file = |rel: &String| dm.get(rel).map(|e| e.kind == "file").unwrap_or(false);
-    let dst_is_dir = |rel: &String| dm.get(rel).map(|e| e.kind == "dir").unwrap_or(false);
 
     // Each bucket is pushed with itself attached, so the `COPY` record can say what
     // caused it without the reporter having to re-derive the origin from a path that
@@ -233,11 +278,7 @@ pub(crate) fn build_plan(
     // reading it instead of the filesystem yields the same paths.
     let mut rmdir: Vec<String> = Vec::new();
     if !keep_extra {
-        let wiped: Vec<String> = copy
-            .iter()
-            .filter(|item| dst_is_dir(&item.rel))
-            .map(|item| format!("{}/", item.rel))
-            .collect();
+        let wiped = DirPrefixes::wiped_by_copy(&copy, dm);
         for (rel, rec) in dm {
             if rec.kind != "dir" || sm.contains_key(rel) {
                 continue;
@@ -248,7 +289,7 @@ pub(crate) fn build_plan(
             if link_ancestor(rel, dm).is_some() {
                 continue;
             }
-            if wiped.iter().any(|w| rel.starts_with(w.as_str())) {
+            if wiped.has_ancestor(rel) {
                 continue;
             }
             rmdir.push(rel.clone());

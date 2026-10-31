@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use super::super::plan::Plan;
+use super::super::plan::{DirPrefixes, Plan};
 use super::Applier;
 use super::copy::copy_one;
 use crate::report::Record;
@@ -241,7 +241,7 @@ impl<'a> Applier<'a> {
         // Cache prefixes this pass removed recursively. A link takes its whole
         // followed subtree with it, and `remove_dir_all` can take rows the plan
         // did not enumerate; those rows describe paths that are gone.
-        let mut wiped: Vec<String> = Vec::new();
+        let mut wiped = DirPrefixes::default();
         for (i, r) in plan.rmdir.iter().enumerate() {
             // The plan excludes links and everything under one; re-check disk as
             // the belt-and-braces half, so a recursive removal can never run
@@ -261,7 +261,7 @@ impl<'a> Applier<'a> {
                 if rel != *r {
                     w.remove(&rel)?;
                 }
-                wiped.push(format!("{rel}/"));
+                wiped.insert(&rel);
                 self.report.emit(Record::path("RMDIR", &rel));
                 removed_dirs += 1;
             } else {
@@ -269,7 +269,7 @@ impl<'a> Applier<'a> {
                     Ok(md) if md.is_dir() => {
                         remove_dir_all(&p)?;
                         w.remove(r)?;
-                        wiped.push(format!("{r}/"));
+                        wiped.insert(r);
                         self.report.emit(Record::path("RMDIR", r));
                         removed_dirs += 1;
                     }
@@ -292,7 +292,7 @@ impl<'a> Applier<'a> {
         }
         if !wiped.is_empty() {
             for key in w.load_keys()? {
-                if wiped.iter().any(|p| key.starts_with(p.as_str())) {
+                if wiped.has_ancestor(&key) {
                     w.remove(&key)?;
                 }
             }
@@ -344,21 +344,17 @@ impl<'a> Applier<'a> {
     /// a real fraction of the run, and it would be the only one left in a real
     /// `sync`.
     pub(crate) fn prune_dst_cache(&self, plan: &Plan) -> Result<()> {
-        // dst paths this run's copies destroy, as `dir/` prefixes. Computed from
-        // `dm` rather than the plan's own lists, so it names exactly the subtrees
-        // `copy_one` will clear: a copy whose dst is a directory.
-        let wiped: Vec<String> = plan
-            .copy
-            .iter()
-            .filter(|item| self.dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
-            .map(|item| format!("{}/", item.rel))
-            .chain(
-                plan.delete_files
-                    .iter()
-                    .filter(|r| self.dm.get(*r).is_some_and(|rec| rec.is_link))
-                    .map(|r| format!("{r}/")),
-            )
-            .collect();
+        // dst directories this run's copies destroy, derived the same way the
+        // planner derives them, so it names exactly the subtrees `copy_one` will
+        // clear: a copy whose dst is a directory. A deleted link takes its whole
+        // followed subtree with it, and those descendants are not paths of their
+        // own on disk.
+        let mut wiped = DirPrefixes::wiped_by_copy(&plan.copy, self.dm);
+        for r in &plan.delete_files {
+            if self.dm.get(r).is_some_and(|rec| rec.is_link) {
+                wiped.insert(r);
+            }
+        }
         let mut present: HashSet<&str> = self.dm.keys().map(String::as_str).collect();
         for r in &plan.mkdir {
             present.insert(r);
@@ -371,11 +367,9 @@ impl<'a> Applier<'a> {
         }
         let mut w = self.dst_db.begin_write()?;
         for rel in w.load_keys()? {
-            // Strictly longer than the prefix, so the copied path itself keeps its
-            // row: only what is *under* a wiped directory is gone.
-            let wiped_subtree = wiped
-                .iter()
-                .any(|p| rel.len() > p.len() && rel.starts_with(p.as_str()));
+            // Strictly under a wiped directory, so the copied path itself keeps
+            // its row: only what is *under* it is gone.
+            let wiped_subtree = wiped.has_ancestor(&rel);
             if !present.contains(rel.as_str()) || wiped_subtree {
                 w.remove(&rel)?;
             }
