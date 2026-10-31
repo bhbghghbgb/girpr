@@ -51,8 +51,8 @@ pub struct Diff {
     /// **Not a bucket.** Nothing here counts: `total()` and `is_empty()` must not read
     /// it, because a pair that came out equal is not a difference and counting one
     /// would turn a clean tree into exit 4. It is the reason behind [`Self::changed`]
-    /// rather than a sixth list of paths, and [`crate::report::verdict`] reads it to
-    /// put a `why=` on the `CHANGED` records.
+    /// rather than a sixth list of paths, and [`crate::report::visit_verdict`] reads it
+    /// to put a `why=` on the `CHANGED` records.
     ///
     /// Filled from the same [`pair_verdict`] value the bucket is filled from, so a
     /// `CHANGED` record and the tag printed for it cannot disagree — one decision, read

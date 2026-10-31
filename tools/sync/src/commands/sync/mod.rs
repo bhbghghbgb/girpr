@@ -17,8 +17,8 @@
 //! ## The plan print
 //!
 //! The diff is reported the way `compare` reports it, through
-//! [`crate::report::verdict`], so `sync` and `compare` speak one vocabulary — one
-//! definition of what a `CHANGED` line means, not two. Then the actions are
+//! [`crate::report::visit_verdict`], so `sync` and `compare` speak one vocabulary
+//! — one definition of what a `CHANGED` line means, not two. Then the actions are
 //! reported as they happen.
 //!
 //! Two segments, and the split is the point: the **plan** answers *"why did it
@@ -64,7 +64,7 @@ use crate::effective::{
     resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
-use crate::report::verdict;
+use crate::report::visit_verdict;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
@@ -337,12 +337,11 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // are the same question asked in two places — a plan print that could not show
     // the equal set would make `--show-identical` look like it works everywhere but
     // here.
-    for rec in verdict(&diff, common.why, common.show_identical)
-        .into_iter()
-        .filter(|rec| rec.label() != "SUMMARY")
-    {
-        report.emit(rec);
-    }
+    visit_verdict(&diff, common.why, common.show_identical, |rec| {
+        if rec.label() != "SUMMARY" {
+            report.emit(rec);
+        }
+    });
 
     // Before the dry-run branch: a plan that cannot be applied is not a plan a
     // dry run should print as if it could be. The apply passes re-check the

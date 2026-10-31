@@ -147,13 +147,14 @@ impl Report {
     }
 }
 
-/// Every record `compare` and `compare-self` report for a [`Diff`], in report
-/// order, ending with the summary.
+/// Emit every record `compare` and `compare-self` report for a [`Diff`], in
+/// report order, ending with the summary.
 ///
-/// The list is data, not lines: [`Report`] renders it as text or JSON, and
-/// `report_diff` is the only caller that prints it. Printing and asserting read
-/// the same list, so what a test states and what a user sees cannot drift apart
-/// — there is one definition of a `CHANGED` line, not one in the printer and
+/// Each record is handed to `emit` as it is built rather than collected first,
+/// so a large `--show-identical` run holds one record at a time. [`Report`]
+/// renders them as text or JSON, and printing and asserting go through the same
+/// definitions, so what a test states and what a user sees cannot drift apart —
+/// there is one definition of a `CHANGED` line, not one in the printer and
 /// another in each test.
 ///
 /// ## `why`
@@ -183,26 +184,25 @@ impl Report {
 /// stays byte-identical to a run that never passes it. A consumer reading
 /// `SUMMARY` must therefore treat `identical` as optional, which is the same
 /// treatment `output`-format-dependent fields already get.
-pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
-    let mut out: Vec<Record> = Vec::new();
+pub fn visit_verdict(diff: &Diff, why: bool, show_identical: bool, mut emit: impl FnMut(Record)) {
     for r in &diff.missing {
-        out.push(Record::path("MISSING", r));
+        emit(Record::path("MISSING", r));
     }
     for r in &diff.extra {
-        out.push(Record::path("EXTRA", r));
+        emit(Record::path("EXTRA", r));
     }
     for r in &diff.changed {
         let mut rec = Record::path("CHANGED", r);
         if why && let Some(tag) = diff.why_tag(r) {
             rec = rec.put("why", tag);
         }
-        out.push(rec);
+        emit(rec);
     }
     for r in &diff.type_conflict {
-        out.push(Record::path("TYPE-CONFLICT", r));
+        emit(Record::path("TYPE-CONFLICT", r));
     }
     for (a, b) in &diff.case_mismatch {
-        out.push(Record::pair("CASE-MISMATCH", "<=>", "src", a, "dst", b));
+        emit(Record::pair("CASE-MISMATCH", "<=>", "src", a, "dst", b));
     }
     // The equal set, between the differences and the summary. A directory on both
     // sides is in here too: leaving it out would make the flag's output look
@@ -220,7 +220,7 @@ pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
             if why && let Some(tag) = diff.why_tag(r) {
                 rec = rec.put("why", tag);
             }
-            out.push(rec);
+            emit(rec);
         }
     }
     let mut summary = Record::keyed("SUMMARY")
@@ -234,7 +234,17 @@ pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
     }
     // `total_diff` last and last-but-one in the meaning too: it counts differences
     // only, so `identical` never reaches it.
-    out.push(summary.put("total_diff", diff.total()));
+    emit(summary.put("total_diff", diff.total()));
+}
+
+/// The records [`visit_verdict`] emits, collected into a `Vec`.
+///
+/// The collecting adapter for callers that read the document as a list — the
+/// tests and library users — while the commands stream it record by record.
+/// Both forms come from [`visit_verdict`], so they cannot disagree.
+pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
+    let mut out = Vec::new();
+    visit_verdict(diff, why, show_identical, |rec| out.push(rec));
     out
 }
 

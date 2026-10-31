@@ -98,7 +98,7 @@ pub struct CommonOpts {
     pub hash_mode: HashMode,
     /// `--why`: put a reason tag on every `CHANGED` record.
     ///
-    /// A reporting knob and nothing else: it reaches [`crate::report::verdict`] and
+    /// A reporting knob and nothing else: it reaches [`crate::report::visit_verdict`] and
     /// nothing downstream, so it cannot move the exit code. It lives beside the other
     /// output-shaping settings rather than in the commands that use it, because the
     /// question "does this run explain itself?" is a property of the run and not of the
