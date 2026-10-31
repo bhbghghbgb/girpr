@@ -37,7 +37,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## 6. Clone removal
 
-- [ ] **F13** — avoidable clones of `Want`, of the whole request log, and of the file list
+- [x] **F13** — avoidable clones of `Want`, of the whole request log, and of the file list
 
 ## Pending review
 
@@ -45,6 +45,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F9 — every value flag must have a non-Unicode case — commit `783c6f7`
 - F7 — one `PendingRow` per class, `MatrixRow::new`, per-class candidate lists — commit `a8cfd2d`
 - F3 — one `join_ordered` in `tasks.rs`; bundle diff 72/72 identical — commit `84322da`
+- F13 — chunk plan and file list shared, request log filtered — commit `80b4837`
 
 ## Follow-ups from review (non-blocking)
 
