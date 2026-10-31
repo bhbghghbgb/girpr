@@ -20,7 +20,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 - [x] **F2** — `http::fetcher::attempt` carries two byte-identical `fail` closures
 - [x] **F5** — `run::verify` and `run::materialize` duplicate the verdict/exit-code tail
-- [ ] **F6** — four `BlobProps` constructors repeat a 14-field literal
+- [x] **F6** — four `BlobProps` constructors repeat a 14-field literal
 
 ## 3. `cli` surface
 
@@ -50,3 +50,4 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F11 — duplicated premise line removed from a test doc — commit `00fe4d6`
 - F2 — one failure-record closure in `fetch`'s attempt — commit `0c136c2`
 - F5 — one `Verdict` for `verify` and `materialize` — commit `b83cb34`
+- F6 — one private skeleton behind the four `BlobProps` constructors — commit `ccf427f`
