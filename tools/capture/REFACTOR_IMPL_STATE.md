@@ -29,7 +29,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## 4. `select` restructure
 
-- [ ] **F7** — `notes`/`coverage` are parallel vectors zipped in phase 3; four `MatrixRow` literals repeat the same `None`s
+- [x] **F7** — `notes`/`coverage` are parallel vectors zipped in phase 3; four `MatrixRow` literals repeat the same `None`s
 
 ## 5. Concurrency (land alone, verify with a bundle diff)
 
@@ -43,6 +43,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 - F8 — `--output` is a clap `ValueEnum`; `resolve_common` infallible — commit `ec343e9`
 - F9 — every value flag must have a non-Unicode case — commit `783c6f7`
+- F7 — one `PendingRow` per class, `MatrixRow::new`, per-class candidate lists — commit `a8cfd2d`
 
 ## Follow-ups from review (non-blocking)
 
