@@ -604,36 +604,7 @@ mod tests {
         use std::os::windows::ffi::OsStringExt as _;
 
         let bad = OsString::from_wide(&[0xD800]);
-        // (argv before the value, whether clap's value type accepts non-Unicode)
-        let cases: &[(&[&str], bool)] = &[
-            // PathBuf: the realistic carrier, accepted.
-            (&["capture", "--out"], true),
-            (&["capture", "--log-file"], true),
-            (&["verify", "--artifact"], true),
-            (&["materialize", "--artifact", "a", "--out"], true),
-            (&["list", "--root"], true),
-            // String, enums and numbers: not representable, refused by clap.
-            (&["capture", "--new-tag"], false),
-            (&["capture", "--old-tag"], false),
-            (&["capture", "--require-class"], false),
-            (&["capture", "--files"], false),
-            (&["capture", "--audio"], false),
-            (&["capture", "--probe-tags"], false),
-            (&["capture", "--hyp-base"], false),
-            (&["capture", "--sophon-base"], false),
-            (&["capture", "--output"], false),
-            (&["capture", "--biz"], false),
-            (&["capture", "--manifest-detail"], false),
-            (&["capture", "--per-class"], false),
-            (&["capture", "--max-download-bytes"], false),
-            (&["capture", "--gzip-threshold"], false),
-            (&["capture", "--jobs"], false),
-            (&["capture", "--retries"], false),
-            (&["capture", "--timeout"], false),
-            (&["capture", "--max-response-bytes"], false),
-            (&["capture", "--max-decompressed-bytes"], false),
-        ];
-        for (prefix, accepted) in cases {
+        for (prefix, accepted) in NON_UNICODE_CASES {
             let mut argv: Vec<OsString> = vec![OsString::from("gircap")];
             argv.extend(prefix.iter().map(OsString::from));
             argv.push(bad.clone());
@@ -664,6 +635,96 @@ mod tests {
                         "{prefix:?}: the refusal does not name the cause: {text}"
                     );
                 }
+            }
+        }
+    }
+
+    /// The cases
+    /// [`every_value_flag_either_parses_or_refuses_a_non_unicode_value_but_records_its_bytes`]
+    /// drives, and whether the flag's type can hold a non-Unicode value.
+    ///
+    /// [`every_value_flag_has_a_non_unicode_case`] reads the same table, so a
+    /// value-taking flag cannot be added without a row here.
+    const NON_UNICODE_CASES: &[(&[&str], bool)] = &[
+        // PathBuf: the realistic carrier, accepted.
+        (&["capture", "--out"], true),
+        (&["capture", "--log-file"], true),
+        (&["verify", "--artifact"], true),
+        (&["materialize", "--artifact", "a", "--out"], true),
+        (&["list", "--root"], true),
+        // String, enums, numbers and level names: not representable, refused by
+        // clap.
+        (&["capture", "--log-level"], false),
+        (&["capture", "--log-file-level"], false),
+        (&["capture", "--new-tag"], false),
+        (&["capture", "--old-tag"], false),
+        (&["capture", "--require-class"], false),
+        (&["capture", "--files"], false),
+        (&["capture", "--audio"], false),
+        (&["capture", "--probe-tags"], false),
+        (&["capture", "--hyp-base"], false),
+        (&["capture", "--sophon-base"], false),
+        (&["capture", "--output"], false),
+        (&["capture", "--biz"], false),
+        (&["capture", "--manifest-detail"], false),
+        (&["capture", "--per-class"], false),
+        (&["capture", "--max-download-bytes"], false),
+        (&["capture", "--gzip-threshold"], false),
+        (&["capture", "--jobs"], false),
+        (&["capture", "--retries"], false),
+        (&["capture", "--timeout"], false),
+        (&["capture", "--max-response-bytes"], false),
+        (&["capture", "--max-decompressed-bytes"], false),
+    ];
+
+    /// The table above covers the whole surface: every value-taking flag clap
+    /// knows has a row, and every row names a real flag of its subcommand.
+    ///
+    /// The non-Unicode test can only prove what its table names, so a flag added
+    /// without a row would pass while never being looked at. This is what turns
+    /// that gap into a red test. Booleans are out of scope: they have no value
+    /// that could be non-Unicode.
+    #[test]
+    fn every_value_flag_has_a_non_unicode_case() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let command = Cli::command();
+        let mut value_flags: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for sub in command.get_subcommands() {
+            let longs: BTreeSet<String> = sub
+                .get_arguments()
+                .filter(|arg| arg.get_action().takes_values())
+                .filter_map(|arg| arg.get_long())
+                .map(|long| format!("--{long}"))
+                .collect();
+            value_flags.insert(sub.get_name().to_string(), longs);
+        }
+
+        // A row is only meaningful if its subcommand exists and its flag is a
+        // value-taking flag of that subcommand.
+        for (prefix, _) in NON_UNICODE_CASES {
+            let sub = prefix.first().copied().expect("a row names its subcommand");
+            let flag = prefix.last().copied().expect("a row names its flag");
+            let longs = value_flags
+                .get(sub)
+                .unwrap_or_else(|| panic!("{prefix:?}: {sub} is not a subcommand"));
+            assert!(
+                longs.contains(flag),
+                "{prefix:?}: {flag} is not a value-taking flag of {sub}"
+            );
+        }
+
+        // And every flag is driven by at least one row.
+        let tested: BTreeSet<&str> = NON_UNICODE_CASES
+            .iter()
+            .map(|(prefix, _)| *prefix.last().expect("a row names its flag"))
+            .collect();
+        for (sub, longs) in &value_flags {
+            for flag in longs {
+                assert!(
+                    tested.contains(flag.as_str()),
+                    "{sub} {flag} has no non-Unicode case"
+                );
             }
         }
     }
