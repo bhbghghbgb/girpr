@@ -151,15 +151,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     };
 
     let db = open_db(&db_path, true, rw()).unwrap();
-    let eff = resolved_map(
-        &dir,
-        &db,
-        &sensitive,
-        ScanMode {
-            no_trust_cached_hashes: true,
-            dry_run: false,
-        },
-    );
+    let eff = resolved_map(&dir, &db, &sensitive, ScanMode::new(true, false));
     assert!(eff.contains_key("a.txt"));
     drop(db);
 
@@ -189,6 +181,181 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     assert!(eff.contains_key("A.txt"));
     assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     drop(db);
+}
+
+/// **An adopted key is renamed, not pruned.** The dry run still reads the
+/// pre-adoption cache, so the old-cased row is in its key snapshot; counting it
+/// as stale would make `pruned` one higher than the real run's, and a dry run
+/// answers the same question. The fixture leaves one real orphan beside the
+/// adopted row, so the count has a baseline the adoption cannot hide in.
+#[test]
+fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
+    let t = temp_root("adopt_prune");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"hello");
+    let db_path = dir.join(CACHE_PREFIX);
+    {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        let _ = phased(&dir, &db, &opts(), scan(false, false));
+        db.put("vanished.txt", &FileRec::dir()).unwrap();
+    }
+
+    // Case-only rename via an intermediate, so it works on either kind of
+    // filesystem.
+    let tmp = dir.join("girsync_rename_tmp");
+    std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
+    std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
+
+    let insensitive = CommonOpts {
+        case_sensitive: false,
+        ..opts()
+    };
+    let (dry_map, dry_stats) = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
+        (pa.map, pa.stats)
+    };
+    assert!(dry_map.contains_key("A.txt"), "disk casing governs");
+    assert!(
+        dry_map["A.txt"].fresh && dry_map["A.txt"].cached.get_named("md5").is_some(),
+        "the adopted row's digests are carried"
+    );
+    assert_eq!(
+        dry_stats.pruned, 1,
+        "the orphan only: the adopted old key is renamed, not pruned"
+    );
+    // The dry run decided to rename and wrote neither half of it.
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    assert!(
+        rows.contains_key("a.txt"),
+        "the old-cased row survives a dry run"
+    );
+    assert!(
+        !rows.contains_key("A.txt"),
+        "and the disk-cased row was not created"
+    );
+
+    let real = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        scan_stat_only(&dir, &db, &insensitive, scan(false, false)).unwrap()
+    };
+    assert_eq!(
+        dry_stats, real.stats,
+        "a dry run answers the same question; only the writes are gone"
+    );
+    assert_eq!(real.stats.pruned, 1, "the same one orphan");
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    assert!(rows.contains_key("A.txt"), "the real run renamed the key");
+    assert!(!rows.contains_key("a.txt"), "and dropped the old casing");
+}
+
+/// **Every adopted key is excluded from the prune count, per key.**
+///
+/// The exclusion is a set of keys, so one adoption cannot stand in for another.
+/// The fixture adopts `a.txt` and `b.txt`, and next to them leaves `c.txt` with
+/// two stale alternates (`C.txt`, `c.TXT`) in its lowercase group: adoption only
+/// takes a group with exactly one leftover, so those two are pruned like any
+/// other stale row. Their count is what proves the exclusion is per key rather
+/// than "the adopted path's group is skipped".
+#[test]
+fn insensitive_dry_run_counts_every_adopted_key_as_renamed_not_pruned() {
+    let t = temp_root("adopt_prune_many");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "b.txt", b"world");
+    let db_path = dir.join(CACHE_PREFIX);
+    {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        let _ = phased(&dir, &db, &opts(), scan(false, false));
+        // Two stale spellings of a third path, so its lowercase group has no
+        // single candidate to adopt. Both rows must still be pruned.
+        let stale = FileRec {
+            kind: "file".into(),
+            size: 4,
+            mtime_ns: 0,
+            hashes: Default::default(),
+        };
+        db.put("C.txt", &stale).unwrap();
+        db.put("c.TXT", &stale).unwrap();
+        db.put("vanished.txt", &FileRec::dir()).unwrap();
+    }
+    wfile(&dir, "c.txt", b"third");
+
+    // Case-only renames via an intermediate, so they work on either kind of
+    // filesystem.
+    for (from, to) in [("a.txt", "A.txt"), ("b.txt", "B.txt")] {
+        let tmp = dir.join(format!("girsync_rename_tmp_{to}"));
+        std::fs::rename(dir.join(from), &tmp).unwrap();
+        std::fs::rename(&tmp, dir.join(to)).unwrap();
+    }
+
+    let insensitive = CommonOpts {
+        case_sensitive: false,
+        ..opts()
+    };
+    let (dry_map, dry_stats) = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
+        (pa.map, pa.stats)
+    };
+    for adopted in ["A.txt", "B.txt"] {
+        assert!(dry_map.contains_key(adopted), "disk casing governs");
+        assert!(
+            dry_map[adopted].fresh && dry_map[adopted].cached.get_named("md5").is_some(),
+            "the adopted row's digests are carried for {adopted}"
+        );
+    }
+    assert!(
+        dry_map.contains_key("c.txt"),
+        "the multi-alternate path is still on disk"
+    );
+    assert_eq!(
+        dry_stats.pruned, 3,
+        "both adopted rows are renamed, not pruned; only C.txt, c.TXT and the orphan are stale"
+    );
+    // The dry run decided to rename and wrote neither half of it.
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    for old in ["a.txt", "b.txt"] {
+        assert!(
+            rows.contains_key(old),
+            "the old-cased row survives a dry run: {old}"
+        );
+    }
+    for new in ["A.txt", "B.txt"] {
+        assert!(
+            !rows.contains_key(new),
+            "and the disk-cased row was not created: {new}"
+        );
+    }
+    assert!(
+        rows.contains_key("C.txt") && rows.contains_key("c.TXT"),
+        "a dry run prunes no row, adopted or not"
+    );
+
+    let real = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        scan_stat_only(&dir, &db, &insensitive, scan(false, false)).unwrap()
+    };
+    assert_eq!(
+        dry_stats, real.stats,
+        "a dry run answers the same question; only the writes are gone"
+    );
+    assert_eq!(
+        real.stats.pruned, 3,
+        "the same three stale rows, with neither adoption counted"
+    );
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    for adopted in ["A.txt", "B.txt"] {
+        assert!(rows.contains_key(adopted), "the real run renamed the key");
+    }
+    assert!(rows.contains_key("c.txt"), "the live path keeps its row");
+    for gone in ["a.txt", "b.txt", "C.txt", "c.TXT", "vanished.txt"] {
+        assert!(
+            !rows.contains_key(gone),
+            "a stale row survived: {gone}; left: {:?}",
+            rows.keys().collect::<Vec<_>>()
+        );
+    }
 }
 
 /// A three-file folder scanned on a cold cache, and the same folder scanned again

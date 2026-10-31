@@ -1,6 +1,6 @@
 //! The [`Plan`] work list and [`build_plan`], pure over the two effective maps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diff::Diff;
 use crate::effective::EffRec;
@@ -43,6 +43,52 @@ pub(crate) struct CopyItem {
     pub rel: String,
     /// Which difference put this path on the copy list.
     pub because: CopyBecause,
+}
+
+/// A set of directories whose subtrees a run destroys, matched by ancestor.
+///
+/// Holds `/`-separated relative directory paths **without** a trailing slash.
+/// Membership is by whole component, so `a` covers `a/b` but neither `a` itself
+/// nor `ab/b`. The strictness is load-bearing: callers handle the directory at
+/// the root of a wipe by name — a copy keeps its own row, a removal drops its
+/// own row — so the test must never match that path itself.
+#[derive(Debug, Default)]
+pub(crate) struct DirPrefixes {
+    dirs: HashSet<Box<str>>,
+}
+
+impl DirPrefixes {
+    pub(crate) fn from_dirs<'a>(dirs: impl IntoIterator<Item = &'a str>) -> Self {
+        Self {
+            dirs: dirs.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    /// The dst directories this run's copies clear out of the way.
+    ///
+    /// `copy_one` removes a blocking dst directory *recursively*, so a copy
+    /// whose dst is a directory takes that directory's whole subtree with it.
+    pub(crate) fn wiped_by_copy(copy: &[CopyItem], dm: &HashMap<String, EffRec>) -> Self {
+        Self::from_dirs(
+            copy.iter()
+                .filter(|item| dm.get(&item.rel).is_some_and(|rec| rec.kind == "dir"))
+                .map(|item| item.rel.as_str()),
+        )
+    }
+
+    pub(crate) fn insert(&mut self, dir: &str) {
+        self.dirs.insert(dir.into());
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.dirs.is_empty()
+    }
+
+    /// True only for a strict descendant, never the directory itself.
+    pub(crate) fn has_ancestor(&self, rel: &str) -> bool {
+        rel.match_indices('/')
+            .any(|(i, _)| self.dirs.contains(&rel[..i]))
+    }
 }
 
 /// The complete work list for one sync, computed before anything is written.
@@ -109,7 +155,6 @@ pub(crate) fn build_plan(
     let src_is_file = |rel: &String| sm.get(rel).map(|e| e.kind == "file").unwrap_or(false);
     let src_is_dir = |rel: &String| sm.get(rel).map(|e| e.kind == "dir").unwrap_or(false);
     let dst_is_file = |rel: &String| dm.get(rel).map(|e| e.kind == "file").unwrap_or(false);
-    let dst_is_dir = |rel: &String| dm.get(rel).map(|e| e.kind == "dir").unwrap_or(false);
 
     // Each bucket is pushed with itself attached, so the `COPY` record can say what
     // caused it without the reporter having to re-derive the origin from a path that
@@ -155,6 +200,9 @@ pub(crate) fn build_plan(
 
     let mut delete_files: Vec<String> = Vec::new();
     let mut shared_link_extras: Vec<(String, String)> = Vec::new();
+    // Every link-extra path asks the same question of the same list, so answer it
+    // once for the whole loop.
+    let type_conflicts: HashSet<&str> = diff.type_conflict.iter().map(String::as_str).collect();
     if !keep_extra {
         for r in &diff.extra {
             // A path *under* a dst link resolves through it: `remove_file` on
@@ -173,7 +221,7 @@ pub(crate) fn build_plan(
                 // A type conflict *at* the link replaces it, which takes
                 // the followed subtree with it: those extras are not left
                 // behind, so this is not the non-convergence case below.
-                let replaced = diff.type_conflict.iter().any(|t| t.as_str() == link);
+                let replaced = type_conflicts.contains(link);
                 if sm.contains_key(link) && !replaced {
                     // Shared: removing the link would delete a directory `src`
                     // is mirroring into, and removing the descendant would reach
@@ -230,11 +278,7 @@ pub(crate) fn build_plan(
     // reading it instead of the filesystem yields the same paths.
     let mut rmdir: Vec<String> = Vec::new();
     if !keep_extra {
-        let wiped: Vec<String> = copy
-            .iter()
-            .filter(|item| dst_is_dir(&item.rel))
-            .map(|item| format!("{}/", item.rel))
-            .collect();
+        let wiped = DirPrefixes::wiped_by_copy(&copy, dm);
         for (rel, rec) in dm {
             if rec.kind != "dir" || sm.contains_key(rel) {
                 continue;
@@ -245,7 +289,7 @@ pub(crate) fn build_plan(
             if link_ancestor(rel, dm).is_some() {
                 continue;
             }
-            if wiped.iter().any(|w| rel.starts_with(w.as_str())) {
+            if wiped.has_ancestor(rel) {
                 continue;
             }
             rmdir.push(rel.clone());

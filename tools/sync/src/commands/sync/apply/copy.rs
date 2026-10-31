@@ -23,19 +23,26 @@ use crate::util::{mtime_ns_of, path_within};
 /// `io::copy` is left alone and keeps whatever fast path it has between two
 /// files. Under `--hash none` that path is the entire copy, and there is no
 /// digest to justify giving it up.
+///
+/// `buf` is the caller's scratch space: a worker hands in the same buffer for
+/// every file it copies, so the chunk allocation and zero-fill happen once per
+/// worker rather than once per file. It is resized only on the digesting path;
+/// the `io::copy` path leaves it untouched. Only `buf[..n]` is ever read back,
+/// because the tail beyond the last read may still hold an earlier chunk.
 fn copy_and_digest(
     src: &mut std::fs::File,
     dst: &mut std::fs::File,
     algos: &AlgoSet,
+    buf: &mut Vec<u8>,
 ) -> Result<DigestSet> {
     if algos.is_empty() {
         std::io::copy(src, dst)?;
         return Ok(DigestSet::default());
     }
     let mut digests = Digests::new(algos);
-    let mut buf = vec![0u8; CHUNK];
+    buf.resize(CHUNK, 0);
     loop {
-        let n: usize = src.read(&mut buf)?;
+        let n: usize = src.read(buf.as_mut_slice())?;
         if n == 0 {
             break;
         }
@@ -58,7 +65,7 @@ fn copy_and_digest(
 /// not evidence about this copy either way.
 fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestSet) -> Result<()> {
     for a in algos {
-        if src.get_named(a.as_str()) != dst.get_named(a.as_str()) {
+        if src.get_algo(*a) != dst.get_algo(*a) {
             error!(algo = %a, path = %path.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, path.display());
         }
@@ -182,6 +189,7 @@ pub(super) fn copy_one(
     dst_root: &Path,
     rel: &str,
     algos: &[HashAlg],
+    buf: &mut Vec<u8>,
 ) -> Result<FileRec> {
     trace!("copy_one start");
     if test_fail_copy(rel) {
@@ -284,7 +292,7 @@ pub(super) fn copy_one(
     // thing `verify_digests` walks below, because only the *requested* digests are
     // judged.
     let set = AlgoSet::from_iter(algos.iter().copied());
-    let sh = copy_and_digest(&mut fin, &mut fout, &set)
+    let sh = copy_and_digest(&mut fin, &mut fout, &set, buf)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     if !test_no_fsync() {
         flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
@@ -371,7 +379,8 @@ mod tests {
         let set = aset(&["md5", "sha256"]);
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
-        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        let mut buf = Vec::new();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set, &mut buf).unwrap();
         drop(fout);
 
         assert_eq!(std::fs::read(&dst).unwrap(), body, "the bytes landed");
@@ -399,7 +408,8 @@ mod tests {
 
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
-        let sh = copy_and_digest(&mut fin, &mut fout, &AlgoSet::NONE).unwrap();
+        let mut buf = Vec::new();
+        let sh = copy_and_digest(&mut fin, &mut fout, &AlgoSet::NONE, &mut buf).unwrap();
         drop(fout);
 
         assert!(
@@ -425,11 +435,53 @@ mod tests {
         let set = aset(&["md5", "sha256"]);
         let mut fin = std::fs::File::open(&src).unwrap();
         let mut fout = std::fs::File::create(&dst).unwrap();
-        let sh = copy_and_digest(&mut fin, &mut fout, &set).unwrap();
+        let mut buf = Vec::new();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set, &mut buf).unwrap();
         drop(fout);
 
         assert_eq!(std::fs::read(&dst).unwrap(), Vec::<u8>::new());
         assert_eq!(sh, hash_file(&src, &set).unwrap());
+    }
+
+    /// Reusing a worker's buffer across files must not let an earlier, longer
+    /// file leak into the next digest: only the bytes a read actually produced
+    /// are written and folded in. A big file runs first so the tail beyond the
+    /// small file's last read still holds its bytes, which is exactly the state
+    /// a reused buffer is handed in with.
+    #[test]
+    fn a_reused_buffer_digests_only_the_bytes_that_were_read() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "reusedbuf");
+        let set = aset(&["md5", "sha256"]);
+        let big_body: Vec<u8> = (0..(CHUNK + 4096)).map(|i| (i % 251) as u8).collect();
+        let big_src = dir.join("big.bin");
+        let big_dst = dir.join("big.copy");
+        std::fs::write(&big_src, &big_body).unwrap();
+
+        let mut buf = Vec::new();
+        let mut fin = std::fs::File::open(&big_src).unwrap();
+        let mut fout = std::fs::File::create(&big_dst).unwrap();
+        copy_and_digest(&mut fin, &mut fout, &set, &mut buf).unwrap();
+        drop(fout);
+
+        let small_body = b"small".to_vec();
+        let small_src = dir.join("small.bin");
+        let small_dst = dir.join("small.copy");
+        std::fs::write(&small_src, &small_body).unwrap();
+        let mut fin = std::fs::File::open(&small_src).unwrap();
+        let mut fout = std::fs::File::create(&small_dst).unwrap();
+        let sh = copy_and_digest(&mut fin, &mut fout, &set, &mut buf).unwrap();
+        drop(fout);
+
+        assert_eq!(
+            std::fs::read(&small_dst).unwrap(),
+            small_body,
+            "the small file's bytes landed, and only those"
+        );
+        assert_eq!(
+            sh,
+            hash_file(&small_src, &set).unwrap(),
+            "the digest covers the read bytes, not whatever the buffer held before"
+        );
     }
 
     /// One digest per algorithm, every one holding `byte` — so two maps built

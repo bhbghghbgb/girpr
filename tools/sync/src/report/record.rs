@@ -4,6 +4,8 @@
 //! Nothing here knows about the diff or about any command — a record is a value
 //! first and a line second.
 
+use std::fmt::Write as _;
+
 use serde_json::{Map, Value};
 
 use super::{OutputFormat, Report};
@@ -91,7 +93,19 @@ impl Record {
 
     /// Append a field. Declaration order is report order, which is what the text
     /// line renders; JSON consumers read by key.
+    ///
+    /// Keys are unique and never `event`: the value form collapses a repeat to
+    /// its last value while [`Record::write_json`] would emit both members, so a
+    /// record that broke this would render two different objects.
     pub fn put(mut self, key: &'static str, value: impl Into<Value>) -> Self {
+        debug_assert!(
+            key != "event",
+            "`event` is rendered from the label and cannot also be a field"
+        );
+        debug_assert!(
+            !self.fields.iter().any(|(k, _)| *k == key),
+            "duplicate record field `{key}`"
+        );
         self.fields.push((key, value.into()));
         self
     }
@@ -103,7 +117,25 @@ impl Record {
 
     /// The JSON `event` name: the text label lowercased.
     pub fn event(&self) -> String {
-        self.label.to_ascii_lowercase()
+        let mut out = String::with_capacity(self.label.len());
+        self.push_event(&mut out);
+        out
+    }
+
+    /// Append the `event` name, lowercased but not JSON-quoted.
+    fn push_event(&self, out: &mut String) {
+        for c in self.label.chars() {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+
+    /// Append the JSON `event` name as a quoted string.
+    fn push_json_event(&self, out: &mut String) {
+        out.push('"');
+        for c in self.label.chars() {
+            push_json_char(out, c.to_ascii_lowercase());
+        }
+        out.push('"');
     }
 
     /// The fields, in report order, without the `event` name.
@@ -123,6 +155,34 @@ impl Record {
             m.insert((*k).to_string(), v.clone());
         }
         Value::Object(m)
+    }
+
+    /// Write the JSON object for this record into `out`, with no trailing
+    /// newline.
+    ///
+    /// Keys are sorted alphabetically, `event` among them, so the bytes match
+    /// the object [`Record::json`] builds. Values are written straight into
+    /// `out` instead of being cloned into a map first.
+    pub fn write_json(&self, out: &mut String) {
+        // A record has a handful of fields, so sorting a small vector of
+        // borrows beats anything that allocates per key.
+        let mut fields: Vec<(&str, &Value)> = self.fields.iter().map(|(k, v)| (*k, v)).collect();
+        fields.sort_unstable_by_key(|(k, _)| *k);
+        let event_at = fields.partition_point(|(k, _)| *k < "event");
+
+        out.push('{');
+        let mut first = true;
+        for (k, v) in &fields[..event_at] {
+            push_json_member(out, &mut first, k);
+            push_json_value(out, v);
+        }
+        push_json_member(out, &mut first, "event");
+        self.push_json_event(out);
+        for (k, v) in &fields[event_at..] {
+            push_json_member(out, &mut first, k);
+            push_json_value(out, v);
+        }
+        out.push('}');
     }
 
     /// The JSON object for this record's fields alone, as compact JSON — the
@@ -147,7 +207,14 @@ impl Record {
 
     /// The human line for this record, with no trailing newline.
     pub fn text(&self) -> String {
-        let mut out = self.label.to_string();
+        let mut out = String::new();
+        self.push_text(&mut out);
+        out
+    }
+
+    /// Append the human line for this record.
+    fn push_text(&self, out: &mut String) {
+        out.push_str(self.label);
         match self.layout {
             Layout::Positional => {
                 for (i, (k, v)) in self.fields.iter().enumerate() {
@@ -156,7 +223,7 @@ impl Record {
                         out.push_str(k);
                         out.push('=');
                     }
-                    out.push_str(&bare(v));
+                    push_bare(out, v);
                 }
             }
             Layout::Keyed => {
@@ -164,7 +231,7 @@ impl Record {
                     out.push(' ');
                     out.push_str(k);
                     out.push('=');
-                    out.push_str(&bare(v));
+                    push_bare(out, v);
                 }
             }
             Layout::Pair(sep) => {
@@ -176,21 +243,81 @@ impl Record {
                     } else {
                         out.push(' ');
                     }
-                    out.push_str(&bare(v));
+                    push_bare(out, v);
                 }
             }
         }
-        out
     }
 }
 
-/// A value as it appears inside a text line: bare, never quoted, arrays joined
-/// with `,` inside `[]`.
-fn bare(v: &Value) -> String {
+/// Append a value as it appears inside a text line: bare, never quoted, arrays
+/// joined with `,` inside `[]`.
+fn push_bare(out: &mut String, v: &Value) {
     match v {
-        Value::String(s) => s.clone(),
-        Value::Array(a) => format!("[{}]", a.iter().map(bare).collect::<Vec<_>>().join(",")),
-        other => other.to_string(),
+        Value::String(s) => out.push_str(s),
+        Value::Array(a) => {
+            out.push('[');
+            for (i, item) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                push_bare(out, item);
+            }
+            out.push(']');
+        }
+        other => {
+            let _ = write!(out, "{other}");
+        }
+    }
+}
+
+/// Append one `"key":` member prefix, with a separating comma when it is not
+/// the first.
+fn push_json_member(out: &mut String, first: &mut bool, key: &str) {
+    if !*first {
+        out.push(',');
+    }
+    *first = false;
+    push_json_string(out, key);
+    out.push(':');
+}
+
+/// Append a value as JSON.
+fn push_json_value(out: &mut String, v: &Value) {
+    match v {
+        Value::String(s) => push_json_string(out, s),
+        // Numbers, booleans, null and nested containers are already rendered
+        // exactly this way by the value's own formatter.
+        other => {
+            let _ = write!(out, "{other}");
+        }
+    }
+}
+
+/// Append `value` as a quoted JSON string, escaped the way `serde_json`
+/// escapes it.
+fn push_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for c in value.chars() {
+        push_json_char(out, c);
+    }
+    out.push('"');
+}
+
+/// Append one character of a JSON string, escaped if it needs to be.
+fn push_json_char(out: &mut String, c: char) {
+    match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\u{08}' => out.push_str("\\b"),
+        '\u{0c}' => out.push_str("\\f"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        c if c < ' ' => {
+            let _ = write!(out, "\\u{:04x}", u32::from(c));
+        }
+        c => out.push(c),
     }
 }
 
@@ -257,5 +384,56 @@ mod tests {
             json!({"event": "summary", "renamed": 2, "mkdir": 1, "copied": 6})
         );
         assert_eq!(rec.text(), "SUMMARY renamed=2 mkdir=1 copied=6");
+    }
+
+    /// The direct writer is the same bytes as serialising the value form:
+    /// keys sorted, `event` in its sorted place, and the signed/unsigned
+    /// distinction intact.
+    #[test]
+    fn write_json_writes_the_same_bytes_as_the_value_form() {
+        let rec = Record::keyed("SUMMARY")
+            .put("renamed", 2usize)
+            .put("delta", -1i64)
+            .put("total", 1u64);
+        let mut out = String::new();
+        rec.write_json(&mut out);
+        assert_eq!(out, rec.json().to_string());
+        assert_eq!(
+            out,
+            r#"{"delta":-1,"event":"summary","renamed":2,"total":1}"#
+        );
+        assert_eq!(rec.text(), "SUMMARY renamed=2 delta=-1 total=1");
+    }
+
+    /// Strings and arrays are escaped byte for byte like the value form, and
+    /// the text form still leaves them bare.
+    #[test]
+    fn write_json_escapes_like_the_value_form() {
+        let awkward = "a\"b\\c\nd\te\r\u{08}\u{0c}\u{1f}\u{7f}é";
+        let rec = Record::positional("update", "dir", awkward)
+            .put("files", 3usize)
+            .put("algos", vec!["md5", "sha1"]);
+        let mut out = String::new();
+        rec.write_json(&mut out);
+        assert_eq!(out, rec.json().to_string());
+        assert_eq!(
+            rec.text(),
+            format!("update {awkward} files=3 algos=[md5,sha1]")
+        );
+    }
+
+    /// A repeated key is what would let the two renderings diverge, so it is
+    /// rejected where it is added rather than left to the writer.
+    #[test]
+    #[should_panic(expected = "duplicate record field `path`")]
+    fn a_repeated_field_key_is_rejected() {
+        let _ = Record::path("COPY", "a.txt").put("path", "b.txt");
+    }
+
+    /// `event` is the label's slot in the JSON object, not a field name.
+    #[test]
+    #[should_panic(expected = "cannot also be a field")]
+    fn the_event_key_is_reserved() {
+        let _ = Record::keyed("SUMMARY").put("event", "other");
     }
 }

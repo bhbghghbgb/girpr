@@ -1,11 +1,10 @@
 //! Live filesystem scan: one entry per file and dir, with cache dirs pruned.
 
 use anyhow::{Context, Result, bail};
-use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use crate::util::{elapsed_s, is_cache_rel, mtime_ns_of};
+use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 
 /// One entry as found on disk, before any cache consultation.
 ///
@@ -145,19 +144,7 @@ pub fn check_mixed_case(live: &[LiveEnt], label: &str, case_sensitive: bool) -> 
     if case_sensitive {
         return Ok(());
     }
-    let mut map: HashMap<String, Vec<&str>> = HashMap::new();
-    for e in live {
-        map.entry(e.rel.to_lowercase()).or_default().push(&e.rel);
-    }
-    for (_, v) in map {
-        let uniq: HashSet<&&str> = v.iter().collect();
-        if uniq.len() > 1 {
-            let mut sorted: Vec<String> = uniq.into_iter().map(|s| s.to_string()).collect();
-            sorted.sort();
-            bail!("mixed-case collision in {}: {}", label, sorted.join(" vs "));
-        }
-    }
-    Ok(())
+    check_mixed_case_keys(live.iter().map(|e| e.rel.as_str()), "", label)
 }
 
 #[cfg(test)]

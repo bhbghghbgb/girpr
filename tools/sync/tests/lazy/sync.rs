@@ -14,10 +14,7 @@ use super::*;
 
 /// Per-side `hashed` for a `sync`, computed the way `cmd_sync` computes it.
 fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> (usize, usize) {
-    let mode = |no_trust| ScanMode {
-        no_trust_cached_hashes: no_trust,
-        dry_run: false,
-    };
+    let mode = |no_trust| ScanMode::new(no_trust, false);
     let src_db = open_folder_cache(src, common, mode(trust.no_trust_src), false).unwrap();
     let dst_db = open_folder_cache(dst, common, mode(trust.no_trust_dst), false).unwrap();
     let src_a = scan_stat_only(src, &src_db, common, mode(trust.no_trust_src)).unwrap();

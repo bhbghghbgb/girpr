@@ -176,10 +176,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
 
     let (s_side, d_side) = (classify(src), classify(dst));
     ensure_distinct_sides(&s_side, &d_side).unwrap();
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run: false,
-    };
+    let mode = ScanMode::new(false, false);
     let mut s = open_side(&s_side, common, mode).unwrap();
     let mut d = open_side(&d_side, common, mode).unwrap();
     let s_label = format!("src {}", s_side.cache_path().display());

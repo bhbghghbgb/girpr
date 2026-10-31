@@ -60,9 +60,8 @@ use crate::effective::{
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
-use crate::util::elapsed_s;
 
-use super::report_diff;
+use super::report_and_finish;
 
 /// Audit `<dir>` against `<dir>/girpr-cache`. Returns the process exit code:
 /// `0` if the cache is in step, `4` if it has drifted.
@@ -156,7 +155,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     };
     info!(
         cache = %db_path.display(),
-        entries = record.load_keys()?.len(),
+        entries = record.entry_count()?,
         "cache opened read-only"
     );
     let rec = load_record_side_from(&record, &common, &db_path.display().to_string())?;
@@ -179,15 +178,13 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // Phase A for both roles, then one pair plan, then phase C — the shape
     // `compare` uses. The planner needs both sides' maps at once, which is why
     // both handles stay live across the plan.
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        // Unconditionally true, and deliberately not read from the flag. It is
-        // belt-and-braces rather than load-bearing — `cold` is in-memory and
-        // `record` is read-only, so neither could be written regardless — but
-        // keeping it means the no-write guarantee does not rest on one
-        // remembered `true` if the handles are ever reworked.
-        dry_run: true,
-    };
+    // `false`/`true` spelled out rather than read from a flag. The `dry_run`
+    // half is unconditionally true, and deliberately so: it is belt-and-braces
+    // rather than load-bearing — `cold` is in-memory and `record` is read-only,
+    // so neither could be written regardless — but keeping it means the no-write
+    // guarantee does not rest on one remembered `true` if the handles are ever
+    // reworked.
+    let mode = ScanMode::new(false, true);
     let disk_a = scan_stat_only(&dir, &cold, &common, mode)?;
     // Labels for a coverage error. The record is `src` here, so the record is what
     // a failure names — which is the side that cannot fill a gap, and the one the
@@ -270,17 +267,6 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         pairing,
         common.show_identical,
     );
-    let code = report_diff(&diff, &log.report(), common.why, common.show_identical);
-    info!(
-        missing = diff.missing.len(),
-        extra = diff.extra.len(),
-        changed = diff.changed.len(),
-        type_conflict = diff.type_conflict.len(),
-        case_mismatch = diff.case_mismatch.len(),
-        total_diff = diff.total(),
-        elapsed_s = elapsed_s(t0),
-        exit = code,
-        "end"
-    );
+    let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
     Ok(code)
 }

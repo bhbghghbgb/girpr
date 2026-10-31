@@ -12,9 +12,8 @@ use crate::effective::{
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
-use crate::util::elapsed_s;
 
-use super::report_diff;
+use super::report_and_finish;
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.
 ///
@@ -80,12 +79,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // or in-memory handle. Every decision below is unchanged either way.
     //
     // Built once per side rather than at each of the four use sites: `dry_run` is
-    // a property of the run, so a field added to `ScanMode` has one place to be
-    // threaded through here, the same shape `sync` uses.
-    let scan_mode = |no_trust_cached_hashes| ScanMode {
-        no_trust_cached_hashes,
-        dry_run: common.dry_run,
-    };
+    // a property of the run, so this closure fixes it once and leaves the
+    // per-side flag to the call, the same shape `sync` uses.
+    let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, common.dry_run);
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);
     let mut s = open_side(&s, &common, src_mode)?;
@@ -166,18 +162,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         pairing,
         common.show_identical,
     );
-    let code = report_diff(&diff, &log.report(), common.why, common.show_identical);
-    info!(
-        missing = diff.missing.len(),
-        extra = diff.extra.len(),
-        changed = diff.changed.len(),
-        type_conflict = diff.type_conflict.len(),
-        case_mismatch = diff.case_mismatch.len(),
-        total_diff = diff.total(),
-        elapsed_s = elapsed_s(t0),
-        exit = code,
-        "end"
-    );
+    let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
     Ok(code)
 }
 

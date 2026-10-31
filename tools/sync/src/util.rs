@@ -1,6 +1,7 @@
 //! Small path, time, and filesystem helpers with no girsync-specific state.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::cache::CACHE_PREFIX;
@@ -137,13 +138,58 @@ pub fn path_within(child: &Path, parent: &Path) -> bool {
 fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     #[cfg(windows)]
     {
-        a.as_os_str().to_string_lossy().to_lowercase()
-            == b.as_os_str().to_string_lossy().to_lowercase()
+        let (a, b) = (a.as_os_str(), b.as_os_str());
+        if a == b {
+            return true;
+        }
+        // The usual case: two different ASCII spellings, compared without
+        // allocating. Non-ASCII and non-UTF-8 names keep the Unicode fold.
+        if let (Some(a), Some(b)) = (a.to_str(), b.to_str())
+            && a.is_ascii()
+            && b.is_ascii()
+        {
+            return a.eq_ignore_ascii_case(b);
+        }
+        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
     }
     #[cfg(not(windows))]
     {
         a == b
     }
+}
+
+/// Group `keys` by lowercase spelling and abort when a group has more than one
+/// spelling.
+///
+/// An exact duplicate is not a collision, so each group is sorted and
+/// deduplicated before it is measured. The reported spellings are sorted for
+/// the same reason: an error message must not depend on map iteration order.
+/// `prefix` and `label` are joined to name the side in the message.
+///
+/// Shared by the disk walk and the record read: both compare paths by name, and
+/// neither owns the rule.
+pub(crate) fn check_mixed_case_keys<'a>(
+    keys: impl IntoIterator<Item = &'a str>,
+    prefix: &str,
+    label: &str,
+) -> Result<()> {
+    let mut groups: HashMap<String, Vec<&'a str>> = HashMap::new();
+    for key in keys {
+        groups.entry(key.to_lowercase()).or_default().push(key);
+    }
+    for (_, mut group) in groups {
+        group.sort_unstable();
+        group.dedup();
+        if group.len() > 1 {
+            bail!(
+                "mixed-case collision in {}{}: {}",
+                prefix,
+                label,
+                group.join(" vs ")
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Modification time as nanoseconds since the epoch (0 if unavailable).
@@ -249,5 +295,55 @@ mod tests {
         ));
         assert!(path_within(Path::new("C:/ROOT/Sub"), Path::new("c:/root")));
         assert!(!path_within(Path::new("C:/ROOTER"), Path::new("c:/root")));
+    }
+
+    /// The fast path covers ASCII spelling differences, and names outside
+    /// ASCII still fold exactly as before: the filesystem treats both as one.
+    #[cfg(windows)]
+    #[test]
+    fn component_equality_folds_ascii_and_non_ascii_case() {
+        assert!(same_path(
+            Path::new("C:/Users/ACER/Readme.TXT"),
+            Path::new("c:/users/acer/readme.txt")
+        ));
+        assert!(path_within(
+            Path::new("C:/ROOT/Sub/Ärger"),
+            Path::new("c:/root/sub/ärger")
+        ));
+        assert!(!same_path(Path::new("C:/Ärger"), Path::new("c:/Arger")));
+    }
+
+    /// A name that is not valid UTF-8 has no `to_str` answer, so the comparison
+    /// must fall through to the lossy Unicode fold. The unpaired surrogate is
+    /// valid UTF-16 storage but not valid UTF-8, which is the only way an
+    /// `OsStr` component reaches that branch on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn a_non_utf8_component_still_compares_through_the_lossy_fold() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        // `C:\a<0xD800>b`, the surrogate standing in for a byte sequence the
+        // platform allows but UTF-8 cannot represent.
+        let name = |first: u16, last: u16| {
+            let mut units: Vec<u16> = r"C:\".encode_utf16().collect();
+            units.extend([first, 0xD800, last]);
+            PathBuf::from(OsString::from_wide(&units))
+        };
+        let lower = name(b'a' as u16, b'b' as u16);
+        let upper = name(b'A' as u16, b'B' as u16);
+        let other = name(b'a' as u16, b'c' as u16);
+        assert!(
+            lower.as_os_str().to_str().is_none(),
+            "the fixture must reach the fallback, not `to_str`"
+        );
+        assert!(
+            same_path(&lower, &upper),
+            "the lossy fold still ignores case around the undecodable component"
+        );
+        assert!(
+            !same_path(&lower, &other),
+            "and it still tells two different tails apart"
+        );
     }
 }

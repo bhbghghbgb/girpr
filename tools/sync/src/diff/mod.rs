@@ -14,7 +14,7 @@ mod verdict;
 pub use crate::planner::StatField;
 pub use verdict::Verdict;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::effective::EffRec;
 use crate::hash::{AlgoSet, DigestSet};
@@ -51,8 +51,8 @@ pub struct Diff {
     /// **Not a bucket.** Nothing here counts: `total()` and `is_empty()` must not read
     /// it, because a pair that came out equal is not a difference and counting one
     /// would turn a clean tree into exit 4. It is the reason behind [`Self::changed`]
-    /// rather than a sixth list of paths, and [`crate::report::verdict`] reads it to
-    /// put a `why=` on the `CHANGED` records.
+    /// rather than a sixth list of paths, and [`crate::report::visit_verdict`] reads it
+    /// to put a `why=` on the `CHANGED` records.
     ///
     /// Filled from the same [`pair_verdict`] value the bucket is filled from, so a
     /// `CHANGED` record and the tag printed for it cannot disagree — one decision, read
@@ -120,8 +120,8 @@ impl Diff {
 /// disagree.
 ///
 /// **Kinds must already agree.** A pair whose kinds differ is a `TYPE-CONFLICT`, which
-/// is decided by the kind itself and needs no reason — so the caller checks that first
-/// and this function is only reached for a same-kind pair. Directories are then
+/// is decided by the kind itself and needs no reason — so `classify_pair` checks that
+/// first and this function is only reached for a same-kind pair. Directories are then
 /// classified here rather than falling through in `diff_maps`, which is what makes
 /// `--show-identical` complete: every both-sides pair gets a verdict, so there is no
 /// path whose equality the flag could silently omit.
@@ -183,6 +183,41 @@ pub fn pair_verdict(
     Verdict::StatMatch
 }
 
+/// Classify one pair found on both sides into its bucket and its verdict.
+///
+/// The one place that decides what a both-sides pair counts as, shared by both
+/// key-matching branches of [`diff_maps`] so "changed vs identical vs verdict" has a
+/// single definition rather than one per branch that could drift apart.
+///
+/// A kind conflict is a `TYPE-CONFLICT` and nothing else: it is decided by the kind
+/// alone, so it bypasses [`pair_verdict`] and gets no [`Diff::verdicts`] entry — there
+/// is no reason to report for it.
+///
+/// `want_identical` fills [`Diff::identical`] and only that; [`pair_verdict`] is
+/// always computed, and the [`Verdict`] it returns is both the bucket decision here and
+/// what [`Diff::why_tag`] later hands the reporter.
+fn classify_pair(
+    d: &mut Diff,
+    key: &str,
+    s: &EffRec,
+    t: &EffRec,
+    stat: StatTrust,
+    required: &Required,
+    want_identical: bool,
+) {
+    if s.kind != t.kind {
+        d.type_conflict.push(key.to_string());
+        return;
+    }
+    let v = pair_verdict(stat, required, s, t, key);
+    if v.is_changed() {
+        d.changed.push(key.to_string());
+    } else if want_identical {
+        d.identical.push(key.to_string());
+    }
+    d.verdicts.insert(key.to_string(), v);
+}
+
 /// Compare two effective maps.
 ///
 /// In insensitive mode keys are matched by lowercase, so a casing-only
@@ -209,7 +244,7 @@ pub fn pair_verdict(
 /// nobody computed. One predicate is what makes that unrepresentable rather than
 /// merely tested for.
 ///
-/// Each both-sides pair is classified by [`pair_verdict`] — one value, of which
+/// Each both-sides pair is classified by `classify_pair` — one value, of which
 /// [`Verdict::is_changed`] and [`Verdict::is_identical`] decide the buckets here. The
 /// classification itself is produced whether or not anything asks for it: a diff
 /// that only computed a reason when a flag was on would be two diffs.
@@ -234,32 +269,20 @@ pub fn diff_maps(
 ) -> Diff {
     let mut d = Diff::default();
     if pairing == CasePairing::Exact {
-        let mut keys: HashSet<&String> = HashSet::new();
-        for k in src.keys().chain(dst.keys()) {
-            keys.insert(k);
+        // Walk src once — each key is either missing from dst or a both-sides pair
+        // classified here — then walk dst for the keys src does not hold. Both maps
+        // are keyed by the same spelling, so the dst pass needs one membership test
+        // and never revisits a pair: every both-sides key is classified exactly once,
+        // under the spelling both sides share.
+        for (k, s) in src {
+            match dst.get(k) {
+                None => d.missing.push(k.clone()),
+                Some(t) => classify_pair(&mut d, k, s, t, stat, required, want_identical),
+            }
         }
-        for k in keys {
-            match (src.get(k), dst.get(k)) {
-                (Some(_s), None) => {
-                    d.missing.push(k.clone());
-                }
-                (None, Some(_)) => {
-                    d.extra.push(k.clone());
-                }
-                (Some(s), Some(t)) => {
-                    if s.kind != t.kind {
-                        d.type_conflict.push(k.clone());
-                    } else {
-                        let v = pair_verdict(stat, required, s, t, k);
-                        if v.is_changed() {
-                            d.changed.push(k.clone());
-                        } else if want_identical {
-                            d.identical.push(k.clone());
-                        }
-                        d.verdicts.insert(k.clone(), v);
-                    }
-                }
-                (None, None) => {}
+        for k in dst.keys() {
+            if !src.contains_key(k) {
+                d.extra.push(k.clone());
             }
         }
     } else {
@@ -290,17 +313,7 @@ pub fn diff_maps(
                 }
                 let s = &src[*srel];
                 let t = &dst[*trel];
-                if s.kind != t.kind {
-                    d.type_conflict.push((*srel).clone());
-                } else {
-                    let v = pair_verdict(stat, required, s, t, srel);
-                    if v.is_changed() {
-                        d.changed.push((*srel).clone());
-                    } else if want_identical {
-                        d.identical.push((*srel).clone());
-                    }
-                    d.verdicts.insert((*srel).clone(), v);
-                }
+                classify_pair(d, srel, s, t, stat, required, want_identical);
             }
             (None, None) => {}
         };
@@ -348,7 +361,7 @@ pub fn hashes_differ(a: &DigestSet, b: &DigestSet, algos: AlgoSet) -> AlgoSet {
         // If either side lacks the hash (e.g. a stat-only `--hash-all-of none`
         // record), fall back to size+mtime which the caller already compared; do
         // not force differ here.
-        if let (Some(x), Some(y)) = (a.get_named(algo.as_str()), b.get_named(algo.as_str()))
+        if let (Some(x), Some(y)) = (a.get_algo(algo), b.get_algo(algo))
             && x != y
         {
             differ.insert(algo);

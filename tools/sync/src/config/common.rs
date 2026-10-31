@@ -98,7 +98,7 @@ pub struct CommonOpts {
     pub hash_mode: HashMode,
     /// `--why`: put a reason tag on every `CHANGED` record.
     ///
-    /// A reporting knob and nothing else: it reaches [`crate::report::verdict`] and
+    /// A reporting knob and nothing else: it reaches [`crate::report::visit_verdict`] and
     /// nothing downstream, so it cannot move the exit code. It lives beside the other
     /// output-shaping settings rather than in the commands that use it, because the
     /// question "does this run explain itself?" is a property of the run and not of the
@@ -333,4 +333,15 @@ pub struct ScanMode {
     /// [`crate::effective::open_folder_cache`]'s decision, so no command can
     /// honour it incorrectly by opening the wrong kind of handle.
     pub dry_run: bool,
+}
+
+impl ScanMode {
+    /// Both decisions are explicit: neither has a default, so a caller cannot
+    /// omit the dry-run half and silently persist a run meant to write nothing.
+    pub const fn new(no_trust_cached_hashes: bool, dry_run: bool) -> Self {
+        Self {
+            no_trust_cached_hashes,
+            dry_run,
+        }
+    }
 }

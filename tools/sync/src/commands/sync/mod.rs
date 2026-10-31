@@ -17,8 +17,8 @@
 //! ## The plan print
 //!
 //! The diff is reported the way `compare` reports it, through
-//! [`crate::report::verdict`], so `sync` and `compare` speak one vocabulary — one
-//! definition of what a `CHANGED` line means, not two. Then the actions are
+//! [`crate::report::visit_verdict`], so `sync` and `compare` speak one vocabulary
+//! — one definition of what a `CHANGED` line means, not two. Then the actions are
 //! reported as they happen.
 //!
 //! Two segments, and the split is the point: the **plan** answers *"why did it
@@ -64,7 +64,7 @@ use crate::effective::{
     resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
-use crate::report::verdict;
+use crate::report::visit_verdict;
 use crate::rw::{RwRuntime, RwSide};
 use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
@@ -168,10 +168,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // produce a second timestamped pair mid-run. `open_folder_cache` is also the
     // only thing that decides how a dry run opens a cache, so this stays a plain
     // call rather than a second policy.
-    let scan_mode = |no_trust_cached_hashes| ScanMode {
-        no_trust_cached_hashes,
-        dry_run,
-    };
+    let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, dry_run);
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);
     let src_db = open_folder_cache(&src, &common, src_mode, false)?;
@@ -340,12 +337,11 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // are the same question asked in two places — a plan print that could not show
     // the equal set would make `--show-identical` look like it works everywhere but
     // here.
-    for rec in verdict(&diff, common.why, common.show_identical)
-        .into_iter()
-        .filter(|rec| rec.label() != "SUMMARY")
-    {
-        report.emit(rec);
-    }
+    visit_verdict(&diff, common.why, common.show_identical, |rec| {
+        if rec.label() != "SUMMARY" {
+            report.emit(rec);
+        }
+    });
 
     // Before the dry-run branch: a plan that cannot be applied is not a plan a
     // dry run should print as if it could be. The apply passes re-check the
@@ -479,6 +475,104 @@ fn validate_inputs(src: &Path, dst: &Path) -> Result<CanonicalRoots> {
     })
 }
 
+/// Which side of the mirror a link check walks.
+#[derive(Clone, Copy)]
+enum LinkSide {
+    Src,
+    Dst,
+}
+
+impl LinkSide {
+    /// The side's own name, as it appears in diagnostics.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Src => "src",
+            Self::Dst => "dst",
+        }
+    }
+
+    /// The name of the root the side must stay clear of.
+    const fn other(self) -> &'static str {
+        match self {
+            Self::Src => "dst",
+            Self::Dst => "src",
+        }
+    }
+
+    /// What the link would wrongly reach, for a target inside the other root.
+    const fn inside_consequence(self) -> &'static str {
+        match self {
+            Self::Src => "read its own destination",
+            Self::Dst => "write into its own source",
+        }
+    }
+
+    /// What the link would wrongly reach, for a target containing the other root.
+    const fn contains_consequence(self) -> &'static str {
+        match self {
+            Self::Src => "reach its own destination",
+            Self::Dst => "reach its own source",
+        }
+    }
+}
+
+/// Refuse an effective tree that reaches the other root through a link.
+///
+/// The walk follows links, so a link inside either root can expose the other
+/// root's files while the two roots still look like siblings. A link is legal
+/// when it points anywhere outside the other root; it is refused when its
+/// resolved target and the other root intersect in either direction:
+///
+/// - the target is the other root or inside it, so the link reaches that side;
+/// - the target contains the other root, so walking the link reaches it from
+///   above.
+///
+/// Every link the effective map kept is checked, not only directories: a file
+/// link can point at a file on the other side just as well. The caller runs
+/// this after its side's phase A and before the plan, the rename and every
+/// apply phase, so nothing in either tree has changed yet. Filters and
+/// `--max-depth` are already applied here, which is why an excluded link is not
+/// refused: it is not part of this run's tree.
+fn validate_links_disjoint(
+    root: &Path,
+    entries: &HashMap<String, SideEntry>,
+    other_canonical: &Path,
+    side: LinkSide,
+) -> Result<()> {
+    for (rel, ent) in entries {
+        if !ent.is_link {
+            continue;
+        }
+        let target = std::fs::canonicalize(root.join(rel))
+            .with_context(|| format!("resolve {} link `{rel}`", side.name()))?;
+        if path_within(&target, other_canonical) {
+            bail!(
+                "src and dst must be disjoint: {} link `{rel}` resolves to `{}`, \
+                 which is inside {} `{}`; a mirror may not {} \
+                 through a link (remove the link, or exclude it with --exclude)",
+                side.name(),
+                target.display(),
+                side.other(),
+                other_canonical.display(),
+                side.inside_consequence()
+            );
+        }
+        if path_within(other_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: {} link `{rel}` resolves to `{}`, \
+                 which contains {} `{}`; a mirror may not {} \
+                 through a link (remove the link, or exclude it with --exclude)",
+                side.name(),
+                target.display(),
+                side.other(),
+                other_canonical.display(),
+                side.contains_consequence()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Refuse an effective source tree that reaches `dst` through a link.
 ///
 /// The root check above canonicalizes only the two roots. The walk follows
@@ -505,32 +599,7 @@ fn validate_src_links(
     entries: &HashMap<String, SideEntry>,
     dst_canonical: &Path,
 ) -> Result<()> {
-    for (rel, ent) in entries {
-        if !ent.is_link {
-            continue;
-        }
-        let target = std::fs::canonicalize(src.join(rel))
-            .with_context(|| format!("resolve src link `{rel}`"))?;
-        if path_within(&target, dst_canonical) {
-            bail!(
-                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
-                 which is inside dst `{}`; a mirror may not read its own destination \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                dst_canonical.display()
-            );
-        }
-        if path_within(dst_canonical, &target) {
-            bail!(
-                "src and dst must be disjoint: src link `{rel}` resolves to `{}`, \
-                 which contains dst `{}`; a mirror may not reach its own destination \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                dst_canonical.display()
-            );
-        }
-    }
-    Ok(())
+    validate_links_disjoint(src, entries, dst_canonical, LinkSide::Src)
 }
 
 /// Refuse an effective destination tree that reaches `src` through a link.
@@ -559,30 +628,43 @@ fn validate_dst_links(
     entries: &HashMap<String, SideEntry>,
     src_canonical: &Path,
 ) -> Result<()> {
-    for (rel, ent) in entries {
-        if !ent.is_link {
-            continue;
-        }
-        let target = std::fs::canonicalize(dst.join(rel))
-            .with_context(|| format!("resolve dst link `{rel}`"))?;
-        if path_within(&target, src_canonical) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which is inside src `{}`; a mirror may not write into its own source \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
-        }
-        if path_within(src_canonical, &target) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which contains src `{}`; a mirror may not reach its own source \
-                 through a link (remove the link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
+    validate_links_disjoint(dst, entries, src_canonical, LinkSide::Dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::DigestSet;
+
+    fn link_entry() -> SideEntry {
+        SideEntry {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            cached: DigestSet::default(),
+            fresh: true,
+            is_link: true,
         }
     }
-    Ok(())
+
+    /// A link the walk kept can still fail to resolve by the time this check
+    /// runs; the error has to name the side whose root the user must fix.
+    #[test]
+    fn an_unresolvable_link_names_its_side() {
+        let t = girpr_tempdir::TempDir::new("girsync_sync", "resolve_link");
+        let root = t.subdir("root");
+        let other = t.subdir("other");
+        let mut entries = HashMap::new();
+        entries.insert("gone".to_string(), link_entry());
+
+        for (side, expected) in [
+            (LinkSide::Src, "resolve src link `gone`"),
+            (LinkSide::Dst, "resolve dst link `gone`"),
+        ] {
+            let err = validate_links_disjoint(&root, &entries, &other, side)
+                .expect_err("a missing target cannot be resolved");
+            let msg = format!("{err:#}");
+            assert!(msg.contains(expected), "expected `{expected}` in: {msg}");
+        }
+    }
 }

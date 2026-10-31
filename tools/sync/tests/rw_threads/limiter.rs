@@ -58,10 +58,7 @@ fn plan_both<'a>(
     .unwrap_or_else(|e| panic!("two folders cannot fail coverage: {e:#}"))
 }
 
-const OPEN_MODE: ScanMode = ScanMode {
-    no_trust_cached_hashes: false,
-    dry_run: false,
-};
+const OPEN_MODE: ScanMode = ScanMode::new(false, false);
 
 /// Resolve both sides at once, exactly as `cmd_compare` does, under `limits`.
 fn resolve_overlapping(

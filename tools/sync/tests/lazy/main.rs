@@ -95,10 +95,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
     let s_side = classify(src);
     let d_side = classify(dst);
     ensure_distinct_sides(&s_side, &d_side).unwrap();
-    let mode = |no_trust: bool| ScanMode {
-        no_trust_cached_hashes: no_trust,
-        dry_run: false,
-    };
+    let mode = |no_trust: bool| ScanMode::new(no_trust, false);
     // Both handles stay live across plan and resolve.
     let mut s = open_side(&s_side, common, mode(trust.no_trust_src)).unwrap();
     let mut d = open_side(&d_side, common, mode(trust.no_trust_dst)).unwrap();

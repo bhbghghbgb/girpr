@@ -12,12 +12,16 @@ pub use update::cmd_update;
 
 pub use crate::report::verdict;
 
+use std::time::Instant;
+
 use anyhow::Result;
+use tracing::info;
 
 use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
-use crate::report::Report;
+use crate::report::{Report, visit_verdict};
+use crate::util::elapsed_s;
 
 /// Emit every record a diff reports — one per difference plus the `SUMMARY` — and
 /// return the exit code: `0` when nothing differs, `4` when something does.
@@ -25,9 +29,9 @@ use crate::report::Report;
 /// Shared by `compare` and `compare-self` so the two cannot drift apart in
 /// vocabulary or exit code. The caller has already logged the span outcome.
 ///
-/// The records come from [`verdict`], which is *data* rather than text, so
+/// The records come from [`visit_verdict`], which is *data* rather than text, so
 /// [`Report`] alone decides whether a human reads lines or a parser reads JSON.
-/// That is also why printing and asserting read the same list: there is one
+/// That is also why printing and asserting read the same definitions: there is one
 /// definition of a `CHANGED` record, not one in the printer and another in each
 /// test.
 ///
@@ -37,10 +41,36 @@ use crate::report::Report;
 /// `--show-identical` stay exit `0`, and it is why the two flags stop here rather than
 /// being read off the emitted records.
 pub(super) fn report_diff(diff: &Diff, report: &Report, why: bool, show_identical: bool) -> i32 {
-    for rec in verdict(diff, why, show_identical) {
-        report.emit(rec);
-    }
+    visit_verdict(diff, why, show_identical, |rec| report.emit(rec));
     if diff.is_empty() { 0 } else { 4 }
+}
+
+/// Report a diff and log the run's `"end"` summary line, returning the exit code.
+///
+/// Both `compare` and `compare-self` finish this way, so the summary fields and the
+/// exit rule live in one place: a new count or a changed exit rule cannot land in
+/// one command and miss the other. The code still comes from [`report_diff`], which
+/// reads [`Diff::is_empty`]; the logged counters are descriptive and never decide it.
+pub(super) fn report_and_finish(
+    diff: &Diff,
+    report: &Report,
+    why: bool,
+    show_identical: bool,
+    t0: Instant,
+) -> i32 {
+    let code = report_diff(diff, report, why, show_identical);
+    info!(
+        missing = diff.missing.len(),
+        extra = diff.extra.len(),
+        changed = diff.changed.len(),
+        type_conflict = diff.type_conflict.len(),
+        case_mismatch = diff.case_mismatch.len(),
+        total_diff = diff.total(),
+        elapsed_s = elapsed_s(t0),
+        exit = code,
+        "end"
+    );
+    code
 }
 
 /// Dispatch a parsed [`Cli`] to its command, returning the process exit code.

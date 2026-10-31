@@ -120,22 +120,22 @@ pub fn scan_stat_only(
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
     let total_live = live.len();
-    let alt_recs: HashMap<String, FileRec> = if !case_sensitive {
-        // Read once up front; the scan's batch handle starts from the same
-        // committed state.
-        cache.load_all()?
+    // Only the keys decide whether a path has an alternate; the row is read
+    // when a stale alternate is actually adopted, which is normally rare. Read
+    // once up front, because the scan's batch handle starts from the same
+    // committed state.
+    let alt_keys = if case_sensitive {
+        Vec::new()
     } else {
-        HashMap::new()
+        cache.load_keys()?
     };
     let mut alt_index: HashMap<String, Vec<String>> = HashMap::new();
-    if !case_sensitive {
-        for key in alt_recs.keys() {
-            alt_index
-                .entry(key.to_lowercase())
-                .or_default()
-                .push(key.clone());
-        }
+    for key in alt_keys {
+        alt_index.entry(key.to_lowercase()).or_default().push(key);
     }
+    // An adopted key is renamed to the disk casing and removed, so it must not
+    // also be counted as stale when the prune set is read below.
+    let mut adopted_keys: HashSet<String> = HashSet::new();
     // Non-dry runs funnel every cache mutation through one batched handle,
     // which auto-commits periodically so progress survives interruption.
     let mut batch = if dry_run {
@@ -174,10 +174,14 @@ pub fn scan_stat_only(
                         let others: Vec<&String> = alts.iter().filter(|k| *k != &e.rel).collect();
                         if others.len() == 1 {
                             let old = others[0];
-                            let rec = alt_recs.get(old).cloned();
+                            let rec = match batch.as_mut() {
+                                Some(w) => w.get(old)?,
+                                None => cache.get(old)?,
+                            };
                             if let Some(w) = batch.as_mut() {
                                 w.remove(old)?; // old casing dropped; new one upserted below
                             }
+                            adopted_keys.insert(old.clone());
                             (rec, true)
                         } else {
                             (None, false) // zero (truly new) or several stale: prune handles leftovers
@@ -248,17 +252,20 @@ pub fn scan_stat_only(
     //
     // Keys, not records. Nothing below looks at a `FileRec` — the question is
     // only "does this row have a path on disk?" — and `load_all` would decode
-    // the entire `entries` table, hash map by hash map, to answer it. In
-    // insensitive mode this is the *second* full pass over that table in one
-    // phase (the first is `alt_recs` above, which does need its values), so the
-    // saving is real on a large tree and is why `load_keys` exists.
+    // the entire `entries` table, hash map by hash map, to answer it. The
+    // alternate-case index above reads this table's keys for the same reason;
+    // neither pass decodes a row it does not need.
     let cached_keys = match batch.as_mut() {
         Some(w) => w.load_keys()?,
         None => cache.load_keys()?,
     };
+    // An adopted key was renamed, not pruned. A real run's batch has already
+    // dropped it, but a dry run only decided to, so it is still in this
+    // pre-adoption snapshot; without the exclusion it would be counted once as
+    // a prune and once as the rename it actually is.
     let stale: Vec<String> = cached_keys
         .iter()
-        .filter(|rel| !live_set.contains(rel.as_str()))
+        .filter(|rel| !live_set.contains(rel.as_str()) && !adopted_keys.contains(rel.as_str()))
         .cloned()
         .collect();
     let pruned = stale.len();

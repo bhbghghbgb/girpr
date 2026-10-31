@@ -113,7 +113,7 @@ impl HashPlan {
         }
         let have = HashAlg::ALL
             .into_iter()
-            .filter(|a| entry.cached.get_named(a.as_str()).is_some())
+            .filter(|a| entry.cached.get_algo(*a).is_some())
             .collect::<AlgoSet>();
         want.difference(have)
     }

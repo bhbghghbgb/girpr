@@ -103,10 +103,7 @@ fn effective_maps(
     };
     let (s, d) = (classify(src), classify(dst));
     ensure_distinct_sides(&s, &d).unwrap();
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run,
-    };
+    let mode = ScanMode::new(false, dry_run);
     let mut so = open_side(&s, &common, mode).unwrap();
     let mut do_ = open_side(&d, &common, mode).unwrap();
     // Labels only so a coverage error can name a side; these fixtures are both

@@ -59,13 +59,35 @@ impl DigestSet {
     /// `None` means "this row has no digest under that name", **not** "the digest is
     /// zero". That distinction is load-bearing: [`crate::diff::hashes_differ`] is
     /// silent on a missing digest, and a zero digest substituted for `None` would turn
-    /// a false clean back on. A known name sitting in `foreign` also reads as `None` here
-    /// — see [`Self::get_named`] for the by-name lookup that finds it.
+    /// a false clean back on. A known name sitting in `foreign` also reads as `None`
+    /// here — see [`Self::get_algo`] for the typed lookup that finds it.
     pub fn get(&self, a: HashAlg) -> Option<&[u8]> {
         match a {
             HashAlg::Md5 => self.md5.as_ref().map(|d| &d[..]),
             HashAlg::Sha256 => self.sha256.as_ref().map(|d| &d[..]),
         }
+    }
+
+    /// The digest for `a`, including a malformed known-name entry carried in
+    /// `foreign` (a known name with an unexpected length).
+    ///
+    /// The typed counterpart to [`Self::get_named`]: a caller that already has a
+    /// `HashAlg` should not have to spell it back into a string. The fallback is
+    /// not optional — a known name whose digest length was unexpected is in
+    /// `foreign`, and [`Self::get`] cannot see it.
+    ///
+    /// The `foreign` match is by **canonical name**, `a.as_str()`, whereas
+    /// [`Self::get_named`] parses its argument case-insensitively and then matches
+    /// the exact spelling. `get_named("MD5")` can therefore find a foreign entry
+    /// spelled `MD5` that this lookup, asked for [`HashAlg::Md5`], will not: a caller
+    /// that must also match a mixed-case spelling has to go through `get_named`.
+    pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
+        self.get(a).or_else(|| {
+            self.foreign
+                .iter()
+                .find(|(name, _)| &**name == a.as_str())
+                .map(|(_, digest)| digest.as_slice())
+        })
     }
 
     /// The digest under *any* name, known or not.
@@ -137,11 +159,13 @@ impl DigestSet {
         self.foreign = entries.into_boxed_slice();
     }
 
-    /// Fold `other` in, with **`self` winning** on every name both hold.
+    /// Fold `other` in, with **`other` winning** on every name both hold.
     ///
-    /// That direction is the merge-write rule: this run's computed digests replace the
-    /// prior row's, and everything the prior row held that this run did not compute
-    /// rides along. See `crate::effective::merge_row`.
+    /// That direction is the merge-write rule, and it is what `merge_row` relies on:
+    /// it clones the prior row into `self` and passes this run's computed digests as
+    /// `other`, so a recomputed digest replaces the prior one while everything the
+    /// prior row held that this run did not compute rides along.
+    /// See `crate::effective::merge_row`.
     pub fn merge(&mut self, other: &DigestSet) {
         if let Some(d) = other.md5 {
             self.md5 = Some(d);

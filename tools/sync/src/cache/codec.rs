@@ -59,12 +59,11 @@ pub(super) fn encode_rec(rec: &FileRec) -> Result<Vec<u8>> {
     // Known algorithms in canonical order, then foreign names sorted by name.
     //
     // Both halves are deterministic, which is the point: the bytes of a row are
-    // reproducible for the same content. For a row whose names are all known this is
-    // byte-for-byte the sorted-by-name layout the previous implementation produced,
-    // because canonical order (`md5`, `sha256`) is also alphabetical order. A row
-    // carrying an unknown name moves that name after the known ones instead of
-    // interleaving it — the meaning does not change, and nothing compares encoded
-    // values for equality (`CacheWrite::put` only inserts).
+    // reproducible for the same content. Known algorithms are emitted in canonical
+    // order (`md5`, `sha256`), which is also alphabetical order. A row carrying an
+    // unknown name moves that name after the known ones instead of interleaving it
+    // — the meaning does not change, and nothing compares encoded values for
+    // equality (`CacheWrite::put` only inserts).
     let mut foreign: Vec<(&str, &[u8])> = rec.hashes.foreign_iter().collect();
     foreign.sort_by_key(|(n, _)| *n);
     v.push(rec.hashes.len() as u8);
@@ -91,14 +90,15 @@ fn push_hash(v: &mut Vec<u8>, name: &str, digest: &[u8]) -> Result<()> {
 
 pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
     let mut cur = bytes;
-    let take = |cur: &mut &[u8], n: usize| -> Result<Vec<u8>> {
+    // Borrow each field from `bytes`; only the destinations that own data copy.
+    fn take<'a>(cur: &mut &'a [u8], n: usize) -> Result<&'a [u8]> {
         if cur.len() < n {
             bail!("truncated cache entry");
         }
-        let (h, t) = cur.split_at(n);
-        *cur = t;
-        Ok(h.to_vec())
-    };
+        let (head, tail) = cur.split_at(n);
+        *cur = tail;
+        Ok(head)
+    }
     let fmt = take(&mut cur, 1)?[0];
     if fmt != FMT_V1 {
         bail!("unsupported entry format {fmt}");
@@ -110,7 +110,7 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
     let mut hashes = DigestSet::default();
     for _ in 0..n {
         let nl = take(&mut cur, 1)?[0] as usize;
-        let name = String::from_utf8(take(&mut cur, nl)?).context("non-UTF8 algo name")?;
+        let name = std::str::from_utf8(take(&mut cur, nl)?).context("non-UTF8 algo name")?;
         let dl = take(&mut cur, 1)?[0] as usize;
         let digest = take(&mut cur, dl)?;
         // **Never `bail!` on an algorithm name.** This is the whole forward-compat
@@ -119,7 +119,7 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
         // routing is `DigestSet::insert_named`'s, and it is the only place that rule
         // is written — including the case of a *known* name with an unexpected length,
         // which is carried rather than refused because that is what a map did.
-        hashes.insert_named(&name, &digest);
+        hashes.insert_named(name, digest);
     }
     if !cur.is_empty() {
         bail!("trailing bytes in cache entry");
@@ -198,11 +198,10 @@ mod tests {
     /// two encodings that agree with each other, which is not the property that
     /// matters here.
     ///
-    /// These are exactly the bytes the previous, map-based implementation
-    /// produced for this row: names sorted, which for `md5` and `sha256` is also
-    /// canonical order, so the two layouts coincide and **every cache written by
-    /// an earlier build stays readable**. If this ever changes, that stops being
-    /// true, and nothing else in the suite would notice.
+    /// Names are sorted, which for `md5` and `sha256` is also canonical order, so
+    /// the layouts coincide and **every cache written by an earlier build stays
+    /// readable**. If this ever changes, that stops being true, and nothing else
+    /// in the suite would notice.
     #[test]
     fn the_wire_format_is_byte_identical_to_what_a_map_produced() {
         let mut want: Vec<u8> = vec![FMT_V1, KIND_FILE];
@@ -221,10 +220,10 @@ mod tests {
     }
 
     /// An unknown name is carried, and it lands **after** the known ones rather
-    /// than interleaving them — the one place the new layout differs from the old.
-    /// The meaning does not change, the bytes stay deterministic, and nothing
-    /// compares encoded values for equality; this says so out loud rather than
-    /// leaving a reader to wonder whether the reordering was intended.
+    /// than interleaving them — the one place this layout reorders entries. The
+    /// meaning does not change, the bytes stay deterministic, and nothing compares
+    /// encoded values for equality; this says so out loud rather than leaving a
+    /// reader to wonder whether the reordering was intended.
     #[test]
     fn an_unknown_name_is_carried_and_lands_after_the_known_ones() {
         let mut rec = file_rec();

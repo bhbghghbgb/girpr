@@ -23,7 +23,7 @@ mod safety;
 #[cfg(test)]
 mod tests;
 
-pub(super) use self::build::{Plan, build_plan};
+pub(super) use self::build::{DirPrefixes, Plan, build_plan};
 // Nothing outside `plan` names these today, but they are part of the `plan::*`
 // surface this split preserves, so the re-export stays.
 #[allow(unused_imports)]

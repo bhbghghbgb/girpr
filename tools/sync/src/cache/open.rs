@@ -129,41 +129,34 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Returns the backup path, or `None` when there was nothing to copy.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
-    if !db_path.exists() {
-        trace!(path = %db_path.display(), "backup skip: db missing");
-        return Ok(None);
-    }
-    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let dest = unique_sibling(parent, format!("girpr-cache-backup-{}", ts_now()));
-    info!(src = %db_path.display(), dst = %dest.display(), "backup start");
-    if db_path.is_dir() {
-        copy_dir_all(db_path, &dest)?;
-    } else {
-        std::fs::copy(db_path, &dest)
-            .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))?;
-    }
-    info!(src = %db_path.display(), dst = %dest.display(), "backup done");
-    Ok(Some(dest))
+    copy_aside(db_path, "girpr-cache-backup-", "backup")
 }
 
 /// Copy an existing cache to `<parent>/girpr-cache-old-<ts>` to record the
 /// pre-sync dst state. Returns the snapshot path, or `None` when absent.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
+    copy_aside(db_path, "girpr-cache-old-", "snapshot-old")
+}
+
+/// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
+/// cache) is copied recursively; a redb file is copied in one call. The
+/// destination never replaces an existing sibling.
+fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
-        trace!(path = %db_path.display(), "snapshot-old skip: db missing");
+        trace!(path = %db_path.display(), "{label} skip: db missing");
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let dest = unique_sibling(parent, format!("girpr-cache-old-{}", ts_now()));
-    info!(src = %db_path.display(), dst = %dest.display(), "snapshot-old start");
+    let dest = unique_sibling(parent, format!("{prefix}{}", ts_now()));
+    info!(src = %db_path.display(), dst = %dest.display(), "{label} start");
     if db_path.is_dir() {
         copy_dir_all(db_path, &dest)?;
     } else {
         std::fs::copy(db_path, &dest)
             .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))?;
     }
-    info!(src = %db_path.display(), dst = %dest.display(), "snapshot-old done");
+    info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
     Ok(Some(dest))
 }
 

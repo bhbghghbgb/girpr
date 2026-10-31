@@ -177,9 +177,9 @@ pub(super) fn merge_row(
 ) -> FileRec {
     let hashes = match prior.filter(|c| stat_matches(Some(c), size, mtime_ns)) {
         Some(c) => {
-            // `merge` is `other` into `self` with `self` winning, so the prior row is
-            // `self` and this run's computed digests are `other` — computed replaces,
-            // everything else rides along.
+            // `merge` folds `other` into `self` with `other` winning. That is the shape
+            // wanted here: the prior row is `self` and this run's computed digests are
+            // `other` — computed replaces, everything else rides along.
             let mut merged = c.hashes.clone();
             merged.merge(&computed);
             merged

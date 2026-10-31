@@ -320,10 +320,7 @@ pub fn log() -> LogCtx {
 
 /// Scan mode for tests: `no_trust_cached_hashes` and `dry_run`.
 pub fn scan(no_trust_cached_hashes: bool, dry_run: bool) -> ScanMode {
-    ScanMode {
-        no_trust_cached_hashes,
-        dry_run,
-    }
+    ScanMode::new(no_trust_cached_hashes, dry_run)
 }
 
 /// The limiter a test gets when concurrency is not what it is testing: strictly
@@ -704,24 +701,8 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
     let src = classify(src);
     let dst = classify(dst);
     ensure_distinct_sides(&src, &dst).unwrap();
-    let mut s = open_side(
-        &src,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: false,
-        },
-    )
-    .unwrap();
-    let mut d = open_side(
-        &dst,
-        &common,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: false,
-        },
-    )
-    .unwrap();
+    let mut s = open_side(&src, &common, ScanMode::new(trust.no_trust_src, false)).unwrap();
+    let mut d = open_side(&dst, &common, ScanMode::new(trust.no_trust_dst, false)).unwrap();
     // The labels exist only so a coverage error can name a side; a fixture that
     // reaches one is a test failure, not something to read.
     let s_label = format!("src {}", src.cache_path().display());
@@ -748,10 +729,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
     .unwrap();
     let sm = resolve_side(
         &mut s,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_src,
-            dry_run: false,
-        },
+        ScanMode::new(trust.no_trust_src, false),
         &plans.src,
         RwSide::Src,
         &serial_rw(),
@@ -759,10 +737,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
     .unwrap();
     let dm = resolve_side(
         &mut d,
-        ScanMode {
-            no_trust_cached_hashes: trust.no_trust_dst,
-            dry_run: false,
-        },
+        ScanMode::new(trust.no_trust_dst, false),
         &plans.dst,
         RwSide::Dst,
         &serial_rw(),

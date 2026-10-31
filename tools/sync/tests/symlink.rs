@@ -20,7 +20,8 @@ mod common;
 use std::path::Path;
 
 use common::{
-    dir_link, entry_names, file_link, is_link, log, parse_ndjson, rfile, sync_mem, temp_root, wfile,
+    dir_link, entry_names, file_link, is_link, log, parse_ndjson, recs_of, rfile, sync_mem,
+    temp_root, wfile,
 };
 use girsync::scan::walk_live;
 use girsync::{cmd_compare_self, cmd_sync};
@@ -368,7 +369,7 @@ fn sync_removes_a_dst_directory_link_without_deleting_its_inside_target() {
     assert_eq!(
         rfile(&dst, "real/x.txt"),
         b"shared content",
-        "the target's file survives: it was deleted through the link before the fix"
+        "the target's file survives: it was not deleted through the link"
     );
     assert!(!dst.join("link").exists(), "the link itself is gone");
     let deleted = paths(&recs, "delete");
@@ -437,7 +438,18 @@ fn keep_extra_spares_a_dst_directory_link_and_its_target() {
 
 /// Assert a run refused the src-link/dst overlap before changing the mirror,
 /// and that the destination file is still there with its bytes.
-fn assert_refused_src_link_into_dst(out: &std::process::Output, dst: &Path, rel: &str) {
+///
+/// `link`, `relation` and `advice` are asserted as whole sentences: the refusal
+/// is where a user learns what the link would have reached, so a reworded
+/// consequence has to fail a test rather than ship unnoticed.
+fn assert_refused_src_link_into_dst(
+    out: &std::process::Output,
+    dst: &Path,
+    rel: &str,
+    link: &str,
+    relation: &str,
+    advice: &str,
+) {
     assert_eq!(
         out.status.code(),
         Some(3),
@@ -445,9 +457,18 @@ fn assert_refused_src_link_into_dst(out: &std::process::Output, dst: &Path, rel:
         String::from_utf8_lossy(&out.stdout)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let context = format!("src and dst must be disjoint: src link `{link}` resolves to");
     assert!(
-        stderr.contains("disjoint") && stderr.contains("link"),
-        "the error names the overlap and the link: {stderr}"
+        stderr.contains(&context),
+        "the error names the overlap and the src link: {stderr}"
+    );
+    assert!(
+        stderr.contains(relation),
+        "the error names where the link leads: {stderr}"
+    );
+    assert!(
+        stderr.contains(advice),
+        "the error says what the link would do: {stderr}"
     );
     assert_eq!(
         rfile(dst, rel),
@@ -468,7 +489,14 @@ fn sync_refuses_a_src_directory_link_to_dst() {
     skip_if_no_link!("directory", dir_link(&dst, &src.join("link")));
 
     let out = sync_bin_raw(&src, &dst, &[]);
-    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert_refused_src_link_into_dst(
+        &out,
+        &dst,
+        "x.txt",
+        "link",
+        "which is inside dst",
+        "a mirror may not read its own destination through a link",
+    );
     assert!(!dst.join("link").exists(), "nothing was created in dst");
     assert!(is_link(&src.join("link")), "the source link is left alone");
 }
@@ -486,7 +514,14 @@ fn sync_refuses_a_src_directory_link_inside_dst() {
     skip_if_no_link!("directory", dir_link(&dst_sub, &src.join("link")));
 
     let out = sync_bin_raw(&src, &dst, &[]);
-    assert_refused_src_link_into_dst(&out, &dst, "sub/x.txt");
+    assert_refused_src_link_into_dst(
+        &out,
+        &dst,
+        "sub/x.txt",
+        "link",
+        "which is inside dst",
+        "a mirror may not read its own destination through a link",
+    );
     assert!(!dst.join("link").exists(), "nothing was created in dst");
 }
 
@@ -503,7 +538,14 @@ fn sync_refuses_a_src_directory_link_containing_dst() {
     skip_if_no_link!("directory", dir_link(&outer, &src.join("link")));
 
     let out = sync_bin_raw(&src, &dst, &[]);
-    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert_refused_src_link_into_dst(
+        &out,
+        &dst,
+        "x.txt",
+        "link",
+        "which contains dst",
+        "a mirror may not reach its own destination through a link",
+    );
     assert_eq!(
         rfile(&outer, "sibling.txt"),
         b"SIBLING",
@@ -524,7 +566,14 @@ fn sync_refuses_a_src_file_link_into_dst() {
     skip_if_no_link!("file", file_link(&dst.join("x.txt"), &src.join("link.txt")));
 
     let out = sync_bin_raw(&src, &dst, &[]);
-    assert_refused_src_link_into_dst(&out, &dst, "x.txt");
+    assert_refused_src_link_into_dst(
+        &out,
+        &dst,
+        "x.txt",
+        "link.txt",
+        "which is inside dst",
+        "a mirror may not read its own destination through a link",
+    );
     assert!(
         is_link(&src.join("link.txt")),
         "the source link is left alone"
@@ -587,8 +636,16 @@ fn sync_refuses_a_dst_file_link_into_src() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("disjoint") && stderr.contains("link"),
-        "the error names the overlap and the link: {stderr}"
+        stderr.contains("src and dst must be disjoint: dst link `a.bin` resolves to"),
+        "the error names the overlap and the dst link: {stderr}"
+    );
+    assert!(
+        stderr.contains("which is inside src"),
+        "the error names where the link leads: {stderr}"
+    );
+    assert!(
+        stderr.contains("a mirror may not write into its own source through a link"),
+        "the error says what the link would do: {stderr}"
     );
     assert_eq!(
         rfile(&src, "b.bin"),
@@ -623,8 +680,16 @@ fn sync_refuses_a_dst_directory_link_into_src() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("disjoint") && stderr.contains("link"),
-        "the error names the overlap and the link: {stderr}"
+        stderr.contains("src and dst must be disjoint: dst link `a.bin` resolves to"),
+        "the error names the overlap and the dst link: {stderr}"
+    );
+    assert!(
+        stderr.contains("which is inside src"),
+        "the error names where the link leads: {stderr}"
+    );
+    assert!(
+        stderr.contains("a mirror may not write into its own source through a link"),
+        "the error says what the link would do: {stderr}"
     );
     assert_eq!(rfile(&src, "a.bin"), b"SOURCE", "the source is untouched");
     assert!(is_link(&dst.join("a.bin")), "the link is left in place");
@@ -632,6 +697,41 @@ fn sync_refuses_a_dst_directory_link_into_src() {
         dst.join("a.bin").is_dir(),
         "and still resolves to the source directory"
     );
+}
+
+/// The other direction: `dst/link` resolves to a directory that **contains**
+/// src, so writing through the link reaches src from above.
+#[test]
+fn sync_refuses_a_dst_directory_link_containing_src() {
+    let t = temp_root("dst_dir_link_contains_src");
+    let outer = t.subdir("outer");
+    let src = t.subdir("outer/src");
+    let dst = t.subdir("dst");
+    wfile(&src, "x.txt", b"PRECIOUS");
+    skip_if_no_link!("directory", dir_link(&outer, &dst.join("link")));
+
+    let out = sync_bin_raw(&src, &dst, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a dst link containing src is a fatal configuration; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("src and dst must be disjoint: dst link `link` resolves to"),
+        "the error names the overlap and the dst link: {stderr}"
+    );
+    assert!(
+        stderr.contains("which contains src"),
+        "the error names where the link leads: {stderr}"
+    );
+    assert!(
+        stderr.contains("a mirror may not reach its own source through a link"),
+        "the error says what the link would do: {stderr}"
+    );
+    assert_eq!(rfile(&src, "x.txt"), b"PRECIOUS", "the source is untouched");
+    assert!(is_link(&dst.join("link")), "the link is left in place");
 }
 
 // ---------------------------------------------------------------------------
@@ -843,6 +943,65 @@ fn a_sync_that_removes_a_link_leaves_compare_self_clean() {
         cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
         0,
         "the dst cache no longer claims the link's descendants"
+    );
+}
+
+/// One run can remove several links, and each one takes its followed subtree
+/// with it. Every descendant row has to go, whichever link carried it: two
+/// sibling links, with a third link nested inside the first one's target.
+#[test]
+fn a_sync_that_removes_several_links_prunes_every_descendant_row() {
+    let t = temp_root("links_cache_prune");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "real/x.txt", b"shared content");
+    wfile(&dst, "real/x.txt", b"shared content");
+    common::sync_mtime(&src.join("real/x.txt"), &dst.join("real/x.txt"));
+    wfile(&outside, "a/one.txt", b"one");
+    wfile(&outside, "a/sub/two.txt", b"two");
+    wfile(&outside, "b/three.txt", b"three");
+    wfile(&outside, "nested/four.txt", b"four");
+    skip_if_no_link!(
+        "directory",
+        dir_link(&outside.join("a"), &dst.join("alpha"))
+    );
+    skip_if_no_link!("directory", dir_link(&outside.join("b"), &dst.join("beta")));
+    // Inside the first link's target, so its rows sit under `alpha` and are
+    // removed with the link that carries them.
+    skip_if_no_link!(
+        "directory",
+        dir_link(&outside.join("nested"), &outside.join("a/nested"))
+    );
+
+    assert_eq!(
+        cmd_sync(common::sync(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(!dst.join("alpha").exists(), "the first link is removed");
+    assert!(!dst.join("beta").exists(), "the second link is removed");
+
+    let rows = recs_of(&dst);
+    for rel in [
+        "alpha",
+        "alpha/one.txt",
+        "alpha/sub",
+        "alpha/sub/two.txt",
+        "alpha/nested",
+        "alpha/nested/four.txt",
+        "beta",
+        "beta/three.txt",
+    ] {
+        assert!(!rows.contains_key(rel), "row `{rel}` is gone");
+    }
+    assert!(
+        rows.contains_key("real/x.txt"),
+        "a path src mirrors keeps its row"
+    );
+    assert_eq!(
+        cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
+        0,
+        "the dst cache no longer claims any link's descendants"
     );
 }
 

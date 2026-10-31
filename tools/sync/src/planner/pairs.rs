@@ -111,14 +111,8 @@ fn shared_pairs<'a>(
     let mut out: Vec<(&String, &String)> = Vec::new();
     match pairing {
         CasePairing::Exact => {
-            // Within one side, mixed-case collisions are already fatal (phase A), so
-            // a first-wins insert cannot lose a pair.
-            let mut seen: HashMap<&str, &String> = HashMap::new();
-            for k in src.keys() {
-                seen.insert(k.as_str(), k);
-            }
             for drel in dst.keys() {
-                if let Some(srel) = seen.get(drel.as_str()) {
+                if let Some((srel, _)) = src.get_key_value(drel.as_str()) {
                     out.push((srel, drel));
                 }
             }
@@ -246,7 +240,20 @@ pub fn plan_pairs(
         // short of.
         return Ok(plan);
     }
-    plan.required.fallback = AlgoSet::from_iter(src.algos.iter().copied());
+    // The run-wide src request as a set, built once: it does not depend on the
+    // pair.
+    let src_all = AlgoSet::from_iter(src.algos.iter().copied());
+    // Only `all-of` asks a side for the whole list; `any-of` settles each pair on
+    // one algorithm. Built once here rather than per pair, since neither the mode
+    // nor the request changes inside the loop. The two sides stay separate because
+    // a `SideRequest` may name different algorithms.
+    let dst_all = match mode {
+        HashMode::AllOf => AlgoSet::from_iter(dst.algos.iter().copied()),
+        HashMode::AnyOf => AlgoSet::NONE,
+    };
+    // The same value the per-path answer uses, so the fallback and the answer
+    // cannot be built from different inputs.
+    plan.required.fallback = src_all;
     // Per side, over the undecided set. `BTreeMap` so the error is deterministic:
     // a message that reshuffles between runs is a message nobody can read twice.
     let mut tally = [Tally::default(), Tally::default()];
@@ -288,7 +295,7 @@ pub fn plan_pairs(
             for algo in req.algos {
                 let slot = t.coverage.entry(*algo).or_insert((0, 0));
                 slot.1 += 1;
-                if e.cached.get_named(algo.as_str()).is_some() {
+                if e.cached.get_algo(*algo).is_some() {
                     slot.0 += 1;
                 }
             }
@@ -301,30 +308,10 @@ pub fn plan_pairs(
             HashMode::AllOf => {
                 // Every algorithm this side cannot obtain is a failure, because the
                 // run needs all of them.
-                for (idx, req, e, rel) in sides {
-                    if req.cap.can_hash_from_disk {
-                        continue;
-                    }
-                    let short = AlgoSet::from_iter(
-                        req.algos
-                            .iter()
-                            .copied()
-                            .filter(|a| !obtainable(e, req.cap, a)),
-                    );
-                    if !short.is_empty() {
-                        tally[idx].missing.insert((*rel).clone(), short);
-                    }
-                }
-                let want = AlgoSet::from_iter(src.algos.iter().copied());
-                plan.required.by_rel.insert((*srel).clone(), want);
-                plan_one(&src, s, srel, want, &mut plan.src);
-                plan_one(
-                    &dst,
-                    d,
-                    drel,
-                    AlgoSet::from_iter(dst.algos.iter().copied()),
-                    &mut plan.dst,
-                );
+                record_shortfalls(&mut tally, &sides);
+                plan.required.by_rel.insert((*srel).clone(), src_all);
+                plan_one(&src, s, srel, src_all, &mut plan.src);
+                plan_one(&dst, d, drel, dst_all, &mut plan.dst);
             }
             HashMode::AnyOf => {
                 // `None` means no requested algorithm is obtainable on both sides.
@@ -336,21 +323,7 @@ pub fn plan_pairs(
                     // obtain anything is always a record — which makes this branch
                     // naming a non-hashable side, by construction rather than by a
                     // guess at which one it was.
-                    for (idx, req, e, rel) in sides {
-                        if req.cap.can_hash_from_disk {
-                            continue;
-                        }
-                        let t = &mut tally[idx];
-                        let short = AlgoSet::from_iter(
-                            req.algos
-                                .iter()
-                                .copied()
-                                .filter(|a| !obtainable(e, req.cap, a)),
-                        );
-                        if !short.is_empty() {
-                            t.missing.insert((*rel).clone(), short);
-                        }
-                    }
+                    record_shortfalls(&mut tally, &sides);
                     continue;
                 };
                 let chosen = AlgoSet::one(pick);
@@ -375,6 +348,31 @@ pub fn plan_pairs(
         }
     }
     Ok(plan)
+}
+
+/// Record the shortfalls of one undecided pair: for each side that cannot hash
+/// from disk, the requested algorithms it cannot obtain.
+///
+/// Only a side with a filesystem can make up a gap, so a side that cannot hash
+/// and lacks an algorithm is the only kind of shortfall there is to record.
+fn record_shortfalls(
+    tally: &mut [Tally; 2],
+    sides: &[(usize, &SideRequest<'_>, &SideEntry, &String)],
+) {
+    for &(idx, req, e, rel) in sides {
+        if req.cap.can_hash_from_disk {
+            continue;
+        }
+        let short = AlgoSet::from_iter(
+            req.algos
+                .iter()
+                .copied()
+                .filter(|a| !obtainable(e, req.cap, a)),
+        );
+        if !short.is_empty() {
+            tally[idx].missing.insert(rel.clone(), short);
+        }
+    }
 }
 
 /// The algorithm that settles one pair under [`HashMode::AnyOf`], or `None` when
@@ -402,8 +400,8 @@ fn pick_one(
         .iter()
         .filter(|a| obtainable(s, sc, a) && obtainable(d, dc, a))
         .min_by_key(|a| {
-            usize::from(s.cached.get_named(a.as_str()).is_none())
-                + usize::from(d.cached.get_named(a.as_str()).is_none())
+            usize::from(s.cached.get_algo(**a).is_none())
+                + usize::from(d.cached.get_algo(**a).is_none())
         })
         .copied()
 }
@@ -414,7 +412,7 @@ fn pick_one(
 /// to re-read rather than reuse, and a record has no filesystem to re-read. Folding
 /// it in would make `--no-trust-cached-hashes src` fatal for every record.
 fn obtainable(e: &SideEntry, cap: SideCapability, algo: &HashAlg) -> bool {
-    e.cached.get_named(algo.as_str()).is_some() || cap.can_hash_from_disk
+    e.cached.get_algo(*algo).is_some() || cap.can_hash_from_disk
 }
 
 /// What one side owes, and how much of it it could meet, over the undecided set.

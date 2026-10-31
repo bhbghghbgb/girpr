@@ -159,10 +159,7 @@ fn resolved(
         test_cache: TestCacheBackend::Memory,
         ..common.clone()
     };
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run: false,
-    };
+    let mode = ScanMode::new(false, false);
     let mut s =
         open_side(&s_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
     let mut d =

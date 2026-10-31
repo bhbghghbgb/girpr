@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
-use super::plan::Plan;
+use super::plan::{DirPrefixes, Plan};
 use crate::cache::{CacheDb, FileRec};
 use crate::config::CommonOpts;
 use crate::effective::EffRec;
@@ -210,18 +210,28 @@ impl Applier<'_> {
         for item in &plan.copy {
             w.remove(&item.rel)?;
         }
+        // The links this run deletes, so their followed descendants can be
+        // dropped with them. A link's own row is removed by the loop below;
+        // only what is *under* the link is matched here, on a `/` boundary.
+        let link_dirs = DirPrefixes::from_dirs(
+            plan.delete_files
+                .iter()
+                .filter(|r| self.dm.get(*r).is_some_and(|rec| rec.is_link))
+                .map(String::as_str),
+        );
         for r in &plan.delete_files {
             w.remove(r)?;
-            // Removing a link removes everything the walk reported under it.
-            // Those rows describe paths that will not exist after the unlink, so
-            // they are dropped here, before the filesystem change, rather than
-            // left for `compare-self` to report as missing.
-            if self.dm.get(r).is_some_and(|rec| rec.is_link) {
-                let prefix = format!("{r}/");
-                for key in w.load_keys()? {
-                    if key.starts_with(&prefix) {
-                        w.remove(&key)?;
-                    }
+        }
+        // Removing a link removes everything the walk reported under it. Those
+        // rows describe paths that will not exist after the unlink, so they are
+        // dropped here, before the filesystem change, rather than left for
+        // `compare-self` to report as missing. One key snapshot covers every
+        // link: dropping a row cannot change which keys are descendants, and a
+        // repeated removal is a no-op, so the scan is not repeated per link.
+        if !link_dirs.is_empty() {
+            for key in w.load_keys()? {
+                if link_dirs.has_ancestor(&key) {
+                    w.remove(&key)?;
                 }
             }
         }

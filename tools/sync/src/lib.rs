@@ -68,5 +68,5 @@ pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;
-pub use report::{OutputFormat, Record, Report, verdict};
+pub use report::{OutputFormat, Record, Report, verdict, visit_verdict};
 pub use rw::{RwLimits, RwPermit, RwRuntime, RwSide};
