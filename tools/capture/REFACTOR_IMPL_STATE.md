@@ -24,7 +24,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## 3. `cli` surface
 
-- [ ] **F8** — `--output` is parsed after clap instead of by clap
+- [x] **F8** — `--output` is parsed after clap instead of by clap
 - [ ] **F9** — non-Unicode flag table in `cli` tests is hand-maintained and can silently miss a new flag
 
 ## 4. `select` restructure
@@ -41,7 +41,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## Pending review
 
-_Nothing awaiting review._
+- F8 — `--output` is a clap `ValueEnum`; `resolve_common` infallible — commit `ec343e9`
 
 ## Follow-ups from review (non-blocking)
 
