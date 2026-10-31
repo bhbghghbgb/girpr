@@ -183,6 +183,72 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     drop(db);
 }
 
+/// **An adopted key is renamed, not pruned.** The dry run still reads the
+/// pre-adoption cache, so the old-cased row is in its key snapshot; counting it
+/// as stale would make `pruned` one higher than the real run's, and a dry run
+/// answers the same question. The fixture leaves one real orphan beside the
+/// adopted row, so the count has a baseline the adoption cannot hide in.
+#[test]
+fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
+    let t = temp_root("adopt_prune");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"hello");
+    let db_path = dir.join(CACHE_PREFIX);
+    {
+        let db = open_db(&db_path, true, rw()).unwrap();
+        let _ = phased(&dir, &db, &opts(), scan(false, false));
+        db.put("vanished.txt", &FileRec::dir()).unwrap();
+    }
+
+    // Case-only rename via an intermediate, so it works on either kind of
+    // filesystem.
+    let tmp = dir.join("girsync_rename_tmp");
+    std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
+    std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
+
+    let insensitive = CommonOpts {
+        case_sensitive: false,
+        ..opts()
+    };
+    let (dry_map, dry_stats) = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
+        (pa.map, pa.stats)
+    };
+    assert!(dry_map.contains_key("A.txt"), "disk casing governs");
+    assert!(
+        dry_map["A.txt"].fresh && dry_map["A.txt"].cached.get_named("md5").is_some(),
+        "the adopted row's digests are carried"
+    );
+    assert_eq!(
+        dry_stats.pruned, 1,
+        "the orphan only: the adopted old key is renamed, not pruned"
+    );
+    // The dry run decided to rename and wrote neither half of it.
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    assert!(
+        rows.contains_key("a.txt"),
+        "the old-cased row survives a dry run"
+    );
+    assert!(
+        !rows.contains_key("A.txt"),
+        "and the disk-cased row was not created"
+    );
+
+    let real = {
+        let db = open_db(&db_path, false, rw()).unwrap();
+        scan_stat_only(&dir, &db, &insensitive, scan(false, false)).unwrap()
+    };
+    assert_eq!(
+        dry_stats, real.stats,
+        "a dry run answers the same question; only the writes are gone"
+    );
+    assert_eq!(real.stats.pruned, 1, "the same one orphan");
+    let rows = load_all_records(&open_db(&db_path, false, rw()).unwrap()).unwrap();
+    assert!(rows.contains_key("A.txt"), "the real run renamed the key");
+    assert!(!rows.contains_key("a.txt"), "and dropped the old casing");
+}
+
 /// A three-file folder scanned on a cold cache, and the same folder scanned again
 /// once warm. Returns `(cold, warm)`, each carrying both phases' counters.
 fn cold_then_warm(tag: &str, algos: Vec<HashAlg>) -> (Run, Run) {
