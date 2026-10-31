@@ -138,7 +138,11 @@ impl Report {
     pub fn render(&self, rec: &Record) -> String {
         match self.format {
             OutputFormat::Text => rec.text(),
-            OutputFormat::Json => rec.json().to_string(),
+            OutputFormat::Json => {
+                let mut out = String::new();
+                rec.write_json(&mut out);
+                out
+            }
         }
     }
 }
