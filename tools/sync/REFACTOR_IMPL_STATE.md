@@ -13,7 +13,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] D1 — share the link-disjoint validation loop
 - [x] E1 — gate `why_tag` behind `why`
 - [x] E3 — allocation-free `Record` rendering, sorted JSON keys
-- [ ] F2 — one mixed-case collision helper
+- [x] F2 — one mixed-case collision helper
 - [ ] H2 — one backup/snapshot copy-aside helper
 - [ ] C1 — precompute the `type_conflict` set
 
@@ -51,6 +51,7 @@ Tasks finished but not yet reviewed by hand:
 - D1 — `girsync: share link-disjoint validation` (`ecbd519`)
 - E1 — `girsync: render why tags only when requested` (`d378dfd`)
 - E3 — `girsync: render records without per-field allocations` (`e30836d`)
+- F2 — `girsync: share mixed-case collision check` (`3628ba6`)
 
 ## Skipped
 
