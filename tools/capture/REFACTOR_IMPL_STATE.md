@@ -14,7 +14,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - [x] **F14** — `Val::from(u64)`/`From<usize>` narrow with `as i64` and a justification that does not hold
 - [x] **F12** — `Rejections::snapshot` and `document` carry the same sort closure twice
 - [x] **F10** — A17 doc comment states "Every state is acceptable" twice
-- [ ] **F11** — duplicated doc line in `manifest/dump.rs` test
+- [x] **F11** — duplicated doc line in `manifest/dump.rs` test
 
 ## 2. Local dedup, no output change
 
@@ -47,3 +47,4 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F14 — `u64`/`usize` values clamp into `i64` when building a `Val` — commit `e49d2ad`
 - F12 — one `sorted` helper for the rejection rows — commit `df4dd86`
 - F10 — A17's completeness point stated once — commit `4ad7b95`
+- F11 — duplicated premise line removed from a test doc — commit `00fe4d6`
