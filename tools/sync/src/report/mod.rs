@@ -188,11 +188,11 @@ pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
         out.push(Record::path("EXTRA", r));
     }
     for r in &diff.changed {
-        let rec = Record::path("CHANGED", r);
-        out.push(match diff.why_tag(r) {
-            Some(tag) if why => rec.put("why", tag),
-            _ => rec,
-        });
+        let mut rec = Record::path("CHANGED", r);
+        if why && let Some(tag) = diff.why_tag(r) {
+            rec = rec.put("why", tag);
+        }
+        out.push(rec);
     }
     for r in &diff.type_conflict {
         out.push(Record::path("TYPE-CONFLICT", r));
@@ -212,11 +212,11 @@ pub fn verdict(diff: &Diff, why: bool, show_identical: bool) -> Vec<Record> {
     // empty bucket must get `identical=0` rather than a missing field.
     if show_identical {
         for r in &diff.identical {
-            let rec = Record::path("IDENTICAL", r);
-            out.push(match diff.why_tag(r) {
-                Some(tag) if why => rec.put("why", tag),
-                _ => rec,
-            });
+            let mut rec = Record::path("IDENTICAL", r);
+            if why && let Some(tag) = diff.why_tag(r) {
+                rec = rec.put("why", tag);
+            }
+            out.push(rec);
         }
     }
     let mut summary = Record::keyed("SUMMARY")
