@@ -41,13 +41,21 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## Pending review
 
-- F1 — `percent_decode` byte-oriented, regression test added — commit `d61798c`
-- F15 — integration tests use the library `percent_decode` — commit `38853ed`
-- F4 — stdout lock recovers from poisoning like the other locks — commit `ffdeba5`
-- F14 — `u64`/`usize` values clamp into `i64` when building a `Val` — commit `e49d2ad`
-- F12 — one `sorted` helper for the rejection rows — commit `df4dd86`
-- F10 — A17's completeness point stated once — commit `4ad7b95`
-- F11 — duplicated premise line removed from a test doc — commit `00fe4d6`
-- F2 — one failure-record closure in `fetch`'s attempt — commit `0c136c2`
-- F5 — one `Verdict` for `verify` and `materialize` — commit `b83cb34`
-- F6 — one private skeleton behind the four `BlobProps` constructors — commit `ccf427f`
+None. F1, F15, F4, F14, F12, F10, F11, F2, F5 and F6 were reviewed and
+accepted: each diff matches its finding, the field values and recorded
+verdicts are unchanged, and `cargo nextest run -p gircap` (756 passed),
+`cargo clippy -p gircap --all-targets -- -D warnings`, `cargo fmt --check`
+and the rustdoc build are clean.
+
+Non-blocking suggestions from that review, none of which holds up a task:
+
+- **F14** — the clamp has no direct test. A `Val::from(u64::MAX) ==
+  Val::Int(i64::MAX)` assertion would pin it as cheaply as the F1 regression
+  test pins the decoder.
+- **F15** — the deleted helper carried the one-line rationale "The summary
+  percent-encodes whitespace and `%`, so decode it back"; keep that context as
+  a comment at the import or first call site if a reader would otherwise have
+  to find `percent_encode` to understand why.
+- **F5** — `Verdict` holds an owned `Option<String>` and clones it into the
+  summary. Fine for one headline per run; an `Option<&str>` borrowed from the
+  report would remove the copy if this ever sits on a hotter path.
