@@ -57,10 +57,7 @@ fn audited(tag: &str, n_eq: usize, n_diff: usize) -> (TempDir, PathBuf) {
 /// the disk side from the record would report "in step" on hidden content drift.
 fn self_audit(dir: &Path) -> Run {
     let common = opts_mem();
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run: true,
-    };
+    let mode = ScanMode::new(false, true);
     // The record: the folder's own cache, read-only. Its side of the comparison.
     // A folder `update`d with `opts_mem` left its rows in the shared memory cache;
     // fall back to the file for any future case that warms one on disk.

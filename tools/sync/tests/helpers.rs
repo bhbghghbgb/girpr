@@ -151,15 +151,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     };
 
     let db = open_db(&db_path, true, rw()).unwrap();
-    let eff = resolved_map(
-        &dir,
-        &db,
-        &sensitive,
-        ScanMode {
-            no_trust_cached_hashes: true,
-            dry_run: false,
-        },
-    );
+    let eff = resolved_map(&dir, &db, &sensitive, ScanMode::new(true, false));
     assert!(eff.contains_key("a.txt"));
     drop(db);
 

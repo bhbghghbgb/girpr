@@ -203,10 +203,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
     let s = classify(src);
     let d = classify(dst);
     ensure_distinct_sides(&s, &d).unwrap();
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run: false,
-    };
+    let mode = ScanMode::new(false, false);
     let mut so = open_side(&s, common, mode).unwrap();
     let mut do_ = open_side(&d, common, mode).unwrap();
     let s_label = format!("src {}", s.cache_path().display());
@@ -243,10 +240,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
 /// always rehashed - which is what makes the count a measure of the plan rather than
 /// of whatever the record happened to hold.
 fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        dry_run: true,
-    };
+    let mode = ScanMode::new(false, true);
     let record = open_db(&dir.join(CACHE_PREFIX), true, CacheOpen::ReadOnly).unwrap();
     let rec = load_record_side_from(&record, common, "record").unwrap();
     let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
