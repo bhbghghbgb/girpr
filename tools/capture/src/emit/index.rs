@@ -1395,14 +1395,10 @@ impl Manifest {
     /// **Every state is acceptable.** A17 is about the matrix being
     /// *complete* — every class has a row, and every row says what happened to
     /// it. `over_budget` is one of those answers: a candidate existed and this
-    /// run's budget would not pay for it. A matrix that records it is more
-    /// honest than one that fails.
-    ///
-    /// **Every state is acceptable.** `over_budget` is one of those answers: a
-    /// candidate existed and this run's budget would not pay for it. Excluding
-    /// it would make a class the budget refused end the whole capture with exit
-    /// `3`, while `--require-class` is the flag that turns an unmet class into
-    /// a failed run. A17 must not do `--require-class`'s job for a class nobody
+    /// run's budget would not pay for it. Excluding it would make a class the
+    /// budget refused end the whole capture with exit `3`, while
+    /// `--require-class` is the flag that turns an unmet class into a failed
+    /// run. A17 must not do `--require-class`'s job for a class nobody
     /// required.
     ///
     /// **Completeness means equality with [`crate::select::Class::ALL`], not
