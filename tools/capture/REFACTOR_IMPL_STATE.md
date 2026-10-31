@@ -11,7 +11,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - [x] **F1** — `percent_decode` slices by byte offset and panics on a multi-byte character after `%`
 - [x] **F15** — integration tests carry their own `percent_decode`; import the library one instead
 - [x] **F4** — stdout lock panics on poisoning instead of recovering like every other lock
-- [ ] **F14** — `Val::from(u64)`/`From<usize>` narrow with `as i64` and a justification that does not hold
+- [x] **F14** — `Val::from(u64)`/`From<usize>` narrow with `as i64` and a justification that does not hold
 - [ ] **F12** — `Rejections::snapshot` and `document` carry the same sort closure twice
 - [ ] **F10** — A17 doc comment states "Every state is acceptable" twice
 - [ ] **F11** — duplicated doc line in `manifest/dump.rs` test
@@ -44,3 +44,4 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F1 — `percent_decode` byte-oriented, regression test added — commit `d61798c`
 - F15 — integration tests use the library `percent_decode` — commit `38853ed`
 - F4 — stdout lock recovers from poisoning like the other locks — commit `ffdeba5`
+- F14 — `u64`/`usize` values clamp into `i64` when building a `Val` — commit `e49d2ad`
