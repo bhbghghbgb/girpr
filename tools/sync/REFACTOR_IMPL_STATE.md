@@ -33,7 +33,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 
 - [x] B1 — one key snapshot for link pre-drops
 - [x] B2 — `DirPrefixes` across `build_plan`, `remove_unknown_dirs`, `prune_dst_cache`
-- [ ] C2 — copy/fix membership sets in the link-storage guards
+- [x] C2 — copy/fix membership sets in the link-storage guards
 - [ ] D3 — shared compare/compare-self tail
 - [ ] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
 - [ ] I3 — Windows ASCII fast path with the Unicode fallback
@@ -65,6 +65,7 @@ Tasks finished but not yet reviewed by hand:
 - E2 — `girsync: stream verdict records` (`5e1dc78`)
 - B1 — `girsync: snapshot cache keys once for link pre-drops` (`84edec5`)
 - B2 — `girsync: share wiped-subtree prefix checks` (`173e54d`)
+- C2 — `girsync: precompute link storage membership` (`08707f6`)
 
 ## Skipped
 
