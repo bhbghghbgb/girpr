@@ -156,7 +156,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     };
     info!(
         cache = %db_path.display(),
-        entries = record.load_keys()?.len(),
+        entries = record.entry_count()?,
         "cache opened read-only"
     );
     let rec = load_record_side_from(&record, &common, &db_path.display().to_string())?;

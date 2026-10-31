@@ -2,7 +2,10 @@
 //! methods.
 
 use anyhow::{Context, Result, bail};
-use redb::{Database, DatabaseError, ReadableDatabase, ReadableTable, backends::InMemoryBackend};
+use redb::{
+    Database, DatabaseError, ReadableDatabase, ReadableTable, ReadableTableMetadata,
+    backends::InMemoryBackend,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -292,6 +295,22 @@ impl CacheDb {
         Ok(keys)
     }
 
+    /// Number of rows in the entries table, without decoding or allocating keys.
+    ///
+    /// This is the raw table length, not a count of anything a caller may
+    /// filter down to: a caller that needs the paths themselves wants
+    /// [`load_keys`](Self::load_keys). A missing table is still an empty
+    /// answer rather than an error.
+    pub fn entry_count(&self) -> Result<u64> {
+        let txn = self.db.begin_read().context("begin read")?;
+        let tbl = match txn.open_table(ENTRIES) {
+            Ok(t) => t,
+            Err(e) if is_table_missing(&e) => return Ok(0),
+            Err(e) => bail!("open entries table: {e:#}"),
+        };
+        tbl.len().context("count cache entries")
+    }
+
     /// Every cached path, with its record.
     pub fn load_all(&self) -> Result<HashMap<String, FileRec>> {
         let txn = self.db.begin_read().context("begin read")?;
@@ -418,6 +437,34 @@ mod tests {
             "a removal is visible"
         );
         assert_eq!(c.load_keys().unwrap().len(), 3);
+    }
+
+    /// `entry_count` answers the same number as the key set it stands in for,
+    /// and a table that does not exist is still zero rather than an error.
+    #[test]
+    fn entry_count_matches_the_key_set_and_reads_a_missing_table_as_zero() {
+        // No entries table at all: the count is zero, exactly as `load_keys`
+        // answers an empty list for the same database.
+        let db = redb_builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let bare = CacheDb::open_writable(db);
+        assert_eq!(bare.entry_count().unwrap(), 0);
+
+        let c = CacheDb::open_temp(true).unwrap();
+        assert_eq!(c.entry_count().unwrap(), 0);
+        c.put("a.txt", &file_rec()).unwrap();
+        c.put("sub/b.bin", &file_rec()).unwrap();
+        c.put("a_dir", &FileRec::dir()).unwrap();
+        assert_eq!(c.entry_count().unwrap(), 3);
+        assert_eq!(
+            c.entry_count().unwrap(),
+            c.load_keys().unwrap().len() as u64,
+            "the count is the key set's size"
+        );
+
+        c.remove("a.txt").unwrap();
+        assert_eq!(c.entry_count().unwrap(), 2);
     }
 
     // -- read-only opens ---------------------------------------------------
