@@ -194,7 +194,9 @@ Review follow-ups from the notes above, addressed in one batch per phase.
 - Phase 0 batch — done, awaiting review: `5359071` (D1 diagnostics pinned),
   `3655645` (D2 test constructors), `dce87a2` (E3 field-key guard),
   `ff1d76c` (F2 helper moved to `util`).
-- Phase 1 batch — pending.
+- Phase 1 batch — done, awaiting review: `6f11ee3` (I2 lookup caveat doc),
+  `b89c189` (E2 visitor export), `b647505` (G3 `dst_all` scoped to `AllOf`);
+  G4 optional struct and the E2 summary-skip variant deliberately skipped.
 - Phase 2 (B1–D3) batch — pending.
 
 ## Skipped
