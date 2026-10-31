@@ -630,3 +630,41 @@ fn validate_dst_links(
 ) -> Result<()> {
     validate_links_disjoint(dst, entries, src_canonical, LinkSide::Dst)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::DigestSet;
+
+    fn link_entry() -> SideEntry {
+        SideEntry {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            cached: DigestSet::default(),
+            fresh: true,
+            is_link: true,
+        }
+    }
+
+    /// A link the walk kept can still fail to resolve by the time this check
+    /// runs; the error has to name the side whose root the user must fix.
+    #[test]
+    fn an_unresolvable_link_names_its_side() {
+        let t = girpr_tempdir::TempDir::new("girsync_sync", "resolve_link");
+        let root = t.subdir("root");
+        let other = t.subdir("other");
+        let mut entries = HashMap::new();
+        entries.insert("gone".to_string(), link_entry());
+
+        for (side, expected) in [
+            (LinkSide::Src, "resolve src link `gone`"),
+            (LinkSide::Dst, "resolve dst link `gone`"),
+        ] {
+            let err = validate_links_disjoint(&root, &entries, &other, side)
+                .expect_err("a missing target cannot be resolved");
+            let msg = format!("{err:#}");
+            assert!(msg.contains(expected), "expected `{expected}` in: {msg}");
+        }
+    }
+}
