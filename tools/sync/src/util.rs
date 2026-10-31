@@ -312,4 +312,38 @@ mod tests {
         ));
         assert!(!same_path(Path::new("C:/Ärger"), Path::new("c:/Arger")));
     }
+
+    /// A name that is not valid UTF-8 has no `to_str` answer, so the comparison
+    /// must fall through to the lossy Unicode fold. The unpaired surrogate is
+    /// valid UTF-16 storage but not valid UTF-8, which is the only way an
+    /// `OsStr` component reaches that branch on Windows.
+    #[cfg(windows)]
+    #[test]
+    fn a_non_utf8_component_still_compares_through_the_lossy_fold() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        // `C:\a<0xD800>b`, the surrogate standing in for a byte sequence the
+        // platform allows but UTF-8 cannot represent.
+        let name = |first: u16, last: u16| {
+            let mut units: Vec<u16> = r"C:\".encode_utf16().collect();
+            units.extend([first, 0xD800, last]);
+            PathBuf::from(OsString::from_wide(&units))
+        };
+        let lower = name(b'a' as u16, b'b' as u16);
+        let upper = name(b'A' as u16, b'B' as u16);
+        let other = name(b'a' as u16, b'c' as u16);
+        assert!(
+            lower.as_os_str().to_str().is_none(),
+            "the fixture must reach the fallback, not `to_str`"
+        );
+        assert!(
+            same_path(&lower, &upper),
+            "the lossy fold still ignores case around the undecodable component"
+        );
+        assert!(
+            !same_path(&lower, &other),
+            "and it still tells two different tails apart"
+        );
+    }
 }
