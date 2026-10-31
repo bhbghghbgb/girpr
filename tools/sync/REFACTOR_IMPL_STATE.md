@@ -197,7 +197,9 @@ Review follow-ups from the notes above, addressed in one batch per phase.
 - Phase 1 batch — done, awaiting review: `6f11ee3` (I2 lookup caveat doc),
   `b89c189` (E2 visitor export), `b647505` (G3 `dst_all` scoped to `AllOf`);
   G4 optional struct and the E2 summary-skip variant deliberately skipped.
-- Phase 2 (B1–D3) batch — pending.
+- Phase 2 (B1–D3) batch — done, awaiting review: `a5bae82` (B1 multi-link
+  pruning), `07db98c` (B2 copy-wiped kind filter), `d026655` (C2 comment);
+  the C2 shared-set style point and the D3 direct test deliberately skipped.
 
 ## Skipped
 
