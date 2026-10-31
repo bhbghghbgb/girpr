@@ -14,7 +14,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] E1 — gate `why_tag` behind `why`
 - [x] E3 — allocation-free `Record` rendering, sorted JSON keys
 - [x] F2 — one mixed-case collision helper
-- [ ] H2 — one backup/snapshot copy-aside helper
+- [x] H2 — one backup/snapshot copy-aside helper
 - [ ] C1 — precompute the `type_conflict` set
 
 ## Phase 1 — local performance and reporting
@@ -52,6 +52,7 @@ Tasks finished but not yet reviewed by hand:
 - E1 — `girsync: render why tags only when requested` (`d378dfd`)
 - E3 — `girsync: render records without per-field allocations` (`e30836d`)
 - F2 — `girsync: share mixed-case collision check` (`3628ba6`)
+- H2 — `girsync: share cache copy-aside helper` (`27aee3e`)
 
 ## Skipped
 
