@@ -241,8 +241,16 @@ pub fn plan_pairs(
         return Ok(plan);
     }
     // The run-wide src request as a set, built once: it does not depend on the
-    // pair. The dst request is built where only `all-of` consumes it.
+    // pair.
     let src_all = AlgoSet::from_iter(src.algos.iter().copied());
+    // Only `all-of` asks a side for the whole list; `any-of` settles each pair on
+    // one algorithm. Built once here rather than per pair, since neither the mode
+    // nor the request changes inside the loop. The two sides stay separate because
+    // a `SideRequest` may name different algorithms.
+    let dst_all = match mode {
+        HashMode::AllOf => AlgoSet::from_iter(dst.algos.iter().copied()),
+        HashMode::AnyOf => AlgoSet::NONE,
+    };
     // The same value the per-path answer uses, so the fallback and the answer
     // cannot be built from different inputs.
     plan.required.fallback = src_all;
@@ -298,11 +306,6 @@ pub fn plan_pairs(
         // — which is the gap the coverage check above exists to close.
         match mode {
             HashMode::AllOf => {
-                // The dst request as a set, built where it is consumed: only
-                // `all-of` asks for the whole list, while `any-of` asks for the one
-                // algorithm it picked for the pair. The two sides stay separate
-                // because a `SideRequest` may name different algorithms.
-                let dst_all = AlgoSet::from_iter(dst.algos.iter().copied());
                 // Every algorithm this side cannot obtain is a failure, because the
                 // run needs all of them.
                 record_shortfalls(&mut tally, &sides);
