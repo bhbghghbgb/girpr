@@ -24,7 +24,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] G2 — shared pair classification
 - [x] G3 — precompute the run-wide `AlgoSet`s
 - [x] G4 — shared shortfall scan and exact-key lookup
-- [ ] H1 — borrowed-slice codec decode
+- [x] H1 — borrowed-slice codec decode
 - [ ] I2 — typed digest lookup with the foreign fallback
 - [ ] J1 — per-worker copy scratch buffer
 - [ ] E2 — `visit_verdict` with the collecting adapter retained
@@ -59,6 +59,7 @@ Tasks finished but not yet reviewed by hand:
 - G2 — `girsync: share pair classification in diff` (`3877e90`)
 - G3 — `girsync: precompute run-wide algorithm sets` (`9dd10fe`)
 - G4 — `girsync: share shortfall scan in pair planning` (`fbd8e89`)
+- H1 — `girsync: decode cache rows from borrowed slices` (`747c0e1`)
 
 ## Skipped
 
