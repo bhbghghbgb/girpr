@@ -289,6 +289,15 @@ fn a_malformed_percent_sequence_passes_through() {
     assert_eq!(percent_decode("100%"), "100%");
 }
 
+/// The scan is over bytes, so the two bytes after a `%` are read as text even
+/// when they are the middle of a multi-byte character. There is no char
+/// boundary there, and a slice of the string would panic.
+#[test]
+fn a_percent_before_a_multibyte_character_passes_through() {
+    assert_eq!(percent_decode("%中"), "%中");
+    assert_eq!(percent_decode("%zz中"), "%zz中");
+}
+
 /// A name with a space is the reader's problem, and the tool must not paper
 /// over it by inserting a quote that changes the bytes. Only *values* are
 /// encoded; keys are `&'static str`s this crate chose.

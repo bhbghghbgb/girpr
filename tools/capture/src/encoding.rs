@@ -44,7 +44,10 @@ pub fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
+            // Parse the two bytes as text, never as a slice of `s`: a `%`
+            // followed by a multi-byte character has no char boundary at
+            // `i + 3`, and the pair is not hex anyway.
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
             if let Ok(b) = u8::from_str_radix(hex, 16) {
                 out.push(b);
                 i += 3;
