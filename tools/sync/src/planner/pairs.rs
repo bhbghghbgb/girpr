@@ -111,14 +111,8 @@ fn shared_pairs<'a>(
     let mut out: Vec<(&String, &String)> = Vec::new();
     match pairing {
         CasePairing::Exact => {
-            // Within one side, mixed-case collisions are already fatal (phase A), so
-            // a first-wins insert cannot lose a pair.
-            let mut seen: HashMap<&str, &String> = HashMap::new();
-            for k in src.keys() {
-                seen.insert(k.as_str(), k);
-            }
             for drel in dst.keys() {
-                if let Some(srel) = seen.get(drel.as_str()) {
+                if let Some((srel, _)) = src.get_key_value(drel.as_str()) {
                     out.push((srel, drel));
                 }
             }
@@ -308,20 +302,7 @@ pub fn plan_pairs(
             HashMode::AllOf => {
                 // Every algorithm this side cannot obtain is a failure, because the
                 // run needs all of them.
-                for (idx, req, e, rel) in sides {
-                    if req.cap.can_hash_from_disk {
-                        continue;
-                    }
-                    let short = AlgoSet::from_iter(
-                        req.algos
-                            .iter()
-                            .copied()
-                            .filter(|a| !obtainable(e, req.cap, a)),
-                    );
-                    if !short.is_empty() {
-                        tally[idx].missing.insert((*rel).clone(), short);
-                    }
-                }
+                record_shortfalls(&mut tally, &sides);
                 plan.required.by_rel.insert((*srel).clone(), src_all);
                 plan_one(&src, s, srel, src_all, &mut plan.src);
                 plan_one(&dst, d, drel, dst_all, &mut plan.dst);
@@ -336,21 +317,7 @@ pub fn plan_pairs(
                     // obtain anything is always a record — which makes this branch
                     // naming a non-hashable side, by construction rather than by a
                     // guess at which one it was.
-                    for (idx, req, e, rel) in sides {
-                        if req.cap.can_hash_from_disk {
-                            continue;
-                        }
-                        let t = &mut tally[idx];
-                        let short = AlgoSet::from_iter(
-                            req.algos
-                                .iter()
-                                .copied()
-                                .filter(|a| !obtainable(e, req.cap, a)),
-                        );
-                        if !short.is_empty() {
-                            t.missing.insert((*rel).clone(), short);
-                        }
-                    }
+                    record_shortfalls(&mut tally, &sides);
                     continue;
                 };
                 let chosen = AlgoSet::one(pick);
@@ -375,6 +342,31 @@ pub fn plan_pairs(
         }
     }
     Ok(plan)
+}
+
+/// Record the shortfalls of one undecided pair: for each side that cannot hash
+/// from disk, the requested algorithms it cannot obtain.
+///
+/// Only a side with a filesystem can make up a gap, so a side that cannot hash
+/// and lacks an algorithm is the only kind of shortfall there is to record.
+fn record_shortfalls(
+    tally: &mut [Tally; 2],
+    sides: &[(usize, &SideRequest<'_>, &SideEntry, &String)],
+) {
+    for &(idx, req, e, rel) in sides {
+        if req.cap.can_hash_from_disk {
+            continue;
+        }
+        let short = AlgoSet::from_iter(
+            req.algos
+                .iter()
+                .copied()
+                .filter(|a| !obtainable(e, req.cap, a)),
+        );
+        if !short.is_empty() {
+            tally[idx].missing.insert(rel.clone(), short);
+        }
+    }
 }
 
 /// The algorithm that settles one pair under [`HashMode::AnyOf`], or `None` when
