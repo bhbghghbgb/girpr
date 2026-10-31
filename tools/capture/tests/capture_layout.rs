@@ -59,7 +59,8 @@ struct Run {
 }
 
 impl Run {
-    /// The `SUMMARY` line, parsed into key=value pairs.
+    /// The `SUMMARY` line, parsed into key=value pairs. The summary percent-encodes
+    /// whitespace and `%`, so the values are decoded back.
     fn summary(&self) -> BTreeMap<&str, String> {
         let line = self
             .stdout
