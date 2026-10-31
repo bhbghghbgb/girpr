@@ -114,12 +114,29 @@ they stay in the pending list. The follow-ups below are non-blocking.
   `AnyOf` the per-pair `AlgoSet::one(pick)` is used. It is a two-byte value built
   once, so this is clarity only; moving it into the `AllOf` arm would remove the
   unused value if the loop grows.
+  **Not addressed in `b647505`:** the set moved *inside* the per-pair `AllOf`
+  arm, so under `all-of` it is rebuilt for every undecided pair — the exact
+  per-pair construction G3 removed, just moved one branch down. Hoist it to run
+  scope instead, before the pair loop, or restore the once-built value; no
+  behavior change either way:
+
+  ```rust
+  let dst_all = if mode == HashMode::AllOf {
+      AlgoSet::from_iter(dst.algos.iter().copied())
+  } else {
+      AlgoSet::NONE
+  };
+  ```
+
 - **G4 — helper signature is the only rough edge.**
   `record_shortfalls(&mut tally, &[(usize, &SideRequest<'_>, &SideEntry,
   &String)])` mirrors the local `sides` array exactly, and both call sites now
   record the same set; the `AnyOf` "nothing obtainable" branch is still the only
   place it runs under that mode. A tiny named struct would read better if a
   third field is ever added; no behavior to change.
+  **Declined in the follow-up batch:** the helper is private with one caller
+  shape, so the struct would add a type without removing awkwardness. Revisit
+  with a third field.
 - **H1 — wire format unchanged.** The borrowed `take` still fails on the same
   truncation and trailing-byte conditions, and `insert_named` still carries an
   unknown or wrong-length name. The byte-identity codec test is the guard; no
@@ -130,6 +147,8 @@ they stay in the pending list. The follow-ups below are non-blocking.
   `md5`. Every converted call site passes `a.as_str()`, so behavior is identical
   today; a sentence in `get_algo`'s doc would keep a future mixed-case caller
   honest.
+  **Addressed in `6f11ee3`:** the canonical-name caveat and the `get_named`
+  escape hatch are documented on `get_algo`.
 - **J1 — the new test is the guard.** The buffer is reused without clearing, and
   correctness rests on only `buf[..n]` being written and digested;
   `a_reused_buffer_digests_only_the_bytes_that_were_read` runs a big file before
@@ -141,6 +160,10 @@ they stay in the pending list. The follow-ups below are non-blocking.
   `sync` still builds the `SUMMARY` record and drops it in the closure;
   harmless, but a summary-skipping variant would avoid the work if that path
   grows.
+  **Addressed in `b89c189`:** `visit_verdict` is re-exported at the crate root.
+  The summary-skip variant was deliberately declined; the note calls it harmless,
+  and it would need a public signature change or a second visitor to keep in
+  sync, so no action.
 
 ### Phase 2 — behavior-adjacent, B1–D3 — accepted
 
@@ -209,9 +232,15 @@ Review follow-ups from the notes above, addressed in one batch per phase.
   runner is nextest in the dev profile, where they pass; gate those tests on
   `debug_assertions` (or make the guard a hard `assert!`) if a release-mode
   suite is ever added.
-- Phase 1 batch — done, awaiting review: `6f11ee3` (I2 lookup caveat doc),
-  `b89c189` (E2 visitor export), `b647505` (G3 `dst_all` scoped to `AllOf`);
-  G4 optional struct and the E2 summary-skip variant deliberately skipped.
+- Phase 1 batch — reviewed: `6f11ee3` (I2 lookup caveat doc) and `b89c189`
+  (E2 visitor export) accepted; `b647505` (G3 `dst_all` scoped to `AllOf`)
+  rejected because it rebuilds `dst_all` inside the per-pair `AllOf` arm. Re-land
+  with the set built once at run scope under `AllOf` (see the G3 note), and the
+  batch is accepted. G4's struct and the E2 summary-skip variant were
+  deliberately skipped and accepted as such. Checked at `b647505` in its own
+  worktree: `cargo test -p girsync` green on every target, and clippy and
+  `cargo fmt --check` clean. Behavior is unchanged; this is G3's performance
+  intent, not a correctness defect.
 - Phase 2 (B1–D3) batch — done, awaiting review: `a5bae82` (B1 multi-link
   pruning), `07db98c` (B2 copy-wiped kind filter), `d026655` (C2 comment);
   the C2 shared-set style point and the D3 direct test deliberately skipped.
