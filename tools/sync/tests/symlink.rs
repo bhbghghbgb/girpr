@@ -20,7 +20,8 @@ mod common;
 use std::path::Path;
 
 use common::{
-    dir_link, entry_names, file_link, is_link, log, parse_ndjson, rfile, sync_mem, temp_root, wfile,
+    dir_link, entry_names, file_link, is_link, log, parse_ndjson, recs_of, rfile, sync_mem,
+    temp_root, wfile,
 };
 use girsync::scan::walk_live;
 use girsync::{cmd_compare_self, cmd_sync};
@@ -942,6 +943,65 @@ fn a_sync_that_removes_a_link_leaves_compare_self_clean() {
         cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
         0,
         "the dst cache no longer claims the link's descendants"
+    );
+}
+
+/// One run can remove several links, and each one takes its followed subtree
+/// with it. Every descendant row has to go, whichever link carried it: two
+/// sibling links, with a third link nested inside the first one's target.
+#[test]
+fn a_sync_that_removes_several_links_prunes_every_descendant_row() {
+    let t = temp_root("links_cache_prune");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    let outside = t.subdir("outside");
+    wfile(&src, "real/x.txt", b"shared content");
+    wfile(&dst, "real/x.txt", b"shared content");
+    common::sync_mtime(&src.join("real/x.txt"), &dst.join("real/x.txt"));
+    wfile(&outside, "a/one.txt", b"one");
+    wfile(&outside, "a/sub/two.txt", b"two");
+    wfile(&outside, "b/three.txt", b"three");
+    wfile(&outside, "nested/four.txt", b"four");
+    skip_if_no_link!(
+        "directory",
+        dir_link(&outside.join("a"), &dst.join("alpha"))
+    );
+    skip_if_no_link!("directory", dir_link(&outside.join("b"), &dst.join("beta")));
+    // Inside the first link's target, so its rows sit under `alpha` and are
+    // removed with the link that carries them.
+    skip_if_no_link!(
+        "directory",
+        dir_link(&outside.join("nested"), &outside.join("a/nested"))
+    );
+
+    assert_eq!(
+        cmd_sync(common::sync(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+    assert!(!dst.join("alpha").exists(), "the first link is removed");
+    assert!(!dst.join("beta").exists(), "the second link is removed");
+
+    let rows = recs_of(&dst);
+    for rel in [
+        "alpha",
+        "alpha/one.txt",
+        "alpha/sub",
+        "alpha/sub/two.txt",
+        "alpha/nested",
+        "alpha/nested/four.txt",
+        "beta",
+        "beta/three.txt",
+    ] {
+        assert!(!rows.contains_key(rel), "row `{rel}` is gone");
+    }
+    assert!(
+        rows.contains_key("real/x.txt"),
+        "a path src mirrors keeps its row"
+    );
+    assert_eq!(
+        cmd_compare_self(common::compare_self_opts(dst.clone()), &log()).unwrap(),
+        0,
+        "the dst cache no longer claims any link's descendants"
     );
 }
 
