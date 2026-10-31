@@ -752,7 +752,7 @@ pub fn emit(line: &str) {
     // producer — one `BUNDLE` per bundle under a root — and for the
     // single-record commands this is noise. The handle is flushed by the
     // `LineWriter` behind stdout on `drop`, and `exit_with` flushes too.
-    let _guard = STDOUT_LOCK.lock();
+    let _guard = STDOUT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
     if let Some(rest) = line.strip_prefix("SUMMARY ") {
