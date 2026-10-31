@@ -27,7 +27,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] H1 — borrowed-slice codec decode
 - [x] I2 — typed digest lookup with the foreign fallback
 - [x] J1 — per-worker copy scratch buffer
-- [ ] E2 — `visit_verdict` with the collecting adapter retained
+- [x] E2 — `visit_verdict` with the collecting adapter retained
 
 ## Phase 2 — behavior-adjacent
 
@@ -62,6 +62,7 @@ Tasks finished but not yet reviewed by hand:
 - H1 — `girsync: decode cache rows from borrowed slices` (`747c0e1`)
 - I2 — `girsync: add typed digest lookup` (`20802e6`)
 - J1 — `girsync: reuse copy buffer per worker` (`867f9a9`)
+- E2 — `girsync: stream verdict records` (`5e1dc78`)
 
 ## Skipped
 
