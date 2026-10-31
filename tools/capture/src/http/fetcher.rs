@@ -446,9 +446,9 @@ pub struct Fetcher {
 impl Fetcher {
     /// Run `f` over `items`, at most `jobs` at a time, **in input order**.
     ///
-    /// [`crate::tasks::join_ordered`] owns the loop and the panic attribution;
-    /// this adds the fetcher handle each task needs and turns a task that did
-    /// not report into the text `fetch_errors` expects.
+    /// The shared ordered-join loop in `tasks` owns the concurrency and the
+    /// panic attribution; this adds the fetcher handle each task needs and turns
+    /// a task that did not report into the text `fetch_errors` expects.
     ///
     /// **Results come back in input order, not completion order.** That is the
     /// whole reason this is safe for anything that writes a document: a caller
