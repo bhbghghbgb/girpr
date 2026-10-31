@@ -13,7 +13,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - [x] **F4** — stdout lock panics on poisoning instead of recovering like every other lock
 - [x] **F14** — `Val::from(u64)`/`From<usize>` narrow with `as i64` and a justification that does not hold
 - [x] **F12** — `Rejections::snapshot` and `document` carry the same sort closure twice
-- [ ] **F10** — A17 doc comment states "Every state is acceptable" twice
+- [x] **F10** — A17 doc comment states "Every state is acceptable" twice
 - [ ] **F11** — duplicated doc line in `manifest/dump.rs` test
 
 ## 2. Local dedup, no output change
@@ -46,3 +46,4 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 - F4 — stdout lock recovers from poisoning like the other locks — commit `ffdeba5`
 - F14 — `u64`/`usize` values clamp into `i64` when building a `Val` — commit `e49d2ad`
 - F12 — one `sorted` helper for the rejection rows — commit `df4dd86`
+- F10 — A17's completeness point stated once — commit `4ad7b95`
