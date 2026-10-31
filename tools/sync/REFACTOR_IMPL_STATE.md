@@ -36,7 +36,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [r] C2 — copy/fix membership sets in the link-storage guards
 - [r] D3 — shared compare/compare-self tail
 - [x] F1 — keys-only alternate index, on-demand adopted rows, adoption-aware dry-run prune count
-- [ ] I3 — Windows ASCII fast path with the Unicode fallback
+- [x] I3 — Windows ASCII fast path with the Unicode fallback
 
 ## Phase 3 — rename path
 
@@ -45,6 +45,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 ## Pending review
 
 - F1 — `girsync: index alternate cache keys and count adoptions once` (`71452b6`)
+- I3 — `girsync: fast-path ASCII component comparison` (`3b05b69`)
 
 ## Review notes
 
