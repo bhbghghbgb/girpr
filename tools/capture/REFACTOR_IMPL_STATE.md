@@ -41,21 +41,10 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## Pending review
 
-None. F1, F15, F4, F14, F12, F10, F11, F2, F5 and F6 were reviewed and
-accepted: each diff matches its finding, the field values and recorded
-verdicts are unchanged, and `cargo nextest run -p gircap` (756 passed),
-`cargo clippy -p gircap --all-targets -- -D warnings`, `cargo fmt --check`
-and the rustdoc build are clean.
+_Nothing awaiting review._
 
-Non-blocking suggestions from that review, none of which holds up a task:
+## Follow-ups from review (non-blocking)
 
-- **F14** — the clamp has no direct test. A `Val::from(u64::MAX) ==
-  Val::Int(i64::MAX)` assertion would pin it as cheaply as the F1 regression
-  test pins the decoder.
-- **F15** — the deleted helper carried the one-line rationale "The summary
-  percent-encodes whitespace and `%`, so decode it back"; keep that context as
-  a comment at the import or first call site if a reader would otherwise have
-  to find `percent_encode` to understand why.
-- **F5** — `Verdict` holds an owned `Option<String>` and clones it into the
-  summary. Fine for one headline per run; an `Option<&str>` borrowed from the
-  report would remove the copy if this ever sits on a hotter path.
+- [ ] **R1** — `Val::from(u64::MAX) == Val::Int(i64::MAX)`, pinning the F14 clamp as the F1 test pins the decoder
+- [ ] **R2** — keep the "the summary percent-encodes whitespace and `%`" rationale as a comment at the first `percent_decode` call site in the integration tests
+- **Not actioned:** F5's `Verdict` holds an owned `Option<String>`; one headline per run, not a hot path, so borrowing it buys nothing today.
