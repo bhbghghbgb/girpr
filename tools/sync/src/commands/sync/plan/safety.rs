@@ -61,7 +61,7 @@ pub(crate) fn spare_link_storage(
 ) -> Result<()> {
     let mut storage = LinkStorage::default();
     // The plan is not mutated until `storage.apply` at the end, so membership
-    // in its copy and type-conflict sets can be read once up front.
+    // in its copy and fix-dir sets can be read once up front.
     let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
     let fix_dirs: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
     // Nothing to spare when no copy or delete could meet a link target.
