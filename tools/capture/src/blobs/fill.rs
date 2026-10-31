@@ -22,14 +22,12 @@ use super::{IndexedBlob, Set, Store};
 pub struct Filled {
     /// One entry per chunk, with the roles it plays.
     pub entries: Vec<(IndexedBlob, Vec<Set>)>,
-    /// Fetches that failed, one entry per chunk, in completion order.
+    /// Fetches that failed, one entry per chunk, in `wants` order.
     ///
-    /// **Completion order, not `wants` order.** `fill` pushes each error from
-    /// `JoinSet::join_next` as its task finishes, so a consumer must not zip this
-    /// list against `wants`; pair an error with its chunk through the id the
-    /// message starts with, or through the index row. `run` reads only the
-    /// length, and the row is written beside the error, so nothing today depends
-    /// on the order.
+    /// **`wants` order, not completion order.** `fill` records each failure
+    /// after the ordered join has placed every result in its slot, so a consumer
+    /// may rely on the position; the message also starts with the chunk id. `run`
+    /// reads only the length, and the row is written beside the error.
     ///
     /// **Not an error.** A chunk the CDN would not serve is recorded as a blob
     /// with its failure and the run continues; A6 is what decides whether that

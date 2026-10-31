@@ -346,78 +346,49 @@ impl Store {
         wants: &[Want],
         jobs: usize,
     ) -> (Vec<(IndexedBlob, Vec<Set>)>, Vec<String>) {
-        let mut out: Vec<Option<(IndexedBlob, Vec<Set>)>> =
-            (0..wants.len()).map(|_| None).collect();
-        let mut errors: Vec<String> = Vec::new();
-        let mut next = 0_usize;
-        let mut set = tokio::task::JoinSet::new();
+        let outcomes = crate::tasks::join_ordered(wants, jobs, "chunk fetch", |i, want| {
+            let store = self.clone();
+            let fetcher = fetcher.clone();
+            async move { Store::one(store, i, fetcher, want).await }
+        })
+        .await;
 
-        // Prime the set, then keep one job in flight per worker. A plain
-        // `for want in wants` would serialise; this does not need `futures`.
-        while next < wants.len() && set.len() < jobs.max(1) {
-            let i = next;
-            next += 1;
-            set.spawn(Store::one(
-                self.clone(),
-                i,
-                fetcher.clone(),
-                wants[i].clone(),
-            ));
-        }
-        while let Some(joined) = set.join_next().await {
-            match joined {
-                Ok((i, Ok(entry))) => {
+        let mut entries = Vec::with_capacity(wants.len());
+        let mut errors: Vec<String> = Vec::new();
+        for (i, outcome) in outcomes.into_iter().enumerate() {
+            let entry = match outcome {
+                Ok(entry) => {
                     // A partial row succeeded at preserving bytes but failed to
                     // fetch the chunk. The run's failed-fetch count must see it
                     // once, through the structured reason it carries.
                     if let Some(e) = &entry.0.props.fetch_error {
                         errors.push(e.detail.clone());
                     }
-                    out[i] = Some(entry);
+                    entry
                 }
                 // **The index and the error are recorded together.** The slot is
                 // known, so the row that says the chunk is absent can also say
                 // why -- and the failure is pushed exactly once.
-                Ok((i, Err(e))) => {
-                    out[i] = Some(self.unfilled(&wants[i], &e));
+                Err(crate::tasks::JoinOutcome::Failed(e)) => {
+                    let row = self.unfilled(&wants[i], &e);
                     errors.push(e.detail);
+                    row
                 }
-                // A panicking task takes its slot number with it, so its hole is
-                // filled below. Pushing a second, slotless error here would count
-                // the same failure twice, which is the bug this function had.
-                // The JoinError itself would be dropped here, so name the panic
-                // in the log before falling through to the generic row text.
-                Err(e) => {
-                    tracing::error!(
-                        error = %crate::tasks::join_failure(e, "chunk fetch"),
-                        "a chunk fetch task did not report; its slot is filled below"
-                    );
+                // A task that did not report still keeps its slot, so the row
+                // and the error name the chunk it belonged to. The payload is in
+                // `why` whenever the shared loop could map the task id back;
+                // only an unrecoverable id leaves the generic sentence.
+                Err(crate::tasks::JoinOutcome::Lost { why }) => {
+                    let why = why
+                        .unwrap_or_else(|| "the chunk fetch task panicked while storing it".into());
+                    let failure = FetchError::local(format!("{}: {why}", wants[i].chunk.id));
+                    errors.push(failure.detail.clone());
+                    self.unfilled(&wants[i], &failure)
                 }
-            }
-            if next < wants.len() {
-                let i = next;
-                next += 1;
-                set.spawn(Store::one(
-                    self.clone(),
-                    i,
-                    fetcher.clone(),
-                    wants[i].clone(),
-                ));
-            }
+            };
+            entries.push(entry);
         }
-
-        // A `None` slot is a fetch that neither succeeded nor reported, which can
-        // only be the panic above. Fill it so the index has no holes, and record
-        // it once, with the chunk id the task could not report.
-        for (i, o) in out.iter_mut().enumerate() {
-            if o.is_none() {
-                let why = "the chunk fetch task panicked while storing it";
-                let failure = FetchError::local(why);
-                errors.push(format!("{}: {why}", wants[i].chunk.id));
-                *o = Some(self.unfilled(&wants[i], &failure));
-            }
-        }
-        (out.into_iter().flatten().collect(), errors)
+        (entries, errors)
     }
 
     /// The index for a run that stored no blobs at all (`--no-chunk-blobs`).
