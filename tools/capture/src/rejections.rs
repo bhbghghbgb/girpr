@@ -133,9 +133,7 @@ impl Rejections {
     /// Every row, in the order the document writes them.
     pub fn snapshot(&self) -> Vec<Rejection> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let mut rows = state.rows.clone();
-        rows.sort_by(|a, b| (&a.source, &a.value, &a.rule).cmp(&(&b.source, &b.value, &b.rule)));
-        rows
+        sorted(&state)
     }
 
     /// How many rows have been recorded, including rows the cap dropped.
@@ -158,15 +156,20 @@ impl Rejections {
             cap_bytes: MAX_RETAINED_VALUE_BYTES as u64,
             total: state.rows.len() as u64,
             omitted: state.omitted,
-            rejections: {
-                let mut rows = state.rows.clone();
-                rows.sort_by(|a, b| {
-                    (&a.source, &a.value, &a.rule).cmp(&(&b.source, &b.value, &b.rule))
-                });
-                rows
-            },
+            rejections: sorted(&state),
         }
     }
+}
+
+/// The rows in the one order both [`Rejections::snapshot`] and
+/// [`Rejections::document`] write them.
+///
+/// Sorting by the same key in one place is what lets two captures of one input
+/// agree regardless of which manifest finished first.
+fn sorted(state: &State) -> Vec<Rejection> {
+    let mut rows = state.rows.clone();
+    rows.sort_by(|a, b| (&a.source, &a.value, &a.rule).cmp(&(&b.source, &b.value, &b.rule)));
+    rows
 }
 
 /// Cut `value` at [`MAX_RETAINED_VALUE_BYTES`] without splitting a character.
