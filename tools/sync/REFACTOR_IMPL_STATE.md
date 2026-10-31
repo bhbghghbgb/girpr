@@ -187,6 +187,16 @@ unimplemented. The follow-ups below are non-blocking.
   the helper returns `0` for an empty `Diff` and `4` otherwise, but that would
   duplicate what the command tests already do.
 
+## Follow-up batches
+
+Review follow-ups from the notes above, addressed in one batch per phase.
+
+- Phase 0 batch — done, awaiting review: `5359071` (D1 diagnostics pinned),
+  `3655645` (D2 test constructors), `dce87a2` (E3 field-key guard),
+  `ff1d76c` (F2 helper moved to `util`).
+- Phase 1 batch — pending.
+- Phase 2 (B1–D3) batch — pending.
+
 ## Skipped
 
 Tasks skipped, with the reason reported by the implementing session:
