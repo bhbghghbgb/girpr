@@ -105,6 +105,51 @@ struct RenameStep {
     perform: bool,
 }
 
+/// A longest-prefix move index: `old -> new` for exact renames and directory
+/// moves together.
+///
+/// A lookup tries the whole path first, then each ancestor from the longest to
+/// the shortest. The whole path winning first is what makes an exact rename beat
+/// a directory move above it, and an ancestor matches only at a component
+/// boundary, so `dir` does not rewrite `dir2/f`.
+#[derive(Default)]
+struct MoveIndex<'a> {
+    moves: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> MoveIndex<'a> {
+    fn insert(&mut self, old: &'a str, new: &'a str) {
+        self.moves.insert(old, new);
+    }
+
+    /// The moved spelling of `rel`, or `rel` unchanged when no move applies.
+    fn apply(&self, rel: &str) -> String {
+        match moved_prefix(rel, |p| self.moves.get(p).copied()) {
+            Some((new, len)) => format!("{new}{}", &rel[len..]),
+            None => rel.to_string(),
+        }
+    }
+}
+
+/// The longest prefix of `rel` that `get` answers, with that prefix's length.
+///
+/// The whole path is tried first, then its ancestors longest first. An ancestor
+/// counts only when the match ends at a `/` component boundary.
+fn moved_prefix<'m>(
+    rel: &str,
+    mut get: impl FnMut(&str) -> Option<&'m str>,
+) -> Option<(&'m str, usize)> {
+    if let Some(new) = get(rel) {
+        return Some((new, rel.len()));
+    }
+    for (i, _) in rel.match_indices('/').rev() {
+        if let Some(new) = get(&rel[..i]) {
+            return Some((new, i));
+        }
+    }
+    None
+}
+
 /// Turn the rename pairs into steps in a parent-first order, rewriting each
 /// `from` through the directory renames already planned.
 ///
@@ -119,10 +164,10 @@ fn plan_steps(
     renames: &[(String, String)],
     dm: &HashMap<String, crate::effective::EffRec>,
 ) -> Vec<RenameStep> {
-    let mut dir_moves: Vec<(String, String)> = Vec::new();
+    let mut dir_moves = MoveIndex::default();
     let mut steps = Vec::with_capacity(renames.len());
     for (from, to) in renames {
-        let effective_from = rewritten_from(from, &dir_moves);
+        let effective_from = dir_moves.apply(from);
         let is_dir = dm.get(from).is_some_and(|r| r.kind == "dir");
         let perform = effective_from != *to;
         steps.push(RenameStep {
@@ -135,44 +180,10 @@ fn plan_steps(
         if perform && is_dir {
             // Keyed by the original path: later `from`s are still spelled the
             // way the walk found them.
-            dir_moves.push((from.clone(), to.clone()));
+            dir_moves.insert(from, to);
         }
     }
     steps
-}
-
-/// Rewrite `from` through the directory renames already performed, choosing the
-/// longest matching prefix.
-///
-/// The longest prefix matters for nested renames: with `dir` -> `Dir` and
-/// `dir/sub` -> `Dir/Sub`, a path `dir/sub/f` must become `Dir/Sub/f`, not
-/// `Dir/sub/f`. A mapping matches only on a component boundary, so `dir` does
-/// not rewrite `dir2/f`.
-fn rewritten_from(from: &str, dir_moves: &[(String, String)]) -> String {
-    let mut best: Option<&(String, String)> = None;
-    for mv in dir_moves {
-        let old = &mv.0;
-        let boundary = from == old
-            || from
-                .strip_prefix(old)
-                .is_some_and(|rest| rest.starts_with('/'));
-        if boundary && best.is_none_or(|b| old.len() > b.0.len()) {
-            best = Some(mv);
-        }
-    }
-    match best {
-        Some((old, new)) => format!("{new}{}", &from[old.len()..]),
-        None => from.to_string(),
-    }
-}
-
-/// The key a dst map/cache entry has after the pass: an exact rename wins,
-/// otherwise the path follows its renamed ancestor directories.
-fn final_key(key: &str, renames: &[(String, String)], dir_moves: &[(String, String)]) -> String {
-    match renames.iter().find(|(from, _)| from == key) {
-        Some((_, to)) => to.clone(),
-        None => rewritten_from(key, dir_moves),
-    }
 }
 
 /// A unique sibling path for the two-step rename, claimed before it is used.
@@ -301,38 +312,26 @@ pub(super) struct RenameOutcome {
 /// subtree and a component boundary is respected.
 #[derive(Debug, Default)]
 pub(super) struct DiskSpelling {
-    /// `(post-rename, on-disk)` moves. The same path can carry two entries when
-    /// a directory move and its own rename both name it; the longest prefix is
-    /// identical, so either answer is right.
-    moves: Vec<(String, String)>,
+    /// post-rename -> on-disk.
+    to_disk: HashMap<String, String>,
+    /// on-disk -> post-rename.
+    to_plan: HashMap<String, String>,
 }
 
 impl DiskSpelling {
     pub(super) fn new(renames: &[(String, String)], dir_moves: &[(String, String)]) -> Self {
-        let mut moves = Vec::with_capacity(renames.len() + dir_moves.len());
-        for (old, new) in renames {
-            moves.push((new.clone(), old.clone()));
+        let mut spelling = Self::default();
+        for (old, new) in renames.iter().chain(dir_moves) {
+            spelling.to_disk.insert(new.clone(), old.clone());
+            spelling.to_plan.insert(old.clone(), new.clone());
         }
-        for (old, new) in dir_moves {
-            moves.push((new.clone(), old.clone()));
-        }
-        Self { moves }
+        spelling
     }
 
     /// The on-disk spelling of `rel`, which the pass reports under `rel`.
     pub(super) fn disk_rel<'a>(&'a self, rel: &'a str) -> Cow<'a, str> {
-        let mut best: Option<&(String, String)> = None;
-        for mov in &self.moves {
-            let boundary = rel == mov.0
-                || rel
-                    .strip_prefix(&mov.0)
-                    .is_some_and(|rest| rest.starts_with('/'));
-            if boundary && best.is_none_or(|b| mov.0.len() > b.0.len()) {
-                best = Some(mov);
-            }
-        }
-        match best {
-            Some((new, old)) => Cow::Owned(format!("{old}{}", &rel[new.len()..])),
+        match moved_prefix(rel, |p| self.to_disk.get(p).map(String::as_str)) {
+            Some((old, len)) => Cow::Owned(format!("{old}{}", &rel[len..])),
             None => Cow::Borrowed(rel),
         }
     }
@@ -345,19 +344,8 @@ impl DiskSpelling {
     /// then look the path up in the post-rename plan. Longest old prefix wins, the
     /// same boundary rule in the other direction.
     pub(super) fn plan_rel<'a>(&'a self, rel: &'a str) -> Cow<'a, str> {
-        let mut best: Option<&(String, String)> = None;
-        for mov in &self.moves {
-            let old = &mov.1;
-            let boundary = rel == old
-                || rel
-                    .strip_prefix(old)
-                    .is_some_and(|rest| rest.starts_with('/'));
-            if boundary && best.is_none_or(|b| old.len() > b.1.len()) {
-                best = Some(mov);
-            }
-        }
-        match best {
-            Some((new, old)) => Cow::Owned(format!("{new}{}", &rel[old.len()..])),
+        match moved_prefix(rel, |p| self.to_plan.get(p).map(String::as_str)) {
+            Some((new, len)) => Cow::Owned(format!("{new}{}", &rel[len..])),
             None => Cow::Borrowed(rel),
         }
     }
@@ -471,11 +459,18 @@ pub(super) fn rename_to_src_casing(
         .map(|s| (s.original_from.clone(), s.to.clone()))
         .collect();
     // Re-key the in-memory map, including under `dry_run`: the plan computed
-    // after this pass reads `dm`. `final_key` handles both exact file renames
-    // and dst-only descendants of a renamed directory.
+    // after this pass reads `dm`. The index handles both exact file renames and
+    // dst-only descendants of a renamed directory.
+    let mut final_moves = MoveIndex::default();
+    for (from, to) in &renames {
+        final_moves.insert(from, to);
+    }
+    for (from, to) in &dir_moves {
+        final_moves.insert(from, to);
+    }
     let old = std::mem::take(dm);
     for (key, rec) in old {
-        dm.insert(final_key(&key, &renames, &dir_moves), rec);
+        dm.insert(final_moves.apply(&key), rec);
     }
     if !dry_run {
         // Move the cache rows with the files. A row under a renamed directory
@@ -484,7 +479,7 @@ pub(super) fn rename_to_src_casing(
         let keys = dst_db.load_keys()?;
         let mut moves = Vec::new();
         for key in keys {
-            let to = final_key(&key, &renames, &dir_moves);
+            let to = final_moves.apply(&key);
             if to != key
                 && let Some(rec) = dst_db.get(&key)?
             {
@@ -543,6 +538,15 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    /// A move index over `moves`, in the order the pass inserts them.
+    fn move_index<'a>(moves: impl IntoIterator<Item = &'a (String, String)>) -> MoveIndex<'a> {
+        let mut index = MoveIndex::default();
+        for (old, new) in moves {
+            index.insert(old, new);
+        }
+        index
     }
 
     /// The set is exactly "dst holds it under different casing", stated as a set
@@ -790,11 +794,35 @@ mod tests {
             ("dir".to_string(), "Dir".to_string()),
             ("dir/sub".to_string(), "Dir/Sub".to_string()),
         ];
-        assert_eq!(rewritten_from("dir/sub/f.txt", &moves), "Dir/Sub/f.txt");
+        let index = move_index(&moves);
+        assert_eq!(index.apply("dir/sub/f.txt"), "Dir/Sub/f.txt");
         assert_eq!(
-            rewritten_from("dir2/f.txt", &moves),
+            index.apply("dir2/f.txt"),
             "dir2/f.txt",
             "a prefix match must end at a component boundary"
+        );
+    }
+
+    /// An exact move wins over the directory move above it, even though the
+    /// ancestor would rewrite the path too.
+    #[test]
+    fn an_exact_move_wins_over_its_ancestor() {
+        let moves = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/sub".to_string(), "Dir/Sub".to_string()),
+            ("dir/sub/f.txt".to_string(), "Dir/Sub/F.txt".to_string()),
+        ];
+        let index = move_index(&moves);
+
+        assert_eq!(
+            index.apply("dir/sub/f.txt"),
+            "Dir/Sub/F.txt",
+            "the exact file move wins over the directory move"
+        );
+        assert_eq!(
+            index.apply("dir/sub"),
+            "Dir/Sub",
+            "the exact directory move wins over its parent"
         );
     }
 
@@ -802,17 +830,29 @@ mod tests {
     /// map and the cache, even though it has no rename pair of its own.
     #[test]
     fn a_dst_only_descendant_follows_its_renamed_parent() {
-        let renames = vec![("dir".to_string(), "Dir".to_string())];
-        let dir_moves = vec![("dir".to_string(), "Dir".to_string())];
+        let renames = [("dir".to_string(), "Dir".to_string())];
+        let dir_moves = [("dir".to_string(), "Dir".to_string())];
+        let index = move_index(renames.iter().chain(dir_moves.iter()));
 
-        assert_eq!(final_key("dir", &renames, &dir_moves), "Dir");
-        assert_eq!(
-            final_key("dir/orphan.txt", &renames, &dir_moves),
-            "Dir/orphan.txt"
-        );
-        assert_eq!(
-            final_key("other/x.txt", &renames, &dir_moves),
-            "other/x.txt"
-        );
+        assert_eq!(index.apply("dir"), "Dir");
+        assert_eq!(index.apply("dir/orphan.txt"), "Dir/orphan.txt");
+        assert_eq!(index.apply("other/x.txt"), "other/x.txt");
+    }
+
+    /// The dry-run spelling map keeps the same precedence in both directions:
+    /// an exact move answers before the directory move above it.
+    #[test]
+    fn the_spelling_map_prefers_an_exact_move() {
+        let renames = vec![
+            ("dir".to_string(), "Dir".to_string()),
+            ("dir/f.txt".to_string(), "Dir/F.txt".to_string()),
+        ];
+        let dir_moves = vec![("dir".to_string(), "Dir".to_string())];
+        let spelling = DiskSpelling::new(&renames, &dir_moves);
+
+        assert_eq!(spelling.disk_rel("Dir/F.txt"), "dir/f.txt");
+        assert_eq!(spelling.disk_rel("Dir/g.txt"), "dir/g.txt");
+        assert_eq!(spelling.plan_rel("dir/f.txt"), "Dir/F.txt");
+        assert_eq!(spelling.plan_rel("dir/g.txt"), "Dir/g.txt");
     }
 }
