@@ -314,6 +314,24 @@ fn duplicate_names_are_kept_not_merged() {
     assert!(s.to_text_line().ends_with("n=1 n=2"));
 }
 
+/// A count too large for `i64` clamps, and does not wrap negative.
+///
+/// Counts and byte totals are `u64` while a field value is `i64`. An `as i64`
+/// cast would turn the largest count into a negative one, so a summary would
+/// report a run that downloaded fewer than zero bytes; the clamp is the whole
+/// point of the conversion, so it is pinned rather than left to the comment
+/// above it.
+#[test]
+fn a_count_too_large_for_i64_clamps_instead_of_wrapping_negative() {
+    assert_eq!(Val::from(u64::MAX), Val::Int(i64::MAX));
+    // On a 32-bit target `usize::MAX` fits in `i64` and must not be clamped.
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(Val::from(usize::MAX), Val::Int(i64::MAX));
+    // The clamp must not touch a value that already fits.
+    assert_eq!(Val::from(7_u64), Val::Int(7));
+    assert_eq!(Val::from(7_usize), Val::Int(7));
+}
+
 #[test]
 fn output_format_parses_both_spellings_and_rejects_others() {
     assert_eq!("text".parse(), Ok(OutputFormat::Text));
