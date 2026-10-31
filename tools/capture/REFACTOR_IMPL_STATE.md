@@ -9,7 +9,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 ## 1. Safe fixes, no output change
 
 - [x] **F1** — `percent_decode` slices by byte offset and panics on a multi-byte character after `%`
-- [ ] **F15** — integration tests carry their own `percent_decode`; import the library one instead
+- [x] **F15** — integration tests carry their own `percent_decode`; import the library one instead
 - [ ] **F4** — stdout lock panics on poisoning instead of recovering like every other lock
 - [ ] **F14** — `Val::from(u64)`/`From<usize>` narrow with `as i64` and a justification that does not hold
 - [ ] **F12** — `Rejections::snapshot` and `document` carry the same sort closure twice
@@ -42,3 +42,4 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 ## Pending review
 
 - F1 — `percent_decode` byte-oriented, regression test added — commit `d61798c`
+- F15 — integration tests use the library `percent_decode` — commit `38853ed`
