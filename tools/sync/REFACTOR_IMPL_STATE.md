@@ -22,7 +22,7 @@ Legend: `[ ]` pending · `[x]` done (awaiting review) · `[~]` skipped · `[r]` 
 - [x] D4 — add `CacheDb::entry_count` for the open log
 - [x] G1 — src-then-dst-only exact diff
 - [x] G2 — shared pair classification
-- [ ] G3 — precompute the run-wide `AlgoSet`s
+- [x] G3 — precompute the run-wide `AlgoSet`s
 - [ ] G4 — shared shortfall scan and exact-key lookup
 - [ ] H1 — borrowed-slice codec decode
 - [ ] I2 — typed digest lookup with the foreign fallback
@@ -57,6 +57,7 @@ Tasks finished but not yet reviewed by hand:
 - D4 — `girsync: add count-only cache entry method` (`2c6047e`)
 - G1 — `girsync: walk exact diff keys without a union set` (`7cde85c`)
 - G2 — `girsync: share pair classification in diff` (`3877e90`)
+- G3 — `girsync: precompute run-wide algorithm sets` (`9dd10fe`)
 
 ## Skipped
 
