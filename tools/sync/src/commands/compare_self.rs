@@ -60,9 +60,8 @@ use crate::effective::{
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
-use crate::util::elapsed_s;
 
-use super::report_diff;
+use super::report_and_finish;
 
 /// Audit `<dir>` against `<dir>/girpr-cache`. Returns the process exit code:
 /// `0` if the cache is in step, `4` if it has drifted.
@@ -268,17 +267,6 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         pairing,
         common.show_identical,
     );
-    let code = report_diff(&diff, &log.report(), common.why, common.show_identical);
-    info!(
-        missing = diff.missing.len(),
-        extra = diff.extra.len(),
-        changed = diff.changed.len(),
-        type_conflict = diff.type_conflict.len(),
-        case_mismatch = diff.case_mismatch.len(),
-        total_diff = diff.total(),
-        elapsed_s = elapsed_s(t0),
-        exit = code,
-        "end"
-    );
+    let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
     Ok(code)
 }
