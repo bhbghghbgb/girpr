@@ -49,6 +49,7 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## Follow-ups from review (non-blocking)
 
-- [x] **R1** — `Val::from(u64::MAX) == Val::Int(i64::MAX)`, pinning the F14 clamp as the F1 test pins the decoder — commit `95df907`
-- [x] **R2** — keep the "the summary percent-encodes whitespace and `%`" rationale as a comment at the first `percent_decode` call site in the integration tests — commit `a30b4b7`
+- [x] **R1** — `Val::from(u64::MAX) == Val::Int(i64::MAX)`, pinning the F14 clamp as the F1 test pins the decoder — commit `95df907` — validated: with the conversion put back to `as i64` the test fails at `src/report/tests.rs:326`; it passes on HEAD.
+- [x] **R2** — keep the "the summary percent-encodes whitespace and `%`" rationale as a comment at the first `percent_decode` call site in the integration tests — commit `a30b4b7` — validated: both `Run::summary` parsers carry it, and the mock server's independent decoder in `tests/common` is untouched.
 - **Not actioned:** F5's `Verdict` holds an owned `Option<String>`; one headline per run, not a hot path, so borrowing it buys nothing today.
+- **History:** at the head validated here (`1e37b37`), `95df907`, `9b649eb`, `a30b4b7` and `1e37b37` are all ancestors, in that order, and each touched only the files its entry names. Gates at that head: `cargo nextest run -p gircap` 760 passed / 3 skipped, `cargo clippy -p gircap --all-targets -- -D warnings` and `cargo fmt --check` clean; the rustdoc build is **red** on `http/fetcher.rs:449`, where F3's `map_concurrently` doc links the private `crate::tasks::join_ordered`. That is F3's review, not R1/R2's.
