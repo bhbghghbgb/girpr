@@ -141,14 +141,16 @@ impl From<i64> for Val {
 }
 impl From<u64> for Val {
     fn from(v: u64) -> Self {
-        // Byte counts are `u64` in the API types; the wire form is JSON, where a
-        // negative number cannot appear, so the narrowing is exact.
-        Val::Int(v as i64)
+        // Counts and byte totals are `u64` while a field value is `i64`. No real
+        // run gets near `i64::MAX`, so clamping is the honest answer for one
+        // that does: the record stays readable instead of wrapping negative.
+        Val::Int(i64::try_from(v).unwrap_or(i64::MAX))
     }
 }
 impl From<usize> for Val {
     fn from(v: usize) -> Self {
-        Val::Int(v as i64)
+        // Same rule as `From<u64>`: a count that does not fit `i64` clamps.
+        Val::Int(i64::try_from(v).unwrap_or(i64::MAX))
     }
 }
 impl From<u32> for Val {
