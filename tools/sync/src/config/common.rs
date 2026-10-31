@@ -334,3 +334,14 @@ pub struct ScanMode {
     /// honour it incorrectly by opening the wrong kind of handle.
     pub dry_run: bool,
 }
+
+impl ScanMode {
+    /// Both decisions are explicit: neither has a default, so a caller cannot
+    /// omit the dry-run half and silently persist a run meant to write nothing.
+    pub const fn new(no_trust_cached_hashes: bool, dry_run: bool) -> Self {
+        Self {
+            no_trust_cached_hashes,
+            dry_run,
+        }
+    }
+}

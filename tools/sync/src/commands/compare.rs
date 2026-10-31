@@ -80,12 +80,9 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // or in-memory handle. Every decision below is unchanged either way.
     //
     // Built once per side rather than at each of the four use sites: `dry_run` is
-    // a property of the run, so a field added to `ScanMode` has one place to be
-    // threaded through here, the same shape `sync` uses.
-    let scan_mode = |no_trust_cached_hashes| ScanMode {
-        no_trust_cached_hashes,
-        dry_run: common.dry_run,
-    };
+    // a property of the run, so this closure fixes it once and leaves the
+    // per-side flag to the call, the same shape `sync` uses.
+    let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, common.dry_run);
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);
     let mut s = open_side(&s, &common, src_mode)?;

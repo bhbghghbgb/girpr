@@ -54,10 +54,7 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // how much would it read?" without committing to it. It still hashes every
     // file, because `update` trusts nothing and a dry run that skipped the
     // hashing would not be answering the same question.
-    let mode = ScanMode {
-        no_trust_cached_hashes: true,
-        dry_run: common.dry_run,
-    };
+    let mode = ScanMode::new(true, common.dry_run);
     // Both flags are accepted and change nothing here, for the same reason they are
     // accepted and change nothing for a record side: there is no short circuit to
     // switch off. `plan_one_side` has no pairing step, so `StatTrust` is never

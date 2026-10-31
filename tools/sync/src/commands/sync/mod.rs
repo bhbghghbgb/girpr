@@ -168,10 +168,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // produce a second timestamped pair mid-run. `open_folder_cache` is also the
     // only thing that decides how a dry run opens a cache, so this stays a plain
     // call rather than a second policy.
-    let scan_mode = |no_trust_cached_hashes| ScanMode {
-        no_trust_cached_hashes,
-        dry_run,
-    };
+    let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, dry_run);
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);
     let src_db = open_folder_cache(&src, &common, src_mode, false)?;

@@ -179,15 +179,13 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // Phase A for both roles, then one pair plan, then phase C — the shape
     // `compare` uses. The planner needs both sides' maps at once, which is why
     // both handles stay live across the plan.
-    let mode = ScanMode {
-        no_trust_cached_hashes: false,
-        // Unconditionally true, and deliberately not read from the flag. It is
-        // belt-and-braces rather than load-bearing — `cold` is in-memory and
-        // `record` is read-only, so neither could be written regardless — but
-        // keeping it means the no-write guarantee does not rest on one
-        // remembered `true` if the handles are ever reworked.
-        dry_run: true,
-    };
+    // `false`/`true` spelled out rather than read from a flag. The `dry_run`
+    // half is unconditionally true, and deliberately so: it is belt-and-braces
+    // rather than load-bearing — `cold` is in-memory and `record` is read-only,
+    // so neither could be written regardless — but keeping it means the no-write
+    // guarantee does not rest on one remembered `true` if the handles are ever
+    // reworked.
+    let mode = ScanMode::new(false, true);
     let disk_a = scan_stat_only(&dir, &cold, &common, mode)?;
     // Labels for a coverage error. The record is `src` here, so the record is what
     // a failure names — which is the side that cannot fill a gap, and the one the
