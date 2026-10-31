@@ -49,6 +49,6 @@ Legend: `[ ]` pending · `[~]` in progress · `[x]` done, awaiting review · `[!
 
 ## Follow-ups from review (non-blocking)
 
-- [ ] **R1** — `Val::from(u64::MAX) == Val::Int(i64::MAX)`, pinning the F14 clamp as the F1 test pins the decoder
+- [x] **R1** — `Val::from(u64::MAX) == Val::Int(i64::MAX)`, pinning the F14 clamp as the F1 test pins the decoder — commit `95df907`
 - [ ] **R2** — keep the "the summary percent-encodes whitespace and `%`" rationale as a comment at the first `percent_decode` call site in the integration tests
 - **Not actioned:** F5's `Verdict` holds an owned `Option<String>`; one headline per run, not a hot path, so borrowing it buys nothing today.
