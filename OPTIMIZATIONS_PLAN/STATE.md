@@ -23,10 +23,10 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T09 | P2 - fetch manifests concurrently | completed | 8244a36, ebbbb14, 8a32496 | RC-03 |
 | T10 | P4 - move blocking phases off workers; parallel check | completed | 3b65c99, f7e4a13, 021d810, 90f62de | RC-04 |
 | T11 | P5 - size the runtime for `--jobs` | completed | 63ceede, 35d55fe | RC-04 |
-| T12 | P6 - verify with one whole-file digest | pending_review | fcdcfe1, b099683, c8c5d3f | RC-05 |
-| T13 | P7 - reuse the temp source handle | pending_review | 65d1915, 8e8303a, 024d535 | RC-05 |
-| T14 | P8 - remove the per-piece sink seek | pending_review | 8920f51, 62095c4 | RC-05 |
-| T15 | P10 - share the local chunk map | pending_review | 6d5b5b4, eb705ce | RC-05 |
+| T12 | P6 - verify with one whole-file digest | completed | fcdcfe1, b099683, c8c5d3f | RC-05 |
+| T13 | P7 - reuse the temp source handle | completed | 65d1915, 8e8303a, 024d535 | RC-05 |
+| T14 | P8 - remove the per-piece sink seek | completed | 8920f51, 62095c4, 9921c0d | RC-05 |
+| T15 | P10 - share the local chunk map | completed | 6d5b5b4, eb705ce | RC-05 |
 | T16 | P3 - consume `--scan` verdicts in repair | todo | | RC-06 |
 | T17 | C2 + C9 - one lock for every mutating run | todo | | RC-07 |
 | T18 | A1 - narrow the public surface | todo | | RC-07 |
@@ -68,7 +68,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-02 | T05-T07 | done | | All three completed without fixes |
 | RC-03 | T08-T09 | done | | Both completed without fixes |
 | RC-04 | T10-T11 | done | | Both completed without fixes |
-| RC-05 | T12-T15 | in_progress | | |
+| RC-05 | T12-T15 | done | 9921c0d | T14 fixed: reservation settled on chunk seek failure |
 | RC-06 | T16 | pending | | |
 | RC-07 | T17-T19 | pending | | |
 | RC-08 | T20-T22 | pending | | |
@@ -122,6 +122,14 @@ until the main tasks and rework are done.
 | F21 | RC-04 review | `src/repair/phases/check.rs` | A panicking check task becomes a damaged-file verdict instead of failing the run, unlike purging. | todo |
 | F22 | RC-04 review | `src/main.rs`, `src/cli.rs` | A huge `--io-threads` now fails runtime construction rather than clamping; validate the flag. | todo |
 | F23 | T10 implementer | `src/repair/phases/check.rs` | The damaged-chunk total from check is only logged, not carried on `Summary`. | todo |
+| F24 | RC-05 review | `src/util/md5.rs` | `scan_reader`/`Scan.file_md5` return hex that callers re-parse; carry `Md5` instead. | todo |
+| F25 | RC-05 review | `src/repair/file/temp.rs` tests | The rollback resume-point test sets `tmp_len` by hand; the caller's update is not exercised end-to-end. | todo |
+| F26 | RC-05 review | `src/repair/file/temp.rs` | The sink's seek-failure refund path has no test seam. | todo |
+| F27 | RC-05 review | `src/repair/file/temp.rs` | The source handle stays open across `promote_tmp`; drop it first to avoid the platform assumption. | todo |
+| F28 | T13 implementer | `src/repair/file/temp.rs` | `try_reuse_slice`'s doc still says it "Returns `false`"; the return type is `ChunkOutcome`. | todo |
+| F29 | T13 implementer | `src/repair/file/inplace.rs` | The in-place path still resolves reuse sources per chunk. | todo |
+| F30 | T14 implementer | `src/repair/file/temp.rs` | `try_reuse_slice` seeks `out` to the chunk offset even on the download path, now redundant. | todo |
+| F31 | T14 implementer | `src/repair/file/temp.rs` | The sink remains unbuffered; buffering needs explicit restart/digest flush handling. | todo |
 
 ## Follow-up batches
 
