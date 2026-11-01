@@ -39,9 +39,10 @@ pub struct Args {
     pub audio: Vec<String>,
 
     /// Max concurrent FILES (chunks inside a file are sequential -> HDD friendly).
-    /// SSD: 4-8, HDD: 1-2.
-    #[arg(long, default_value_t = 4)]
-    pub io_threads: usize,
+    /// SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker
+    /// threads; `--io-threads` is a deprecated alias.
+    #[arg(long = "jobs", visible_alias = "io-threads", default_value_t = 4)]
+    pub jobs: usize,
 
     /// Delete files not in the live manifest after patching (Collapse files-cleanup parity).
     /// Same cleanup as `--purge-before`, only the timing differs.
@@ -253,8 +254,14 @@ impl Args {
     /// Validate the raw flags into a [`RunCtx`]. Every failure here is a usage
     /// error (exit 1), so the caller only has to pick the exit code.
     pub fn into_ctx(self) -> Result<RunCtx> {
-        if self.io_threads == 0 {
-            bail!("io-threads must be >= 1");
+        if self.jobs == 0 {
+            bail!("--jobs must be >= 1");
+        }
+        let available = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        if let Some(warning) = excessive_jobs_warning(self.jobs, available) {
+            tracing::warn!("{warning}");
         }
         let (audio, _saw_none) = parse_audio_selection(&self.audio)?;
         // A bad glob is a usage error (exit 1) and says which one it was.
@@ -282,7 +289,7 @@ impl Args {
             // reports, so it is tracked next to the value: an unflagged run
             // must not grow a key.
             repair_mode_explicit: self.repair_mode.is_some(),
-            jobs: self.io_threads,
+            jobs: self.jobs,
             check_only: self.check_only,
             scan: self.scan,
             purge_only: self.purge_only,
@@ -301,6 +308,22 @@ impl Args {
             sleep: Arc::new(RealSleep),
         })
     }
+}
+
+/// The warning for a file window wider than the host's parallelism.
+///
+/// `--jobs` bounds in-flight file tasks, not worker threads: each file task
+/// does synchronous disk I/O, so admitting more tasks than the host can run at
+/// once can starve timers and network polling. It is a warning rather than a
+/// refusal because an oversized window can still be a deliberate choice.
+fn excessive_jobs_warning(jobs: usize, available: usize) -> Option<String> {
+    (jobs > available).then(|| {
+        format!(
+            "--jobs {jobs} exceeds the {available} available workers; more file tasks than \
+             workers can starve timers and network polling. --jobs bounds concurrent files, \
+             not worker threads"
+        )
+    })
 }
 
 /// Split the repeatable `--audio` values into a canonical language set.
@@ -402,18 +425,18 @@ mod tests {
     }
 
     #[test]
-    fn zero_threads_is_a_usage_error() {
+    fn zero_jobs_is_a_usage_error() {
         let args = Args::parse_from([
             "girpr",
             "--game-path",
             ".",
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "0",
         ]);
         let err = args.into_ctx().unwrap_err().to_string();
-        assert!(err.contains("io-threads must be >= 1"), "{err}");
+        assert!(err.contains("--jobs must be >= 1"), "{err}");
     }
 
     #[test]
