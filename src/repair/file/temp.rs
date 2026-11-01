@@ -104,15 +104,14 @@ async fn repair_attempt_inner(
         .metadata()
         .with_context(|| format!("stat tmp {}", tmp_path.display()))?
         .len();
+    let mut tmp_len = have;
     if have > file.size as u64 {
         tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
+        tmp_len = file.size as u64;
     }
     tracing::debug!(
-        tmp_bytes = f
-            .metadata()
-            .with_context(|| format!("stat tmp {}", tmp_path.display()))?
-            .len(),
+        tmp_bytes = tmp_len,
         expect_size = file.size,
         "tmp resume point"
     );
@@ -121,18 +120,22 @@ async fn repair_attempt_inner(
     // instead of allocating a fresh 512 KiB buffer per chunk.
     let mut scratch = Vec::new();
     for c in &file.chunks {
-        match try_reuse_slice(
+        let outcome = try_reuse_slice(
             ctx,
             final_path,
             c,
             reuse_entries,
             &mut f,
             &mut scratch,
-            tmp_path,
+            &mut tmp_len,
             writes,
-        )? {
+        )?;
+        match outcome {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
-            ChunkOutcome::Reused => stats.chunks_reused += 1,
+            ChunkOutcome::Reused => {
+                stats.chunks_reused += 1;
+                tmp_len = tmp_len.max(chunk_end(c)?);
+            }
             ChunkOutcome::Download => {
                 if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats, writes).await
                 {
@@ -147,8 +150,15 @@ async fn repair_attempt_inner(
                     if let Err(rollback) = rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64) {
                         return Err(chunk_failure_after_rollback(tmp_path, rollback, e));
                     }
+                    tmp_len = c.offset.max(0) as u64;
+                    tracing::debug!(
+                        tmp_bytes = tmp_len,
+                        chunk = %c.id,
+                        "tmp resume point after rollback"
+                    );
                     return Err(e);
                 }
+                tmp_len = tmp_len.max(chunk_end(c)?);
             }
         }
     }
@@ -164,6 +174,24 @@ enum ChunkOutcome {
     Resumed,
     Reused,
     Download,
+}
+
+/// The exclusive end of a chunk in the target file, validated against the
+/// manifest's signed fields.
+///
+/// The manifest controls both numbers; a corrupt pair must fail this file
+/// normally rather than panic (release builds would wrap here).
+fn chunk_end(c: &SophonChunk) -> Result<u64> {
+    u64::try_from(c.offset)
+        .ok()
+        .zip(u64::try_from(c.uncompressed_size).ok())
+        .and_then(|(offset, size)| offset.checked_add(size))
+        .with_context(|| {
+            format!(
+                "chunk {} has an invalid offset/size: {} + {}",
+                c.id, c.offset, c.uncompressed_size
+            )
+        })
 }
 
 /// Truncate the `_tmp` back to `offset`, so a chunk that failed cannot be
@@ -243,32 +271,17 @@ fn try_reuse_slice(
     reuse_entries: Option<&FileReuse>,
     out: &mut File,
     scratch: &mut Vec<u8>,
-    tmp_path: &std::path::Path,
+    tmp_len: &mut u64,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
-    // The manifest controls both numbers; a corrupt pair must fail this file
-    // normally rather than panic (release builds would wrap here).
-    let end = u64::try_from(c.offset)
-        .ok()
-        .zip(u64::try_from(c.uncompressed_size).ok())
-        .and_then(|(offset, size)| offset.checked_add(size))
-        .with_context(|| {
-            format!(
-                "chunk {} has an invalid offset/size: {} + {}",
-                c.id, c.offset, c.uncompressed_size
-            )
-        })?;
-    let cur_len = out
-        .metadata()
-        .with_context(|| format!("stat tmp {} before reuse", tmp_path.display()))?
-        .len();
+    let end = chunk_end(c)?;
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
     // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
     // before failing shut. Mirrors Starward's
     // `if (fs.Length < chunk.Offset + chunk.UncompressedSize)` skip.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343
-    if cur_len >= end {
+    if *tmp_len >= end {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
         return Ok(ChunkOutcome::Resumed);
     }
