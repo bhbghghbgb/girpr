@@ -641,7 +641,7 @@ mod tests {
                 files: Vec::new(),
                 url_prefix_by_file: Default::default(),
             }),
-            local_map: LocalChunkMap::new(),
+            local_map: Arc::new(LocalChunkMap::new()),
             summary: Arc::new(Summary::new()),
             dry_run: false,
             repair_mode: RepairMode::Temp,

@@ -857,7 +857,7 @@ mod tests {
             dir.to_path_buf(),
             None,
             plan,
-            LocalChunkMap::new(),
+            Arc::new(LocalChunkMap::new()),
             Summary::new(),
             1,
             false,
