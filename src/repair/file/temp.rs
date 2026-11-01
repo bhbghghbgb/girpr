@@ -626,7 +626,7 @@ mod tests {
     use crate::repair::phases::plan::RepairPlan;
     use crate::report::Summary;
     use crate::sleep::NoSleep;
-    use crate::sophon::ReuseEntry;
+    use crate::sophon::{ChunkSink, ReuseEntry};
     use crate::util::Md5;
 
     /// A context with no network activity: the tests below only reach the
@@ -891,5 +891,44 @@ mod tests {
             "the rolled-back chunk must not be resumed"
         );
         assert_eq!(std::fs::metadata(&tmp).unwrap().len(), 4);
+    }
+
+    /// The sink positions the file once and then writes sequentially: two
+    /// pieces land at `offset..offset+len`, and `written` reports their total.
+    /// A retry restarts the chunk at its offset instead of appending to what
+    /// the failed attempt left behind.
+    #[test]
+    fn the_sink_writes_from_its_offset_and_restarts_over_it() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "sink_offset");
+        let path = dir.join("out.bin");
+        std::fs::write(&path, b"0123456789abcdef").unwrap();
+        let mut out = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let ctx = test_ctx();
+
+        let mut sink = ChunkFileSink::new(&ctx, &mut out, 4).expect("seek to the chunk offset");
+        sink.write_all(b"ab").unwrap();
+        sink.write_all(b"cd").unwrap();
+        assert_eq!(sink.written(), 4, "the count is the bytes that landed");
+        sink.flush().unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"0123abcd89abcdef",
+            "the two pieces are contiguous from the chunk offset"
+        );
+
+        sink.restart().unwrap();
+        assert_eq!(sink.written(), 0, "a retry starts the chunk over");
+        sink.write_all(b"XY").unwrap();
+        assert_eq!(sink.written(), 2);
+        sink.flush().unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"0123XYcd89abcdef",
+            "the retry overwrites from the offset rather than appending"
+        );
     }
 }
