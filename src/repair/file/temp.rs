@@ -119,6 +119,10 @@ async fn repair_attempt_inner(
     // One scratch buffer for this file: every reuse hash and copy reuses it
     // instead of allocating a fresh 512 KiB buffer per chunk.
     let mut scratch = Vec::new();
+    // The reuse source is the same file for every chunk, so one lazily opened
+    // handle serves them all. A failed read drops it, and the next chunk may
+    // open the path once more instead of failing the file.
+    let mut src_handle: Option<File> = None;
     for c in &file.chunks {
         let outcome = try_reuse_slice(
             ctx,
@@ -127,6 +131,7 @@ async fn repair_attempt_inner(
             reuse_entries,
             &mut f,
             &mut scratch,
+            &mut src_handle,
             &mut tmp_len,
             writes,
         )?;
@@ -271,6 +276,7 @@ fn try_reuse_slice(
     reuse_entries: Option<&FileReuse>,
     out: &mut File,
     scratch: &mut Vec<u8>,
+    src_handle: &mut Option<File>,
     tmp_len: &mut u64,
     writes: &mut FileWrites,
 ) -> Result<ChunkOutcome> {
@@ -294,53 +300,70 @@ fn try_reuse_slice(
     };
     let ro = entry.offset;
 
-    let mut sf = match File::open(src).with_context(|| format!("open {}", src.display())) {
-        Ok(sf) => sf,
-        Err(e) => {
-            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-            return Ok(ChunkOutcome::Download);
-        }
+    // Take the file out while it is in use. A failed read leaves the slot
+    // empty, so the next chunk tries a fresh open once rather than holding on
+    // to a handle that is known to be unusable.
+    let mut sf = match src_handle.take() {
+        Some(sf) => sf,
+        None => match File::open(src).with_context(|| format!("open {}", src.display())) {
+            Ok(sf) => sf,
+            Err(e) => {
+                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                return Ok(ChunkOutcome::Download);
+            }
+        },
     };
-    match util::md5::md5_reader_slice_digest(
+    let digest = match util::md5::md5_reader_slice_digest(
         &mut sf,
         ro as u64,
         c.uncompressed_size as u64,
         scratch,
     ) {
-        Ok(h) if h.matches_hex(&c.uncompressed_md5) => {
-            tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            // The same handle: seek back to the slice start and copy the
-            // bytes that were just verified, instead of opening `src` again.
-            sf.seek(SeekFrom::Start(ro as u64))?;
-            let mut remaining = c.uncompressed_size as u64;
-            let buf = scratch_slice(scratch, COPY_BUF);
-            while remaining > 0 {
-                let want = (remaining as usize).min(buf.len());
-                let n = sf.read(&mut buf[..want])?;
-                if n == 0 {
-                    // Short slice: fall through to the download, which re-seeks
-                    // to `c.offset` and overwrites the partial copy.
-                    tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
-                    return Ok(ChunkOutcome::Download);
-                }
-                // The write ceiling counts *this* copy: it goes into `*_tmp` and
-                // appears in neither `download_bytes` nor the plan's estimate.
-                reserve_write(ctx, n as u64)?;
-                out.write_all(&buf[..n])?;
-                note_write(ctx, writes, n as u64)?;
-                remaining -= n as u64;
-            }
-            Ok(ChunkOutcome::Reused)
-        }
-        Ok(h) => {
-            tracing::debug!(chunk = %c.id, slice_md5 = %h, "reuse slice md5 mismatch -> download");
-            Ok(ChunkOutcome::Download)
-        }
+        Ok(h) => h,
         Err(e) => {
             tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-            Ok(ChunkOutcome::Download)
+            return Ok(ChunkOutcome::Download);
         }
+    };
+    if !digest.matches_hex(&c.uncompressed_md5) {
+        *src_handle = Some(sf);
+        tracing::debug!(chunk = %c.id, slice_md5 = %digest, "reuse slice md5 mismatch -> download");
+        return Ok(ChunkOutcome::Download);
     }
+    tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
+    // The same handle: seek back to the slice start and copy the bytes that
+    // were just verified, instead of opening `src` again.
+    if let Err(e) = sf.seek(SeekFrom::Start(ro as u64)) {
+        tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+        return Ok(ChunkOutcome::Download);
+    }
+    let mut remaining = c.uncompressed_size as u64;
+    let buf = scratch_slice(scratch, COPY_BUF);
+    while remaining > 0 {
+        let want = (remaining as usize).min(buf.len());
+        let n = match sf.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                return Ok(ChunkOutcome::Download);
+            }
+        };
+        if n == 0 {
+            // Short slice: fall through to the download, which re-seeks
+            // to `c.offset` and overwrites the partial copy.
+            *src_handle = Some(sf);
+            tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
+            return Ok(ChunkOutcome::Download);
+        }
+        // The write ceiling counts *this* copy: it goes into `*_tmp` and
+        // appears in neither `download_bytes` nor the plan's estimate.
+        reserve_write(ctx, n as u64)?;
+        out.write_all(&buf[..n])?;
+        note_write(ctx, writes, n as u64)?;
+        remaining -= n as u64;
+    }
+    *src_handle = Some(sf);
+    Ok(ChunkOutcome::Reused)
 }
 
 /// The sink of a streamed chunk: the decoded bytes go straight into the
