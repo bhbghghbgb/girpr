@@ -676,6 +676,83 @@ mod tests {
         assert_eq!(s.download.live(), 1 + u64::MAX / 2);
     }
 
+    /// The no-ceiling charge takes the `fetch_add` fast path: every call
+    /// answers yes, and concurrent charges still add up to the exact sum.
+    #[test]
+    fn an_unlimited_charge_accepts_concurrently_and_counts_exactly() {
+        let s = Arc::new(Summary::default());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        assert!(s.reserve_write_bytes(7), "no ceiling ever refuses");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(s.write.live(), 8 * 100 * 7);
+    }
+
+    /// The same for the settled figure: with no verified ceiling the settle
+    /// always reports "within limit" and still counts every byte.
+    #[test]
+    fn an_unlimited_settle_accepts_concurrently_and_counts_exactly() {
+        let s = Arc::new(Summary::default());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        assert!(s.note_write_bytes(11), "no ceiling ever refuses");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(s.write.settled(), 8 * 100 * 11);
+    }
+
+    /// The fast path saturates rather than wrapping at the top of the range:
+    /// a meter cannot be pushed back to a small figure that would switch a
+    /// ceiling off.
+    #[test]
+    fn the_unlimited_path_saturates_at_the_top_of_the_range() {
+        let m = Meter::new();
+        assert!(m.charge_live(u64::MAX));
+        assert_eq!(m.live(), u64::MAX);
+        assert!(m.charge_live(1));
+        assert_eq!(m.live(), u64::MAX, "the charge saturates, not wraps");
+
+        let m = Meter::new();
+        assert!(m.settle(u64::MAX));
+        assert_eq!(m.settled(), u64::MAX);
+        assert!(m.settle(1));
+        assert_eq!(m.settled(), u64::MAX, "the settle saturates, not wraps");
+    }
+
+    /// A ceiling installed after construction is still honored: the setter
+    /// allows it, and the fast path must not have cached the sentinel.
+    #[test]
+    fn a_limit_installed_after_construction_still_binds() {
+        let mut m = Meter::new();
+        assert!(m.charge_live(100), "no ceiling yet");
+        assert!(m.settle(100), "no verified ceiling yet");
+        m.set_live_limit(Some(100));
+        m.set_settled_limit(Some(100));
+        assert_eq!(m.live_limit(), Some(100));
+        assert_eq!(m.settled_limit(), Some(100));
+        assert!(!m.charge_live(1), "the late live ceiling binds");
+        assert_eq!(m.live(), 100, "the refused charge added nothing");
+        assert!(!m.settle(1), "the late verified ceiling binds");
+        assert_eq!(m.settled(), 101, "the settle counted before reporting");
+    }
+
     #[test]
     fn a_reservation_is_all_or_nothing_and_the_boundary_is_inclusive() {
         let mut s = Summary::default();
