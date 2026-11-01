@@ -18,7 +18,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T04 | C7 - use a Windows path key, not Unicode lowercase | completed | 176561b, 670c45e | RC-01 |
 | T05 | C3 - never publish a partial audio target | pending_review | 5ba1466, 084bb1e | RC-02 |
 | T06 | C4 - write `--plan-out` atomically | pending_review | 3b9fcce, 3675334 | RC-02 |
-| T07 | C8 - one temp-file naming rule | todo | | RC-02 |
+| T07 | C8 - one temp-file naming rule | in_progress | | RC-02 |
 | T08 | P1 - overlap metadata calls | todo | | RC-03 |
 | T09 | P2 - fetch manifests concurrently | todo | | RC-03 |
 | T10 | P4 - move blocking phases off workers; parallel check | todo | | RC-04 |
