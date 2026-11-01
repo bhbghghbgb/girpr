@@ -1294,6 +1294,41 @@ async fn a_second_run_against_the_same_install_is_refused() {
 }
 
 #[tokio::test]
+async fn read_only_runs_do_not_take_the_lock() {
+    // A held lock only refuses a run that mutates the install. Verification,
+    // a dry run and a printed plan stay lock-free.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock_readonly");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+
+    let mut check = ctx_for(dir.to_path_buf(), &mock, 1);
+    check.check_only = true;
+    let (_, code) = repair::run(check)
+        .await
+        .expect("check-only ignores the lock");
+    assert_eq!(code, 0);
+
+    let mut dry = ctx_for(dir.to_path_buf(), &mock, 1);
+    dry.dry_run = true;
+    let (_, code) = repair::run(dry).await.expect("dry-run ignores the lock");
+    assert_eq!(code, 0);
+
+    let mut plan = ctx_for(dir.to_path_buf(), &mock, 1);
+    plan.print_plan = true;
+    let (_, code) = repair::run(plan)
+        .await
+        .expect("print-plan ignores the lock");
+    assert_eq!(code, 0);
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_legacy_in_install_lock_is_left_alone() {
     // Older runs put the lock at the game dir's root. This run locks outside
     // the install and must not delete the old file behind the user's back;

@@ -224,4 +224,60 @@ mod tests {
         let msg = format!("{:#}", held(&path));
         assert!(msg.contains("body is unreadable"), "{msg}");
     }
+
+    #[test]
+    fn different_game_dirs_do_not_conflict() {
+        let one = girpr_tempdir::TempDir::new("girpr_test_lock", "dir_one");
+        let two = girpr_tempdir::TempDir::new("girpr_test_lock", "dir_two");
+        let first = Lock::acquire(&one).expect("the first install is locked");
+        let second = Lock::acquire(&two).expect("another install is independent");
+        assert_ne!(first.path(), second.path());
+    }
+
+    #[test]
+    fn dropping_releases_the_lock() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "release");
+        let path = {
+            let lock = Lock::acquire(&dir).expect("the lock is taken");
+            lock.path().to_path_buf()
+        };
+        assert!(!path.exists(), "the temp file is removed best-effort");
+        let _again = Lock::acquire(&dir).expect("the OS released the lock");
+    }
+
+    #[test]
+    fn a_file_left_by_a_dead_run_does_not_block() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "dead");
+        // A killed run leaves its body behind, but the OS has released the
+        // handle: there is no mtime rule and no wall-clock wait.
+        let path = lock_path(&dir);
+        std::fs::write(&path, "pid=1\nstarted=2000-01-01T00:00:00Z\n").unwrap();
+        let lock = Lock::acquire(&dir).expect("an unlocked leftover is harmless");
+        assert_eq!(lock.path(), path);
+    }
+
+    #[test]
+    fn lock_policy_covers_every_run_mode() {
+        // A mutating run, including `--purge-only`: takes the lock.
+        assert!(takes_lock(false, false, false));
+        // `--dry-run` (readonly) and `--check-only`: no lock.
+        assert!(!takes_lock(true, false, false));
+        assert!(!takes_lock(false, true, false));
+        assert!(!takes_lock(true, true, false));
+        // `--print-plan`: no lock.
+        assert!(!takes_lock(false, false, true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_key_folds_ascii_case_on_windows() {
+        assert_eq!(
+            key_for(Path::new(r"C:\Game")),
+            key_for(Path::new(r"c:\game"))
+        );
+        assert_ne!(
+            key_for(Path::new(r"C:\Game")),
+            key_for(Path::new(r"D:\Game"))
+        );
+    }
 }
