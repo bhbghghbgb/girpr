@@ -29,7 +29,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T15 | P10 - share the local chunk map | completed | 6d5b5b4, eb705ce | RC-05 |
 | T16 | P3 - consume `--scan` verdicts in repair | completed | 2ea0747, df034d0 | RC-06 |
 | T17 | C2 + C9 - one lock for every mutating run | pending_review | 8800aad, 14cffba, cc204d9, d698d8c | RC-07 |
-| T18 | A1 - narrow the public surface | todo | | RC-07 |
+| T18 | A1 - narrow the public surface | in_progress | | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | todo | | RC-07 |
 | T20 | A3 - exercise the post-phase in dry-run | todo | | RC-08 |
 | T21 | A4 - one emitter and one progress driver | todo | | RC-08 |
