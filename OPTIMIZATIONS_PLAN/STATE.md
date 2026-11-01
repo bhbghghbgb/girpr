@@ -21,8 +21,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T07 | C8 - one temp-file naming rule | completed | 6739ad8, d47582f, 78477e4 | RC-02 |
 | T08 | P1 - overlap metadata calls | completed | eb8fe99, a88c94f | RC-03 |
 | T09 | P2 - fetch manifests concurrently | completed | 8244a36, ebbbb14, 8a32496 | RC-03 |
-| T10 | P4 - move blocking phases off workers; parallel check | pending_review | 3b65c99, f7e4a13, 021d810, 90f62de | RC-04 |
-| T11 | P5 - size the runtime for `--jobs` | pending_review | 63ceede, 35d55fe | RC-04 |
+| T10 | P4 - move blocking phases off workers; parallel check | completed | 3b65c99, f7e4a13, 021d810, 90f62de | RC-04 |
+| T11 | P5 - size the runtime for `--jobs` | completed | 63ceede, 35d55fe | RC-04 |
 | T12 | P6 - verify with one whole-file digest | todo | | RC-05 |
 | T13 | P7 - reuse the temp source handle | todo | | RC-05 |
 | T14 | P8 - remove the per-piece sink seek | todo | | RC-05 |
@@ -67,7 +67,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-01 | T01-T04 | done | 262dcdc | T03 fixed: deprecated atomic API in `adjust_live` |
 | RC-02 | T05-T07 | done | | All three completed without fixes |
 | RC-03 | T08-T09 | done | | Both completed without fixes |
-| RC-04 | T10-T11 | in_progress | | |
+| RC-04 | T10-T11 | done | | Both completed without fixes |
 | RC-05 | T12-T15 | pending | | |
 | RC-06 | T16 | pending | | |
 | RC-07 | T17-T19 | pending | | |
@@ -117,6 +117,11 @@ until the main tasks and rework are done.
 | F16 | RC-03 review | `src/repair/phases/manifest.rs` | A fast failure still waits for slower siblings; reorder incrementally and cancel the rest. | todo |
 | F17 | T08 implementer | `src/repair/phases/metadata.rs` | Blocking local reads are dropped unawaited on early return; drain them for stricter lifetime hygiene. | todo |
 | F18 | T09 implementer | `tests/common` | The mock models a single latest manifest; multi-manifest integration coverage needs fixture work. | todo |
+| F19 | RC-04 review | `src/repair/phases/check.rs` | `--check-only` emits progress only after the whole verify pass; a ticker should keep it live. | todo |
+| F20 | RC-04 review | `src/repair/phases/post.rs`, `src/repair/purge.rs` | `delete_deprecated` and `apply_purge` still run synchronous filesystem loops on async workers. | todo |
+| F21 | RC-04 review | `src/repair/phases/check.rs` | A panicking check task becomes a damaged-file verdict instead of failing the run, unlike purging. | todo |
+| F22 | RC-04 review | `src/main.rs`, `src/cli.rs` | A huge `--io-threads` now fails runtime construction rather than clamping; validate the flag. | todo |
+| F23 | T10 implementer | `src/repair/phases/check.rs` | The damaged-chunk total from check is only logged, not carried on `Summary`. | todo |
 
 ## Follow-up batches
 
