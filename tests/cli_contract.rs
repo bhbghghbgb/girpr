@@ -220,7 +220,7 @@ fn help_text_lists_every_documented_flag() {
         "--game-path",
         "--biz",
         "--audio",
-        "--io-threads",
+        "--jobs",
         "--purge-after",
         "--purge-before",
         "--check-only",
@@ -249,6 +249,23 @@ fn help_text_lists_every_documented_flag() {
     ] {
         assert!(stdout.contains(flag), "help is missing {flag}:\n{stdout}");
     }
+}
+
+#[test]
+fn help_names_jobs_and_keeps_the_compatibility_alias_discoverable() {
+    let (_, stdout, _) = run(&["--help"]);
+    assert!(stdout.contains("--jobs"), "{stdout}");
+    assert!(
+        stdout.contains("--io-threads"),
+        "the compatibility alias stays discoverable:\n{stdout}"
+    );
+}
+
+#[test]
+fn zero_jobs_is_exit_one_and_the_message_names_the_flag() {
+    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("--jobs must be >= 1"), "{stderr}");
 }
 
 #[test]
@@ -484,7 +501,7 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
     );
     let body = std::fs::read_to_string(&log).expect("the environment named the file");
     assert!(
-        body.contains("usage error: io-threads must be >= 1"),
+        body.contains("usage error: --jobs must be >= 1"),
         "and it holds the run's own records:\n{body}"
     );
 }

@@ -440,6 +440,47 @@ mod tests {
     }
 
     #[test]
+    fn jobs_and_its_alias_produce_the_same_file_window() {
+        let parse = |flag: &str| {
+            Args::parse_from([
+                "girpr",
+                "--game-path",
+                ".",
+                "--biz",
+                "hk4e_global",
+                flag,
+                "8",
+            ])
+        };
+        let primary = parse("--jobs");
+        let alias = parse("--io-threads");
+        assert_eq!(primary.jobs, 8);
+        assert_eq!(alias.jobs, 8);
+        assert_eq!(primary.into_ctx().unwrap().jobs, 8);
+        assert_eq!(alias.into_ctx().unwrap().jobs, 8);
+    }
+
+    #[test]
+    fn an_oversized_file_window_warns_but_still_runs() {
+        assert_eq!(excessive_jobs_warning(4, 4), None);
+        let warning = excessive_jobs_warning(8, 4).expect("8 files on 4 workers warns");
+        assert!(warning.contains("--jobs 8"), "{warning}");
+        assert!(warning.contains("4 available workers"), "{warning}");
+        assert!(warning.contains("not worker threads"), "{warning}");
+
+        let args = Args::parse_from([
+            "girpr",
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--jobs",
+            "1000",
+        ]);
+        assert_eq!(args.into_ctx().unwrap().jobs, 1000);
+    }
+
+    #[test]
     fn omitted_audio_is_not_explicit_and_defaults_jobs_to_4() {
         let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
         let ctx = args.into_ctx().unwrap();
