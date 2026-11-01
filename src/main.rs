@@ -5,10 +5,10 @@ use clap::Parser;
 use clap::error::ErrorKind;
 
 use girpr::cli::Args;
+use girpr::config::RunCtx;
 use girpr::{logging, repair, report};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let args = parse_args();
     // Logging first: everything after this point is diagnosable from the file.
     // Read off `args` before `into_ctx` consumes it — the flag layer is live
@@ -29,7 +29,6 @@ async fn main() {
         eprintln!("log file: {}", path.display());
     }
 
-    let output = args.output;
     let ctx = match args.into_ctx() {
         Ok(c) => c,
         Err(e) => {
@@ -40,10 +39,57 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    // The file tasks inside the run do blocking disk I/O on the async
+    // runtime's workers. One worker beyond the file window keeps timers and
+    // network polling able to run while every file task is waiting on the
+    // disk, so raising `--io-threads` does not starve the runtime itself.
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let workers = worker_threads(available, ctx.jobs);
+    tracing::info!(
+        worker_threads = workers,
+        jobs = ctx.jobs,
+        "runtime sized for requested file window"
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            // A runtime that cannot start is an environment failure, not a
+            // repair failure: exit 1 like any other usage-level error.
+            eprintln!("ERROR failed to start runtime: {e:#}");
+            std::process::exit(1);
+        }
+    };
+
+    std::process::exit(runtime.block_on(run(ctx)));
+}
+
+/// Worker threads for a run that admits `jobs` files at once.
+///
+/// At least the host's parallelism, and always one more than the file window
+/// so the runtime keeps a worker for timers and network progress. The addition
+/// saturates: an absurd `jobs` must not overflow the thread count.
+fn worker_threads(available: usize, jobs: usize) -> usize {
+    available.max(jobs.saturating_add(1))
+}
+
+/// Run the pipeline and return the process exit code.
+///
+/// The caller builds the runtime first, so nothing here decides *how* the
+/// pipeline is scheduled.
+async fn run(ctx: RunCtx) -> i32 {
     // `output` is logged with the rest of the run's shape because every data-plane
     // line in the file after this one is rendered in it. A log file with no
     // record of the plane is a log file whose `SUMMARY` line cannot be parsed
     // by the same reader that parses stdout.
+    let output = ctx.output;
     tracing::info!(
         "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={} output={}",
         ctx.game_dir.display(),
@@ -60,12 +106,12 @@ async fn main() {
         Ok((summary, code)) => {
             // stdout for parsing + log so a stderr-only capture still keeps it.
             report::emit(&report::summary_record(&summary, code), output);
-            std::process::exit(code);
+            code
         }
         Err(f) => {
             tracing::error!("fatal(exit={}): {:#}", f.exit_code, f.source);
             eprintln!("FATAL {:#}", f.source);
-            std::process::exit(f.exit_code);
+            f.exit_code
         }
     }
 }
