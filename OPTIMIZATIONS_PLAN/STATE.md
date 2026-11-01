@@ -31,9 +31,9 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T17 | C2 + C9 - one lock for every mutating run | completed | 8800aad, 14cffba, cc204d9, d698d8c | RC-07 |
 | T18 | A1 - narrow the public surface | completed | c0dd7de, 9007c90 | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | completed | fa79ffd, c1c875a, 14bef05 | RC-07 |
-| T20 | A3 - exercise the post-phase in dry-run | pending_review | d32c395, bb1368c, c4285e7, f221aad | RC-08 |
-| T21 | A4 - one emitter and one progress driver | pending_review | 0948590, b8d5068, c56681c | RC-08 |
-| T22 | A5 - return an exit code and flush logs | pending_review | dc8f7cd, 54ec0ee, e197cd3 | RC-08 |
+| T20 | A3 - exercise the post-phase in dry-run | completed | d32c395, bb1368c, c4285e7, f221aad, f0fa925 | RC-08 |
+| T21 | A4 - one emitter and one progress driver | completed | 0948590, b8d5068, c56681c | RC-08 |
+| T22 | A5 - return an exit code and flush logs | completed | dc8f7cd, 54ec0ee, e197cd3 | RC-08 |
 | T23 | P9 - buffer the file log sink | todo | | RC-09 |
 | T24 | P11 - remove purge/scope per-pass allocations | todo | | RC-09 |
 | T25 | P13 - fast-path unlimited meters | todo | | RC-09 |
@@ -71,7 +71,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-05 | T12-T15 | done | 9921c0d | T14 fixed: reservation settled on chunk seek failure |
 | RC-06 | T16 | done | | Completed without fixes |
 | RC-07 | T17-T19 | done | | All three completed without fixes |
-| RC-08 | T20-T22 | in_progress | | |
+| RC-08 | T20-T22 | done | f0fa925 | T20 fixed: docs' deprecated-list dry-run contract |
 | RC-09 | T23-T26 | pending | | |
 | RC-10 | T27 | pending | | |
 | RC-11 | T28-T29 | pending | | |
@@ -144,6 +144,16 @@ until the main tasks and rework are done.
 | F43 | T18 implementer | `src/report/mod.rs` | `Summary` public fields have types (`Meter`, `SummaryFlags`, `Ceiling`) no longer nameable outside the crate. | todo |
 | F44 | T19 implementer | `src/cli.rs` | On hosts with parallelism below 4, the default `--jobs 4` warns on every run. | todo |
 | F45 | T17 implementer | `src/repair/lock.rs` | On Windows the exclusive lock hides the body, so refusals usually cannot name the holder pid. | todo |
+| F46 | RC-08 review | `src/repair/purge.rs`, `src/repair/phases/post.rs` | `--purge-before --purge-after --dry-run` lists the same cleanup candidates twice. | todo |
+| F47 | RC-08 review | `src/repair/phases/post.rs` | A dry run that trips the post-repair ceiling logs error-level `limit exceeded` yet exits 0. | todo |
+| F48 | RC-08 review | `src/report/mod.rs` | `emit_progress`/`PROGRESS_INTERVAL_SECS` are no longer re-exported; restore if that is API. | todo |
+| F49 | RC-08 review | `src/logging.rs` tests | A flush test asserts it is the only setter of the global sink; fragile if another test installs tracing. | todo |
+| F50 | T20 implementer | `src/repair/phases/post.rs` | A dry run now does a second purge walk plus the audio walk, adding I/O and network work. | todo |
+| F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | todo |
+| F52 | T21 implementer | `src/repair/phases/check.rs` | Check-only counters are folded after `collect`, so the ticker may report `done=0` mid-phase. | todo |
+| F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | todo |
+| F54 | T22 implementer | `src/logging.rs` | The flush handle is a `OnceLock` for the first sink only; a second `init_tracing` is unflushable. | todo |
+| F55 | T22 implementer | `src/logging.rs` | The flush-failure stderr branch has no test (stderr capture is process-level). | todo |
 
 ## Follow-up batches
 
