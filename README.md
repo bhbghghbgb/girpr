@@ -220,7 +220,10 @@ flowchart TD
   and it uses the per-launcher pair (cn `1/1`, global `1/0`, bili `14/0`) — the
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
-  no `config.ini`, byte counters stay 0; purge lists are only logged).
+  no `config.ini`, byte counters stay 0). `--dry-run` also exercises the post-phase's
+  read-only paths: it lists the deprecated deletes, the audio cache move and the
+  cleanup, and stops before the `config.ini` bump. `--check-only` and `--print-plan`
+  do not run the post-phase, so they also skip its deprecated-list request.
   A malformed manifest chunk range is a **plan** error (exit `2`) in every
   mode, including these read-only ones, so `--check-only` cannot report such a
   file intact and `--print-plan` cannot print a plan that cannot run.
@@ -309,7 +312,7 @@ cargo build --release
 | `--check-only` | off | Verify size+MD5; writes nothing. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
-| `--dry-run` | off | Log actions; writes nothing |
+| `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
 | `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed) |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
