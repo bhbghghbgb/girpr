@@ -1,12 +1,12 @@
 //! Thin entry point: parse, install tracing, run the pipeline, print `SUMMARY`,
-//! return the exit code. All behavior lives in the library.
+//! flush the log, return the exit code. All behavior lives in the library.
 
 use std::process::ExitCode;
 
 use clap::Parser;
 use clap::error::ErrorKind;
 
-use girpr::{Args, RunCtx, emit, init_tracing, run as repair_run, summary_record};
+use girpr::{Args, RunCtx, emit, flush_log, init_tracing, run as repair_run, summary_record};
 
 fn main() -> ExitCode {
     let args = parse_args();
@@ -36,6 +36,7 @@ fn main() -> ExitCode {
             // (README / docs/02 §1).
             tracing::error!("usage error: {e:#}");
             eprintln!("ERROR {e:#}");
+            flush_log();
             return exit_code(1);
         }
     };
@@ -64,11 +65,14 @@ fn main() -> ExitCode {
             // A runtime that cannot start is an environment failure, not a
             // repair failure: exit 1 like any other usage-level error.
             eprintln!("ERROR failed to start runtime: {e:#}");
+            flush_log();
             return exit_code(1);
         }
     };
 
-    exit_code(runtime.block_on(run(ctx)))
+    let code = runtime.block_on(run(ctx));
+    flush_log();
+    exit_code(code)
 }
 
 /// Map a documented exit code (`0`..=`5`) to what the process returns.

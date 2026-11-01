@@ -21,8 +21,8 @@
 //!   [`summary_record`] — the run counters and the stdout automation contract;
 //! - [`Args`] plus the audio helpers — the command-line parser;
 //! - [`Biz`] — the game/channel selector;
-//! - [`init_tracing`], [`Level`] and [`girpr_log`] — the logging entry point
-//!   and the policy type it returns.
+//! - [`init_tracing`], [`flush_log`], [`Level`] and [`girpr_log`] — the logging
+//!   entry points and the policy type `init_tracing` returns.
 //!
 //! Everything else is an implementation detail. Integration tests reach the
 //! internal types they construct through [`test_support`], a hidden seam with
@@ -39,7 +39,8 @@
 //! ignore/blacklist files, server-path containment).
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
-//! run config → [`run`] → print `SUMMARY` → exit with the returned code.
+//! run config → [`run`] → print `SUMMARY` → flush the log → return the exit
+//! code.
 
 mod biz;
 mod cli;
@@ -62,7 +63,7 @@ pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang, parse_audio_selection};
 pub use config::{RunCtx, RunFailure};
 pub use girpr_log::Level;
-pub use logging::init_tracing;
+pub use logging::{flush_log, init_tracing};
 pub use repair::run;
 pub use report::{OutputFormat, Record, Summary, emit, summary_record};
 

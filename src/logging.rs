@@ -24,20 +24,59 @@
 //!   it is meant to be read with `grep 'path=<file>'`.
 //!
 //! A log file that cannot be opened degrades to a warning on stderr rather than
-//! failing the run, so [`init_tracing`] is infallible.
+//! failing the run, so [`init_tracing`] is infallible. [`flush_log`] is the
+//! explicit last write: the binary calls it on every exit path after logging is
+//! installed, so a buffered sink cannot lose the tail of the run.
 
 use std::io::Write;
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use girpr_log::{Level, LogOptions, LogPlan};
+use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::prelude::*;
 
 /// This project's name: the default log file's stem, and the prefix of the
 /// environment variables that answer for the flags.
 pub const PROJECT: &str = "girpr";
+
+/// The file layer's writer, shared between the subscriber and [`flush_log`].
+type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
+
+/// The sink [`flush_log`] reaches, set once by [`init_tracing`].
+///
+/// `None` until logging is installed, which is what makes [`flush_log`] safe on
+/// a path that never got that far.
+static FILE_SINK: OnceLock<FileSink> = OnceLock::new();
+
+/// A `MakeWriter` that hands `tracing` the shared file sink.
+struct SharedWriter(FileSink);
+
+/// One event's exclusive use of the sink.
+struct SharedWriterGuard<'a>(MutexGuard<'a, Box<dyn Write + Send + Sync>>);
+
+impl Write for SharedWriterGuard<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl<'a> MakeWriter<'a> for SharedWriter {
+    type Writer = SharedWriterGuard<'a>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        // A panic while holding the lock must not silence the log's tail: the
+        // writer is an append-only file, whose state is still usable.
+        SharedWriterGuard(self.0.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
 
 /// Where the log file lives when neither `--log-file` nor `GIRPR_LOG_FILE`
 /// named one: `<exe-dir>/logs/girpr_<timestamp>.log`, falling back to the
@@ -95,18 +134,21 @@ pub fn init_tracing(
     // for a file, or any build that was told `--no-log-file`. The sink then
     // writes nowhere, so the run leaves nothing behind and nothing has to be
     // cleaned up afterwards.
-    let file_writer: Mutex<Box<dyn Write + Send + Sync>> = match plan.file_path() {
-        None => Mutex::new(Box::new(std::io::sink())),
+    let file_writer: FileSink = Arc::new(Mutex::new(match plan.file_path() {
+        None => Box::new(std::io::sink()) as Box<dyn Write + Send + Sync>,
         Some(path) => match open_log_file(path) {
-            Ok(f) => Mutex::new(Box::new(f)),
+            Ok(f) => Box::new(f),
             Err(e) => {
                 eprintln!("WARN disabling file logging ({}): {e}", path.display());
-                Mutex::new(Box::new(std::io::sink()))
+                Box::new(std::io::sink())
             }
         },
-    };
+    }));
+    // The subscriber owns one handle; `flush_log` owns the other, so the tail
+    // can still be written after the subscriber has no more events to render.
+    let _ = FILE_SINK.set(Arc::clone(&file_writer));
     let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
+        .with_writer(SharedWriter(file_writer))
         .with_ansi(false)
         .with_filter(girpr_log::filter(&plan.file_filter(), &plan.file_filter()));
 
@@ -128,6 +170,32 @@ pub fn init_tracing(
         None => tracing::info!("log file: none"),
     }
     plan
+}
+
+/// Flush the log file on the way out.
+///
+/// The file is the record of the run, so the caller flushes it explicitly on
+/// every path after [`init_tracing`] rather than trusting a `Drop` that an
+/// abrupt exit would skip. It is safe when no file was opened — the sink writes
+/// nowhere — and when logging was never installed, in which case there is
+/// nothing to flush.
+///
+/// A flush failure is reported once on stderr and never changes the exit code:
+/// the run already earned its code before the log was written down.
+pub fn flush_log() {
+    let Some(sink) = FILE_SINK.get() else {
+        return;
+    };
+    if let Err(e) = flush_sink(sink) {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            eprintln!("WARN cannot flush the log file: {e}");
+        }
+    }
+}
+
+fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
+    sink.lock().unwrap_or_else(|e| e.into_inner()).flush()
 }
 
 /// Open the log file for appending, creating the parent directory if needed.
