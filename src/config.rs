@@ -127,7 +127,10 @@ pub struct RunCtx {
     /// conditional key follows, so an unflagged run's line stays
     /// byte-identical.
     pub repair_mode_explicit: bool,
-    /// Concurrent **files**; guaranteed `>= 1`.
+    /// Concurrent **files**; guaranteed `>= 1`. Chunks inside a file stay
+    /// sequential. This is a file-task window, not the runtime's worker-thread
+    /// count; `--jobs` is the primary spelling and `--io-threads` is a
+    /// deprecated alias.
     pub jobs: usize,
     pub check_only: bool,
     /// `--scan`: read the whole install once, in the plan phase, so the

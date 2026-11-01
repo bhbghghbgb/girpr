@@ -78,7 +78,7 @@ machine rather than the code.
 
 ```mermaid
 flowchart TD
-    A["parse Args<br/>cli.rs: validate io_threads, audio, globs, ceilings → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
+    A["parse Args<br/>cli.rs: validate jobs, audio, globs, ceilings → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
     B -->|FILE mode| X1["exit 1 (usage)"]
     B -->|retcode/http fail| X2["exit 2 (metadata)"]
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
@@ -210,7 +210,7 @@ flowchart TD
   `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
-  (unknown flag, bad enum value, `--io-threads 0`, bad `--audio`, bad
+  (unknown flag, bad enum value, `--jobs 0`, bad `--audio`, bad
   `--include` glob, non-numeric `--max-files`) is `1` — clap's default `2` is
   remapped so it cannot collide with "metadata/network". `--help` is `0`.
 - `getGameConfigs.default_download_mode` must be `DOWNLOAD_MODE_CHUNK`; anything
@@ -274,7 +274,7 @@ the completed `*_tmp` prefix and continuing it.
 
 - Rust 1.85+ (the crate is `edition = "2024"`); network to HoYoPlay + Sophon
   CDNs (production runs only).
-- Game dir (read/write); free bytes ≈ `io_threads × largest file` **growth**
+- Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
@@ -285,7 +285,7 @@ cargo build --release
 # Verify only; exit 4 if damaged
 .\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --check-only
 # Repair + purge extras
-.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --io-threads 4
+.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --jobs 4
 ```
 
 | Flag | Default | Meaning |
@@ -293,7 +293,7 @@ cargo build --release
 | `--game-path <DIR>` | (required) | Install dir (`config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
 | `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr` (case-insensitive, `_` accepted for `-`; display names `chinese`/`english`/`english(us)`/`japanese`/`korean` also work); `none` = game-only (overwrites scan file) |
-| `--io-threads <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2 |
+| `--jobs <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2. Bounds in-flight file tasks, not tokio worker threads; a value above the host's parallelism warns and still runs. `--io-threads` is a deprecated alias |
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include`. A content glob such as `mods/*` hides the files under `mods` but not `mods` itself, so an empty `mods` directory is still visible and may be swept; a directory is hidden only when the glob matches the directory path itself |
