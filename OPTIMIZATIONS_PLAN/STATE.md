@@ -22,7 +22,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T08 | P1 - overlap metadata calls | completed | eb8fe99, a88c94f | RC-03 |
 | T09 | P2 - fetch manifests concurrently | completed | 8244a36, ebbbb14, 8a32496 | RC-03 |
 | T10 | P4 - move blocking phases off workers; parallel check | pending_review | 3b65c99, f7e4a13, 021d810, 90f62de | RC-04 |
-| T11 | P5 - size the runtime for `--jobs` | in_progress | | RC-04 |
+| T11 | P5 - size the runtime for `--jobs` | pending_review | 63ceede, 35d55fe | RC-04 |
 | T12 | P6 - verify with one whole-file digest | todo | | RC-05 |
 | T13 | P7 - reuse the temp source handle | todo | | RC-05 |
 | T14 | P8 - remove the per-piece sink seek | todo | | RC-05 |
