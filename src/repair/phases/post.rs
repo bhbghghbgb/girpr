@@ -15,6 +15,7 @@
 //! argument, having been read during the plan phase.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
@@ -48,22 +49,50 @@ use crate::repair::scope::PathScope;
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
-    plan: &RepairPlan,
+    plan: Arc<RepairPlan>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &[String],
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
     delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
-    move_audio_cache(game_dir, &meta.config, &ctx.path_scope, dry);
-    if ctx.purge_after || ctx.purge_only {
-        let purge_plan = purge::plan_purge(
-            game_dir,
-            plan,
-            &purge::keep_set(),
-            &meta.blacklist,
-            &ctx.path_scope,
+    // The audio move walks the cache and renames/copies its files. It is
+    // best-effort, so a panicked task is logged and the phase carries on; it
+    // must not stall the runtime while it runs.
+    let move_game_dir = game_dir.to_path_buf();
+    let move_config = meta.config.clone();
+    let move_scope = ctx.path_scope.clone();
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        move_audio_cache(&move_game_dir, &move_config, &move_scope, dry);
+    })
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            "audio cache move task failed; the post-phase carries on"
         );
+    }
+    if ctx.purge_after || ctx.purge_only {
+        let purge_game_dir = game_dir.to_path_buf();
+        let purge_plan = Arc::clone(&plan);
+        let keep = purge::keep_set();
+        let blacklist = meta.blacklist.clone();
+        let purge_scope = ctx.path_scope.clone();
+        let purge_plan = tokio::task::spawn_blocking(move || {
+            purge::plan_purge(
+                &purge_game_dir,
+                &purge_plan,
+                &keep,
+                &blacklist,
+                &purge_scope,
+            )
+        })
+        .await
+        .map_err(|e| {
+            RunFailure::write(anyhow::anyhow!(
+                "purge planning task failed before the post-repair cleanup: {e}"
+            ))
+        })?;
         // The post-repair re-plan is the only purge pass whose candidates were
         // not computed at assert time, so `--max-delete-bytes` is checked
         // against it again here. It can only be *smaller* than the

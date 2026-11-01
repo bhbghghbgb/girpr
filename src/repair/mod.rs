@@ -258,8 +258,32 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // re-plan, whose candidates could in principle differ — so the bound does
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
-    let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), &meta.blacklist, scope));
+    let purge_plan = if ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan {
+        let purge_game_dir = game_dir.clone();
+        let purge_plan = Arc::clone(&plan);
+        let keep = purge::keep_set();
+        let blacklist = meta.blacklist.clone();
+        let purge_scope = ctx.path_scope.clone();
+        Some(
+            tokio::task::spawn_blocking(move || {
+                purge::plan_purge(
+                    &purge_game_dir,
+                    &purge_plan,
+                    &keep,
+                    &blacklist,
+                    &purge_scope,
+                )
+            })
+            .await
+            .map_err(|e| {
+                RunFailure::write(anyhow::anyhow!(
+                    "purge planning task failed before any delete: {e}"
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
 
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
@@ -561,8 +585,15 @@ async fn execute_phase(
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome =
-            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome = phases::post::run(
+            ctx,
+            &game_dir,
+            Arc::clone(&plan),
+            &meta,
+            &summary,
+            &deprecated,
+        )
+        .await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
@@ -604,8 +635,15 @@ async fn execute_phase(
     // (check-only already returned, but gating on `readonly` keeps the
     // invariant obvious).
     if !readonly {
-        let outcome =
-            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
+        let outcome = phases::post::run(
+            ctx,
+            &game_dir,
+            Arc::clone(&plan),
+            &meta,
+            &summary,
+            &deprecated,
+        )
+        .await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     } else if ctx.dry_run

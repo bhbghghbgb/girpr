@@ -41,7 +41,7 @@ fn match_options() -> MatchOptions {
 ///
 /// An empty `includes` admits **everything** — that is what makes
 /// `--exclude`-only and unflagged runs identical.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PathScope {
     includes: Vec<Pattern>,
     excludes: Vec<Pattern>,
