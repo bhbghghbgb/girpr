@@ -17,8 +17,27 @@ use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 /// see README).
 pub fn emit(record: &Record, format: OutputFormat) {
     let line = record.render(format);
-    println!("{line}");
+    // The log mirror is written first: a consumer that closed stdout must not
+    // also cost the run its record in the log.
     tracing::info!("{line}");
+    // A closed stdout is the end of the data plane, not a failed run: the
+    // repair already happened and the exit code is the one it earned.
+    match write_line(&mut std::io::stdout().lock(), &line) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            tracing::debug!("stdout closed: {e}");
+        }
+        Err(e) => tracing::warn!("stdout write failed ({:?}): {e}", e.kind()),
+    }
+}
+
+/// Write one rendered record plus its newline.
+///
+/// Private seam for the writer tests; the process stdout is the only real
+/// caller.
+pub(super) fn write_line(out: &mut impl std::io::Write, line: &str) -> std::io::Result<()> {
+    out.write_all(line.as_bytes())?;
+    out.write_all(b"\n")
 }
 
 /// The `PROGRESS` snapshot: where the run is, without touching the disk.
