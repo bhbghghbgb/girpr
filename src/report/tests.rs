@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
-use crate::report::emit::{progress_record, report_record, summary_record};
+use crate::report::emit::{progress_record, report_record, summary_record, write_line};
 use crate::report::record::{OutputFormat, Record};
 use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
 
@@ -329,4 +329,75 @@ fn report_record_says_none_for_an_absent_local_version() {
     assert_eq!(v["biz"], "hk4e_cn");
     assert_eq!(v["exe"], "GenshinImpact.exe");
     assert_eq!(v["audio_langs"], "");
+}
+
+/// A writer whose reader has gone away: it fails on the first write, exactly
+/// as process stdout does after `| head`.
+struct BrokenPipeWriter;
+
+impl std::io::Write for BrokenPipeWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A writer that accepts one byte and then makes no more progress.
+struct ShortWriter(usize);
+
+impl std::io::Write for ShortWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(1).min(self.0);
+        if n == 1 {
+            self.0 = 0;
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct VecWriter(Vec<u8>);
+
+impl std::io::Write for VecWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_closed_stdout_returns_the_error_instead_of_panicking() {
+    // `emit` handles this error and carries on; here the seam itself must only
+    // report it, so the caller has something to handle rather than a panic.
+    let err = write_line(&mut BrokenPipeWriter, "SUMMARY total=1").unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
+#[test]
+fn a_short_write_is_reported_and_not_retried_forever() {
+    let mut out = ShortWriter(1);
+    let err = write_line(&mut out, "SUMMARY total=1").unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+}
+
+#[test]
+fn a_successful_write_is_the_line_and_exactly_one_newline() {
+    let mut out = VecWriter(Vec::new());
+    write_line(&mut out, "SUMMARY total=1").unwrap();
+    assert_eq!(out.0, b"SUMMARY total=1\n");
 }
