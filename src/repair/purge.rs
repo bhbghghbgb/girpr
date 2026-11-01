@@ -265,6 +265,11 @@ fn mark_kept_ancestors(file: &Path, game_dir: &Path, out: &mut HashSet<PathBuf>)
         if !dir.starts_with(game_dir) {
             return;
         }
+        // An earlier kept file already marked this directory and, by
+        // construction, every ancestor up to `game_dir`; no new key is needed.
+        if out.contains(dir) {
+            return;
+        }
         out.insert(dir.to_path_buf());
         let Some(parent) = dir.parent() else {
             return;
