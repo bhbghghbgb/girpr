@@ -40,7 +40,7 @@
 //!
 //! | shape | what it does |
 //! |---|---|
-//! | **streamed** | `sophon::stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
+//! | **streamed** | `stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
 //! | **buffered** | `resp.bytes()` → `zstd::decode_all` → the decoded buffer — the buffered path |
 //!
 //! The payload is the shape of the reference bundle's largest chunk: ~2.16 MB
@@ -54,8 +54,7 @@ use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use girpr::sleep::RealSleep;
-use girpr::sophon::{self, ChunkSink};
+use girpr::test_support::{ChunkSink, RealSleep, stream_chunk_to};
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -272,7 +271,7 @@ async fn the_chunk_paths_peak_live_heap() {
     {
         let mut sink = FileSink::new(&path);
         let mut consumed = 0u64;
-        sophon::stream_chunk_to(
+        stream_chunk_to(
             &client,
             &RealSleep,
             &base,
@@ -290,7 +289,7 @@ async fn the_chunk_paths_peak_live_heap() {
     // bytes are written into the file.
     let mut sink = FileSink::new(&path);
     let mut consumed = 0u64;
-    let (streamed, digest) = measure(sophon::stream_chunk_to(
+    let (streamed, digest) = measure(stream_chunk_to(
         &client,
         &RealSleep,
         &base,

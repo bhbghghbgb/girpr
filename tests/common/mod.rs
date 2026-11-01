@@ -25,7 +25,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+use girpr::test_support::{SophonChunk, SophonChunkFile, SophonChunkManifest};
 use prost::Message as _;
 
 // ---------------------------------------------------------------------------
@@ -190,7 +190,7 @@ pub struct Lies {
     ///
     /// The bytes on disk are unchanged, so the size gate passes and the digest
     /// gate is what has to refuse. On a zero-length entry the honest digest is
-    /// [`girpr::util::EMPTY_MD5`]; the lie is a non-empty digest, which a real
+    /// [`girpr::test_support::EMPTY_MD5`]; the lie is a non-empty digest, which a real
     /// server would never publish for a file with no bytes.
     pub wrong_file_md5: Vec<String>,
 }

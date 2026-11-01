@@ -43,9 +43,8 @@ use common::{
     build_fixture_spec, build_fixture_with_lies, build_moved_fixture, read_game_file, temp_dir,
     write_game_file,
 };
-use girpr::repair::scope::{Limits, PathScope};
-use girpr::sleep::NoSleep;
-use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
+use girpr::test_support::{Limits, Lock, NoSleep, PathScope, RepairMode, summary_record};
+use girpr::{Biz, OutputFormat, RunCtx, Summary, run};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -69,7 +68,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
         audio_explicit: false,
         path_scope: PathScope::default(),
         limits: Limits::default(),
-        repair_mode: girpr::config::RepairMode::Auto,
+        repair_mode: RepairMode::Auto,
         repair_mode_explicit: false,
         jobs,
         check_only: false,
@@ -89,7 +88,7 @@ fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz
     }
 }
 
-fn load_counters(s: &girpr::Summary) -> (u64, u64, u64, u64, u64) {
+fn load_counters(s: &Summary) -> (u64, u64, u64, u64, u64) {
     (
         s.files_skipped.load(Ordering::Relaxed),
         s.files_repaired.load(Ordering::Relaxed),
@@ -118,7 +117,7 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
     }
     write_game_file(&dir, &foo.rel, &bad_foo);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("run must succeed");
     assert_eq!(code, 0, "repair exit");
@@ -153,7 +152,7 @@ async fn check_only_clean_reports_zero() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+    let (summary, code) = run(ctx).await.expect("check-only runs");
     assert_eq!(code, 0);
     let (skipped, _rep, failed, _, _) = load_counters(&summary);
     assert_eq!(failed, 0);
@@ -175,7 +174,7 @@ async fn check_only_dirty_reports_damage_and_writes_nothing() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+    let (summary, code) = run(ctx).await.expect("check-only runs");
     assert_eq!(code, 4, "check-only damage exit");
     let (_sk, _rep, failed, _, _) = load_counters(&summary);
     assert_eq!(failed, 1);
@@ -212,7 +211,7 @@ async fn check_only_matches_between_one_and_many_jobs() {
 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, jobs);
         ctx.check_only = true;
-        let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+        let (summary, code) = run(ctx).await.expect("check-only runs");
         runs.push((load_counters(&summary), code));
     }
 
@@ -240,7 +239,7 @@ async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.check_only = true;
         ctx.scan = scan;
-        let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+        let (summary, code) = run(ctx).await.expect("check-only runs");
         assert_eq!(code, 4, "scan={scan}: an absent file is damage");
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),
@@ -255,7 +254,7 @@ async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.check_only = true;
         ctx.scan = scan;
-        let (_summary, code) = repair::run(ctx).await.expect("check-only runs");
+        let (_summary, code) = run(ctx).await.expect("check-only runs");
         assert_eq!(code, 0, "scan={scan}: an empty file that exists is clean");
     }
 
@@ -273,7 +272,7 @@ async fn dry_run_writes_nothing() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.dry_run = true;
-    let (_summary, code) = repair::run(ctx).await.expect("dry-run runs");
+    let (_summary, code) = run(ctx).await.expect("dry-run runs");
     assert_eq!(code, 0);
     assert!(
         read_game_file(&dir, &fx2.files[0].rel).is_none(),
@@ -297,7 +296,7 @@ async fn purge_after_deletes_orphans_keeps_manifest_and_config() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-after runs");
+    let (summary, code) = run(ctx).await.expect("purge-after runs");
     assert_eq!(code, 0);
     let (_, _, _, _, deleted) = load_counters(&summary);
     assert!(deleted >= 100, "orphan bytes counted, got {deleted}");
@@ -331,7 +330,7 @@ async fn purge_after_keeps_the_case_variant_it_just_verified() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.purge_after = true;
-    let (_summary, code) = repair::run(ctx).await.expect("case-differing purge run");
+    let (_summary, code) = run(ctx).await.expect("case-differing purge run");
     assert_eq!(code, 0);
 
     #[cfg(windows)]
@@ -368,7 +367,7 @@ async fn purge_before_deletes_orphans_then_repairs() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_before = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-before runs");
+    let (summary, code) = run(ctx).await.expect("purge-before runs");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, deleted) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -420,7 +419,7 @@ async fn blacklisted_files_survive_every_purge_spelling() {
 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
         apply(&mut ctx);
-        let (summary, code) = repair::run(ctx)
+        let (summary, code) = run(ctx)
             .await
             .unwrap_or_else(|e| panic!("{name}: run failed: {e:#}"));
         assert_eq!(code, 0, "{name}: exit");
@@ -459,7 +458,7 @@ async fn deprecated_files_deleted_in_post_phase() {
     }
     write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("run with deprecated list");
     assert_eq!(code, 0);
@@ -491,7 +490,7 @@ async fn verified_local_slice_is_reused_without_redownload() {
     }
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("reuse run");
     assert_eq!(code, 0);
@@ -522,7 +521,7 @@ async fn partial_tmp_prefix_is_resumed() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
     ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("resume run");
+    let (summary, code) = run(ctx).await.expect("resume run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -565,7 +564,7 @@ async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
     ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("the retry repairs the file");
+    let (summary, code) = run(ctx).await.expect("the retry repairs the file");
     assert_eq!(code, 0);
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
@@ -605,7 +604,7 @@ async fn a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write()
         let dir = temp_dir("escape_manifest");
         let game = dir.join("install");
 
-        let err = repair::run(ctx_for(game.clone(), &mock, 1))
+        let err = run(ctx_for(game.clone(), &mock, 1))
             .await
             .expect_err("an escaping manifest path is metadata");
         assert_eq!(err.exit_code, 2, "{bad}");
@@ -638,7 +637,7 @@ async fn a_deprecated_path_that_escapes_the_game_dir_is_kept() {
     }
     std::fs::write(dir.join("victim.dll"), b"do not delete").unwrap();
 
-    let (summary, code) = repair::run(ctx_for(game, &mock, 2))
+    let (summary, code) = run(ctx_for(game, &mock, 2))
         .await
         .expect("the run itself is fine");
     assert_eq!(code, 0);
@@ -686,7 +685,7 @@ async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
         std::fs::create_dir_all(dir.join("audio_res")).unwrap();
         std::fs::write(dir.join("audio_res").join("keep.pck"), b"res bytes").unwrap();
 
-        let err = repair::run(ctx_for(game.clone(), &mock, 2))
+        let err = run(ctx_for(game.clone(), &mock, 2))
             .await
             .expect_err("an escaping audio dir is metadata");
         assert_eq!(err.exit_code, 2, "an escaping audio dir is metadata");
@@ -787,7 +786,7 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
     }
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
     assert_eq!(code, 0);
@@ -830,7 +829,7 @@ async fn a_file_that_grows_writes_only_the_growth() {
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
     assert_eq!(code, 0);
@@ -876,7 +875,7 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Discard;
-    let (summary, code) = repair::run(ctx).await.expect("discard run");
+    let (summary, code) = run(ctx).await.expect("discard run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -915,7 +914,7 @@ async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
     perms.set_readonly(true);
     std::fs::set_permissions(&target, perms).unwrap();
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("read-only run");
     assert_eq!(code, 0);
@@ -953,7 +952,7 @@ async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
     .unwrap();
     write_game_file(&dir, &old_rel, &old_bytes);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("moved run");
     assert_eq!(code, 0);
@@ -1001,7 +1000,7 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     // "stage nothing at all" is what selects the ordered tier.
     ctx.limits.ram_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("moved run");
+    let (summary, code) = run(ctx).await.expect("moved run");
     assert_eq!(code, 0);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -1104,7 +1103,7 @@ async fn the_run_counts_the_paths_it_used() {
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
     // The default: in place.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
     assert_eq!(code, 0);
@@ -1117,7 +1116,7 @@ async fn the_run_counts_the_paths_it_used() {
     write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
-    let (summary, code) = repair::run(ctx).await.expect("temp run");
+    let (summary, code) = run(ctx).await.expect("temp run");
     assert_eq!(code, 0);
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
@@ -1145,11 +1144,11 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
     // Unflagged: nothing.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
         assert!(
             !line.contains(k),
@@ -1164,9 +1163,9 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Auto;
     ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("run");
+    let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("repair_mode=auto"), "{line}");
     assert!(line.contains("inplace=1"), "{line}");
     assert!(line.contains("temp=0"), "{line}");
@@ -1181,9 +1180,9 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     write_game_file(&dir3, &fx2.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir3.to_path_buf(), &mock, 1);
     ctx.limits.ram_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("run");
+    let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("ram_bytes=0"), "{line}");
 
     mock.stop();
@@ -1203,7 +1202,7 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    let (summary, code) = run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
     // The run reported the plan, not a repair.
     assert!(summary.files_repaired.load(Ordering::Relaxed) == 0);
@@ -1214,7 +1213,7 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     ctx.plan_out = Some(out.clone());
-    repair::run(ctx).await.expect("print-plan runs");
+    run(ctx).await.expect("print-plan runs");
     let written = std::fs::read_to_string(&out).expect("--plan-out file");
     let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
     let foo = v["repair"]
@@ -1251,10 +1250,10 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let fx2 = build_fixture();
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     // Hold the lock, as a first run would.
-    let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+    let _lock = Lock::acquire(&dir).expect("the lock is taken");
     let lock_path = _lock.path().to_path_buf();
 
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("the second run is refused");
     assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
@@ -1274,15 +1273,13 @@ async fn a_second_run_against_the_same_install_is_refused() {
     // outside its include list; otherwise it could write beside the first run.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let err = repair::run(ctx)
-        .await
-        .expect_err("a scoped run is refused too");
+    let err = run(ctx).await.expect_err("a scoped run is refused too");
     assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
 
     // The lock is released when the run that holds it ends.
     drop(_lock);
     assert!(!lock_path.exists());
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the next run is not refused");
     assert_eq!(code, 0);
@@ -1304,25 +1301,21 @@ async fn read_only_runs_do_not_take_the_lock() {
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
-    let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+    let _lock = Lock::acquire(&dir).expect("the lock is taken");
 
     let mut check = ctx_for(dir.to_path_buf(), &mock, 1);
     check.check_only = true;
-    let (_, code) = repair::run(check)
-        .await
-        .expect("check-only ignores the lock");
+    let (_, code) = run(check).await.expect("check-only ignores the lock");
     assert_eq!(code, 0);
 
     let mut dry = ctx_for(dir.to_path_buf(), &mock, 1);
     dry.dry_run = true;
-    let (_, code) = repair::run(dry).await.expect("dry-run ignores the lock");
+    let (_, code) = run(dry).await.expect("dry-run ignores the lock");
     assert_eq!(code, 0);
 
     let mut plan = ctx_for(dir.to_path_buf(), &mock, 1);
     plan.print_plan = true;
-    let (_, code) = repair::run(plan)
-        .await
-        .expect("print-plan ignores the lock");
+    let (_, code) = run(plan).await.expect("print-plan ignores the lock");
     assert_eq!(code, 0);
 
     mock.stop();
@@ -1346,7 +1339,7 @@ async fn a_legacy_in_install_lock_is_left_alone() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
-    let (_, code) = repair::run(ctx).await.expect("the purge runs");
+    let (_, code) = run(ctx).await.expect("the purge runs");
     assert_eq!(code, 0);
     // The old lock is an ordinary unexpected file that the cleanup keeps;
     // only the new temp-dir lock is the run's own.
@@ -1575,7 +1568,7 @@ async fn an_interrupted_in_place_run_resumes_by_verification() {
     }
     write_game_file(&dir, &fx2.files[0].rel, &interrupted);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
     assert_eq!(code, 0);
@@ -1618,7 +1611,7 @@ async fn explicit_audio_selection_overwrites_scan_file() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
-    let (_, code) = repair::run(ctx).await.expect("audio run");
+    let (_, code) = run(ctx).await.expect("audio run");
     assert_eq!(code, 0);
     let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
@@ -1631,7 +1624,7 @@ async fn explicit_audio_selection_overwrites_scan_file() {
     let mut ctx2 = ctx_for(dir2.to_path_buf(), &mock, 2);
     ctx2.audio = HashSet::new();
     ctx2.audio_explicit = true;
-    let (_, code2) = repair::run(ctx2).await.expect("audio-none run");
+    let (_, code2) = run(ctx2).await.expect("audio-none run");
     assert_eq!(code2, 0);
     let scan2 = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
     assert!(scan2.is_empty(), "{scan2}");
@@ -1663,7 +1656,7 @@ async fn an_unreadable_audio_scan_file_fails_before_any_repair() {
     std::fs::create_dir_all(dir.join("Audio").join("scan.txt")).unwrap();
 
     let ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    let err = repair::run(ctx)
+    let err = run(ctx)
         .await
         .expect_err("an unreadable scan file must not default to en-us");
     assert_eq!(err.exit_code, 1, "local config read failure: {err:#}");
@@ -1699,7 +1692,7 @@ async fn non_chunk_download_mode_is_a_usage_error() {
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, &f.data);
         }
-        let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect_err("non-chunk mode must fail");
         assert_eq!(err.exit_code, 1, "mode {mode:?} must be a usage error");
@@ -1734,7 +1727,7 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     )
     .await;
     let dir = temp_dir("dlmode_branch");
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("non-chunk mode must fail");
     assert_eq!(err.exit_code, 1, "the mode refusal wins: {err:#}");
@@ -1764,7 +1757,7 @@ async fn a_run_without_a_local_version_issues_only_the_latest_build() {
     let dir = temp_dir("no_local_build");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.print_plan = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    let (summary, code) = run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
     let builds = mock
         .request_targets()
@@ -1804,7 +1797,7 @@ async fn a_run_that_stops_before_acting_creates_no_game_dir() {
     .await;
     let parent = temp_dir("nodir");
     let missing = parent.join("never-created");
-    let err = repair::run(ctx_for(missing.clone(), &mock, 1))
+    let err = run(ctx_for(missing.clone(), &mock, 1))
         .await
         .expect_err("non-chunk mode must fail");
     assert_eq!(err.exit_code, 1);
@@ -1835,7 +1828,7 @@ async fn include_repairs_exactly_the_selected_file() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped run");
+    let (summary, code) = run(ctx).await.expect("scoped run");
     assert_eq!(code, 0);
     assert_eq!(summary.files_total, 1, "only the selected file is planned");
     assert!(summary.flags.scoped, "scoped run reports scoped=1");
@@ -1862,7 +1855,7 @@ async fn include_repairs_exactly_the_selected_file() {
     );
     // ...and says so in the machine contract, so a test can assert the fact
     // instead of reading the file.
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("scoped=1"), "{line}");
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("plan_files=1"), "{line}");
@@ -1890,7 +1883,7 @@ async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("scoped purge run");
+    let (summary, code) = run(ctx).await.expect("scoped purge run");
     assert_eq!(code, 0);
 
     // Everything survives: the fixture files, and the orphans that were out of
@@ -1930,7 +1923,7 @@ async fn a_scoped_purge_keeps_an_empty_out_of_scope_directory() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.purge_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("scoped purge-only run");
+    let (summary, code) = run(ctx).await.expect("scoped purge-only run");
     assert_eq!(code, 0);
 
     assert!(
@@ -1961,7 +1954,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("plain purge run");
+    let (summary, code) = run(ctx).await.expect("plain purge run");
     assert_eq!(code, 0);
     assert!(
         read_game_file(&dir, "log/output.txt").is_none(),
@@ -1971,7 +1964,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
     assert!(!summary.flags.limited);
     // And the conditional keys are absent, so an unflagged `SUMMARY` carries
     // only the always-on ones.
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     for k in ["scoped", "config_bumped", "plan_files", "limited"] {
         assert!(
             !line.contains(k),
@@ -1995,9 +1988,7 @@ async fn an_include_matching_nothing_is_a_usage_error() {
     }
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/nope.dat"], &[]);
-    let err = repair::run(ctx)
-        .await
-        .expect_err("an empty scope must fail");
+    let err = run(ctx).await.expect_err("an empty scope must fail");
     assert_eq!(err.exit_code, 1);
     let msg = format!("{:#}", err.source);
     assert!(msg.contains("game/nope.dat"), "must name the glob: {msg}");
@@ -2006,9 +1997,7 @@ async fn an_include_matching_nothing_is_a_usage_error() {
     // `--exclude` matching nothing is unremarkable and must still succeed.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&[], &["no/such/thing"]);
-    let (_, code) = repair::run(ctx)
-        .await
-        .expect("a non-matching exclude is fine");
+    let (_, code) = run(ctx).await.expect("a non-matching exclude is fine");
     assert_eq!(code, 0);
 
     mock.stop();
@@ -2038,7 +2027,7 @@ async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scop
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
-    let err = repair::run(ctx).await.expect_err("--audio under a scope");
+    let err = run(ctx).await.expect_err("--audio under a scope");
     assert_eq!(err.exit_code, 1);
     let msg = format!("{:#}", err.source);
     assert!(
@@ -2059,9 +2048,7 @@ async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scop
     ctx2.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
     ctx2.audio = HashSet::from(["ja-jp".to_string()]);
     ctx2.audio_explicit = true;
-    let (_, code) = repair::run(ctx2)
-        .await
-        .expect("scan file in scope is allowed");
+    let (_, code) = run(ctx2).await.expect("scan file in scope is allowed");
     assert_eq!(code, 0);
     let scan = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
@@ -2090,7 +2077,7 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&["old/*", "game/foo.dat", "game/bar.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
+    let (summary, code) = run(ctx).await.expect("scoped deprecated run");
     assert_eq!(code, 0);
     assert!(
         read_game_file(&dir, "old/legacy.dll").is_none(),
@@ -2130,7 +2117,7 @@ async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&[], &["old/*"]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
+    let (summary, code) = run(ctx).await.expect("scoped deprecated run");
     assert_eq!(code, 0);
     assert_eq!(
         read_game_file(&dir, "old/legacy.dll").unwrap(),
@@ -2171,9 +2158,7 @@ async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
     ctx.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
-    let (_, code) = repair::run(ctx)
-        .await
-        .expect("the cleaned scan rel is in scope");
+    let (_, code) = run(ctx).await.expect("the cleaned scan rel is in scope");
     assert_eq!(code, 0);
     let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
@@ -2205,7 +2190,7 @@ async fn a_dot_spelled_audio_cache_hidden_by_the_scope_is_not_moved() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&[], &["Audio/*"]);
-    let (_, code) = repair::run(ctx).await.expect("scoped audio run");
+    let (_, code) = run(ctx).await.expect("scoped audio run");
     assert_eq!(code, 0);
     assert_eq!(
         read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
@@ -2241,7 +2226,7 @@ async fn max_files_refuses_before_touching_anything() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.files = Some(1); // the plan is 2 files
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    let (summary, code) = run(ctx).await.expect("a refusal is not an error");
     assert_eq!(code, 5, "a tripped ceiling is exit 5");
     assert!(summary.flags.limited);
     assert_eq!(summary.files_total, 2, "plan_files is still reported");
@@ -2268,7 +2253,7 @@ async fn max_files_refuses_before_touching_anything() {
     let missing = absent_game_dir(&parent);
     let mut ctx = ctx_for(missing.clone(), &mock, 1);
     ctx.limits.files = Some(1);
-    let (_, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    let (_, code) = run(ctx).await.expect("a refusal is not an error");
     assert_eq!(code, 5);
     assert!(!missing.exists(), "a refusal must not even create game_dir");
 
@@ -2434,7 +2419,7 @@ async fn max_files_at_the_boundary_does_not_refuse() {
     }
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(2); // == plan.files.len()
-    let (summary, code) = repair::run(ctx).await.expect("the boundary must pass");
+    let (summary, code) = run(ctx).await.expect("the boundary must pass");
     assert_eq!(code, 0);
     assert!(
         summary.flags.limited,
@@ -2459,7 +2444,7 @@ async fn max_files_zero_is_a_ceiling_not_a_usage_error() {
     }
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(0);
-    let (_, code) = repair::run(ctx).await.expect("0 is a ceiling");
+    let (_, code) = run(ctx).await.expect("0 is a ceiling");
     assert_eq!(code, 5, "0 files allowed, 2 planned -> refuse");
 
     mock.stop();
@@ -2479,7 +2464,7 @@ async fn max_files_is_checked_after_the_scope_filter() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.limits.files = Some(1); // the *filtered* plan is 1 file
-    let (summary, code) = repair::run(ctx).await.expect("scoped boundary passes");
+    let (summary, code) = run(ctx).await.expect("scoped boundary passes");
     assert_eq!(code, 0);
     assert_eq!(summary.files_total, 1);
     assert!(summary.flags.scoped && summary.flags.limited);
@@ -2489,7 +2474,7 @@ async fn max_files_is_checked_after_the_scope_filter() {
     let mut ctx2 = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx2.path_scope = scope(&["game/foo.dat"], &[]);
     ctx2.limits.files = Some(0);
-    let (_, code2) = repair::run(ctx2).await.expect("refusal is not an error");
+    let (_, code2) = run(ctx2).await.expect("refusal is not an error");
     assert_eq!(code2, 5);
 
     mock.stop();
@@ -2511,7 +2496,7 @@ async fn max_delete_bytes_refuses_and_deletes_nothing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
     ctx.limits.delete_bytes = Some(100);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
+    let (summary, code) = run(ctx).await.expect("refusal is not an error");
     assert_eq!(code, 5, "170 > 100");
     assert_eq!(
         summary.deleted_extra_bytes.load(Ordering::Relaxed),
@@ -2525,7 +2510,7 @@ async fn max_delete_bytes_refuses_and_deletes_nothing() {
     let mut ctx2 = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx2.purge_after = true;
     ctx2.limits.delete_bytes = Some(170);
-    let (summary2, code2) = repair::run(ctx2).await.expect("the boundary passes");
+    let (summary2, code2) = run(ctx2).await.expect("the boundary passes");
     assert_eq!(code2, 0);
     assert_eq!(summary2.deleted_extra_bytes.load(Ordering::Relaxed), 170);
 
@@ -2550,7 +2535,7 @@ async fn an_out_of_scope_path_never_counts_toward_the_delete_ceiling() {
     ctx.path_scope = scope(&["game/foo.dat", "game/bar.dat"], &[]);
     ctx.purge_after = true;
     ctx.limits.delete_bytes = Some(1); // would be blown by the orphan
-    let (_, code) = repair::run(ctx).await.expect("scoped run");
+    let (_, code) = run(ctx).await.expect("scoped run");
     assert_eq!(code, 0, "the out-of-scope orphan is not a candidate at all");
     assert!(read_game_file(&dir, "huge/orphan.dat").is_some(), "kept");
 
@@ -2570,8 +2555,8 @@ async fn a_tripped_ceiling_still_emits_a_summary_tail() {
     }
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(1);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
-    let line = girpr::report::summary_record(&summary, code).text();
+    let (summary, code) = run(ctx).await.expect("refusal is not an error");
+    let line = summary_record(&summary, code).text();
     assert_eq!(
         line,
         "SUMMARY total=2 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
@@ -2596,7 +2581,7 @@ async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
     ctx.limits.files = Some(1);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
+    let (summary, code) = run(ctx).await.expect("refusal is not an error");
     assert_eq!(code, 5, "the ceiling is asked before the verification");
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
@@ -2607,7 +2592,7 @@ async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
     // Without the ceiling, the same run reports damage.
     let mut ctx2 = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx2.check_only = true;
-    let (_, code2) = repair::run(ctx2).await.expect("check runs");
+    let (_, code2) = run(ctx2).await.expect("check runs");
     assert_eq!(code2, 4);
 
     mock.stop();
@@ -2628,7 +2613,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     // One byte under the estimate → refuse before fetching anything.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.download_bytes = Some(est - 1);
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    let (summary, code) = run(ctx).await.expect("a refusal is not an error");
     assert_eq!(code, 5);
     assert_eq!(
         summary.flags.plan_download_bytes,
@@ -2641,10 +2626,10 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     // Exactly the estimate → the boundary passes and the whole thing runs.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.download_bytes = Some(est);
-    let (summary, code) = repair::run(ctx).await.expect("the boundary passes");
+    let (summary, code) = run(ctx).await.expect("the boundary passes");
     assert_eq!(code, 0);
     assert_eq!(summary.download.settled(), est);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(
         line.contains(&format!("plan_download_bytes={est}")),
         "{line}"
@@ -2697,7 +2682,7 @@ async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
     // exactly that: the plan passes, and the retry's traffic is what crosses it.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(compressed);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
         code, 5,
         "a settle that crosses the ceiling is the runtime hard stop"
@@ -2762,7 +2747,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     let limit = 1u64; // any positive value: the estimate is 0, so it passes
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(code, 5, "the runtime hard stop is also exit 5");
     assert_eq!(
         summary.flags.stopped,
@@ -2796,7 +2781,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
         "a stopped file is not promoted"
     );
 
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("stopped=--max-download-bytes"), "{line}");
     assert!(line.contains("limited=1"), "{line}");
 
@@ -2814,12 +2799,12 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("plain run");
     assert_eq!(code, 0);
     for format in [OutputFormat::Text, OutputFormat::Json] {
-        let line = girpr::report::summary_record(&summary, code).render(format);
+        let line = summary_record(&summary, code).render(format);
         for k in [
             "limited",
             "scoped",
@@ -2858,7 +2843,7 @@ async fn print_plan_reports_the_plan_and_writes_nothing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    let (summary, code) = run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
 
     // The counters report a plan, not a repair.
@@ -3148,7 +3133,7 @@ async fn print_plan_out_writes_the_per_file_json_document() {
     ctx.print_plan = true;
     ctx.purge_after = true;
     ctx.plan_out = Some(out.clone());
-    let (_, code) = repair::run(ctx).await.expect("print-plan runs");
+    let (_, code) = run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
 
     let written = std::fs::read_to_string(&out).expect("--plan-out file");
@@ -3240,7 +3225,7 @@ async fn a_ceiling_trips_print_plan_like_any_other_mode() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     ctx.limits.download_bytes = Some(est - 1);
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
+    let (summary, code) = run(ctx).await.expect("a refusal is not an error");
     assert_eq!(code, 5, "the assert comes before the plan report");
     assert_eq!(summary.flags.plan_download_bytes, Some(est));
 }
@@ -3258,7 +3243,7 @@ async fn print_plan_does_not_imply_check_only() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    let (summary, code) = run(ctx).await.expect("print-plan runs");
     assert_eq!(code, 0);
     assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 0);
@@ -3266,7 +3251,7 @@ async fn print_plan_does_not_imply_check_only() {
     // The same tree under --check-only does report damage.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
-    let (_, code) = repair::run(ctx).await.expect("check runs");
+    let (_, code) = run(ctx).await.expect("check runs");
     assert_eq!(code, 4);
 
     mock.stop();
@@ -3286,7 +3271,7 @@ async fn print_plan_with_dry_run_is_coherent() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     ctx.dry_run = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan + dry-run runs");
+    let (summary, code) = run(ctx).await.expect("print-plan + dry-run runs");
     assert_eq!(code, 0);
     assert_eq!(summary.files_total, 2);
     assert!(!dir.join("config.ini").exists(), "dry-run writes nothing");
@@ -3314,7 +3299,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     let limit = 1u64;
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.write_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(code, 5);
     assert_eq!(
         summary.flags.stopped,
@@ -3337,7 +3322,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
         "and the reported figure is no larger than it"
     );
 
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("stopped=--max-write-bytes"), "{line}");
     assert!(line.contains("write_bytes="), "{line}");
 
@@ -3363,12 +3348,12 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
 
     // Same run, no flag: the repair completes and the key is absent.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
     assert_eq!(code, 0);
     assert!(summary.write.settled() > 0, "it was counted");
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(!line.contains("write_bytes"), "{line}");
     // `download_bytes` is the network; `write_bytes` is the disk. They are not the
     // same quantity and never were — that is the whole reason `--max-write-bytes`
@@ -3386,10 +3371,10 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     write_game_file(&dir2, &fx3.files[1].rel, b"not the game data");
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.limits.write_bytes = Some(1 << 20);
-    let (summary, code) = repair::run(ctx).await.expect("run");
+    let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
     assert!(summary.flags.stopped.is_none());
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("write_bytes="), "{line}");
     assert!(!line.contains("stopped="), "{line}");
 
@@ -3412,11 +3397,11 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, b"not the game data");
     }
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(!line.contains("_spent"), "{line}");
 
     // With the ceilings on, both figures are: what the repair achieved and
@@ -3431,9 +3416,9 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(1 << 20);
     ctx.limits.write_bytes = Some(1 << 20);
-    let (summary, code) = repair::run(ctx).await.expect("run");
+    let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("download_bytes_spent="), "{line}");
     assert!(line.contains("write_bytes_spent="), "{line}");
     // The settled download figure is the base key, and in a clean run it is
@@ -3473,7 +3458,7 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     let limit = 64u64;
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.verified_write_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
         code, 5,
         "the verified ceiling is a hard stop, like every other"
@@ -3505,7 +3490,7 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     // number here: nothing was wasted, the run simply ran out of budget.
     assert_eq!(summary.write.live(), summary.write.settled());
 
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(
         line.contains("stopped=--max-verified-write-bytes"),
         "{line}"
@@ -3543,7 +3528,7 @@ async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.limits.write_bytes = Some(live);
         ctx.limits.verified_write_bytes = Some(verified);
-        let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+        let (summary, code) = girpr::run(ctx).await.expect("a stop is not an error");
         assert_eq!(code, 5, "a ceiling bound");
         mock.stop();
         summary
@@ -3585,7 +3570,7 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     // second one is never started.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.verified_download_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
+    let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
         code, 5,
         "the verified ceiling is a hard stop, like every other"
@@ -3615,7 +3600,7 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     // was fetched twice.
     assert_eq!(summary.download.live(), summary.download.settled());
 
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(
         line.contains("stopped=--max-verified-download-bytes"),
         "{line}"
@@ -3653,7 +3638,7 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
         // The key is emitted only when the flag was passed.
         ctx.repair_mode_explicit = true;
         ctx.path_scope = scope(&["game/foo.dat"], &[]);
-        let (summary, code) = repair::run(ctx).await.expect("run");
+        let (summary, code) = girpr::run(ctx).await.expect("run");
         assert_eq!(code, 0, "the file was repaired on the second attempt");
         assert_eq!(
             read_game_file(&dir, &fx2.files[0].rel).unwrap(),
@@ -3711,9 +3696,7 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.fail_fast = true;
     let started = std::time::Instant::now();
-    let (summary, code) = repair::run(ctx)
-        .await
-        .expect("a failed repair is not an Err");
+    let (summary, code) = run(ctx).await.expect("a failed repair is not an Err");
     let elapsed = started.elapsed();
     assert_eq!(code, 3, "a file failed, so the post-phase is skipped");
     assert_eq!(
@@ -3800,7 +3783,7 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
         ctx.fail_fast = true;
         ctx.path_scope = scope(&[&fx2.files[0].rel], &[]);
         let started = std::time::Instant::now();
-        let (summary, code) = repair::run(ctx).await.expect("not an Err");
+        let (summary, code) = run(ctx).await.expect("not an Err");
         let elapsed = started.elapsed();
 
         assert_eq!(
@@ -3844,7 +3827,7 @@ async fn a_404_manifest_fails_the_run_without_waiting_for_it() {
     .await;
     let dir = temp_dir("manifest_404");
     let started = std::time::Instant::now();
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("no manifests means the run cannot plan");
     let elapsed = started.elapsed();
@@ -3889,9 +3872,7 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.purge_only = true;
     ctx.path_scope = scope(&["game/removed.dat"], &[]);
-    let (summary, code) = repair::run(ctx)
-        .await
-        .expect("a cleanup run must not be refused");
+    let (summary, code) = run(ctx).await.expect("a cleanup run must not be refused");
     assert_eq!(
         code, 0,
         "an empty repair plan is not a typo when there is cleanup to do"
@@ -3912,7 +3893,7 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     assert_eq!(summary.files_total, 0, "the repair plan really was empty");
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
     assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 512);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("scoped=1"), "{line}");
 
@@ -3934,7 +3915,7 @@ async fn an_include_that_selects_nothing_at_all_is_still_a_typo() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.purge_only = true; // asks for the cleanup…
     ctx.path_scope = scope(&["game/never-existed.dat"], &[]); // …of nothing
-    let err = repair::run(ctx)
+    let err = run(ctx)
         .await
         .expect_err("a scope that selects nothing is still a typo");
     assert_eq!(err.exit_code, 1);
@@ -3971,7 +3952,7 @@ async fn purge_only_cleans_up_without_repairing() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-only runs");
+    let (summary, code) = run(ctx).await.expect("purge-only runs");
     assert_eq!(code, 0);
     assert_eq!(
         summary.files_repaired.load(Ordering::Relaxed),
@@ -3995,7 +3976,7 @@ async fn purge_only_cleans_up_without_repairing() {
         !dir.join("config.ini").exists(),
         "purge-only must not bump config.ini"
     );
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("config_bumped=0"), "{line}");
 
     mock.stop();
@@ -4032,7 +4013,7 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_only = true;
     ctx.dry_run = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-only --dry-run runs");
+    let (summary, code) = run(ctx).await.expect("purge-only --dry-run runs");
     assert_eq!(code, 0);
 
     // Nothing moved, nothing deleted, nothing promoted.
@@ -4092,7 +4073,7 @@ async fn a_read_only_run_issues_no_deprecated_file_call() {
             "check" => ctx.check_only = true,
             _ => ctx.print_plan = true,
         }
-        repair::run(ctx).await.expect("run");
+        run(ctx).await.expect("run");
         assert!(
             mock.first_target_with("getGameDeprecatedFileConfigs")
                 .is_none(),
@@ -4359,7 +4340,7 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     let fx2 = build_fixture();
     write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the retry must recover");
     assert_eq!(code, 0);
@@ -4415,7 +4396,7 @@ async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
     )
     .await;
     let dir = temp_dir("manifest_checksum");
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("a manifest that does not match its checksum cannot be planned from");
     assert_eq!(err.exit_code, 2, "metadata, not a write failure");
@@ -4452,7 +4433,7 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     // Only foo.dat: its first chunk is the corrupt one, and its second chunk
     // is the one that must **not** be downloaded twice.
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("the retry must recover");
+    let (summary, code) = run(ctx).await.expect("the retry must recover");
     assert_eq!(code, 0, "the file was repaired on the second attempt");
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
@@ -4524,7 +4505,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }
-        let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        let (summary, code) = girpr::run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect("run");
         assert_eq!(code, 0, "the repair recovered");
@@ -4586,14 +4567,14 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
     // check-only: damage found, nothing written, orphan kept.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
-    let (_, code) = repair::run(ctx).await.expect("check runs");
+    let (_, code) = run(ctx).await.expect("check runs");
     assert_eq!(code, 4);
     assert!(read_game_file(&dir, "stray/orphan.dat").is_some());
 
     // purge-only: the orphan is gone, the damage is untouched.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_only = true;
-    let (_, code) = repair::run(ctx).await.expect("purge-only runs");
+    let (_, code) = run(ctx).await.expect("purge-only runs");
     assert_eq!(code, 0);
     assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
     assert_eq!(
@@ -4641,11 +4622,11 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         *b ^= 0xFF;
     }
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("local_manifest=ok"), "{line}");
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
     assert!(
@@ -4674,11 +4655,11 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         *b ^= 0xFF;
     }
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("a degraded run still succeeds");
     assert_eq!(code, 0, "the fallback is not an error");
-    let line = girpr::report::summary_record(&summary, code).text();
+    let line = summary_record(&summary, code).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
         mock.chunk_hits(),
@@ -4997,7 +4978,7 @@ async fn deprecated_files_call_carries_the_per_launcher_channel() {
         write_game_file(&dir, &f.rel, &f.data);
     }
     write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-    repair::run(ctx_for_biz(dir.to_path_buf(), &mock, 1, Biz::Hk4eBilibili))
+    run(ctx_for_biz(dir.to_path_buf(), &mock, 1, Biz::Hk4eBilibili))
         .await
         .expect("bilibili run");
 

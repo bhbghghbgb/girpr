@@ -18,7 +18,7 @@
 //! file never has a server.
 
 use clap::Parser;
-use girpr::cli::Args;
+use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
 
