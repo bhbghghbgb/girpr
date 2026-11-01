@@ -1,8 +1,9 @@
 //! Local state + server metadata (docs/02 steps 1–2).
 //!
-//! Five HoYoPlay/Sophon calls, in order: `getGameConfigs` → `getGameBranches` →
-//! `getBuild(latest)` → `getBuild(local, best-effort)`. The deprecated-file list
-//! is *not* fetched here; it is lazy and lives in the post-phase.
+//! Five HoYoPlay/Sophon calls: `getGameConfigs` and `getGameBranches` run as one
+//! wave, then `getBuild(latest)` and `getBuild(local, best-effort)` as another,
+//! while the local files are read in parallel. The deprecated-file list is *not*
+//! fetched here; it is lazy and lives in the post-phase.
 //!
 //! The audio selection is resolved here rather than in step 1 because it needs
 //! `audio_pkg_scan_dir` from `getGameConfigs`; the work is split between this
@@ -79,26 +80,44 @@ fn clean_config_dir(game_dir: &Path, name: &str, dir: &str) -> Result<String, Ru
 }
 
 /// Read local state, then fetch the server metadata that defines the target.
+///
+/// The calls are overlapped where the data dependencies allow it: the two
+/// config/branch lookups form one wave, the latest and local builds form a
+/// second, and the local files are read on the blocking pool while the
+/// network work runs.
 pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
-    // 1. local state. An absent `config.ini` is a fresh install; an unreadable
-    // one is an error, not a fresh install that the post-phase would then
-    // overwrite the version of.
-    let local_version = util::read_game_version(game_dir)
-        .context("read local game version")
-        .map_err(RunFailure::usage)?;
-    tracing::info!("local game_version: {local_version:?}");
-
-    // 2. server metadata (up to 5 calls)
     let hyp = hyp_client_for(ctx).map_err(RunFailure::metadata)?;
-    let mut config = hyp
-        .game_config()
-        .await
+
+    // 1. Local state. An absent `config.ini` is a fresh install; an unreadable
+    // one is an error, not a fresh install that the post-phase would then
+    // overwrite the version of. The read needs only `game_dir`, so it starts
+    // together with the first network wave rather than before it.
+    let version_read = {
+        let game_dir = game_dir.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            util::read_game_version(&game_dir)
+                .context("read local game version")
+                .map_err(RunFailure::usage)
+        })
+    };
+
+    // 2. First server wave: the two calls are independent. `join!`, not
+    // `try_join!`, so the error chosen below depends on the inputs rather than
+    // on which future happened to be polled first.
+    let (config_result, branch_result) = tokio::join!(hyp.game_config(), hyp.game_branch());
+    let mut config = config_result
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)?;
+    let local_version = version_read
+        .await
+        .map_err(|e| RunFailure::usage(anyhow::anyhow!("read local game version: {e}")))??;
+    tracing::info!("local game_version: {local_version:?}");
+
     // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
     // have no per-file chunk manifests to patch from, so refuse rather than
     // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
-    // i.e. exit 2 instead of the documented usage error).
+    // i.e. exit 2 instead of the documented usage error). The mode check stays
+    // authoritative even though the branch call has already gone out.
     // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
     if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
         return Err(RunFailure::usage(anyhow::anyhow!(
@@ -106,6 +125,13 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             config.default_download_mode
         )));
     }
+    let game_branch = branch_result
+        .context("getGameBranches")
+        .map_err(RunFailure::metadata)?;
+    let branch = game_branch.main;
+    let latest = branch.tag.clone();
+    tracing::info!("latest version: {latest}");
+
     // These three dirs feed both a path-scope gate and a filesystem sink. Clean
     // each spelling once, here, so the gate and the sink compare the same
     // string; cleaning only inside `contained_join` would let a `./`-spelled
@@ -125,68 +151,95 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         config.default_download_mode
     );
 
-    let game_branch = hyp
-        .game_branch()
-        .await
-        .context("getGameBranches")
-        .map_err(RunFailure::metadata)?;
-    let branch = game_branch.main;
-    let latest = branch.tag.clone();
-    tracing::info!("latest version: {latest}");
-    let latest_build = hyp
-        .chunk_build(&branch, None)
-        .await
-        .context("getBuild(latest)")
-        .map_err(RunFailure::metadata)?;
-
-    // The local build only feeds chunk reuse (S2). A missing local version, or a
-    // server that no longer serves that tag (retcode -202), just means more
-    // downloads — never a wrong result.
-    let mut local_build = None;
-    if let Some(lv) = local_version.as_deref() {
-        match hyp.chunk_build(&branch, Some(lv)).await {
-            Ok(b) => {
-                tracing::info!("local build manifest loaded for dedup (tag={lv})");
-                local_build = Some(b);
+    // 3. Local reads: they need only `game_dir` and the cleaned config, so they
+    // run on the blocking pool while the build manifests are fetched. The
+    // audio dirs were normalised above; they feed a **move** sink and the
+    // `--audio` pre-flight below, so the gate there and the sink use the
+    // cleaned string rather than the raw server spelling.
+    let ignore_read = {
+        let game_dir = game_dir.to_path_buf();
+        let dir = config.res_category_dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<HashSet<String>, RunFailure> {
+            if dir.is_empty() {
+                return Ok(HashSet::new());
             }
-            Err(e) => tracing::warn!("local build unavailable ({e}); full-fetch fallback"),
-        }
-    }
-
-    let ignore = if config.res_category_dir.is_empty() {
-        HashSet::new()
-    } else {
-        let p = util::contained_join(game_dir, &config.res_category_dir)
-            .context("res_category_dir")
-            .map_err(RunFailure::metadata)?;
-        util::read_ignore_categories(&p)
-            .context("read res_category ignore list")
-            .map_err(RunFailure::usage)?
-            .unwrap_or_default()
+            let p = util::contained_join(&game_dir, &dir)
+                .context("res_category_dir")
+                .map_err(RunFailure::metadata)?;
+            Ok(util::read_ignore_categories(&p)
+                .context("read res_category ignore list")
+                .map_err(RunFailure::usage)?
+                .unwrap_or_default())
+        })
     };
-    let blacklist = if config.enable_resource_blacklist && !config.blacklist_dir.is_empty() {
-        let p = util::contained_join(game_dir, &config.blacklist_dir)
-            .context("blacklist_dir")
-            .map_err(RunFailure::metadata)?;
-        util::read_blacklist(&p)
-            .context("read blacklist")
-            .map_err(RunFailure::usage)?
-            .unwrap_or_default()
-    } else {
-        HashSet::new()
+    let blacklist_read = {
+        let game_dir = game_dir.to_path_buf();
+        let enabled = config.enable_resource_blacklist && !config.blacklist_dir.is_empty();
+        let dir = config.blacklist_dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<HashSet<String>, RunFailure> {
+            if !enabled {
+                return Ok(HashSet::new());
+            }
+            let p = util::contained_join(&game_dir, &dir)
+                .context("blacklist_dir")
+                .map_err(RunFailure::metadata)?;
+            Ok(util::read_blacklist(&p)
+                .context("read blacklist")
+                .map_err(RunFailure::usage)?
+                .unwrap_or_default())
+        })
     };
-    // The audio dirs were normalised and validated at the top of this function,
-    // where `getGameConfigs` enters the run. They feed a **move** sink and the
-    // `--audio` pre-flight below, so the gate there and the sink use the cleaned
-    // string rather than the raw server spelling.
     // Effective audio langs: explicit `--audio` (incl. `none` = game-only) wins
     // and overwrites the scan file; omitted flag keeps the detected set. An
     // absent scan file falls back to `en-us`; an unreadable one fails the run
     // rather than silently replacing the selection (R-2).
-    let explicit = ctx.audio_explicit.then_some(&ctx.audio);
-    let audio = audio::resolve_effective_audio(game_dir, &config.audio_pkg_scan_dir, explicit)
-        .context("resolve audio selection")
-        .map_err(RunFailure::usage)?;
+    let audio_read = {
+        let game_dir = game_dir.to_path_buf();
+        let scan_dir = config.audio_pkg_scan_dir.clone();
+        let explicit = ctx.audio_explicit.then(|| ctx.audio.clone());
+        tokio::task::spawn_blocking(move || {
+            audio::resolve_effective_audio(&game_dir, &scan_dir, explicit.as_ref())
+                .context("resolve audio selection")
+                .map_err(RunFailure::usage)
+        })
+    };
+
+    // 4. Second server wave: the latest build is fatal; the local one only
+    // feeds chunk reuse (S2). A missing local version, or a server that no
+    // longer serves that tag (retcode -202), just means more downloads — never
+    // a wrong result.
+    let local_build_fut = async {
+        match local_version.as_deref() {
+            Some(lv) => Some(hyp.chunk_build(&branch, Some(lv)).await),
+            None => None,
+        }
+    };
+    let (latest_result, local_result) =
+        tokio::join!(hyp.chunk_build(&branch, None), local_build_fut);
+    let latest_build = latest_result
+        .context("getBuild(latest)")
+        .map_err(RunFailure::metadata)?;
+    let local_build = match (local_version.as_deref(), local_result) {
+        (Some(lv), Some(Ok(b))) => {
+            tracing::info!("local build manifest loaded for dedup (tag={lv})");
+            Some(b)
+        }
+        (_, Some(Err(e))) => {
+            tracing::warn!("local build unavailable ({e}); full-fetch fallback");
+            None
+        }
+        _ => None,
+    };
+
+    let ignore = ignore_read.await.map_err(|e| {
+        RunFailure::metadata(anyhow::anyhow!("read res_category ignore list: {e}"))
+    })??;
+    let blacklist = blacklist_read
+        .await
+        .map_err(|e| RunFailure::metadata(anyhow::anyhow!("read blacklist: {e}")))??;
+    let audio = audio_read
+        .await
+        .map_err(|e| RunFailure::usage(anyhow::anyhow!("resolve audio selection: {e}")))??;
     // The write itself is deferred to the execution phase: the repair reads
     // the in-memory `audio` above, never the file.
     //
