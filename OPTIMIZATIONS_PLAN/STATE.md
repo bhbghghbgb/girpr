@@ -19,7 +19,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T05 | C3 - never publish a partial audio target | completed | 5ba1466, 084bb1e | RC-02 |
 | T06 | C4 - write `--plan-out` atomically | completed | 3b9fcce, 3675334 | RC-02 |
 | T07 | C8 - one temp-file naming rule | completed | 6739ad8, d47582f, 78477e4 | RC-02 |
-| T08 | P1 - overlap metadata calls | todo | | RC-03 |
+| T08 | P1 - overlap metadata calls | in_progress | | RC-03 |
 | T09 | P2 - fetch manifests concurrently | todo | | RC-03 |
 | T10 | P4 - move blocking phases off workers; parallel check | todo | | RC-04 |
 | T11 | P5 - size the runtime for `--jobs` | todo | | RC-04 |
