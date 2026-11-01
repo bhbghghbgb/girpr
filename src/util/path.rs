@@ -455,6 +455,34 @@ mod tests {
         }
     }
 
+    /// The key is the plan's and the purge's only path-equality rule, so the
+    /// fold it applies is pinned here: ASCII case where the platform folds it,
+    /// and no Unicode case mapping on either platform.
+    #[test]
+    fn path_key_folds_ascii_case_only_on_windows() {
+        // ASCII case variants name one file on Windows and two on Unix.
+        let ascii_same = path_key("Game/A.DAT") == path_key("game/a.dat");
+        assert_eq!(
+            ascii_same,
+            cfg!(windows),
+            "ASCII case folding must follow the host"
+        );
+
+        // `str::to_lowercase` maps the Kelvin sign to `k`, but Windows keeps
+        // the two names apart, so the key must not collapse them.
+        assert_ne!(path_key("\u{212A}"), path_key("k"));
+
+        // A non-ASCII name is compared byte for byte; only its ASCII letters
+        // are folded.
+        let mixed = path_key("Game/Ä.DAT");
+        if cfg!(windows) {
+            assert_eq!(mixed, "game/Ä.dat");
+        } else {
+            assert_eq!(mixed, "Game/Ä.DAT");
+        }
+        assert_ne!(path_key("Ä"), path_key("ä"));
+    }
+
     #[test]
     fn contained_join_keeps_a_legitimate_path_under_the_base() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
