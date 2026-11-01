@@ -136,3 +136,247 @@ pub async fn local_reuse_map(
     }
     sophon::build_local_chunk_map(&wanted)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hyp::{ChunkManifestMeta, ManifestFile, ManifestUrl};
+    use crate::sleep::{NoSleep, SleepFuture};
+    use crate::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+    use prost::Message;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A manifest body as the origin sends it: zstd over the protobuf, with
+    /// the checksum of the **decompressed** bytes.
+    fn manifest_body(files: Vec<SophonChunkFile>) -> (Vec<u8>, String) {
+        let manifest = SophonChunkManifest { chuncks: files };
+        let mut raw = Vec::new();
+        manifest.encode(&mut raw).expect("prost encode");
+        let checksum = format!("{:x}", md5::compute(&raw));
+        (
+            zstd::encode_all(raw.as_slice(), 3).expect("zstd encode"),
+            checksum,
+        )
+    }
+
+    /// One file with one chunk at `offset`, so two manifests can describe the
+    /// same path differently.
+    fn file(path: &str, offset: i64) -> SophonChunkFile {
+        let digest = format!("{:x}", md5::compute(b"payload"));
+        SophonChunkFile {
+            file: path.into(),
+            chunks: vec![SophonChunk {
+                id: "chunk".into(),
+                uncompressed_md5: digest.clone(),
+                offset,
+                compressed_size: 1,
+                uncompressed_size: 7,
+                unknown: 0,
+                compressed_md5: String::new(),
+            }],
+            is_folder: false,
+            size: 7,
+            md5: digest,
+        }
+    }
+
+    fn meta(field: &str, id: &str, checksum: &str) -> ChunkManifestMeta {
+        ChunkManifestMeta {
+            category_id: field.into(),
+            category_name: field.into(),
+            matching_field: field.into(),
+            manifest: ManifestFile {
+                id: id.into(),
+                checksum: checksum.into(),
+                compressed_size: 0,
+                uncompressed_size: 0,
+            },
+            chunk_download: ManifestUrl::default(),
+            manifest_download: ManifestUrl::default(),
+        }
+    }
+
+    /// A build whose manifests all download from `prefix`, in the given
+    /// selection order.
+    fn build(prefix: &str, manifests: Vec<ChunkManifestMeta>) -> ChunkBuild {
+        ChunkBuild {
+            build_id: "build_test".into(),
+            tag: "tag_test".into(),
+            manifests: manifests
+                .into_iter()
+                .map(|mut m| {
+                    m.manifest_download.url_prefix = prefix.into();
+                    m.chunk_download.url_prefix = prefix.into();
+                    m
+                })
+                .collect(),
+        }
+    }
+
+    enum Reply {
+        Body(Vec<u8>),
+        Status(&'static str),
+    }
+
+    /// Serve `id -> reply` on an ephemeral loopback port.
+    async fn serve(routes: Vec<(&'static str, Reply)>) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        let routes = Arc::new(routes);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    continue;
+                };
+                let routes = routes.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let mut got = 0;
+                    while got < buf.len() {
+                        match socket.read(&mut buf[got..]).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                got += n;
+                                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&buf[..got]).to_string();
+                    let target = head
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let id = target.rsplit('/').next().unwrap_or("");
+                    let (status, body) = match routes.iter().find(|(rid, _)| *rid == id) {
+                        Some((_, Reply::Body(body))) => ("200 OK", body.clone()),
+                        Some((_, Reply::Status(status))) => (*status, Vec::new()),
+                        None => ("404 Not Found", Vec::new()),
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        base
+    }
+
+    /// A short backoff, so a retryable failure takes longer to finish than a
+    /// decided one without spending the real 1+2+3+4 s.
+    #[derive(Debug)]
+    struct ShortSleep;
+
+    impl Sleep for ShortSleep {
+        fn sleep(&self, _d: Duration) -> SleepFuture {
+            Box::pin(tokio::time::sleep(Duration::from_millis(5)))
+        }
+    }
+
+    /// The re-index step, with results arriving out of order: the first error
+    /// a caller walking left to right meets is the second selection, not the
+    /// first completion.
+    #[test]
+    fn out_of_order_results_are_reindexed_by_selection() {
+        let results = vec![(2, Ok("third")), (1, Err("second")), (0, Ok("first"))];
+        let ordered: Vec<_> = in_selection_order(results, 3)
+            .into_iter()
+            .map(|slot| slot.expect("every selection has a result"))
+            .collect();
+        assert_eq!(ordered, vec![Ok("first"), Err("second"), Ok("third")]);
+        assert_eq!(
+            ordered.iter().position(|r| r.is_err()),
+            Some(1),
+            "the first error is the first in selection order"
+        );
+    }
+
+    /// The first manifest fails slowly (a retryable 500) while a later one
+    /// fails at once with a 404. The returned error must name the first
+    /// manifest in selection order, not the first to finish.
+    #[tokio::test]
+    async fn fetch_latest_reports_the_first_failure_in_selection_order() {
+        let (ok_body, ok_checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let base = serve(vec![
+            ("slow", Reply::Status("500 Internal Server Error")),
+            ("fast", Reply::Status("404 Not Found")),
+            ("ok", Reply::Body(ok_body)),
+        ])
+        .await;
+        let build = build(
+            &base,
+            vec![
+                meta("game", "slow", ""),
+                meta("res", "fast", ""),
+                meta("extra", "ok", &ok_checksum),
+            ],
+        );
+        let client = Client::new();
+        let failure = fetch_latest(
+            &client,
+            &ShortSleep,
+            &build,
+            &HashSet::new(),
+            &HashSet::new(),
+            4,
+        )
+        .await
+        .expect_err("the game manifest is down");
+        let message = failure.to_string();
+        assert!(message.contains("manifest game"), "{message}");
+        assert!(!message.contains("manifest res"), "{message}");
+    }
+
+    /// A failed local manifest is skipped, and the successful ones still
+    /// contribute. The earlier selection's entry for a path wins, so
+    /// completion order cannot leak into the map.
+    #[tokio::test]
+    async fn local_reuse_map_keeps_the_union_and_selection_order() {
+        let (first_body, first_checksum) = manifest_body(vec![file("game/foo.dat", 0)]);
+        let (last_body, last_checksum) = manifest_body(vec![file("game/foo.dat", 99)]);
+        let base = serve(vec![
+            ("first", Reply::Body(first_body)),
+            ("gone", Reply::Status("404 Not Found")),
+            ("last", Reply::Body(last_body)),
+        ])
+        .await;
+        let build = build(
+            &base,
+            vec![
+                meta("game", "first", &first_checksum),
+                meta("res", "gone", ""),
+                meta("extra", "last", &last_checksum),
+            ],
+        );
+        let client = Client::new();
+        let map = local_reuse_map(
+            &client,
+            &NoSleep,
+            Some(&build),
+            &HashSet::new(),
+            &HashSet::new(),
+            4,
+        )
+        .await;
+        let entries = map
+            .get("game/foo.dat")
+            .expect("the successful manifests contribute to the map")
+            .entries();
+        assert_eq!(entries.len(), 1, "the same chunk is one entry");
+        assert_eq!(
+            entries[0].offset, 0,
+            "the first selected manifest's entry wins"
+        );
+    }
+}
