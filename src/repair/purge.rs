@@ -15,6 +15,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use walkdir::WalkDir;
@@ -62,6 +63,42 @@ pub struct PurgePlan {
     pub errors: u64,
 }
 
+/// The plan-derived keep inputs to the files-cleanup, folded once per run.
+///
+/// `expected` comes from [`RepairPlan::expected_rels`], `server_keep` from
+/// [`keep_set`], and `blacklist` from the launcher's `blacklist_dir`. All three
+/// are keyed with [`path_key`] so the walked rel (folded once per file) meets
+/// them in the same spelling.
+///
+/// [`RepairPlan`] is immutable after construction and shared by `Arc` across the
+/// before/after passes, so this cache cannot go stale within one run. The walked
+/// candidates are deliberately **not** part of it: the filesystem can change
+/// between passes, so each pass recomputes them.
+#[derive(Debug, Clone)]
+pub struct PurgeKeys {
+    expected: HashSet<String>,
+    server_keep: HashSet<String>,
+    blacklist: HashSet<String>,
+}
+
+impl PurgeKeys {
+    /// Fold the three keep inputs once for a run.
+    pub fn new(
+        plan: &RepairPlan,
+        server_keep: &HashSet<String>,
+        blacklist: &HashSet<String>,
+    ) -> Self {
+        // The expected set is keyed straight from the plan's rels: the raw-
+        // spelling `expected_paths()` set would be immediately re-keyed into a
+        // second one.
+        Self {
+            expected: plan.expected_rels().map(path_key).collect(),
+            server_keep: server_keep.iter().map(|r| path_key(r)).collect(),
+            blacklist: blacklist.iter().map(|r| path_key(r)).collect(),
+        }
+    }
+}
+
 /// NOTE(collapse-parity): set-difference of on-disk files vs the live manifest.
 /// See <https://github.com/CollapseLauncher/Collapse/blob/dc47259171794596331dffcf90db85a6ac0415ac/CollapseLauncher/Classes/InstallManagement/Genshin/GenshinInstall.cs#L177-L263>
 ///
@@ -89,21 +126,12 @@ pub struct PurgePlan {
 ///
 /// Pure with respect to the walk's contents: it reads the filesystem and
 /// decides, but deletes nothing.
-pub fn plan_purge(
-    game_dir: &Path,
-    plan: &RepairPlan,
-    server_keep: &HashSet<String>,
-    blacklist: &HashSet<String>,
-    scope: &PathScope,
-) -> PurgePlan {
-    // Fold the three keep sets once, here, rather than rebuilding a set for
-    // every walked file. `classify_purge_path` folds only the walked rel, so
-    // the purge compares the same `path_key` the plan dedups on. The expected
-    // set is keyed straight from the plan's rels: the raw-spelling
-    // `expected_paths()` set would be immediately re-keyed into a second one.
-    let expected: HashSet<String> = plan.expected_rels().map(path_key).collect();
-    let server_keep: HashSet<String> = server_keep.iter().map(|r| path_key(r)).collect();
-    let blacklist: HashSet<String> = blacklist.iter().map(|r| path_key(r)).collect();
+pub fn plan_purge(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> PurgePlan {
+    // The keep inputs were folded once per run; this pass only walks and keys
+    // the paths it meets.
+    let expected = &keys.expected;
+    let server_keep = &keys.server_keep;
+    let blacklist = &keys.blacklist;
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
     // Ancestors of every `Keep`-classified file: anything else is left empty by
@@ -163,7 +191,7 @@ pub fn plan_purge(
         // Match the scope once and hand the answer to the classifier: rule 0
         // needs exactly this value, and the `hidden` count needs it too.
         let visible = scope.is_visible(&rel);
-        match classify_purge_path_visible(&rel, visible, &expected, &server_keep, &blacklist) {
+        match classify_purge_path_visible(&rel, visible, expected, server_keep, blacklist) {
             PurgeVerdict::Keep => mark_kept_ancestors(path, game_dir, &mut kept_dirs),
             PurgeVerdict::Purge => {
                 debug_assert!(visible, "a hidden path must classify Keep");
@@ -342,15 +370,19 @@ fn rel_path(p: &Path, game_dir: &Path) -> String {
 /// [`classify_purge_path`], not here, because their location varies by channel.
 ///
 /// All entries are `/`-separated rel paths (same normalization as
-/// [`super::phases::plan::build_plan`] and the purge walk).
-pub fn keep_set() -> HashSet<String> {
-    HashSet::from([
-        "config.ini".to_string(),
-        // The single-writer lock lives at the game dir's root and is not in
-        // the manifest. The cleanup must never eat it: a run that holds it
-        // would lose its exclusion and a second run could start beside it.
-        crate::repair::lock::LOCK_FILE.to_string(),
-    ])
+/// [`super::phases::plan::build_plan`] and the purge walk). The set is fixed,
+/// so it is built once and shared rather than allocated per call.
+pub fn keep_set() -> &'static HashSet<String> {
+    static KEEP: OnceLock<HashSet<String>> = OnceLock::new();
+    KEEP.get_or_init(|| {
+        HashSet::from([
+            "config.ini".to_string(),
+            // The single-writer lock lives at the game dir's root and is not in
+            // the manifest. The cleanup must never eat it: a run that holds it
+            // would lose its exclusion and a second run could start beside it.
+            crate::repair::lock::LOCK_FILE.to_string(),
+        ])
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,7 +413,7 @@ pub fn classify_purge_path(
 /// computed.
 ///
 /// `expected`, `server_keep` and `blacklist` must already be keyed with
-/// `path_key`; [`plan_purge`] does that once per pass. `rel` is keyed here,
+/// `path_key`; [`PurgeKeys`] does that once per run. `rel` is keyed here,
 /// once per file. That keeps the classification case-insensitive on Windows
 /// (the plan's dedup and the scope already are) while leaving Unix paths
 /// distinct.
@@ -460,8 +492,13 @@ mod tests {
 
     fn purge_fixture() -> (HashSet<String>, HashSet<String>) {
         let expected: HashSet<String> = ["game.dat".to_string()].into_iter().collect();
-        let server_keep = keep_set();
+        let server_keep = keep_set().clone();
         (expected, server_keep)
+    }
+
+    /// The plan-derived keep inputs, folded the way `plan_phase` does.
+    fn keys_for(plan: &RepairPlan, blacklist: &HashSet<String>) -> PurgeKeys {
+        PurgeKeys::new(plan, keep_set(), blacklist)
     }
 
     /// No blacklist, for the tests that predate it.
@@ -490,17 +527,8 @@ mod tests {
     }
 
     fn purge_now(dir: &Path, plan: &RepairPlan, dry_run: bool) -> u64 {
-        apply_purge(
-            &plan_purge(
-                dir,
-                plan,
-                &keep_set(),
-                &no_blacklist(),
-                &PathScope::default(),
-            ),
-            dry_run,
-        )
-        .unwrap()
+        let keys = keys_for(plan, &no_blacklist());
+        apply_purge(&plan_purge(dir, &keys, &PathScope::default()), dry_run).unwrap()
     }
 
     /// Compile a scope for the classifier tests.
@@ -569,9 +597,7 @@ mod tests {
 
         let pp = plan_purge(
             &dir,
-            &plan_of("Game/Foo.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("Game/Foo.dat"), &no_blacklist()),
             &PathScope::default(),
         );
         let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
@@ -639,7 +665,7 @@ mod tests {
         // The file is not in this plan: the blacklist is the only keep rule
         // that names it, which is exactly the shape the plan's blacklist test
         // (`build_plan`) produces.
-        let pp = plan_purge(&dir, &plan_of("game.dat"), &keep_set(), &blacklist, &open);
+        let pp = plan_purge(&dir, &keys_for(&plan_of("game.dat"), &blacklist), &open);
         let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
         assert_eq!(
             rels,
@@ -787,9 +813,7 @@ mod tests {
         let plan = plan_of("deep/nested/game.dat");
         let pp = plan_purge(
             &dir,
-            &plan,
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan, &no_blacklist()),
             &PathScope::default(),
         );
         // `deep` has a kept descendant, so neither it nor `deep/nested` may be
@@ -813,9 +837,7 @@ mod tests {
         std::fs::write(dir.join("b.dat"), b"123").unwrap();
         let pp = plan_purge(
             &dir,
-            &plan_of("game.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game.dat"), &no_blacklist()),
             &PathScope::default(),
         );
         let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
@@ -846,9 +868,10 @@ mod tests {
         let scoped = scope(&["game/foo.dat"], &[]);
         let pp = plan_purge(
             &dir,
-            &plan_of_all(&["game/foo.dat", "game/bar.dat"]),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(
+                &plan_of_all(&["game/foo.dat", "game/bar.dat"]),
+                &no_blacklist(),
+            ),
             &scoped,
         );
         assert_eq!(pp.total_bytes, 0, "nothing is a delete candidate");
@@ -885,9 +908,7 @@ mod tests {
         let scoped = scope(&["game/foo.dat"], &[]);
         let pp = plan_purge(
             &dir,
-            &plan_of("game/foo.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game/foo.dat"), &no_blacklist()),
             &scoped,
         );
         assert!(
@@ -917,9 +938,7 @@ mod tests {
         let scoped = scope(&["*"], &[]);
         let pp = plan_purge(
             &dir,
-            &plan_of("game.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game.dat"), &no_blacklist()),
             &scoped,
         );
         assert_eq!(pp.hidden, 0);
@@ -941,9 +960,7 @@ mod tests {
         let dir = TempDir::new("girpr_test_purge", "walk_error");
         let pp = plan_purge(
             &dir.join("bad\0name"),
-            &plan_of("game.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game.dat"), &no_blacklist()),
             &PathScope::default(),
         );
         assert!(pp.files.is_empty(), "{:?}", pp.files);
@@ -978,9 +995,7 @@ mod tests {
         let dir = TempDir::new("girpr_test_purge", "missing_root");
         let pp = plan_purge(
             &dir.join("not_there_yet"),
-            &plan_of("game.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game.dat"), &no_blacklist()),
             &PathScope::default(),
         );
         assert!(pp.files.is_empty());
@@ -998,9 +1013,7 @@ mod tests {
         let scoped = scope(&["*.dat"], &[]);
         let pp = plan_purge(
             &dir,
-            &plan_of("game.dat"),
-            &keep_set(),
-            &no_blacklist(),
+            &keys_for(&plan_of("game.dat"), &no_blacklist()),
             &scoped,
         );
         assert_eq!(pp.total_bytes, 4);

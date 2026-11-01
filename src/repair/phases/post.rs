@@ -28,7 +28,6 @@ use crate::report::Summary;
 use crate::util;
 
 use super::metadata::Meta;
-use crate::repair::phases::plan::RepairPlan;
 use crate::repair::purge;
 use crate::repair::scope::PathScope;
 
@@ -51,7 +50,7 @@ use crate::repair::scope::PathScope;
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
-    plan: Arc<RepairPlan>,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &[String],
@@ -75,19 +74,17 @@ pub async fn run(
         );
     }
     if ctx.purge_after || ctx.purge_only {
+        // The plan-derived keep inputs were folded once in the plan phase;
+        // only the walked candidates are recomputed here.
+        let keys = purge_keys.ok_or_else(|| {
+            RunFailure::write(anyhow::anyhow!(
+                "purge planning task started without the run's keyed keep sets"
+            ))
+        })?;
         let purge_game_dir = game_dir.to_path_buf();
-        let purge_plan = Arc::clone(&plan);
-        let keep = purge::keep_set();
-        let blacklist = meta.blacklist.clone();
         let purge_scope = ctx.path_scope.clone();
         let purge_plan = tokio::task::spawn_blocking(move || {
-            purge::plan_purge(
-                &purge_game_dir,
-                &purge_plan,
-                &keep,
-                &blacklist,
-                &purge_scope,
-            )
+            purge::plan_purge(&purge_game_dir, &keys, &purge_scope)
         })
         .await
         .map_err(|e| {

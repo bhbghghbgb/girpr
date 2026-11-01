@@ -110,6 +110,10 @@ struct PlanPhase {
     /// The up-front purge candidates, when a purge or `--print-plan` asked for
     /// them.
     purge_plan: Option<PurgePlan>,
+    /// The plan-derived keep inputs, folded once here and reused by the
+    /// post-repair pass. `None` when no purge flag or `--print-plan` asked for
+    /// a purge plan at all.
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
     /// The install scan, when `--scan` asked for it. Shared with the
     /// `--check-only` verifier so neither path deep-clones it.
     scan: Option<Arc<ScanReport>>,
@@ -260,21 +264,27 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // re-plan, whose candidates could in principle differ — so the bound does
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
-    let purge_plan = if ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan {
+    let purge_wanted = ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan;
+    // The keep inputs are derived only from the immutable plan and the run's
+    // configuration, so fold them once and let both purge passes (and the
+    // `--print-plan` numbers) share them. The walked candidates stay
+    // per-pass: the filesystem can change between the before and after walks.
+    let purge_keys = if purge_wanted {
+        Some(Arc::new(purge::PurgeKeys::new(
+            &plan,
+            purge::keep_set(),
+            &meta.blacklist,
+        )))
+    } else {
+        None
+    };
+    let purge_plan = if let Some(keys) = purge_keys.as_ref() {
         let purge_game_dir = game_dir.clone();
-        let purge_plan = Arc::clone(&plan);
-        let keep = purge::keep_set();
-        let blacklist = meta.blacklist.clone();
+        let keys = Arc::clone(keys);
         let purge_scope = ctx.path_scope.clone();
         Some(
             tokio::task::spawn_blocking(move || {
-                purge::plan_purge(
-                    &purge_game_dir,
-                    &purge_plan,
-                    &keep,
-                    &blacklist,
-                    &purge_scope,
-                )
+                purge::plan_purge(&purge_game_dir, &keys, &purge_scope)
             })
             .await
             .map_err(|e| {
@@ -495,6 +505,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         http,
         plan,
         purge_plan,
+        purge_keys,
         scan,
         deprecated,
         local_map,
@@ -518,6 +529,7 @@ async fn execute_phase(
         http,
         plan,
         purge_plan,
+        purge_keys,
         scan,
         deprecated,
         local_map,
@@ -613,15 +625,8 @@ async fn execute_phase(
     if ctx.purge_only {
         summary.flags.config_bumped_zero = true;
         tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome = phases::post::run(
-            ctx,
-            &game_dir,
-            Arc::clone(&plan),
-            &meta,
-            &summary,
-            &deprecated,
-        )
-        .await?;
+        let outcome =
+            phases::post::run(ctx, &game_dir, purge_keys, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
@@ -668,15 +673,8 @@ async fn execute_phase(
     let mutates = !readonly;
     let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
     if mutates || lists_dry_run {
-        let outcome = phases::post::run(
-            ctx,
-            &game_dir,
-            Arc::clone(&plan),
-            &meta,
-            &summary,
-            &deprecated,
-        )
-        .await?;
+        let outcome =
+            phases::post::run(ctx, &game_dir, purge_keys, &meta, &summary, &deprecated).await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
     }
