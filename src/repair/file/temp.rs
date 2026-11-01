@@ -466,8 +466,17 @@ pub(super) async fn write_downloaded_chunk(
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
     let expected = c.uncompressed_size.max(0) as u64;
-    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64)
-        .with_context(|| format!("seek to chunk {} offset", c.id))?;
+    // The seek is the only thing that can fail before the fetch starts. It
+    // happens after the reservation, so a failure refunds it: no byte crossed
+    // the wire, and a leaked reservation would count against the ceiling for
+    // the rest of the run.
+    let mut sink = match ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64) {
+        Ok(sink) => sink,
+        Err(e) => {
+            settle_reservation(ctx, reserved, 0);
+            return Err(e).with_context(|| format!("seek to chunk {} offset", c.id));
+        }
+    };
     // What the fetch really spent, across every attempt: the checks below run
     // after the stream ends, so on failure the bytes of the attempt that died
     // mid-body would otherwise be lost. They crossed the wire, and the
