@@ -1270,12 +1270,14 @@ async fn a_second_run_against_the_same_install_is_refused() {
         "{msg}"
     );
 
-    // A **scoped** run does not take the lock — the lock's path is outside
-    // the scope, so it does not exist to the run — and is not refused.
+    // A **scoped** run takes the same lock even though the lock's path is
+    // outside its include list; otherwise it could write beside the first run.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (_, code) = repair::run(ctx).await.expect("a scoped run is not refused");
-    assert_eq!(code, 0);
+    let err = repair::run(ctx)
+        .await
+        .expect_err("a scoped run is refused too");
+    assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
 
     // The lock is released when the run that holds it ends.
     drop(_lock);
@@ -1284,8 +1286,9 @@ async fn a_second_run_against_the_same_install_is_refused() {
         .await
         .expect("the next run is not refused");
     assert_eq!(code, 0);
-    // The scoped run above already repaired foo.dat, and bar.dat was intact.
-    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
+    // foo.dat was missing and is repaired; bar.dat was intact.
+    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 1);
 
     mock.stop();
 }

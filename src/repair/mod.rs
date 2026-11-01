@@ -524,7 +524,6 @@ async fn execute_phase(
         local_map,
     } = phase;
     let readonly = ctx.readonly();
-    let scope = &ctx.path_scope;
 
     // === execution phase: everything below may touch the disk ===
 
@@ -543,19 +542,18 @@ async fn execute_phase(
     let root = util::PathRoot::new(&game_dir).ok();
 
     // The single-writer lock. Two runs against one install can write
-    // conflicting bytes into the same file, so a run that mutates the
-    // install takes the lock — and only such a run, and only when the
-    // path scope admits the lock file (the same rule `config.ini` lives
-    // under: a path outside the scope does not exist to the run).
-    let _lock =
-        if !readonly && !ctx.check_only && !ctx.print_plan && scope.is_visible(lock::LOCK_FILE) {
-            let lock = lock::Lock::acquire(&game_dir)
-                .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
-            tracing::info!(path = %lock.path().display(), "single-writer lock taken");
-            Some(lock)
-        } else {
-            None
-        };
+    // conflicting bytes into the same file, so every run that mutates the
+    // install takes the lock. The lock lives outside the install, keyed by
+    // the canonical game dir, so a path scope cannot hide it from one run
+    // while another run mutates the same files.
+    let _lock = if lock::takes_lock(readonly, ctx.check_only, ctx.print_plan) {
+        let lock = lock::Lock::acquire(&game_dir)
+            .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+        tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+        Some(lock)
+    } else {
+        None
+    };
 
     // 5.1 the explicit `--audio` selection, written now rather than in
     // `metadata`: the plan half is documented to leave the install untouched,
