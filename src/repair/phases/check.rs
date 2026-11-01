@@ -37,11 +37,15 @@ pub async fn verify_plan(
     game_dir: &Path,
     root: Option<&util::PathRoot>,
     plan: Arc<RepairPlan>,
-    summary: &Summary,
+    summary: Arc<Summary>,
     output: report::OutputFormat,
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
 ) -> u64 {
+    // One progress owner for the phase: the ticker reads the counters below as
+    // they are folded. Dropping the guard on return stops it, so the check-only
+    // path never leaves a ticker behind.
+    let _progress = report::ProgressGuard::start(Arc::clone(&summary), output);
     // The install root is resolved once here, not once per file, and shared by
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
@@ -96,7 +100,6 @@ pub async fn verify_plan(
     let mut bad = 0u64;
     let mut clean = 0u64;
     let mut damaged_chunks = 0u64;
-    let mut last_emit = std::time::Instant::now();
     for (idx, outcome) in outcomes {
         let f = &plan.files[idx];
         if outcome.ok {
@@ -149,13 +152,10 @@ pub async fn verify_plan(
                 }
             }
         }
-        // Keep the counters live so PROGRESS reflects work done so far.
+        // Keep the counters live so the phase's ticker reflects work done so
+        // far. Only the ticker emits `PROGRESS`.
         summary.files_skipped.store(clean, Ordering::Relaxed);
         summary.files_failed.store(bad, Ordering::Relaxed);
-        if last_emit.elapsed().as_secs() >= report::PROGRESS_INTERVAL_SECS {
-            report::emit_progress(summary, output);
-            last_emit = std::time::Instant::now();
-        }
     }
     tracing::info!(
         "check-only: total={} bad={} damaged_chunks={}",
@@ -334,14 +334,14 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let summary = Summary::default();
+        let summary = Arc::new(Summary::default());
         let mut bad = 0u64;
         let logs = crate::repair::test_support::logs_of(|| {
             bad = runtime.block_on(verify_plan(
                 base,
                 None,
                 Arc::clone(plan),
-                &summary,
+                Arc::clone(&summary),
                 report::OutputFormat::Text,
                 scan.clone(),
                 jobs,

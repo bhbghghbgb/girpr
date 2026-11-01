@@ -585,17 +585,22 @@ async fn execute_phase(
         // The execute-phase root was built after `create_dir_all` and the
         // second canonicalize above, so it is the current form for these
         // files; no per-file re-resolution is needed.
+        let summary = Arc::new(summary);
         let bad = phases::check::verify_plan(
             &game_dir,
             root.as_ref(),
             Arc::clone(&plan),
-            &summary,
+            Arc::clone(&summary),
             ctx.output,
             scan.clone(),
             ctx.jobs,
         )
         .await;
         summary.files_failed.store(bad, Ordering::Relaxed);
+        // The phase's ticker is stopped when `verify_plan` returns, but its
+        // aborted task may not have dropped its clone yet; `snapshot` reads the
+        // same counters either way.
+        let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
 

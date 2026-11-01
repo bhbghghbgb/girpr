@@ -31,6 +31,6 @@ pub mod emit;
 pub mod record;
 pub mod summary;
 
-pub use self::emit::{ProgressGuard, emit, emit_progress, report_record, summary_record};
-pub use self::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
+pub use self::emit::{ProgressGuard, emit, report_record, summary_record};
+pub use self::record::{OutputFormat, Record};
 pub use self::summary::Summary;
