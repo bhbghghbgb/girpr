@@ -76,8 +76,8 @@ use scan::ScanReport;
 /// `3` write/verify · `4` `--check-only` found damage. Fatal classes come back
 /// as [`RunFailure`], which carries the same codes.
 ///
-/// The work is split in two halves: [`plan_phase`] decides everything and
-/// touches nothing, then [`execute_phase`] carries it out. This function is
+/// The work is split in two halves: `plan_phase` decides everything and
+/// touches nothing, then `execute_phase` carries it out. This function is
 /// only the phase order.
 pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
     // The counters accumulate across both halves and an early plan return still
