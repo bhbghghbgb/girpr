@@ -27,7 +27,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T13 | P7 - reuse the temp source handle | completed | 65d1915, 8e8303a, 024d535 | RC-05 |
 | T14 | P8 - remove the per-piece sink seek | completed | 8920f51, 62095c4, 9921c0d | RC-05 |
 | T15 | P10 - share the local chunk map | completed | 6d5b5b4, eb705ce | RC-05 |
-| T16 | P3 - consume `--scan` verdicts in repair | in_progress | | RC-06 |
+| T16 | P3 - consume `--scan` verdicts in repair | pending_review | 2ea0747, df034d0 | RC-06 |
 | T17 | C2 + C9 - one lock for every mutating run | todo | | RC-07 |
 | T18 | A1 - narrow the public surface | todo | | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | todo | | RC-07 |
