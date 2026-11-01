@@ -1,4 +1,4 @@
-﻿use anyhow::{Context, Result};
+use anyhow::{Context, Result};
 use std::path::{Component, Path, PathBuf};
 
 /// What a file-length probe found.
@@ -475,6 +475,60 @@ mod tests {
         ] {
             let got = clean_rel(bad);
             assert!(got.is_err(), "{bad:?} must be refused, got {got:?}");
+        }
+    }
+
+    /// Every atomic writer names its temp the same way: the suffix is appended
+    /// to the whole file name, so no extension is replaced and a multi-dot name
+    /// keeps its shape.
+    #[test]
+    fn temp_sibling_appends_to_the_whole_name() {
+        for (input, want) in [
+            ("config.ini", "config.ini.girpr_tmp"),
+            ("scan.txt", "scan.txt.girpr_tmp"),
+            ("a.b.txt", "a.b.txt.girpr_tmp"),
+            ("plan.v1.json", "plan.v1.json.girpr_tmp"),
+            ("scan", "scan.girpr_tmp"),
+        ] {
+            assert_eq!(
+                temp_sibling(Path::new(input)),
+                PathBuf::from(want),
+                "{input:?}"
+            );
+        }
+        // The sibling stays beside the target, in the same directory.
+        assert_eq!(
+            temp_sibling(Path::new("Audio/scan.txt")),
+            PathBuf::from("Audio/scan.txt.girpr_tmp")
+        );
+    }
+
+    /// The suffix is pushed onto the `OsString`, so a name that is not UTF-8
+    /// keeps every byte instead of being round-tripped through a lossy string.
+    #[test]
+    fn temp_sibling_keeps_a_non_utf8_name() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"scan\xff.txt");
+            let got = temp_sibling(Path::new(name));
+            assert_eq!(
+                got.file_name().unwrap().as_bytes(),
+                b"scan\xff.txt.girpr_tmp"
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            // An unpaired surrogate has no UTF-8 encoding.
+            let name = std::ffi::OsString::from_wide(&[0x73, 0x63, 0xD800, 0x2e, 0x74, 0x78, 0x74]);
+            let got = temp_sibling(Path::new(&name));
+            let mut want: Vec<u16> = name.encode_wide().collect();
+            want.extend(".girpr_tmp".encode_utf16());
+            assert_eq!(
+                got.file_name().unwrap().encode_wide().collect::<Vec<u16>>(),
+                want
+            );
         }
     }
 
