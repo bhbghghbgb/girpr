@@ -571,6 +571,38 @@ mod tests {
         assert_eq!(m.settled(), 60);
     }
 
+    /// A refund larger than the live figure saturates at zero and warns: a
+    /// wrapped figure would switch the ceiling off for the rest of the run.
+    #[test]
+    fn a_refund_never_takes_the_live_figure_below_zero() {
+        let m = Meter::new();
+        assert!(m.charge_live(100));
+        m.refund_live(30);
+        m.refund_live(30);
+        assert_eq!(m.live(), 40);
+        let logs = crate::repair::test_support::logs_of(|| m.refund_live(1000));
+        assert_eq!(m.live(), 0, "the refund saturates instead of wrapping");
+        assert!(
+            logs.contains("refund") && logs.contains("1000"),
+            "the attempted refund is reported: {logs}"
+        );
+    }
+
+    /// The negative branch of `adjust_live` goes through the same hardened
+    /// refund, so an oversized correction cannot disable the ceiling either.
+    #[test]
+    fn a_negative_adjustment_saturates_at_zero() {
+        let mut m = Meter::new();
+        m.set_live_limit(Some(100));
+        assert!(m.charge_live(40));
+        m.adjust_live(-1000);
+        assert_eq!(m.live(), 0, "the adjustment saturates instead of wrapping");
+        // The ceiling still bounds the figure after the oversized correction.
+        assert!(m.charge_live(100));
+        assert!(!m.charge_live(1), "the ceiling still binds");
+        assert_eq!(m.live(), 100);
+    }
+
     /// The two ceilings bound different numbers: the live one is checked when
     /// the bytes are spent, the settled one when they are settled.
     #[test]
