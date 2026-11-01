@@ -366,6 +366,7 @@ pub enum PurgeVerdict {
 /// the path-scope verdict itself. [`plan_purge`] already knows whether a
 /// walked path is visible, so it calls the variant directly and matches the
 /// scope once per file.
+#[cfg(test)]
 pub fn classify_purge_path(
     rel: &str,
     expected: &HashSet<String>,
@@ -376,7 +377,7 @@ pub fn classify_purge_path(
     classify_purge_path_visible(rel, scope.is_visible(rel), expected, server_keep, blacklist)
 }
 
-/// [`classify_purge_path`] with the path-scope verdict (`visible`) already
+/// `classify_purge_path` with the path-scope verdict (`visible`) already
 /// computed.
 ///
 /// `expected`, `server_keep` and `blacklist` must already be keyed with

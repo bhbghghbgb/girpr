@@ -4,16 +4,14 @@
 use clap::Parser;
 use clap::error::ErrorKind;
 
-use girpr::cli::Args;
-use girpr::config::RunCtx;
-use girpr::{logging, repair, report};
+use girpr::{Args, RunCtx, emit, init_tracing, run as repair_run, summary_record};
 
 fn main() {
     let args = parse_args();
     // Logging first: everything after this point is diagnosable from the file.
     // Read off `args` before `into_ctx` consumes it — the flag layer is live
     // even for a run that is about to fail validation.
-    let plan = logging::init_tracing(
+    let plan = init_tracing(
         args.log_level,
         args.log_file_level,
         args.log_file.as_deref(),
@@ -102,10 +100,10 @@ async fn run(ctx: RunCtx) -> i32 {
         output
     );
 
-    match repair::run(ctx).await {
+    match repair_run(ctx).await {
         Ok((summary, code)) => {
             // stdout for parsing + log so a stderr-only capture still keeps it.
-            report::emit(&report::summary_record(&summary, code), output);
+            emit(&summary_record(&summary, code), output);
             code
         }
         Err(f) => {

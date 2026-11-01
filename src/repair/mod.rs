@@ -50,9 +50,8 @@ pub mod scope;
 pub(crate) mod test_support;
 
 pub use phases::metadata::Meta;
-pub use phases::plan::{PlannedFile, RepairPlan};
-pub use purge::{PurgeCandidate, PurgePlan, PurgeVerdict};
-pub use scope::PathScope;
+pub use phases::plan::RepairPlan;
+pub use purge::PurgePlan;
 
 use std::path::PathBuf;
 use std::sync::Arc;

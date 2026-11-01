@@ -56,19 +56,19 @@ pub struct Summary {
     /// actually caused — the bytes are spent whether they turn out to be good
     /// or not.
     ///
-    /// See [`Meter`] for the rule that tells the two apart.
+    /// See `Meter` for the rule that tells the two apart.
     pub download: Meter,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
     /// deprecated files) lands here. No split accounting.
     pub deleted_extra_bytes: AtomicU64,
-    /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
+    /// Conditional keys — see `SummaryFlags`. Set once, before the tasks
     /// start; plain values, so no atomics are needed.
     pub flags: SummaryFlags,
     /// Which runtime ceiling bound, if any. `0` = none; the numbers are
-    /// [`crate::repair::scope::ledger::StoppedBy`]'s. A single marker rather
-    /// than a flag per ceiling, because the *value* the `SUMMARY` reports is
-    /// the flag that bound — see [`SummaryFlags::stopped`].
+    /// `StoppedBy`'s. A single marker rather than a flag per ceiling, because
+    /// the *value* the `SUMMARY` reports is the flag that bound — see
+    /// `SummaryFlags::stopped`.
     pub stopped_by: AtomicU8,
     /// The disk meter: the bytes that landed in the install (**live**) and the
     /// bytes written from sources that passed their gate (**settled**).
@@ -80,13 +80,13 @@ pub struct Summary {
     /// fails its digest has already been written, and the bytes are spent
     /// whether they are good or not.
     ///
-    /// See [`Meter`] for the rule that tells the two apart.
+    /// See `Meter` for the rule that tells the two apart.
     pub write: Meter,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
     pub aborted: AtomicBool,
-    /// `--max-ram-bytes`; see [`Ceiling`] for the `u64::MAX` sentinel.
+    /// `--max-ram-bytes`; see `Ceiling` for the `u64::MAX` sentinel.
     pub ram_limit: Ceiling,
     /// RAM currently reserved for staging the bytes a file has to move
     /// inside itself. Live, not cumulative: a file gives its reservation

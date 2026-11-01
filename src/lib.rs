@@ -11,45 +11,75 @@
 //! `docs/02-repair-chunk-spec.md`, module plan:
 //! `docs/03-repair-rust-implementation-plan.md`.
 //!
-//! Module map:
-//! - [`cli`] / [`config`] — the argument surface and the validated per-run
-//!   configuration ([`config::RunCtx`]) plus the typed exit-code failure
-//!   ([`config::RunFailure`])
-//! - [`logging`] — console + file `tracing` layers, over the shared log policy
-//!   (`girpr-log`: the log file's path, the two levels, the env vars)
-//! - [`repair`] — the whole pipeline, split into phases
-//!   ([`repair::run`] is the coordinator)
-//! - [`hyp`] — HoYoPlay + Sophon `getBuild` JSON APIs
-//! - [`sophon`] — chunk-manifest protobuf, fetch/verify/parse, manifest filter,
-//!   local chunk-reuse map
-//! - [`biz`] — biz → launcher id / game id / channel tuple
-//! - [`report`] — run counters, the [`report::Record`] data plane and every
-//!   stdout line of the automation contract
-//! - [`util`] — MD5, `config.ini`, ignore/blacklist files, server-path containment
+//! ## Public surface
+//!
+//! The binary is the product, so the library exposes one deliberate seam:
+//!
+//! - [`run`] — the whole pipeline, and its configuration ([`RunCtx`]) and
+//!   typed failure ([`RunFailure`]);
+//! - [`Summary`], [`OutputFormat`], [`Record`], [`emit`](fn@emit) and
+//!   [`summary_record`] — the run counters and the stdout automation contract;
+//! - [`Args`] plus the audio helpers — the command-line parser;
+//! - [`Biz`] — the game/channel selector;
+//! - [`init_tracing`], [`Level`] and [`girpr_log`] — the logging entry point
+//!   and the policy type it returns.
+//!
+//! Everything else is an implementation detail. Integration tests reach the
+//! internal types they construct through [`test_support`], a hidden seam with
+//! a narrow, documented list.
+//!
+//! The modules behind the seam are private: `cli` / `config` (the argument
+//! surface and validated per-run configuration), `logging` (console + file
+//! `tracing` layers over the shared `girpr-log` policy), `repair` (the
+//! pipeline, split into phases), `hyp` (HoYoPlay + Sophon `getBuild` JSON
+//! APIs), `sophon` (chunk-manifest protobuf, fetch/verify/parse, manifest
+//! filter, local chunk-reuse map), `biz` (biz → launcher id / game id /
+//! channel tuple), `report` (run counters, the record data plane and every
+//! stdout line), `sleep` (the injectable wait) and `util` (MD5, `config.ini`,
+//! ignore/blacklist files, server-path containment).
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
-//! run config → [`repair::run`] → print `SUMMARY` → exit with the returned code.
+//! run config → [`run`] → print `SUMMARY` → exit with the returned code.
 
-pub mod biz;
-pub mod cli;
-pub mod config;
-pub mod hyp;
-pub mod logging;
-pub mod repair;
-pub mod report;
-pub mod sleep;
-pub mod sophon;
-pub mod util;
+mod biz;
+mod cli;
+mod config;
+mod hyp;
+mod logging;
+mod repair;
+mod report;
+mod sleep;
+mod sophon;
+mod util;
 
 // The log policy crate, re-exported so that a caller can name the type
-// [`logging::init_tracing`] returns without adding a dependency of its own:
-// the policy is part of this crate's public signature, so it is part of this
-// crate's public surface.
+// [`init_tracing`] returns without adding a dependency of its own: the policy
+// is part of this crate's public signature, so it is part of this crate's
+// public surface.
 pub use girpr_log;
 
 pub use biz::Biz;
-pub use cli::{Args, is_audio_none, normalize_audio_lang};
+pub use cli::{Args, is_audio_none, normalize_audio_lang, parse_audio_selection};
 pub use config::{RunCtx, RunFailure};
 pub use girpr_log::Level;
+pub use logging::init_tracing;
 pub use repair::run;
-pub use report::{OutputFormat, Summary};
+pub use report::{OutputFormat, Record, Summary, emit, summary_record};
+
+/// The integration tests' seam.
+///
+/// These items are implementation details. They are public only so that the
+/// integration tests can construct a run and inspect its results without
+/// importing a private module. Nothing here is production API.
+#[doc(hidden)]
+pub mod test_support {
+    pub use crate::config::RepairMode;
+    pub use crate::repair::lock::Lock;
+    pub use crate::repair::scope::{Limits, PathScope};
+    pub use crate::report::{Record, summary_record};
+    pub use crate::sleep::{NoSleep, RealSleep};
+    pub use crate::sophon::{
+        ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
+    };
+    pub use crate::util::EMPTY_MD5;
+}

@@ -27,7 +27,9 @@
 //! failing the run, so [`init_tracing`] is infallible.
 
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use girpr_log::{Level, LogOptions, LogPlan};
@@ -44,6 +46,7 @@ pub const PROJECT: &str = "girpr";
 /// The timestamp keeps concurrent runs from interleaving but also makes the
 /// name unguessable to the caller, which is why the flag and the environment
 /// variable exist.
+#[cfg(test)]
 pub fn default_log_path() -> PathBuf {
     girpr_log::default_log_path(PROJECT)
 }

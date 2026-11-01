@@ -371,7 +371,8 @@ pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
 ///
 /// Opens the file and hashes the range through the shared reader helper; the
 /// read buffer is internal. A caller that already holds the file and wants to
-/// reuse its buffer uses [`md5_reader_slice`] instead.
+/// reuse its buffer uses `md5_reader_slice` instead.
+#[cfg(test)]
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut buf = Vec::new();
@@ -384,11 +385,12 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
 /// Seeks `f` to `offset` first and leaves it at the end of the range (or at
 /// end of file, for a short read), so a caller that wants to copy the same
 /// bytes afterwards seeks back once instead of opening the file again.
+#[cfg(test)]
 pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) -> Result<String> {
     Ok(md5_reader_slice_digest(f, offset, len, buf)?.to_hex())
 }
 
-/// [`md5_reader_slice`] as a digest, for a gate that compares bytes.
+/// `md5_reader_slice` as a digest, for a gate that compares bytes.
 pub(crate) fn md5_reader_slice_digest(
     f: &mut File,
     offset: u64,

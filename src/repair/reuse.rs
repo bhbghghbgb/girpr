@@ -89,11 +89,12 @@ impl Order {
 /// A tie goes to **ascending**: both directions are valid then, and the
 /// ascending one writes forward, which is the friendlier pattern for a
 /// spinning disk.
+#[cfg(test)]
 pub fn salvage_order(chunks: &[SophonChunk], sources: &[Option<u64>], usable_len: u64) -> Order {
     order_from(chunks.iter(), sources, usable_len)
 }
 
-/// [`salvage_order`] over borrowed chunks.
+/// `salvage_order` over borrowed chunks.
 ///
 /// Callers that already hold a selection of chunks (the scan's bad chunks, or
 /// the in-place path's indices into `file.chunks`) can order them without

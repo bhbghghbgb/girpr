@@ -73,6 +73,8 @@ pub struct GameConfig {
 pub struct GameBranch {
     #[serde(default)]
     pub main: GameBranchPackage,
+    // Deserialized for completeness; no phase reads the pre-download branch.
+    #[allow(dead_code)]
     #[serde(default)]
     pub pre_download: Option<GameBranchPackage>,
 }
@@ -210,6 +212,9 @@ pub fn terminal_retcode(retcode: i64) -> bool {
 }
 
 impl HypClient {
+    /// The default constructor, kept for callers that do not override the
+    /// bases.
+    #[allow(dead_code)]
     pub fn new(biz: Biz) -> Result<Self> {
         let (host, _, _) = biz.endpoints();
         let (hyp_base, sophon_base) = production_bases(host);

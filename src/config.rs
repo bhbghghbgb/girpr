@@ -149,7 +149,7 @@ pub struct RunCtx {
     pub purge_after: bool,
     pub purge_before: bool,
     /// How the data plane is rendered: `key=value` lines (the default) or NDJSON.
-    /// One [`crate::report::Record`] per line either way — see [`crate::report`].
+    /// One [`crate::Record`] per line either way.
     pub output: OutputFormat,
     /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
     /// APIs are fetched from these bases instead of the production CDNs
