@@ -1,12 +1,14 @@
 //! Thin entry point: parse, install tracing, run the pipeline, print `SUMMARY`,
-//! exit. All behavior lives in the library.
+//! return the exit code. All behavior lives in the library.
+
+use std::process::ExitCode;
 
 use clap::Parser;
 use clap::error::ErrorKind;
 
 use girpr::{Args, RunCtx, emit, init_tracing, run as repair_run, summary_record};
 
-fn main() {
+fn main() -> ExitCode {
     let args = parse_args();
     // Logging first: everything after this point is diagnosable from the file.
     // Read off `args` before `into_ctx` consumes it — the flag layer is live
@@ -34,7 +36,7 @@ fn main() {
             // (README / docs/02 §1).
             tracing::error!("usage error: {e:#}");
             eprintln!("ERROR {e:#}");
-            std::process::exit(1);
+            return exit_code(1);
         }
     };
 
@@ -62,11 +64,20 @@ fn main() {
             // A runtime that cannot start is an environment failure, not a
             // repair failure: exit 1 like any other usage-level error.
             eprintln!("ERROR failed to start runtime: {e:#}");
-            std::process::exit(1);
+            return exit_code(1);
         }
     };
 
-    std::process::exit(runtime.block_on(run(ctx)));
+    exit_code(runtime.block_on(run(ctx)))
+}
+
+/// Map a documented exit code (`0`..=`5`) to what the process returns.
+///
+/// The pipeline only produces the documented values, so this is a plain cast in
+/// practice; clamping keeps a future bug from wrapping `3` into `259` on a
+/// platform whose exit status is narrower than an `i32`.
+fn exit_code(code: i32) -> ExitCode {
+    ExitCode::from(code.clamp(0, u8::MAX as i32) as u8)
 }
 
 /// Worker threads for a run that admits `jobs` files at once.
