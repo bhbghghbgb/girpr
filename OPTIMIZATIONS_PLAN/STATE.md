@@ -64,7 +64,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
-| RC-01 | T01-T04 | pending | | |
+| RC-01 | T01-T04 | in_progress | | |
 | RC-02 | T05-T07 | pending | | |
 | RC-03 | T08-T09 | pending | | |
 | RC-04 | T10-T11 | pending | | |
