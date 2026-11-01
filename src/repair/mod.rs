@@ -325,16 +325,16 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // post-phase: it is part of what the run will act on, so it belongs with the
     // rest of the plan. Still best-effort (the list is advisory).
     //
-    // Read-only modes skip it. The post-phase is its only consumer, and a
-    // read-only run never reaches the post-phase, so issuing the request would
-    // add a network round-trip to every `--dry-run`, `--check-only` and
-    // `--print-plan` run and then throw the answer away. (`--print-plan` is not
-    // covered by `readonly()` — it leaves by an early return — hence the
-    // explicit disjunct.)
+    // `--dry-run` needs it because the post-phase now runs in a dry run and
+    // lists the deprecated deletes it would make. `--check-only` and
+    // `--print-plan` still skip it: neither reaches the post-phase, so the
+    // request would only add a network round-trip and throw the answer away.
+    // (`--print-plan` is not covered by `readonly()` — it leaves by an early
+    // return — hence the explicit disjunct.)
     //
     // It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
     // extra network call.
-    let wants_deprecated = !readonly && !ctx.print_plan;
+    let wants_deprecated = ctx.dry_run || (!readonly && !ctx.print_plan);
     let deprecated = if wants_deprecated {
         fetch_deprecated(&meta.hyp).await
     } else {
@@ -570,7 +570,6 @@ async fn execute_phase(
     // space for the repair itself. Skipped entirely in `--check-only`
     // (verification reports damage; it must not delete). In `--dry-run` it runs
     // in log-only mode.
-    let mut purge_logged = false;
     if ctx.purge_before
         && !ctx.check_only
         && let Some(pp) = purge_plan.as_ref()
@@ -579,7 +578,6 @@ async fn execute_phase(
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
-        purge_logged = true;
     }
 
     // 5.5 check-only: verify only, then return. Nothing is written.
@@ -657,10 +655,14 @@ async fn execute_phase(
         return Ok((summary, 3));
     }
 
-    // 7. post phase. `readonly` covers both `--dry-run` and `--check-only`
-    // (check-only already returned, but gating on `readonly` keeps the
-    // invariant obvious).
-    if !readonly {
+    // 7. post phase. It runs when the run actually mutates the install, and
+    // for `--dry-run` so the listing covers what the post-phase would do.
+    // `--check-only` already returned above and `--print-plan` never reaches
+    // the execution phase, but they are named here so the read-only modes stay
+    // visibly post-phase-free rather than relying on that.
+    let mutates = !readonly;
+    let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
+    if mutates || lists_dry_run {
         let outcome = phases::post::run(
             ctx,
             &game_dir,
@@ -672,16 +674,6 @@ async fn execute_phase(
         .await?;
         let code = finish(outcome, &mut summary);
         return Ok((summary, code));
-    } else if ctx.dry_run
-        && ctx.purge_after
-        && !purge_logged
-        && let Some(pp) = purge_plan.as_ref()
-    {
-        // Dry-run logging only: list what the files-cleanup would delete (writes
-        // nothing; the byte count stays 0 by design). Skipped when the
-        // purge-before pass above already listed the same candidates, so
-        // `--purge-before --purge-after --dry-run` does not log each file twice.
-        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
     }
 
     Ok((summary, 0))

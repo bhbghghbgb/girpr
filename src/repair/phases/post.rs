@@ -10,7 +10,9 @@
 //! 4. `config.ini` bump last, so the on-disk version only advances once the
 //!    bytes are in place.
 //!
-//! The whole phase is skipped in read-only modes and whenever any file failed.
+//! The whole phase is skipped by `--check-only`/`--print-plan` and whenever
+//! any file failed. `--dry-run` reaches it, but every destructive step below
+//! lists instead of acting, and the `config.ini` bump is skipped.
 //! The deprecated list itself is **not** fetched here — it arrives as an
 //! argument, having been read during the plan phase.
 
@@ -42,10 +44,10 @@ use crate::repair::scope::PathScope;
 /// `deprecated` is the server's deprecated-file list, already fetched (and
 /// already possibly empty, if the call failed) during the plan phase.
 ///
-/// **This phase owns its own `--dry-run` discipline.** `repair::run` does not
-/// reach it only through `if !readonly` — `--purge-only` is a second call site —
-/// and a gate every caller has to remember is not a gate. Each destructive step
-/// below therefore consults `ctx.dry_run` itself.
+/// **This phase owns its own `--dry-run` discipline.** It has more than one
+/// call site — the repair run, `--purge-only`, and now a dry run — and a gate
+/// every caller has to remember is not a gate. Each destructive step below
+/// therefore consults `ctx.dry_run` itself.
 pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
@@ -116,8 +118,15 @@ pub async fn run(
             .fetch_add(bytes, Ordering::Relaxed);
     }
     // `config.ini` is bumped last so the on-disk version only
-    // advances once the bytes are in place. Two situations make that premise
-    // false by construction — the bytes were deliberately *not* put in place:
+    // advances once the bytes are in place. A dry run never put any bytes in
+    // place, so it stops here: the mode lists what the phase would do and must
+    // leave the launcher's version untouched.
+    if dry {
+        tracing::info!("dry run: not bumping config.ini");
+        return Ok(PostOutcome::DeletedNothing);
+    }
+    // Two situations make that premise false by construction — the bytes were
+    // deliberately *not* put in place:
     //
     // - an active path scope: the run only repaired a subset of the tree,
     // - `--purge-only`: a cleanup put no bytes in place at all.
@@ -158,8 +167,9 @@ pub enum PostOutcome {
     /// `--max-delete-bytes` blocked the post-repair cleanup pass. Nothing in
     /// that pass was deleted; earlier passes were already applied.
     DeleteCeiling,
-    /// `--dry-run`: the pass was listed and applied nothing. Distinguishable
-    /// from `DeleteCeiling` so a dry run does not report a limit it never hit.
+    /// `--dry-run`: the post-phase listed what it would do and applied
+    /// nothing. Kept apart from `DeleteCeiling` so a dry run never reports a
+    /// limit it did not hit.
     DeletedNothing,
 }
 
@@ -369,8 +379,7 @@ fn move_audio_cache(
         (Ok(cache), Ok(res)) => (cache, res),
         (cache, res) => {
             // Both are server data and this sink **moves files**: an escape is
-            // skipped, never followed. `--print-plan`/`--dry-run` cannot reach
-            // this (the post-phase is not run), but a real race would.
+            // skipped, never followed.
             tracing::warn!(
                 cache = %cache_dir,
                 res = %res_dir,

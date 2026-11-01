@@ -4046,11 +4046,13 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
 }
 
 #[tokio::test]
-async fn a_read_only_run_issues_no_deprecated_file_call() {
-    // The deprecated list is fetched during the plan phase, and read-only
-    // modes skip that phase's network calls: `--dry-run`, `--check-only` and
-    // `--print-plan` must issue zero `getGameDeprecatedFileConfigs` requests.
-    for mode in ["dry", "check", "plan"] {
+async fn check_only_and_print_plan_issue_no_deprecated_file_call() {
+    // The deprecated list is fetched during the plan phase, and these modes
+    // never reach the post-phase, so they skip that network call:
+    // `--check-only` and `--print-plan` must issue zero
+    // `getGameDeprecatedFileConfigs` requests. (`--dry-run` does fetch it,
+    // because it lists the deprecated deletes.)
+    for mode in ["check", "plan"] {
         let fx = build_fixture();
         let mock = MockServer::start(
             fx,
@@ -4069,7 +4071,6 @@ async fn a_read_only_run_issues_no_deprecated_file_call() {
 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
         match mode {
-            "dry" => ctx.dry_run = true,
             "check" => ctx.check_only = true,
             _ => ctx.print_plan = true,
         }
