@@ -70,7 +70,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-04 | T10-T11 | done | | Both completed without fixes |
 | RC-05 | T12-T15 | done | 9921c0d | T14 fixed: reservation settled on chunk seek failure |
 | RC-06 | T16 | done | | Completed without fixes |
-| RC-07 | T17-T19 | pending | | |
+| RC-07 | T17-T19 | in_progress | | |
 | RC-08 | T20-T22 | pending | | |
 | RC-09 | T23-T26 | pending | | |
 | RC-10 | T27 | pending | | |
