@@ -382,13 +382,17 @@ struct ChunkFileSink<'a> {
 }
 
 impl<'a> ChunkFileSink<'a> {
-    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> Self {
-        Self {
+    /// Position the file at the chunk's offset once. The sink then writes
+    /// sequentially: it holds the only `&mut File` for the stream, so no other
+    /// user can move the cursor behind it.
+    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> std::io::Result<Self> {
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Self {
             ctx,
             file,
             offset,
             written: 0,
-        }
+        })
     }
 
     /// How many bytes have landed in the file.
@@ -402,12 +406,9 @@ impl Write for ChunkFileSink<'_> {
         // The write ceiling counts this piece: it goes into the install, and
         // the ceiling counts what lands there.
         reserve_write(self.ctx, buf.len() as u64).map_err(std::io::Error::other)?;
-        // The seek is per piece, and it is deliberate: the sink is
-        // position-independent, so the caller cannot get it wrong by having
-        // left the file's cursor somewhere else. A syscall per 32 KB is
-        // nothing next to the decode.
-        self.file
-            .seek(SeekFrom::Start(self.offset + self.written))?;
+        // The cursor was placed at the chunk's offset in `new`, and this sink
+        // is the only writer for the stream, so the piece lands where the
+        // previous one ended. `restart` is what repositions it.
         self.file.write_all(buf)?;
         self.written += buf.len() as u64;
         Ok(buf.len())
@@ -465,7 +466,8 @@ pub(super) async fn write_downloaded_chunk(
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
     let expected = c.uncompressed_size.max(0) as u64;
-    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
+    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64)
+        .with_context(|| format!("seek to chunk {} offset", c.id))?;
     // What the fetch really spent, across every attempt: the checks below run
     // after the stream ends, so on failure the bytes of the attempt that died
     // mid-body would otherwise be lost. They crossed the wire, and the
