@@ -32,7 +32,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T18 | A1 - narrow the public surface | completed | c0dd7de, 9007c90 | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | completed | fa79ffd, c1c875a, 14bef05 | RC-07 |
 | T20 | A3 - exercise the post-phase in dry-run | pending_review | d32c395, bb1368c, c4285e7, f221aad | RC-08 |
-| T21 | A4 - one emitter and one progress driver | in_progress | | RC-08 |
+| T21 | A4 - one emitter and one progress driver | pending_review | 0948590, b8d5068, c56681c | RC-08 |
 | T22 | A5 - return an exit code and flush logs | todo | | RC-08 |
 | T23 | P9 - buffer the file log sink | todo | | RC-09 |
 | T24 | P11 - remove purge/scope per-pass allocations | todo | | RC-09 |
