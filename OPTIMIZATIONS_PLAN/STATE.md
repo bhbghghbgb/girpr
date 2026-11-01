@@ -27,7 +27,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T13 | P7 - reuse the temp source handle | completed | 65d1915, 8e8303a, 024d535 | RC-05 |
 | T14 | P8 - remove the per-piece sink seek | completed | 8920f51, 62095c4, 9921c0d | RC-05 |
 | T15 | P10 - share the local chunk map | completed | 6d5b5b4, eb705ce | RC-05 |
-| T16 | P3 - consume `--scan` verdicts in repair | pending_review | 2ea0747, df034d0 | RC-06 |
+| T16 | P3 - consume `--scan` verdicts in repair | completed | 2ea0747, df034d0 | RC-06 |
 | T17 | C2 + C9 - one lock for every mutating run | todo | | RC-07 |
 | T18 | A1 - narrow the public surface | todo | | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | todo | | RC-07 |
@@ -69,7 +69,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-03 | T08-T09 | done | | Both completed without fixes |
 | RC-04 | T10-T11 | done | | Both completed without fixes |
 | RC-05 | T12-T15 | done | 9921c0d | T14 fixed: reservation settled on chunk seek failure |
-| RC-06 | T16 | in_progress | | |
+| RC-06 | T16 | done | | Completed without fixes |
 | RC-07 | T17-T19 | pending | | |
 | RC-08 | T20-T22 | pending | | |
 | RC-09 | T23-T26 | pending | | |
@@ -130,6 +130,9 @@ until the main tasks and rework are done.
 | F29 | T13 implementer | `src/repair/file/inplace.rs` | The in-place path still resolves reuse sources per chunk. | todo |
 | F30 | T14 implementer | `src/repair/file/temp.rs` | `try_reuse_slice` seeks `out` to the chunk offset even on the download path, now redundant. | todo |
 | F31 | T14 implementer | `src/repair/file/temp.rs` | The sink remains unbuffered; buffering needs explicit restart/digest flush handling. | todo |
+| F32 | RC-06 review | `tests/repair_machinery.rs` | No end-to-end test mutates a file between plan and repair to prove the fresh-scan fallback. | todo |
+| F33 | RC-06 review | `src/repair/file/inplace.rs` | The reuse debug log's `age_secs` is the file's mtime age, not the scan snapshot's age. | todo |
+| F34 | RC-06 review | `src/repair/scan.rs`, `src/repair/file/inplace.rs` | Coarse-mtime filesystems can evade the exact length+mtime guard; document or harden. | todo |
 
 ## Follow-up batches
 
