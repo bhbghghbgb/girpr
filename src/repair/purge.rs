@@ -40,7 +40,7 @@ pub struct PurgeCandidate {
 ///
 /// Built by `plan_purge`, consumed by `apply_purge`. Everything the run will
 /// delete is here before the first byte is deleted.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PurgePlan {
     /// Delete candidates, sorted by path so a rerun's log is comparable.
     pub files: Vec<PurgeCandidate>,
@@ -852,6 +852,84 @@ mod tests {
         // Planning alone mutates nothing.
         assert!(dir.join("a.dat").exists());
         assert!(dir.join("b.dat").exists());
+    }
+
+    /// One folded [`PurgeKeys`] classifies every keep rule: expected manifest
+    /// files (including a directory descendant), the two owned metadata files,
+    /// a blacklisted path, the audio bookkeeping, a hidden path, and the temps
+    /// that still purge.
+    #[test]
+    fn cached_keys_classify_every_keep_rule() {
+        let plan = plan_of_all(&["game.dat", "dir/manifest.dat"]);
+        let blacklist = keyed(&["mods/blacklisted.dat"]);
+        let keys = keys_for(&plan, &blacklist);
+        let open = PathScope::default();
+        let scoped = scope(&["game.dat"], &[]);
+
+        for (rel, scope, want) in [
+            ("game.dat", &open, PurgeVerdict::Keep),
+            ("dir/manifest.dat", &open, PurgeVerdict::Keep),
+            ("config.ini", &open, PurgeVerdict::Keep),
+            (crate::repair::lock::LOCK_FILE, &open, PurgeVerdict::Keep),
+            ("mods/blacklisted.dat", &open, PurgeVerdict::Keep),
+            ("audio_lang_14", &open, PurgeVerdict::Keep),
+            ("Audio_English_pkg_version", &open, PurgeVerdict::Keep),
+            ("stray.dat", &open, PurgeVerdict::Purge),
+            ("a.dat_tmp", &open, PurgeVerdict::Purge),
+            ("x.hdiff", &open, PurgeVerdict::Purge),
+            ("hidden/orphan.dat", &scoped, PurgeVerdict::Keep),
+        ] {
+            assert_eq!(
+                classify_purge_path_visible(
+                    rel,
+                    scope.is_visible(rel),
+                    &keys.expected,
+                    &keys.server_keep,
+                    &keys.blacklist,
+                ),
+                want,
+                "{rel}"
+            );
+        }
+    }
+
+    /// The keys are shared by every purge pass, but the candidate list is not:
+    /// each pass walks the tree afresh, so a file that appears between the
+    /// before and after passes is seen by the later one.
+    #[test]
+    fn shared_keys_are_reused_while_each_pass_walks_afresh() {
+        let dir = TempDir::new("girpr_test_purge", "cached_passes");
+        std::fs::write(dir.join("game.dat"), b"keep").unwrap();
+        std::fs::write(dir.join("stray.dat"), b"drop").unwrap();
+
+        let plan = plan_of("game.dat");
+        let keys = keys_for(&plan, &no_blacklist());
+        let open = PathScope::default();
+
+        let before = plan_purge(&dir, &keys, &open);
+        assert_eq!(
+            before
+                .files
+                .iter()
+                .map(|c| c.rel.as_str())
+                .collect::<Vec<_>>(),
+            vec!["stray.dat"]
+        );
+        // The same keys over an unchanged tree decide the same thing.
+        let after = plan_purge(&dir, &keys, &open);
+        assert_eq!(before, after);
+
+        // The walk is per-pass: a late orphan is a candidate on the next pass.
+        std::fs::write(dir.join("late.dat"), b"drop").unwrap();
+        let later = plan_purge(&dir, &keys, &open);
+        assert_eq!(
+            later
+                .files
+                .iter()
+                .map(|c| c.rel.as_str())
+                .collect::<Vec<_>>(),
+            vec!["late.dat", "stray.dat"]
+        );
     }
 
     /// The case a scope has to get right for it not to be destructive: a purge

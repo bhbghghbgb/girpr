@@ -383,6 +383,34 @@ async fn purge_before_deletes_orphans_then_repairs() {
 }
 
 #[tokio::test]
+async fn purge_before_and_after_share_the_keys_and_delete_the_orphan_once() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("purge_both");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 96]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_before = true;
+    ctx.purge_after = true;
+    let (summary, code) = run(ctx).await.expect("both purge passes run");
+    assert_eq!(code, 0);
+    let (_, repaired, failed, _, deleted) = load_counters(&summary);
+    assert_eq!((repaired, failed), (0, 0));
+    assert_eq!(deleted, 96, "the orphan is deleted exactly once");
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
+    for f in &fx2.files {
+        assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
+    }
+    assert!(dir.join("config.ini").exists(), "config.ini kept");
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn blacklisted_files_survive_every_purge_spelling() {
     // The blacklist excludes a file from the *work list*; it does not remove
     // it from the expected install. docs/01 says blacklisted entries are
