@@ -617,6 +617,65 @@ fn promote_tmp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use crate::config::RepairMode;
+    use crate::repair::phases::manifest::LocalChunkMap;
+    use crate::repair::phases::plan::RepairPlan;
+    use crate::report::Summary;
+    use crate::sleep::NoSleep;
+    use crate::sophon::ReuseEntry;
+    use crate::util::Md5;
+
+    /// A context with no network activity: the tests below only reach the
+    /// reuse/no-candidate branches, where nothing is fetched.
+    fn test_ctx() -> FileCtx {
+        FileCtx {
+            game_dir: std::path::PathBuf::new(),
+            root: None,
+            http: reqwest::Client::new(),
+            plan: Arc::new(RepairPlan {
+                latest: String::new(),
+                files: Vec::new(),
+                url_prefix_by_file: Default::default(),
+            }),
+            local_map: LocalChunkMap::new(),
+            summary: Arc::new(Summary::new()),
+            dry_run: false,
+            repair_mode: RepairMode::Temp,
+            sleep: Arc::new(NoSleep),
+        }
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: md5.into(),
+            offset,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    fn reuse_at(md5: &str, size: i64, offset: i64) -> FileReuse {
+        FileReuse::new(vec![ReuseEntry {
+            md5: Md5::parse_hex(md5).unwrap(),
+            size,
+            offset,
+        }])
+    }
+
+    fn temp_out(path: &std::path::Path) -> File {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .unwrap()
+    }
 
     /// A stat failure on the `_tmp` must name the stat and the path:
     /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
@@ -679,5 +738,156 @@ mod tests {
             chain.contains(&tmp.display().to_string()) && chain.contains("rolling the tmp back"),
             "the rollback failure must be attached with the path: {chain}"
         );
+    }
+
+    /// The source is one file for the whole attempt: the first reuse opens it,
+    /// and later chunks are served from the same handle. Removing the path is
+    /// allowed to fail while the handle is open; either way the bytes come out
+    /// the same.
+    #[test]
+    fn a_held_source_handle_serves_later_chunks() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_handle");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 8, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 8);
+        let tmp_path = dir.join("out.bin");
+        let mut out = temp_out(&tmp_path);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut tmp_len = 0u64;
+        let mut handle = None;
+
+        let first = chunk_at("c0", &md5, 0, 4);
+        let outcome = try_reuse_slice(
+            &ctx,
+            &src,
+            &first,
+            Some(&reuse),
+            &mut out,
+            &mut scratch,
+            &mut handle,
+            &mut tmp_len,
+            &mut writes,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert!(handle.is_some(), "the first reuse keeps the source handle");
+
+        // The removal is allowed to fail on a platform that will not unlink an
+        // open file; the held handle is what the next chunk must use either way.
+        let _ = std::fs::remove_file(&src);
+        let second = chunk_at("c1", &md5, 4, 4);
+        let outcome = try_reuse_slice(
+            &ctx,
+            &src,
+            &second,
+            Some(&reuse),
+            &mut out,
+            &mut scratch,
+            &mut handle,
+            &mut tmp_len,
+            &mut writes,
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Reused),
+            "the held handle serves the later chunk"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), b"89ab89ab");
+    }
+
+    /// A source that cannot be opened is not a file failure: the chunk is
+    /// downloaded, and the empty slot lets the next chunk try a fresh open.
+    #[test]
+    fn a_missing_reuse_source_falls_back_to_download() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_missing");
+        let src = dir.join("never-written.bin");
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let reuse = reuse_at(md5, 4, 8);
+        let c = chunk_at("c0", md5, 0, 4);
+        let mut out = temp_out(&dir.join("out.bin"));
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut tmp_len = 0u64;
+        let mut handle = None;
+
+        let outcome = try_reuse_slice(
+            &ctx,
+            &src,
+            &c,
+            Some(&reuse),
+            &mut out,
+            &mut scratch,
+            &mut handle,
+            &mut tmp_len,
+            &mut writes,
+        )
+        .unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(handle.is_none(), "a failed open leaves no handle behind");
+    }
+
+    /// Resume-by-length reads the tracked counter, so a chunk the failed
+    /// download rolled back out of the `_tmp` must be downloaded again rather
+    /// than kept as complete.
+    #[test]
+    fn a_rollback_moves_the_resume_point_back_to_the_failed_chunk() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "rollback_resume");
+        let tmp = dir.join("foo.dat_tmp");
+        std::fs::write(&tmp, b"01234567").unwrap();
+        let mut out = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&tmp)
+            .unwrap();
+        let ctx = test_ctx();
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let c = chunk_at("c1", md5, 4, 4);
+        let missing = dir.join("never-written.bin");
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut handle = None;
+        let mut tmp_len = 8u64;
+
+        let outcome = try_reuse_slice(
+            &ctx,
+            &missing,
+            &c,
+            None,
+            &mut out,
+            &mut scratch,
+            &mut handle,
+            &mut tmp_len,
+            &mut writes,
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Resumed),
+            "the chunk's end is inside the tmp"
+        );
+
+        rollback_tmp(&mut out, &tmp, c.offset.max(0) as u64).unwrap();
+        tmp_len = c.offset.max(0) as u64;
+        let outcome = try_reuse_slice(
+            &ctx,
+            &missing,
+            &c,
+            None,
+            &mut out,
+            &mut scratch,
+            &mut handle,
+            &mut tmp_len,
+            &mut writes,
+        )
+        .unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Download),
+            "the rolled-back chunk must not be resumed"
+        );
+        assert_eq!(std::fs::metadata(&tmp).unwrap().len(), 4);
     }
 }
