@@ -191,14 +191,22 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
     let http = meta.hyp.http();
     let sleep = ctx.sleep.as_ref();
-    let per_manifest =
-        manifest::fetch_latest(&http, sleep, &meta.latest_build, &meta.audio, &meta.ignore).await?;
+    let per_manifest = manifest::fetch_latest(
+        &http,
+        sleep,
+        &meta.latest_build,
+        &meta.audio,
+        &meta.ignore,
+        ctx.jobs,
+    )
+    .await?;
     let local_map = manifest::local_reuse_map(
         &http,
         sleep,
         meta.local_build.as_ref(),
         &meta.audio,
         &meta.ignore,
+        ctx.jobs,
     )
     .await;
     // The local manifest loading is the one degradation that changes the
