@@ -217,8 +217,33 @@ impl Meter {
     /// This is the **only** way the live figure goes down. A resource that was
     /// consumed and then failed is *not* refunded: those bytes were spent, and
     /// the difference between the two numbers is exactly what says so.
+    ///
+    /// A refund larger than the live figure saturates at zero and warns: the
+    /// counter is what a ceiling bounds, and wrapping it to a figure near
+    /// `u64::MAX` would switch the ceiling off for the rest of the run. The
+    /// warning keeps the caller's logic error visible without panicking a
+    /// release run.
     pub fn refund_live(&self, n: u64) {
-        self.live.fetch_sub(n, Ordering::Relaxed);
+        let mut cur = self.live.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_sub(n);
+            match self
+                .live
+                .compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    if cur < n {
+                        tracing::warn!(
+                            refund = n,
+                            live = cur,
+                            "refund exceeds the live byte figure; saturating at zero"
+                        );
+                    }
+                    return;
+                }
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// Correct a charge once the real byte count is known.
@@ -228,11 +253,19 @@ impl Meter {
     /// construction* rather than by assumption, which is what `gircap`'s
     /// `download_bytes == patchmaps/<id>.json → totals.download_bytes`
     /// assertion is written against.
+    ///
+    /// A negative delta takes the hardened [`Self::refund_live`] path, and a
+    /// positive one saturates rather than wrapping.
     pub fn adjust_live(&self, delta: i64) {
         if delta < 0 {
             self.refund_live(delta.unsigned_abs());
         } else if delta > 0 {
-            self.live.fetch_add(delta as u64, Ordering::Relaxed);
+            let n = delta as u64;
+            let _ = self
+                .live
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                    Some(cur.saturating_add(n))
+                });
         }
     }
 
