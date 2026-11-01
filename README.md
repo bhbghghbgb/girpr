@@ -56,7 +56,7 @@ machine rather than the code.
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
-| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire`, `LOCK_FILE` |
+| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
@@ -236,23 +236,31 @@ flowchart TD
   `--print-plan`. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
-  (expected set = live-manifest paths + `config.ini` + the single-writer lock
-  + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version` patterns;
+  (expected set = live-manifest paths + `config.ini` + the legacy in-install
+  `girpr.lock` + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version`
+  patterns;
   **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
   `ScreenShot/`). The whole plan is built before the first delete.
-- single-writer lock: a run that mutates the install takes `{game_dir}/girpr.lock`
-  (`create_new`, so the creation *is* the exclusion). A live lock refuses the
-  second run with **exit `1`**, naming the file and the pid; a lock older than
-  24 h is taken over. A read-only run (`--check-only`, `--dry-run`,
-  `--print-plan`) never takes it, and a **scoped** run does not either — the
-  lock's path is outside the scope, so it does not exist to the run.
+- single-writer lock: every run that mutates the install takes an OS advisory
+  lock on `{temp}/girpr-{key:016x}.lock`, keyed by a stable FNV-1a hash of the
+  canonical game dir (ASCII case folded on Windows, because the filesystem is).
+  The open handle is the exclusion, so a **scoped** run takes the same lock as
+  an unscoped one and the OS releases a killed run's lock immediately — there
+  is no wall-clock staleness rule. A live holder refuses the second run with
+  **exit `1`**, naming the lock file and the holder from the body when it can
+  be read (an exclusive lock can hide the body on Windows, and the refusal says
+  so). The file is removed on exit best-effort; an unlocked leftover does not
+  block the next run. A read-only run (`--check-only`, `--dry-run`,
+  `--print-plan`) never takes it. Older runs wrote `{game_dir}/girpr.lock`; it
+  is never created now, and a leftover is left alone by the run and the
+  cleanup.
 - audio: omitted flag = keep scan file (default `en-us` only when the file is **absent**; an unreadable scan file fails the run rather than silently replacing the selection). An empty scan file is the game-only choice, not absence. A non-empty scan file that names no known language is a config error (exit `1`, naming the file and the offending line) rather than an empty selection `--purge-after` would act on. Explicit list/`none` overwrites the scan file atomically, in the execution phase after every plan-half refusal. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
 S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
-single-writer lock (`purge::keep_set`); the cleaned blacklist is a separate keep input
+legacy in-install `girpr.lock` (`purge::keep_set`); the cleaned blacklist is a separate keep input
 (`purge::plan_purge`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
