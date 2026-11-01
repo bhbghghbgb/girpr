@@ -68,7 +68,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-02 | T05-T07 | done | | All three completed without fixes |
 | RC-03 | T08-T09 | done | | Both completed without fixes |
 | RC-04 | T10-T11 | done | | Both completed without fixes |
-| RC-05 | T12-T15 | pending | | |
+| RC-05 | T12-T15 | in_progress | | |
 | RC-06 | T16 | pending | | |
 | RC-07 | T17-T19 | pending | | |
 | RC-08 | T20-T22 | pending | | |
