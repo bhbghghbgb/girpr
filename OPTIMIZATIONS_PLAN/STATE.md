@@ -16,9 +16,9 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T02 | C5 - reject oversized JSON numbers | completed | 0bf3646, 7f7190e | RC-01 |
 | T03 | C6 - harden meter subtraction | completed | 76e7499, f029dfc, 262dcdc | RC-01 |
 | T04 | C7 - use a Windows path key, not Unicode lowercase | completed | 176561b, 670c45e | RC-01 |
-| T05 | C3 - never publish a partial audio target | pending_review | 5ba1466, 084bb1e | RC-02 |
-| T06 | C4 - write `--plan-out` atomically | pending_review | 3b9fcce, 3675334 | RC-02 |
-| T07 | C8 - one temp-file naming rule | pending_review | 6739ad8, d47582f, 78477e4 | RC-02 |
+| T05 | C3 - never publish a partial audio target | completed | 5ba1466, 084bb1e | RC-02 |
+| T06 | C4 - write `--plan-out` atomically | completed | 3b9fcce, 3675334 | RC-02 |
+| T07 | C8 - one temp-file naming rule | completed | 6739ad8, d47582f, 78477e4 | RC-02 |
 | T08 | P1 - overlap metadata calls | todo | | RC-03 |
 | T09 | P2 - fetch manifests concurrently | todo | | RC-03 |
 | T10 | P4 - move blocking phases off workers; parallel check | todo | | RC-04 |
@@ -65,7 +65,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
 | RC-01 | T01-T04 | done | 262dcdc | T03 fixed: deprecated atomic API in `adjust_live` |
-| RC-02 | T05-T07 | in_progress | | |
+| RC-02 | T05-T07 | done | | All three completed without fixes |
 | RC-03 | T08-T09 | pending | | |
 | RC-04 | T10-T11 | pending | | |
 | RC-05 | T12-T15 | pending | | |
@@ -103,6 +103,14 @@ until the main tasks and rework are done.
 | F02 | RC-01 review | `src/report/emit.rs` | Non-`BrokenPipe` stdout errors warn per call with no latch; revisit only if log flooding is observed. | todo |
 | F03 | RC-01 review | `tools/sync` | Sibling crate still folds path keys with `str::to_lowercase` (same Unicode-fold class of issue). | todo |
 | F04 | RC-01 review | `src/repair/scope/filter.rs` | Glob case-insensitive matching differs from `path_key`; cross-reference the two docs. | todo |
+| F05 | RC-02 review | `src/repair/phases/post.rs` | `copy_publish_with` keeps its own `PUBLISH_TMP_SUFFIX` append; adopt `util::path::temp_sibling`. | todo |
+| F06 | RC-02 review | `src/repair/scope/report.rs` | Temp-then-rename replaces a symlink at the target and resets the target's mode; document the trade. | todo |
+| F07 | T02 implementer | `src/hyp.rs` | Negative sizes are still accepted and clamped to zero; decide whether to reject them explicitly. | todo |
+| F08 | T03 implementer | `src/repair/scope/ledger.rs` | `Summary::release_ram_bytes` still uses unchecked `fetch_sub`; consider the same saturation guard. | todo |
+| F09 | T05 implementer | `src/repair/phases/post.rs` | The copy-fallback caller path is only unit-tested through the injected helper, not a real failed rename. | todo |
+| F10 | T05 implementer | `src/repair/phases/post.rs` | The fixed temp sibling name would collide if two moves target the same path concurrently. | todo |
+| F11 | T06 implementer | `src/repair/scope/report.rs` | Untested `file_name() == None` fallback; cleanup warns when a directory occupies the temp path. | todo |
+| F12 | T07 implementer | `src/repair/purge.rs` | A purge test hard-codes the `.girpr_tmp` spelling instead of using the shared name helper. | todo |
 
 ## Follow-up batches
 
