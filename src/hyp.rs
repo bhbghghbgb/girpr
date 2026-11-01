@@ -509,14 +509,30 @@ mod tests {
 
     #[test]
     fn num_from_string_both_shapes() {
-        #[derive(Deserialize)]
+        #[derive(Debug, Deserialize)]
         struct S {
             #[serde(deserialize_with = "num_from_string")]
             n: i64,
         }
-        let a: S = serde_json::from_str(r#"{"n":12}"#).unwrap();
-        let b: S = serde_json::from_str(r#"{"n":"34"}"#).unwrap();
+        let parse = |json: &str| serde_json::from_str::<S>(json);
+
+        let a = parse(r#"{"n":12}"#).unwrap();
+        let b = parse(r#"{"n":"34"}"#).unwrap();
         assert_eq!((a.n, b.n), (12, 34));
+
+        // The largest representable size is accepted in both shapes.
+        let max_num = parse(r#"{"n":9223372036854775807}"#).unwrap();
+        let max_str = parse(r#"{"n":"9223372036854775807"}"#).unwrap();
+        assert_eq!((max_num.n, max_str.n), (i64::MAX, i64::MAX));
+
+        // One past the top of the range must not wrap into a negative size.
+        let above = parse(r#"{"n":9223372036854775808}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(above.contains("9223372036854775808"), "{above}");
+
+        assert!(parse(r#"{"n":18446744073709551615}"#).is_err());
+        assert!(parse(r#"{"n":"9223372036854775808"}"#).is_err());
     }
 
     fn client_for(biz: Biz) -> HypClient {
