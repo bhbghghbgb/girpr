@@ -1,8 +1,12 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
-use crate::report::emit::{progress_record, report_record, summary_record, write_line};
+use crate::report::emit::{
+    ProgressGuard, progress_record, report_record, summary_record, write_line,
+};
 use crate::report::record::{OutputFormat, Record};
 use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
 
@@ -73,6 +77,80 @@ fn progress_record_counts_done_as_the_three_outcomes() {
     assert_eq!(v["event"], "progress");
     assert_eq!(v["done"], 6);
     assert_eq!(v["total"], 10);
+}
+
+/// The phase's guard is the only owner of the ticker: it skips the immediate
+/// first tick, emits once per interval after that, and never emits `SUMMARY`.
+///
+/// Paused time makes the cadence deterministic instead of sleeping.
+#[test]
+fn the_progress_guard_ticks_once_per_interval_and_never_emits_a_summary() {
+    let logs = crate::repair::test_support::logs_of(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::pause();
+            let summary = Arc::new(Summary::default());
+            let guard = ProgressGuard::start_with_interval(
+                Arc::clone(&summary),
+                OutputFormat::Text,
+                Duration::from_millis(10),
+            );
+            // Let the ticker consume its immediate first tick, then let the
+            // paused clock pass two full intervals. Auto-advance drives the
+            // ticker's timer; the test task's own sleep is what yields to it.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            drop(guard);
+        });
+    });
+    assert_eq!(
+        logs.lines()
+            .filter(|line| line.contains("PROGRESS done="))
+            .count(),
+        2,
+        "one tick per interval, with the immediate first tick skipped:\n{logs}"
+    );
+    assert!(
+        !logs.lines().any(|line| line.contains("SUMMARY ")),
+        "the ticker never owns the run's final record:\n{logs}"
+    );
+}
+
+/// Dropping the guard stops the ticker, including when a phase returns early.
+/// Nothing may keep ticking into the next phase.
+#[test]
+fn dropping_the_progress_guard_stops_the_ticker() {
+    let logs = crate::repair::test_support::logs_of(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::pause();
+            let summary = Arc::new(Summary::default());
+            let guard = ProgressGuard::start_with_interval(
+                Arc::clone(&summary),
+                OutputFormat::Text,
+                Duration::from_millis(10),
+            );
+            tokio::task::yield_now().await;
+            drop(guard);
+            // A whole minute of clock after the drop: an unstopped ticker would
+            // have emitted thousands of records here.
+            tokio::time::advance(Duration::from_secs(60)).await;
+            tokio::task::yield_now().await;
+        });
+    });
+    assert_eq!(
+        logs.lines()
+            .filter(|line| line.contains("PROGRESS done="))
+            .count(),
+        0,
+        "the dropped guard must leave no ticker behind:\n{logs}"
+    );
 }
 
 #[test]

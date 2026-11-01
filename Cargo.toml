@@ -38,3 +38,6 @@ futures = "0.3"
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
+# Paused-time tests: the progress guard's cadence and its stop-on-drop are
+# checked against a controlled clock rather than by sleeping in CI.
+tokio = { version = "1", features = ["test-util"] }
