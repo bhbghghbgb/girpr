@@ -29,13 +29,14 @@ use anyhow::{Context, Result};
 use glob::{MatchOptions, Pattern};
 
 /// girsync's matching options, hardcoded (see the module docs).
-fn match_options() -> MatchOptions {
-    MatchOptions {
-        case_sensitive: false,
-        require_literal_separator: false,
-        require_literal_leading_dot: false,
-    }
-}
+///
+/// A fixed value: keeping it `const` avoids rebuilding it for every walked
+/// path in the hottest predicate.
+const MATCH_OPTIONS: MatchOptions = MatchOptions {
+    case_sensitive: false,
+    require_literal_separator: false,
+    require_literal_leading_dot: false,
+};
 
 /// The set of globs narrowing one run, compiled once at startup.
 ///
@@ -77,11 +78,18 @@ impl PathScope {
 
     /// `true` when `rel` is inside the scope. `--exclude` beats `--include`.
     pub fn is_visible(&self, rel: &str) -> bool {
-        let opts = match_options();
-        if !self.includes.is_empty() && !self.includes.iter().any(|p| p.matches_with(rel, opts)) {
+        if !self.includes.is_empty()
+            && !self
+                .includes
+                .iter()
+                .any(|p| p.matches_with(rel, MATCH_OPTIONS))
+        {
             return false;
         }
-        !self.excludes.iter().any(|p| p.matches_with(rel, opts))
+        !self
+            .excludes
+            .iter()
+            .any(|p| p.matches_with(rel, MATCH_OPTIONS))
     }
 
     /// The `--include` globs as written, for the "matched nothing" usage
