@@ -14,7 +14,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 |---|---|---|---|---|
 | T01 | C1 - closed stdout is not a panic | pending_review | 37473e0, 587af78 | RC-01 |
 | T02 | C5 - reject oversized JSON numbers | pending_review | 0bf3646, 7f7190e | RC-01 |
-| T03 | C6 - harden meter subtraction | in_progress | | RC-01 |
+| T03 | C6 - harden meter subtraction | pending_review | 76e7499, f029dfc | RC-01 |
 | T04 | C7 - use a Windows path key, not Unicode lowercase | todo | | RC-01 |
 | T05 | C3 - never publish a partial audio target | todo | | RC-02 |
 | T06 | C4 - write `--plan-out` atomically | todo | | RC-02 |
