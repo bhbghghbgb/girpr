@@ -132,13 +132,16 @@ where
             Ok(v)
         }
         fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<i64, E> {
-            Ok(v as i64)
+            i64::try_from(v)
+                .map_err(|_| E::custom(format!("size {v} is larger than i64::MAX ({})", i64::MAX)))
         }
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
-            v.parse::<i64>().map_err(E::custom)
+            v.parse::<i64>()
+                .map_err(|_| E::custom(format!("size {v:?} is not an integer that fits an i64")))
         }
         fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
-            v.parse::<i64>().map_err(E::custom)
+            v.parse::<i64>()
+                .map_err(|_| E::custom(format!("size {v:?} is not an integer that fits an i64")))
         }
     }
     deserializer.deserialize_any(V)
