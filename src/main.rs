@@ -102,6 +102,8 @@ async fn run(ctx: RunCtx) -> i32 {
 
     match repair_run(ctx).await {
         Ok((summary, code)) => {
+            // The run's last record. This is the only `SUMMARY` call site: a
+            // phase never emits it, so every return path ends with exactly one.
             // stdout for parsing + log so a stderr-only capture still keeps it.
             emit(&summary_record(&summary, code), output);
             code

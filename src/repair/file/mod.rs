@@ -223,7 +223,7 @@ pub async fn repair_all(
         repair_mode,
         sleep,
     });
-    let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
+    let progress = crate::report::ProgressGuard::start(Arc::clone(&summary), output);
 
     // Keep at most `jobs` file tasks alive at once: a task is spawned only when
     // the in-flight window has room, so a large plan does not allocate one task
@@ -235,7 +235,9 @@ pub async fn repair_all(
         file_task(ctx, idx, total_files)
     })
     .await;
-    progress.abort();
+    // The phase is over: stop the ticker before the final unwrap, so no tick
+    // can read the counters while they are being converted.
+    drop(progress);
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
     // its clone yet. Either way `snapshot` reads the live counters.
     Arc::try_unwrap(summary)

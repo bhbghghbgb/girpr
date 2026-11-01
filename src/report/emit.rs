@@ -1,5 +1,24 @@
+//! The one writer for the run's stdout data plane.
+//!
+//! The record order is fixed: `REPORT` once the metadata is known, `PLAN` when
+//! the run asked for it, zero or more `PROGRESS` ticks from the phase's single
+//! [`ProgressGuard`], and `SUMMARY` last, emitted once by the caller after
+//! [`crate::repair::run`] returns. No phase emits `SUMMARY`.
+//!
+//! Ownership rule: a phase that has long-running work starts **one**
+//! [`ProgressGuard`] for its shared [`Summary`] and drops it when the phase
+//! returns. The ticker is the only `PROGRESS` producer; per-file loops and
+//! blocking tasks update counters but never emit. That is what keeps two
+//! tickers from interleaving into the same stream.
+//!
+//! [`emit`] is the only writer. Its policy for every record: render once,
+//! mirror the rendered line to the log, write stdout through [`write_line`],
+//! never panic, and never change the exit code.
+
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use super::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
 use super::summary::{Summary, conditional_extras};
@@ -61,24 +80,54 @@ pub fn emit_progress(sum: &Summary, format: OutputFormat) {
     emit(&progress_record(sum), format);
 }
 
-/// Background `PROGRESS` ticker for the repair phase. The first tick fires
-/// immediately; it is skipped so we only report after a full interval.
+/// Owns a phase's `PROGRESS` ticker for as long as the phase runs.
 ///
-/// Under `--output json` this is one more NDJSON line: the same record, same
-/// shape, in the middle of the stream where the tick actually landed.
-pub fn spawn_progress_reporter(
-    sum: std::sync::Arc<Summary>,
-    format: OutputFormat,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(PROGRESS_INTERVAL_SECS));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            emit_progress(&sum, format);
-        }
-    })
+/// A phase with long-running work starts exactly one guard for its shared
+/// counters and drops it on the way out (including an early return or a
+/// panic): dropping stops the ticker, so no later phase can inherit a running
+/// stream. It is an RAII handle rather than a global because two live guards
+/// would otherwise be two silent tickers.
+pub struct ProgressGuard {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ProgressGuard {
+    /// Start the ticker for a phase whose counters `sum` holds.
+    pub fn start(sum: Arc<Summary>, format: OutputFormat) -> Self {
+        Self::spawn(sum, format, Duration::from_secs(PROGRESS_INTERVAL_SECS))
+    }
+
+    /// The same ticker at a shorter interval, for the start/stop tests.
+    #[cfg(test)]
+    pub fn start_with_interval(
+        sum: Arc<Summary>,
+        format: OutputFormat,
+        interval: Duration,
+    ) -> Self {
+        Self::spawn(sum, format, interval)
+    }
+
+    fn spawn(sum: Arc<Summary>, format: OutputFormat, interval: Duration) -> Self {
+        let task = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            // The first tick fires immediately; skip it so a phase only reports
+            // after a full interval has passed.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                emit_progress(&sum, format);
+            }
+        });
+        Self { task }
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        // Abort, do not await: the ticker spends its life asleep between ticks,
+        // and joining it would block the runtime for up to a whole interval.
+        self.task.abort();
+    }
 }
 
 /// The one-time begin report, written right after the metadata calls. Parsers
