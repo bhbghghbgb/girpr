@@ -11,7 +11,10 @@
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+use futures::StreamExt;
 
 use crate::report::{self, Summary};
 use crate::util::{self, Md5};
@@ -25,32 +28,77 @@ use crate::repair::scan::{ScanReport, Verdict};
 /// reading the files again: the scan already read them, and the answer it
 /// carries is the same one. That is what makes `--check-only --scan` a
 /// single read of the install.
-pub fn verify_plan(
+///
+/// The checks are blocking filesystem reads, so each file is checked on the
+/// blocking pool and `jobs` bounds how many run at once. The results are folded
+/// in plan order even when the tasks finish out of order, so the failure log
+/// and the counters stay deterministic.
+pub async fn verify_plan(
     game_dir: &Path,
     root: Option<&util::PathRoot>,
-    plan: &RepairPlan,
+    plan: Arc<RepairPlan>,
     summary: &Summary,
     output: report::OutputFormat,
-    scan: Option<&ScanReport>,
+    scan: Option<Arc<ScanReport>>,
+    jobs: usize,
 ) -> u64 {
+    // The install root is resolved once here, not once per file, and shared by
+    // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
+    let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
+    let game_dir = game_dir.to_path_buf();
+    let mut outcomes: Vec<(usize, CheckOutcome)> = futures::stream::iter(0..plan.files.len())
+        .map(|idx| {
+            let plan = Arc::clone(&plan);
+            let game_dir = game_dir.clone();
+            let root = root.clone();
+            let scan = scan.clone();
+            async move {
+                match tokio::task::spawn_blocking(move || {
+                    let f = &plan.files[idx];
+                    // Resolve once. A containment failure is a *diagnostic*:
+                    // `build_plan` already refused an escaping rel, so this is
+                    // defence in depth, and it must not be mislabelled as a
+                    // size mismatch (which is what `.ok()` did here). The run's
+                    // cached root saves the per-file base resolution when it has
+                    // one; `None` keeps the old `contained_join` fallback.
+                    let path = root.map_or_else(
+                        || util::contained_join(&game_dir, &f.rel),
+                        |root| root.join(&f.rel),
+                    );
+                    let outcome = match scan.as_deref().and_then(|s| s.files.get(&f.rel)) {
+                        Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
+                        None => check_one(f, &path, DigestSource::Read),
+                    };
+                    (idx, outcome)
+                })
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(e) => {
+                        // A panicked or cancelled task is a bug, not a clean
+                        // verdict. Keep the file counted as damaged instead of
+                        // dropping it from the total without a trace.
+                        (
+                            idx,
+                            CheckOutcome::failed(CheckFailure::Read(format!(
+                                "check task failed: {e}"
+                            ))),
+                        )
+                    }
+                }
+            }
+        })
+        .buffer_unordered(jobs.max(1))
+        .collect()
+        .await;
+    outcomes.sort_by_key(|(idx, _)| *idx);
+
     let mut bad = 0u64;
     let mut clean = 0u64;
     let mut damaged_chunks = 0u64;
     let mut last_emit = std::time::Instant::now();
-    for f in &plan.files {
-        // Resolve once. A containment failure is a *diagnostic*: `build_plan`
-        // already refused an escaping rel, so this is defence in depth, and it
-        // must not be mislabelled as a size mismatch (which is what `.ok()`
-        // did here). The run's cached root saves the per-file base resolution
-        // when it has one; `None` keeps the old `contained_join` fallback.
-        let path = root.map_or_else(
-            || util::contained_join(game_dir, &f.rel),
-            |root| root.join(&f.rel),
-        );
-        let outcome = match scan.and_then(|s| s.files.get(&f.rel)) {
-            Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
-            None => check_one(f, &path, DigestSource::Read),
-        };
+    for (idx, outcome) in outcomes {
+        let f = &plan.files[idx];
         if outcome.ok {
             clean += 1;
         } else {

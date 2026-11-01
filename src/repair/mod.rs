@@ -111,8 +111,9 @@ struct PlanPhase {
     /// The up-front purge candidates, when a purge or `--print-plan` asked for
     /// them.
     purge_plan: Option<PurgePlan>,
-    /// The install scan, when `--scan` asked for it.
-    scan: Option<ScanReport>,
+    /// The install scan, when `--scan` asked for it. Shared with the
+    /// `--check-only` verifier so neither path deep-clones it.
+    scan: Option<Arc<ScanReport>>,
     /// The server's deprecated-file list (empty in read-only modes, or when the
     /// best-effort fetch failed).
     deprecated: Vec<String>,
@@ -493,7 +494,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         http,
         plan,
         purge_plan,
-        scan,
+        scan: scan.map(Arc::new),
         deprecated,
         local_map,
     })))
@@ -590,11 +591,13 @@ async fn execute_phase(
         let bad = phases::check::verify_plan(
             &game_dir,
             root.as_ref(),
-            &plan,
+            Arc::clone(&plan),
             &summary,
             ctx.output,
-            scan.as_ref(),
-        );
+            scan.clone(),
+            ctx.jobs,
+        )
+        .await;
         summary.files_failed.store(bad, Ordering::Relaxed);
         return Ok((summary, if bad == 0 { 0 } else { 4 }));
     }
