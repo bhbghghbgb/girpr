@@ -134,3 +134,23 @@ fn parse_args() -> Args {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::worker_threads;
+
+    #[test]
+    fn a_single_job_keeps_runtime_headroom_on_one_core() {
+        assert!(worker_threads(1, 1) >= 2);
+    }
+
+    #[test]
+    fn host_parallelism_wins_when_it_exceeds_the_file_window() {
+        assert_eq!(worker_threads(8, 1), 8);
+    }
+
+    #[test]
+    fn a_huge_file_window_saturates_instead_of_overflowing() {
+        assert_eq!(worker_threads(1, usize::MAX), usize::MAX);
+    }
+}
