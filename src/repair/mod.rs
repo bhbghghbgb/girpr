@@ -346,7 +346,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // The scan, when it was asked for. It reads every planned file once and
     // turns the plan's estimates from upper bounds into figures.
     let scan = if ctx.scan {
-        Some(
+        Some(Arc::new(
             scan::scan_plan(
                 &game_dir,
                 root.as_ref(),
@@ -355,7 +355,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
                 ctx.jobs,
             )
             .await,
-        )
+        ))
     } else {
         None
     };
@@ -496,7 +496,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         http,
         plan,
         purge_plan,
-        scan: scan.map(Arc::new),
+        scan,
         deprecated,
         local_map,
     })))
@@ -644,6 +644,7 @@ async fn execute_phase(
         root,
         plan.clone(),
         local_map,
+        scan,
         summary,
         ctx.jobs,
         ctx.dry_run,

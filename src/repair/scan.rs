@@ -15,14 +15,17 @@
 //! install before it refuses, because the estimate the ceiling is checked
 //! against is only exact after the scan.
 //!
-//! The scan does not change what the repair does. The repair re-reads each
-//! file before it writes it, because a file can have changed since the plan
-//! phase, and the repair needs its verdicts at the moment it writes. The
-//! scan is for the *plan*, not for the writer.
+//! Under `--scan`, the plan's verdict is also available to the in-place
+//! writer, guarded by a length and modification-time check that falls back to
+//! a fresh read when the file changed since it was scanned. The plan scan
+//! feeds the in-place writer only: the temp path's gate is a single digest
+//! over the finished temp file, not a verdict about the target, so it keeps
+//! its own read.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use futures::StreamExt;
 
@@ -43,6 +46,13 @@ pub struct Verdict {
     pub dest_ok: Vec<bool>,
     /// Per chunk, in the plan's order: is its reuse source intact?
     pub source_ok: Vec<bool>,
+    /// The file length the scan read. The in-place writer compares this
+    /// against its open handle before reusing the verdict.
+    pub file_len: u64,
+    /// The file's modification time when the scan was taken, from one
+    /// `metadata` call. `None` when that stat failed, which leaves the
+    /// verdict unusable for reuse.
+    pub modified: Option<SystemTime>,
 }
 
 impl Verdict {
@@ -348,10 +358,18 @@ fn scan_one(
                     file_md5: util::EMPTY_MD5.to_string(),
                     dest_ok: vec![false; n],
                     source_ok: vec![false; n],
+                    file_len: 0,
+                    modified: None,
                 },
             };
         }
     };
+    // The guard the writer can use later: the modification time from one stat
+    // taken before the read, plus the length the read itself observes. A
+    // failed stat leaves the time absent, so the verdict is never reusable.
+    let modified = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok());
     let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
     let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
@@ -373,6 +391,8 @@ fn scan_one(
             file_md5: scan.file_md5,
             dest_ok: scan.dest_ok,
             source_ok,
+            file_len: scan.file_len,
+            modified,
         },
     }
 }
@@ -409,6 +429,8 @@ mod tests {
             file_md5: "x".into(),
             dest_ok: vec![false, false],
             source_ok: vec![true, false],
+            file_len: 0,
+            modified: None,
         };
         let sources = vec![Some(20u64), None];
         assert_eq!(
@@ -440,6 +462,8 @@ mod tests {
             file_md5: "x".into(),
             dest_ok: vec![false, false],
             source_ok: vec![true, true],
+            file_len: 0,
+            modified: None,
         };
         // Each chunk's bytes live where the other lands.
         let sources = vec![Some(20u64), Some(0)];
@@ -478,6 +502,8 @@ mod tests {
             file_md5: "x".into(),
             dest_ok: vec![true, false],
             source_ok: vec![false, false],
+            file_len: 0,
+            modified: None,
         };
         let sources = vec![None, None];
         assert_eq!(
@@ -535,6 +561,8 @@ mod tests {
             file_md5: "x".into(),
             dest_ok: vec![false; 3],
             source_ok: vec![false; 3],
+            file_len: 0,
+            modified: None,
         };
         assert_eq!(
             est_file_download_bytes(
@@ -603,6 +631,8 @@ mod tests {
             file_md5: "x".into(),
             dest_ok: vec![true, false, false, true],
             source_ok: vec![true; 4],
+            file_len: 0,
+            modified: None,
         };
         assert_eq!(v.damaged_chunks(), 2);
     }

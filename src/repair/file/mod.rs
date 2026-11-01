@@ -81,6 +81,7 @@ use crate::util;
 
 use crate::repair::phases::manifest::LocalChunkMap;
 use crate::repair::phases::plan::{PlannedFile, RepairPlan, validate_chunk_ranges};
+use crate::repair::scan::ScanReport;
 
 mod inplace;
 mod mode;
@@ -197,6 +198,7 @@ pub async fn repair_all(
     root: Option<util::PathRoot>,
     plan: Arc<RepairPlan>,
     local_map: Arc<LocalChunkMap>,
+    scan: Option<Arc<ScanReport>>,
     summary: Summary,
     jobs: usize,
     dry_run: bool,
@@ -215,6 +217,7 @@ pub async fn repair_all(
         http,
         plan: Arc::clone(&plan),
         local_map,
+        scan,
         summary: summary.clone(),
         dry_run,
         repair_mode,
@@ -391,6 +394,8 @@ struct FileCtx {
     http: reqwest::Client,
     plan: Arc<RepairPlan>,
     local_map: Arc<LocalChunkMap>,
+    /// The plan-phase scan, when `--scan` ran. Shared by every file task.
+    scan: Option<Arc<ScanReport>>,
     summary: Arc<Summary>,
     dry_run: bool,
     /// How each file is repaired.
@@ -858,6 +863,7 @@ mod tests {
             None,
             plan,
             Arc::new(LocalChunkMap::new()),
+            None,
             Summary::new(),
             1,
             false,

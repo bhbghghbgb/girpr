@@ -308,6 +308,8 @@ mod tests {
             file_md5: file_md5.into(),
             dest_ok,
             source_ok: Vec::new(),
+            file_len: 0,
+            modified: None,
         }
     }
 

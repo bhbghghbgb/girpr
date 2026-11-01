@@ -16,7 +16,7 @@ use super::{
 };
 use crate::config::RepairMode;
 use crate::repair::reuse;
-use crate::repair::scan::scan_ranges;
+use crate::repair::scan::{Verdict, scan_ranges};
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
@@ -34,7 +34,9 @@ use anyhow::{Context, Result};
 ///    clearing the read-only attribute if that is what stopped the open;
 /// 2. **scan** — one read that answers everything: the whole-file MD5 (the
 ///    skip check), which chunks are already correct where they belong, and
-///    which reuse sources are intact;
+///    which reuse sources are intact. Under `--scan` the plan phase already
+///    read the file; when a length and modification-time check proves it has
+///    not changed, that verdict is reused instead of reading it again;
 /// 3. **stage** — the bytes of the chunks that have to *move* inside the
 ///    file are read into RAM, so the write order cannot destroy them;
 /// 4. **patch** — the wrong chunks are written, ascending: from the staged
@@ -105,9 +107,30 @@ async fn attempt_inplace_inner(
     };
 
     // 2. scan. One read: the whole-file MD5, which chunks are already
-    // correct, and which sources are intact.
-    let mut scan = util::scan_reader(&mut handle, &dest_ranges, &source_ranges)
-        .with_context(|| format!("scan {}", file.rel))?;
+    // correct, and which sources are intact. Under `--scan` the plan phase
+    // already took that read; reuse it only when the guard proves the file is
+    // still the one that was scanned.
+    let mut scan = match reusable_verdict(ctx, file, final_path, &handle) {
+        Some(v) => {
+            let age_secs = v
+                .modified
+                .and_then(|m| m.elapsed().ok())
+                .map(|d| d.as_secs());
+            tracing::debug!(
+                file = %file.rel,
+                age_secs = ?age_secs,
+                "reusing the plan scan in the in-place writer"
+            );
+            util::Scan {
+                file_md5: v.file_md5.clone(),
+                file_len: v.file_len,
+                dest_ok: v.dest_ok.clone(),
+                source_ok: source_ok_by_range(v, &source_owner),
+            }
+        }
+        None => util::scan_reader(&mut handle, &dest_ranges, &source_ranges)
+            .with_context(|| format!("scan {}", file.rel))?,
+    };
     tracing::debug!(
         actual_md5 = %scan.file_md5,
         expect_md5 = %file.md5,
@@ -410,6 +433,42 @@ fn source_ok_by_chunk(
         source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
     }
     source_ok
+}
+
+/// The plan-phase verdict for this file, when a cheap stat proves the file has
+/// not changed since it was scanned.
+///
+/// Reuse is deliberately conservative: a missing report, a failed stat, a
+/// length mismatch, or any modification-time difference all mean "read it
+/// again". A stale verdict describes a layout that is no longer on disk, so
+/// every uncertainty costs the read rather than risking a wrong write.
+fn reusable_verdict<'a>(
+    ctx: &'a FileCtx,
+    file: &PlannedFile,
+    path: &std::path::Path,
+    handle: &std::fs::File,
+) -> Option<&'a Verdict> {
+    let verdict = ctx.scan.as_deref()?.files.get(&file.rel)?;
+    if verdict.dest_ok.len() != file.chunks.len() || verdict.source_ok.len() != file.chunks.len() {
+        return None;
+    }
+    let recorded = verdict.modified?;
+    if handle.metadata().ok()?.len() != verdict.file_len {
+        return None;
+    }
+    if std::fs::metadata(path).ok()?.modified().ok()? != recorded {
+        return None;
+    }
+    Some(verdict)
+}
+
+/// The plan verdict's per-chunk source answers, mapped onto the source ranges
+/// [`scan_ranges`] built. One entry per range, in the order the scan expects.
+fn source_ok_by_range(verdict: &Verdict, source_owner: &[usize]) -> Vec<bool> {
+    source_owner
+        .iter()
+        .map(|&i| verdict.source_ok.get(i).copied().unwrap_or(false))
+        .collect()
 }
 
 /// The success settle shared by the first verify and the redo.
