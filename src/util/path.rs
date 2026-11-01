@@ -154,12 +154,26 @@ pub fn clean_rel(rel: &str) -> Result<String> {
 /// the key is the path itself. The two must agree, so the rule lives here
 /// instead of once per module.
 ///
+/// The Windows fold is **ASCII-only**. Server manifest paths are ASCII in
+/// practice, and `str::to_lowercase` is a Unicode case mapping rather than the
+/// filesystem's relation: it maps spellings Windows keeps apart onto one key
+/// (the Kelvin sign `\u{212A}` and `k`, for example), which over-merges in the
+/// plan and over-keeps in the purge. So the rule is "fold ASCII case, compare
+/// every other byte exactly".
+///
+/// Non-ASCII case variants are therefore deliberately **distinct** keys, even
+/// where the filesystem may consider them one file. That is the trade: this is
+/// a map key, not a containment check, and a non-ASCII install gets exact-byte
+/// equality rather than a guess. [`contained_join`] owns the filesystem
+/// decision.
+///
 /// The choice is compile-time (`cfg!`), so both branches are type-checked on
-/// every host while the behavior stays exactly "fold where Windows paths are
-/// case-insensitive".
+/// every host. Keep them in sync: a change to the Windows fold must be
+/// reflected in the Unix branch, or the platforms stop answering the same
+/// question.
 pub(crate) fn path_key(rel: &str) -> String {
     if cfg!(windows) {
-        rel.to_lowercase()
+        rel.to_ascii_lowercase()
     } else {
         rel.to_string()
     }
