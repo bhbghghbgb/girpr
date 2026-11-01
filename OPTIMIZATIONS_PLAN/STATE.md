@@ -28,9 +28,9 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T14 | P8 - remove the per-piece sink seek | completed | 8920f51, 62095c4, 9921c0d | RC-05 |
 | T15 | P10 - share the local chunk map | completed | 6d5b5b4, eb705ce | RC-05 |
 | T16 | P3 - consume `--scan` verdicts in repair | completed | 2ea0747, df034d0 | RC-06 |
-| T17 | C2 + C9 - one lock for every mutating run | pending_review | 8800aad, 14cffba, cc204d9, d698d8c | RC-07 |
-| T18 | A1 - narrow the public surface | pending_review | c0dd7de, 9007c90 | RC-07 |
-| T19 | A2 - make `--jobs` the primary flag | pending_review | fa79ffd, c1c875a, 14bef05 | RC-07 |
+| T17 | C2 + C9 - one lock for every mutating run | completed | 8800aad, 14cffba, cc204d9, d698d8c | RC-07 |
+| T18 | A1 - narrow the public surface | completed | c0dd7de, 9007c90 | RC-07 |
+| T19 | A2 - make `--jobs` the primary flag | completed | fa79ffd, c1c875a, 14bef05 | RC-07 |
 | T20 | A3 - exercise the post-phase in dry-run | todo | | RC-08 |
 | T21 | A4 - one emitter and one progress driver | todo | | RC-08 |
 | T22 | A5 - return an exit code and flush logs | todo | | RC-08 |
@@ -70,7 +70,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-04 | T10-T11 | done | | Both completed without fixes |
 | RC-05 | T12-T15 | done | 9921c0d | T14 fixed: reservation settled on chunk seek failure |
 | RC-06 | T16 | done | | Completed without fixes |
-| RC-07 | T17-T19 | in_progress | | |
+| RC-07 | T17-T19 | done | | All three completed without fixes |
 | RC-08 | T20-T22 | pending | | |
 | RC-09 | T23-T26 | pending | | |
 | RC-10 | T27 | pending | | |
@@ -133,6 +133,17 @@ until the main tasks and rework are done.
 | F32 | RC-06 review | `tests/repair_machinery.rs` | No end-to-end test mutates a file between plan and repair to prove the fresh-scan fallback. | todo |
 | F33 | RC-06 review | `src/repair/file/inplace.rs` | The reuse debug log's `age_secs` is the file's mtime age, not the scan snapshot's age. | todo |
 | F34 | RC-06 review | `src/repair/scan.rs`, `src/repair/file/inplace.rs` | Coarse-mtime filesystems can evade the exact length+mtime guard; document or harden. | todo |
+| F35 | RC-07 review | `src/repair/lock.rs` | `Drop` unlocks then deletes, a narrow Unix race; leave the file or re-verify after acquire. | todo |
+| F36 | RC-07 review | `src/repair/lock.rs` | The temp lock is opened by name and truncated; a pre-created symlink could truncate a user file. | todo |
+| F37 | RC-07 review | `src/repair/lock.rs` | `key_for` hashes `to_string_lossy()`; distinct non-UTF-8 paths can collide. | todo |
+| F38 | RC-07 review | `src/repair/purge.rs`, `docs/01-03` | Comments and docs still describe the in-install `girpr.lock` and keep-set wording. | todo |
+| F39 | RC-07 review | `README.md`, `Cargo.toml` | README claims Rust 1.85+, but `File::try_lock` needs 1.89; no `rust-version` pin. | todo |
+| F40 | RC-07 review | `src/cli.rs` | `excessive_jobs_warning` says workers can fall below file tasks, but the runtime is sized to `max(parallelism, jobs+1)`. | todo |
+| F41 | RC-07 review | `src/main.rs`, `src/repair/**`, `tools/sync`, `docs/02-06` | Stale `--io-threads` prose remains after the `--jobs` rename. | todo |
+| F42 | RC-07 review | `src/lib.rs` | `test_support` re-exports `stream_chunk_to` beyond the task's list and duplicates root items; document the seam. | todo |
+| F43 | T18 implementer | `src/report/mod.rs` | `Summary` public fields have types (`Meter`, `SummaryFlags`, `Ceiling`) no longer nameable outside the crate. | todo |
+| F44 | T19 implementer | `src/cli.rs` | On hosts with parallelism below 4, the default `--jobs 4` warns on every run. | todo |
+| F45 | T17 implementer | `src/repair/lock.rs` | On Windows the exclusive lock hides the body, so refusals usually cannot name the holder pid. | todo |
 
 ## Follow-up batches
 
