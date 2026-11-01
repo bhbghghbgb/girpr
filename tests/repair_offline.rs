@@ -30,7 +30,8 @@
 //!   agrees with the plan total, a ceiling still trips it
 //! - **`--max-write-bytes`, `--fail-fast`, `--purge-only`** — the write stop, a
 //!   500 origin, and `--purge-only` alone and with `--dry-run`
-//! - **read-only discipline** — no deprecated-list call, `download_bytes`
+//! - **read-only discipline** — `--check-only`/`--print-plan` issue no
+//!   deprecated-list call (a dry run does, to list its deletes), `download_bytes`
 //!   counts only promoted files even after a retry
 //! - **endpoint override** — the real binary over `--hyp-base` / `--sophon-base`,
 //!   and the explicit-beats-env precedence

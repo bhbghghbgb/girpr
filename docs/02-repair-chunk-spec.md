@@ -97,8 +97,9 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    the calls above — API-sourced, not from config). Under `--output json` this is
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
-   list. This is the lazy call: fetched best-effort during the post-phase (Step 8), never in
-   `--check-only`/`--dry-run`; a failure only warns. `channel`/`sub_channel` are the
+   list. This is the lazy call: fetched best-effort during the plan phase, never in
+   `--check-only`/`--print-plan`, and in `--dry-run` only because the post-phase (Step 7)
+   lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
    **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
    `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
    returns the wrong set. It is the only one of the three APIs that carries them.
