@@ -567,6 +567,10 @@ pub struct MockOpts {
     /// which is what exercises the retry/backoff paths (`--fail-fast`) without
     /// a dead host and its connection timeouts.
     pub fail_chunks: bool,
+    /// Serve every `getGameBranches` request as `500` while `getGameConfigs`
+    /// still answers. Models the branch endpoint failing after the first wave
+    /// has already been issued, so error precedence is testable.
+    pub fail_branches: bool,
     /// Serve every chunk request as `404`. Models the blob routes' real answer
     /// to an id they do not have: the live CDN (`autopatchhk.yuanshen.com`,
     /// `Server: AliyunOSS`) answers `404` with an `application/xml` `NoSuchKey`
@@ -703,6 +707,7 @@ struct Responses {
     local_manifest: Option<(String, Vec<u8>)>,
     latest_tag: String,
     fail_chunks: bool,
+    fail_branches: bool,
     not_found_chunks: bool,
     not_found_manifests: bool,
     corrupt_first_chunks: u32,
@@ -857,6 +862,7 @@ fn build_responses(
         local_manifest,
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
+        fail_branches: opts.fail_branches,
         not_found_chunks: opts.not_found_chunks,
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
@@ -917,7 +923,15 @@ async fn serve_one(
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
         ("200 OK", "application/json", r.configs.clone())
     } else if target.contains("getGameBranches") {
-        ("200 OK", "application/json", r.branches.clone())
+        if r.fail_branches {
+            (
+                "500 Internal Server Error",
+                "text/plain",
+                b"branch endpoint unavailable".to_vec(),
+            )
+        } else {
+            ("200 OK", "application/json", r.branches.clone())
+        }
     } else if target.contains("getGameDeprecatedFileConfigs") {
         ("200 OK", "application/json", r.deprecated.clone())
     } else if target.contains("getBuild") {

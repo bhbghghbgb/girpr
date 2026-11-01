@@ -1653,6 +1653,77 @@ async fn non_chunk_download_mode_is_a_usage_error() {
 }
 
 #[tokio::test]
+async fn non_chunk_mode_wins_over_a_failed_branch_call() {
+    // The first wave issues both calls. A branch endpoint that fails must not
+    // turn the authoritative mode refusal into a metadata error: the mode
+    // check runs after both futures have settled but before the branch result
+    // is used, so exit 1 wins over exit 2.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+            fail_branches: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dlmode_branch");
+    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("non-chunk mode must fail");
+    assert_eq!(err.exit_code, 1, "the mode refusal wins: {err:#}");
+    assert!(
+        err.source.to_string().contains("not chunk mode"),
+        "the refusal is the mode one: {err:#}"
+    );
+    assert!(
+        mock.first_target_with("getGameBranches").is_some(),
+        "the branch call was issued and then discarded"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a refused mode"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_run_without_a_local_version_issues_only_the_latest_build() {
+    // A fresh install has no `config.ini`, so there is no local tag to ask
+    // for: the second build call is not merely allowed to fail, it must not
+    // be issued at all.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("no_local_build");
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.print_plan = true;
+    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, 0);
+    let builds = mock
+        .request_targets()
+        .into_iter()
+        .filter(|t| t.contains("getBuild"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        builds.len(),
+        1,
+        "only the latest build is fetched: {builds:?}"
+    );
+    assert!(
+        !builds[0].contains("tag="),
+        "the one build request is the latest (tag omitted): {builds:?}"
+    );
+    assert!(
+        summary.flags.local_manifest.is_none(),
+        "no local version means no lookup to report"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_run_that_stops_before_acting_creates_no_game_dir() {
     // `create_dir_all` lives in the execution phase, not at the top of
     // the run, so a run that never reaches it (here: the non-chunk
