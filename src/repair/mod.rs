@@ -429,9 +429,32 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // and the `--plan-out` document. Compute it when either was asked for, so
     // the document is written for a run that does the work as well as for
     // `--print-plan`.
-    let disk = (ctx.print_plan || ctx.plan_out.is_some()).then(|| {
-        scope::report::DiskPlan::new(&game_dir, root.as_ref(), &plan, ctx.repair_mode, ctx.jobs)
-    });
+    let disk = if ctx.print_plan || ctx.plan_out.is_some() {
+        let disk_game_dir = game_dir.clone();
+        let disk_root = root.clone();
+        let disk_plan = Arc::clone(&plan);
+        let repair_mode = ctx.repair_mode;
+        let jobs = ctx.jobs;
+        Some(
+            tokio::task::spawn_blocking(move || {
+                scope::report::DiskPlan::new(
+                    &disk_game_dir,
+                    disk_root.as_ref(),
+                    &disk_plan,
+                    repair_mode,
+                    jobs,
+                )
+            })
+            .await
+            .map_err(|e| {
+                RunFailure::write(anyhow::anyhow!(
+                    "disk planning task failed before any write: {e}"
+                ))
+            })?,
+        )
+    } else {
+        None
+    };
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
             &plan,
