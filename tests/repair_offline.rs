@@ -4821,9 +4821,14 @@ async fn a_successful_run_flushes_its_summary_to_the_log_file() {
         .find(|line| line.starts_with("SUMMARY "))
         .expect("the run ends with a SUMMARY");
     let body = std::fs::read_to_string(&log).expect("the log file was written");
+    let tail = body
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("the log is not empty");
     assert!(
-        body.contains(summary),
-        "the log must hold the same SUMMARY the run returned:\n{body}"
+        tail.contains(summary),
+        "the log's tail must be the same SUMMARY the run returned:\n{body}"
     );
 
     mock.stop();

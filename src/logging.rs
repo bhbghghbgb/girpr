@@ -238,6 +238,7 @@ fn open_log_file(path: &Path) -> std::io::Result<BufWriter<std::fs::File>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use girpr_tempdir::TempDir;
     use std::sync::atomic::AtomicUsize;
 
     /// A writer whose only observable act is the flush.
@@ -267,6 +268,35 @@ mod tests {
                 .and_then(Path::file_name)
                 .and_then(|s| s.to_str()),
             Some("logs")
+        );
+    }
+
+    #[test]
+    fn the_file_sink_keeps_records_in_the_buffer_until_the_flush() {
+        let dir = TempDir::new("girpr_logging", "buffered_file");
+        let path = dir.join("run.log");
+        let sink: FileSink = Arc::new(Mutex::new(Box::new(
+            open_log_file(&path).expect("open the log file"),
+        ) as Box<dyn Write + Send + Sync>));
+
+        sink.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write_all(b"the run's tail\n")
+            .expect("write into the buffer");
+
+        assert_eq!(
+            std::fs::read(&path).expect("the file exists"),
+            b"",
+            "a buffered record has not reached the file yet"
+        );
+
+        // `flush_log` is the exit seam and reaches exactly this call.
+        flush_sink(&sink).expect("flush the sink");
+
+        assert_eq!(
+            std::fs::read(&path).expect("read the flushed file"),
+            b"the run's tail\n",
+            "the flush writes the buffered tail"
         );
     }
 
