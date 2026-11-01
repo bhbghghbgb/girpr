@@ -16,7 +16,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T02 | C5 - reject oversized JSON numbers | completed | 0bf3646, 7f7190e | RC-01 |
 | T03 | C6 - harden meter subtraction | completed | 76e7499, f029dfc, 262dcdc | RC-01 |
 | T04 | C7 - use a Windows path key, not Unicode lowercase | completed | 176561b, 670c45e | RC-01 |
-| T05 | C3 - never publish a partial audio target | in_progress | | RC-02 |
+| T05 | C3 - never publish a partial audio target | pending_review | 5ba1466, 084bb1e | RC-02 |
 | T06 | C4 - write `--plan-out` atomically | todo | | RC-02 |
 | T07 | C8 - one temp-file naming rule | todo | | RC-02 |
 | T08 | P1 - overlap metadata calls | todo | | RC-03 |
