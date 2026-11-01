@@ -20,6 +20,7 @@
 //! the usual level, and the flag help says so.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::Context;
@@ -348,14 +349,48 @@ impl<'a> PlanDocument<'a> {
     }
 
     /// Render to the file named by `--plan-out`.
+    ///
+    /// The document is serialized straight into a temp file beside the target
+    /// and then renamed, so a full disk or a crash cannot leave a truncated
+    /// plan where the caller asked for a parseable one.
     pub fn write_to(&self, path: &Path) -> anyhow::Result<()> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        let json = serde_json::to_string_pretty(self).context("serialize plan")?;
-        std::fs::write(path, format!("{json}\n"))
-            .with_context(|| format!("write {}", path.display()))?;
+        // Append to the whole name, not `with_extension`: `plan.v1.json`
+        // becomes `plan.v1.json.girpr_tmp`, which stays beside the target.
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(".girpr_tmp");
+        let tmp = path.with_file_name(name);
+        let published = (|| -> anyhow::Result<()> {
+            let file = std::fs::File::create(&tmp)
+                .with_context(|| format!("create plan tmp {}", tmp.display()))?;
+            let mut writer = std::io::BufWriter::new(file);
+            serde_json::to_writer_pretty(&mut writer, self).context("serialize plan")?;
+            writer.write_all(b"\n").context("serialize plan")?;
+            writer
+                .flush()
+                .with_context(|| format!("flush plan tmp {}", tmp.display()))?;
+            // Close before publishing; a reader must see the whole file.
+            drop(writer);
+            std::fs::rename(&tmp, path).with_context(|| format!("publish plan {}", path.display()))
+        })();
+        if let Err(e) = published {
+            if let Err(cleanup) = std::fs::remove_file(&tmp)
+                && cleanup.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(
+                    path = %tmp.display(),
+                    error = %cleanup,
+                    "could not remove the plan temp file"
+                );
+            }
+            return Err(e);
+        }
         Ok(())
     }
 }
