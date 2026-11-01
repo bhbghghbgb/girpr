@@ -12,10 +12,10 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 
 | ID | Title | Status | Commits | Batch |
 |---|---|---|---|---|
-| T01 | C1 - closed stdout is not a panic | pending_review | 37473e0, 587af78 | RC-01 |
-| T02 | C5 - reject oversized JSON numbers | pending_review | 0bf3646, 7f7190e | RC-01 |
-| T03 | C6 - harden meter subtraction | pending_review | 76e7499, f029dfc | RC-01 |
-| T04 | C7 - use a Windows path key, not Unicode lowercase | pending_review | 176561b, 670c45e | RC-01 |
+| T01 | C1 - closed stdout is not a panic | completed | 37473e0, 587af78 | RC-01 |
+| T02 | C5 - reject oversized JSON numbers | completed | 0bf3646, 7f7190e | RC-01 |
+| T03 | C6 - harden meter subtraction | completed | 76e7499, f029dfc, 262dcdc | RC-01 |
+| T04 | C7 - use a Windows path key, not Unicode lowercase | completed | 176561b, 670c45e | RC-01 |
 | T05 | C3 - never publish a partial audio target | todo | | RC-02 |
 | T06 | C4 - write `--plan-out` atomically | todo | | RC-02 |
 | T07 | C8 - one temp-file naming rule | todo | | RC-02 |
@@ -64,7 +64,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
-| RC-01 | T01-T04 | in_progress | | |
+| RC-01 | T01-T04 | done | 262dcdc | T03 fixed: deprecated atomic API in `adjust_live` |
 | RC-02 | T05-T07 | pending | | |
 | RC-03 | T08-T09 | pending | | |
 | RC-04 | T10-T11 | pending | | |
@@ -99,7 +99,10 @@ until the main tasks and rework are done.
 
 | ID | Source | Area | Description | Status |
 |---|---|---|---|---|
-| | | | | |
+| F01 | RC-01 review | `src/hyp.rs` | `num_from_string` string branches discard the `ParseIntError` detail; keep the parse reason for diagnosability. | todo |
+| F02 | RC-01 review | `src/report/emit.rs` | Non-`BrokenPipe` stdout errors warn per call with no latch; revisit only if log flooding is observed. | todo |
+| F03 | RC-01 review | `tools/sync` | Sibling crate still folds path keys with `str::to_lowercase` (same Unicode-fold class of issue). | todo |
+| F04 | RC-01 review | `src/repair/scope/filter.rs` | Glob case-insensitive matching differs from `path_key`; cross-reference the two docs. | todo |
 
 ## Follow-up batches
 
