@@ -280,6 +280,29 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
     PathRoot::new(base)?.join_rel(rel)
 }
 
+/// The sibling an atomic writer publishes through: `path` with
+/// [`TEMP_SUFFIX`] appended to the whole file name.
+///
+/// `with_extension` replaces the real extension (`scan.txt` ->
+/// `scan.girpr_tmp`) and has its own surprises on multi-dot names; appending to
+/// the `OsString` keeps the whole name, so `config.ini` becomes
+/// `config.ini.girpr_tmp` and `plan.v1.json` becomes
+/// `plan.v1.json.girpr_tmp`. It also stays lossless for a non-UTF-8 name.
+///
+/// The result is beside `path`, which is what makes the rename that publishes
+/// it atomic.
+pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(TEMP_SUFFIX);
+    path.with_file_name(name)
+}
+
+/// The suffix [`temp_sibling`] appends.
+const TEMP_SUFFIX: &str = ".girpr_tmp";
+
 /// Canonicalize `path` as far as it exists, then append the missing tail.
 ///
 /// `canonicalize` fails on a path that is not there yet, and the plan runs
