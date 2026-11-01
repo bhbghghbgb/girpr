@@ -776,6 +776,66 @@ mod tests {
     }
 
     #[test]
+    fn the_written_document_is_valid_json_ending_in_one_newline() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "written_shape");
+        let path = dir.join("plan.json");
+        let (plan, purge) = (plan(), purge_plan());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        doc.write_to(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            bytes.iter().rev().take_while(|b| **b == b'\n').count(),
+            1,
+            "exactly one trailing newline"
+        );
+        let v: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("the written plan must be valid JSON");
+        assert_eq!(v["repair"].as_array().unwrap().len(), 3);
+        assert_eq!(v["repair"][0]["rel"], "game/foo.dat");
+        assert!(v["repair"][0].get("est_download_bytes").is_some());
+        assert_eq!(v["purge"][0]["rel"], "stray/orphan.dat");
+        assert!(
+            !dir.join("plan.json.girpr_tmp").exists(),
+            "the temp is renamed away, not left beside the plan"
+        );
+    }
+
+    #[test]
+    fn a_failed_publish_leaves_no_temp_sibling() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "failed_publish");
+        let path = dir.join("plan.json");
+        // A directory in place of the target makes the publish rename fail.
+        std::fs::create_dir(&path).unwrap();
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let err = doc.write_to(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("publish plan"), "{err:#}");
+        assert!(
+            !dir.join("plan.json.girpr_tmp").exists(),
+            "a failed write must not leave the temp behind"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_leaves_an_existing_plan_intact() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "keeps_target");
+        let path = dir.join("plan.json");
+        let previous = b"{\"previous\":true}\n";
+        std::fs::write(&path, previous).unwrap();
+        // A directory where the temp would go makes the write fail before the
+        // target is touched.
+        std::fs::create_dir(dir.join("plan.json.girpr_tmp")).unwrap();
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        doc.write_to(&path).unwrap_err();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            previous.as_slice(),
+            "the target keeps its old contents when the write fails"
+        );
+    }
+
+    #[test]
     fn the_summary_a_plan_run_returns_is_untouched() {
         // `--print-plan` reports the plan, not a repair: no counter moves.
         let mut s = Summary::default();
