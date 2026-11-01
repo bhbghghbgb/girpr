@@ -170,7 +170,7 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create audio scan dir {}", parent.display()))?;
     }
-    let tmp = p.with_extension("girpr_tmp");
+    let tmp = crate::util::path::temp_sibling(&p);
     let published = std::fs::write(&tmp, lines.join("\n"))
         .with_context(|| format!("write audio scan tmp {}", tmp.display()))
         .and_then(|()| {
@@ -367,7 +367,7 @@ mod tests {
             "Japanese"
         );
         assert!(
-            !d.join("scan.girpr_tmp").exists(),
+            !d.join("scan.txt.girpr_tmp").exists(),
             "the temp is renamed away, not left beside the file"
         );
     }

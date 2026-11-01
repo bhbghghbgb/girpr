@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
-use super::path::clean_rel;
+use super::path::{clean_rel, temp_sibling};
 
 /// Parse `config.ini` last `game_version=` match.
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
@@ -406,7 +406,7 @@ pub fn write_config_ini(
         tracing::info!("would write config.ini game_version={}", latest);
         return Ok(());
     }
-    let tmp = path.with_extension("ini.girpr_tmp");
+    let tmp = temp_sibling(&path);
     let write = (|| -> Result<()> {
         let mut f = File::create(&tmp)?;
         f.write_all(out.as_bytes())?;

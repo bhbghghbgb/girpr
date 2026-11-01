@@ -358,14 +358,9 @@ impl<'a> PlanDocument<'a> {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
-        // Append to the whole name, not `with_extension`: `plan.v1.json`
+        // Appended to the whole name, not `with_extension`: `plan.v1.json`
         // becomes `plan.v1.json.girpr_tmp`, which stays beside the target.
-        let mut name = path
-            .file_name()
-            .map(|n| n.to_os_string())
-            .unwrap_or_default();
-        name.push(".girpr_tmp");
-        let tmp = path.with_file_name(name);
+        let tmp = util::path::temp_sibling(path);
         let published = (|| -> anyhow::Result<()> {
             let file = std::fs::File::create(&tmp)
                 .with_context(|| format!("create plan tmp {}", tmp.display()))?;
