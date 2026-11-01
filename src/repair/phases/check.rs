@@ -284,6 +284,7 @@ fn check_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -294,12 +295,119 @@ mod tests {
         }
     }
 
+    fn plan_of(files: Vec<PlannedFile>) -> RepairPlan {
+        RepairPlan {
+            latest: "9.9".into(),
+            files,
+            url_prefix_by_file: HashMap::new(),
+        }
+    }
+
     fn verdict(file_md5: &str, dest_ok: Vec<bool>) -> Verdict {
         Verdict {
             file_md5: file_md5.into(),
             dest_ok,
             source_ok: Vec::new(),
         }
+    }
+
+    /// The failure lines from a captured log, without the timestamp prefix, so
+    /// two runs can be compared for the same warning set and order.
+    fn check_warnings(logs: &str) -> Vec<String> {
+        logs.lines()
+            .filter_map(|line| line.find("CHECK fail").map(|at| line[at..].to_string()))
+            .collect()
+    }
+
+    /// Run one verify on a current-thread runtime and return its counters and
+    /// captured log. The check tasks use the blocking pool; only the ordered
+    /// fold logs, so the captured lines stay deterministic.
+    fn run_verify(
+        base: &Path,
+        plan: &Arc<RepairPlan>,
+        scan: &Option<Arc<ScanReport>>,
+        jobs: usize,
+    ) -> (u64, u64, u64, String) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let summary = Summary::default();
+        let mut bad = 0u64;
+        let logs = crate::repair::test_support::logs_of(|| {
+            bad = runtime.block_on(verify_plan(
+                base,
+                None,
+                Arc::clone(plan),
+                &summary,
+                report::OutputFormat::Text,
+                scan.clone(),
+                jobs,
+            ));
+        });
+        (
+            bad,
+            summary.files_skipped.load(Ordering::Relaxed),
+            summary.files_failed.load(Ordering::Relaxed),
+            logs,
+        )
+    }
+
+    /// The jobs flag bounds the checks without changing their answer: same
+    /// clean/failed counts, same damaged-chunk total, same warnings in the same
+    /// plan order, whether one file runs at a time or all of them do.
+    #[test]
+    fn parallel_checks_match_one_job_and_stay_in_plan_order() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "parallel_parity");
+        let base = &*dir;
+        std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
+        std::fs::write(base.join("b.dat"), b"bbbb").unwrap();
+        let clean_md5 = format!("{:x}", md5::compute(b"aaaa"));
+        let plan = Arc::new(plan_of(vec![
+            planned("a.dat", 4, &clean_md5),
+            planned("b.dat", 4, "ffffffffffffffffffffffffffffffff"),
+            planned("c.dat", 7, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+        ]));
+        let scan = Some(Arc::new(ScanReport {
+            files: HashMap::from([(
+                "b.dat".to_string(),
+                verdict("00000000000000000000000000000000", vec![true, false, false]),
+            )]),
+            bytes: 0,
+            damaged_chunks: 0,
+        }));
+
+        let one = run_verify(base, &plan, &scan, 1);
+        let many = run_verify(base, &plan, &scan, 4);
+
+        assert_eq!(
+            (one.0, one.1, one.2),
+            (many.0, many.1, many.2),
+            "jobs must not change the verdict or the counters"
+        );
+        assert_eq!((one.0, one.1, one.2), (2, 1, 2));
+        let one_warnings = check_warnings(&one.3);
+        assert_eq!(
+            one_warnings,
+            check_warnings(&many.3),
+            "the warning set and its plan order are jobs-independent"
+        );
+        assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
+        assert!(
+            one_warnings[0].contains("b.dat") && one_warnings[0].contains("CHECK fail: md5"),
+            "{:?}",
+            one_warnings
+        );
+        assert!(
+            one_warnings[1].contains("c.dat") && one_warnings[1].contains("CHECK fail: size"),
+            "{:?}",
+            one_warnings
+        );
+        assert!(
+            one.3.contains("damaged_chunks=2"),
+            "the scan's damaged-chunk total is folded once: {}",
+            one.3
+        );
     }
 
     #[test]
@@ -348,5 +456,36 @@ mod tests {
             );
             assert_eq!(outcome.damaged_chunks, None);
         }
+    }
+
+    /// A scanned check trusts the scan's digest — it must not read the file a
+    /// second time — but the presence and length checks still run against the
+    /// disk, so a file that changed after the scan is still caught where those
+    /// checks can see it.
+    #[test]
+    fn a_scanned_check_uses_the_scan_digest_but_still_checks_the_length() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "scanned_trusts_digest");
+        let base = &*dir;
+        std::fs::write(base.join("f.dat"), b"on disk").unwrap();
+        let expected = "0123456789abcdef0123456789abcdef";
+        let scan = verdict(expected, vec![true]);
+
+        // The on-disk bytes do not hash to `expected`, but the scan says they
+        // did: using the scan's answer means no second read.
+        let same_size = planned("f.dat", 7, expected);
+        let path = util::contained_join(base, &same_size.rel);
+        assert!(
+            check_one(&same_size, &path, DigestSource::Scanned(&scan)).ok,
+            "the scan's digest is the digest"
+        );
+
+        // The length check is not delegated to the scan.
+        let changed_length = planned("f.dat", 8, expected);
+        let outcome = check_one(&changed_length, &path, DigestSource::Scanned(&scan));
+        assert!(!outcome.ok);
+        assert!(
+            matches!(outcome.failure, Some(CheckFailure::Size(7))),
+            "a length change after the scan is still damage"
+        );
     }
 }

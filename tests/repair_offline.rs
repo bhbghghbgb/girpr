@@ -192,6 +192,42 @@ async fn check_only_dirty_reports_damage_and_writes_nothing() {
 }
 
 #[tokio::test]
+async fn check_only_matches_between_one_and_many_jobs() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let fx2 = build_fixture();
+    let foo = &fx2.files[0];
+    let bar = &fx2.files[1];
+
+    let mut runs = Vec::new();
+    for jobs in [1usize, 4] {
+        let dir = temp_dir(&format!("check_parity_{jobs}"));
+        write_game_file(&dir, &bar.rel, &bar.data);
+        // Same length, different bytes: a digest failure, not a size one.
+        let mut bad_foo = foo.data.clone();
+        for b in bad_foo.iter_mut().skip(64) {
+            *b ^= 0xFF;
+        }
+        write_game_file(&dir, &foo.rel, &bad_foo);
+
+        let mut ctx = ctx_for(dir.to_path_buf(), &mock, jobs);
+        ctx.check_only = true;
+        let (summary, code) = repair::run(ctx).await.expect("check-only runs");
+        runs.push((load_counters(&summary), code));
+    }
+
+    assert_eq!(
+        runs[0], runs[1],
+        "jobs must not change the check's verdict or counters"
+    );
+    assert_eq!(runs[0].1, 4, "the corrupt file is still damage");
+    let (skipped, _repaired, failed, _, _) = runs[0].0;
+    assert_eq!((skipped, failed), (1, 1));
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
     // The scan's verdict for an absent file carries the empty digest, and a
     // legitimate empty file's manifest entry has exactly that digest. The
