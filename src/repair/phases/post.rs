@@ -519,6 +519,87 @@ mod tests {
         );
     }
 
+    /// A copy that fails partway must not publish its truncated bytes: the temp
+    /// sibling is removed, the destination stays absent, and the source stays.
+    #[test]
+    fn a_partial_copy_publishes_nothing() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "partial_copy");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        let target = base.join("Audio/res/a.pck");
+        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        let err = copy_publish_with(&src, &target, |_, dst| {
+            std::fs::write(dst, b"partial")?;
+            Err(std::io::Error::other("injected copy failure"))
+        })
+        .unwrap_err();
+
+        assert_eq!(err.to_string(), "injected copy failure");
+        assert!(!target.exists(), "a partial copy is never published");
+        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"cache bytes",
+            "the source survives a failed copy"
+        );
+    }
+
+    /// The same failure with a destination already in place: the original file
+    /// keeps its bytes, since only a complete temp file is renamed over it.
+    #[test]
+    fn a_partial_copy_leaves_an_existing_target_alone() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "partial_keeps_target");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        let target = base.join("Audio/res/a.pck");
+        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        std::fs::write(&src, b"cache bytes").unwrap();
+        std::fs::write(&target, b"old bytes").unwrap();
+
+        copy_publish_with(&src, &target, |_, dst| {
+            std::fs::write(dst, b"partial")?;
+            Err(std::io::Error::other("injected copy failure"))
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"old bytes",
+            "the previous target is untouched"
+        );
+        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert_eq!(std::fs::read(&src).unwrap(), b"cache bytes");
+    }
+
+    /// A complete copy publishes exactly the source bytes and leaves nothing
+    /// behind; the caller removes the source only after that.
+    #[test]
+    fn a_completed_copy_publishes_the_whole_file() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "copy_publish");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        let target = base.join("Audio/res/a.pck");
+        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        copy_publish_with(&src, &target, |from, to| std::fs::copy(from, to)).unwrap();
+
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"cache bytes",
+            "the published file is the complete source"
+        );
+        assert!(!tmp.exists(), "no temp sibling outlives the publish");
+    }
+
     /// The other half of the same line: a relocation that did happen is
     /// reported with its counts.
     #[test]
