@@ -4779,6 +4779,111 @@ async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String
     )
 }
 
+/// A successful run's last record reaches the file before the process returns,
+/// not merely the console: the log is the record of the run.
+#[tokio::test]
+async fn a_successful_run_flushes_its_summary_to_the_log_file() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("success_log_tail");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    let log = dir.join("run.log");
+    let log_arg = log.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--check-only",
+            "--log-file",
+            &log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let summary = stdout
+        .lines()
+        .find(|line| line.starts_with("SUMMARY "))
+        .expect("the run ends with a SUMMARY");
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    assert!(
+        body.contains(summary),
+        "the log must hold the same SUMMARY the run returned:\n{body}"
+    );
+
+    mock.stop();
+}
+
+/// A fatal run is the one where a lost tail hurts most, so the fatal line is
+/// the last non-empty line in the file when the process returns.
+#[tokio::test]
+async fn a_fatal_run_flushes_its_last_line_to_the_log_file() {
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/foo.dat",
+            vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
+        )])
+        .with_lies(Lies {
+            huge_offset: vec!["chunk_foo0".into()],
+            ..Default::default()
+        }),
+    );
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("fatal_log_tail");
+    let game = dir.join("install");
+    let log = dir.join("run.log");
+    let game_arg = game.to_string_lossy().into_owned();
+    let log_arg = log.to_string_lossy().into_owned();
+
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--log-file",
+            &log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 2, "a corrupt chunk range is metadata: {stderr}");
+
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    let tail = body
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .expect("the log is not empty");
+    assert!(
+        tail.contains("fatal(exit=2)"),
+        "the fatal line must be the log's tail:\n{body}"
+    );
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
     // A mock at 127.0.0.1 standing in for the whole CDN, driven by the real

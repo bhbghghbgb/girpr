@@ -152,7 +152,8 @@ fn parse_args() -> Args {
 
 #[cfg(test)]
 mod tests {
-    use super::worker_threads;
+    use super::{exit_code, worker_threads};
+    use std::process::ExitCode;
 
     #[test]
     fn a_single_job_keeps_runtime_headroom_on_one_core() {
@@ -167,5 +168,18 @@ mod tests {
     #[test]
     fn a_huge_file_window_saturates_instead_of_overflowing() {
         assert_eq!(worker_threads(1, usize::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn the_documented_exit_codes_reach_the_process_unchanged() {
+        for code in 0..=5 {
+            assert_eq!(exit_code(code), ExitCode::from(code as u8));
+        }
+    }
+
+    #[test]
+    fn an_out_of_range_code_is_clamped_instead_of_wrapping() {
+        assert_eq!(exit_code(300), ExitCode::from(u8::MAX));
+        assert_eq!(exit_code(-1), ExitCode::SUCCESS);
     }
 }

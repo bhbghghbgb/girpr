@@ -213,6 +213,23 @@ fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// A writer whose only observable act is the flush.
+    struct FlushRecorder {
+        flushes: Arc<AtomicUsize>,
+    }
+
+    impl Write for FlushRecorder {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
 
     #[test]
     fn the_default_file_is_named_for_the_project() {
@@ -226,5 +243,21 @@ mod tests {
                 .and_then(|s| s.to_str()),
             Some("logs")
         );
+    }
+
+    #[test]
+    fn flush_log_reaches_the_installed_writer_exactly_once() {
+        let flushes = Arc::new(AtomicUsize::new(0));
+        let sink: FileSink = Arc::new(Mutex::new(Box::new(FlushRecorder {
+            flushes: Arc::clone(&flushes),
+        })));
+        assert!(
+            FILE_SINK.set(sink).is_ok(),
+            "no other test installs the log sink"
+        );
+
+        flush_log();
+
+        assert_eq!(flushes.load(Ordering::Relaxed), 1);
     }
 }
