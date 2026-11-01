@@ -117,8 +117,8 @@ struct PlanPhase {
     /// The server's deprecated-file list (empty in read-only modes, or when the
     /// best-effort fetch failed).
     deprecated: Vec<String>,
-    /// The local chunk map, moved into the repair loop.
-    local_map: manifest::LocalChunkMap,
+    /// The local chunk map, shared with the repair loop and the scan.
+    local_map: Arc<manifest::LocalChunkMap>,
 }
 
 /// How [`plan_phase`] ends.
@@ -201,15 +201,17 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         ctx.jobs,
     )
     .await?;
-    let local_map = manifest::local_reuse_map(
-        &http,
-        sleep,
-        meta.local_build.as_ref(),
-        &meta.audio,
-        &meta.ignore,
-        ctx.jobs,
-    )
-    .await;
+    let local_map = Arc::new(
+        manifest::local_reuse_map(
+            &http,
+            sleep,
+            meta.local_build.as_ref(),
+            &meta.audio,
+            &meta.ignore,
+            ctx.jobs,
+        )
+        .await,
+    );
     // The local manifest loading is the one degradation that changes the
     // reported numbers while leaving the exit code at `0`: with no local build
     // the reuse map is empty, so every chunk downloads and both
@@ -349,7 +351,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
                 &game_dir,
                 root.as_ref(),
                 Arc::clone(&plan),
-                Arc::new(local_map.clone()),
+                Arc::clone(&local_map),
                 ctx.jobs,
             )
             .await,

@@ -196,7 +196,7 @@ pub async fn repair_all(
     game_dir: PathBuf,
     root: Option<util::PathRoot>,
     plan: Arc<RepairPlan>,
-    local_map: LocalChunkMap,
+    local_map: Arc<LocalChunkMap>,
     summary: Summary,
     jobs: usize,
     dry_run: bool,
@@ -390,7 +390,7 @@ struct FileCtx {
     root: Option<util::PathRoot>,
     http: reqwest::Client,
     plan: Arc<RepairPlan>,
-    local_map: LocalChunkMap,
+    local_map: Arc<LocalChunkMap>,
     summary: Arc<Summary>,
     dry_run: bool,
     /// How each file is repaired.
