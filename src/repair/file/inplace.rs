@@ -572,6 +572,8 @@ enum Tier {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Seek, SeekFrom};
+
     use super::*;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
@@ -763,5 +765,61 @@ mod tests {
             source_ok_by_chunk(chunks.len(), &owner, &[true]),
             vec![false, true]
         );
+    }
+
+    /// The verify pass pins the whole-file digest on success and names the
+    /// chunks to redo on a mismatch. The corrupt byte is in the chunk the
+    /// patch did not write, so the digest has to fail first and the extra
+    /// scan then has to report that chunk — not the one the patch rewrote.
+    #[test]
+    fn the_in_place_verify_pins_the_digest_and_names_the_still_bad_chunks() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "verify_digest");
+        let path = dir.join("f.dat");
+        let mut good = vec![0x41u8; 64];
+        good.extend_from_slice(&[0x42u8; 64]);
+        std::fs::write(&path, &good).unwrap();
+
+        let md5_0 = format!("{:x}", md5::compute(&good[..64]));
+        let md5_1 = format!("{:x}", md5::compute(&good[64..]));
+        let dest: Vec<util::ScanRange<'_>> = vec![(0, 64, &md5_0), (64, 64, &md5_1)];
+        let expect = format!("{:x}", md5::compute(&good));
+
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        // The verify starts at the beginning of the file even when the last
+        // write left the handle at EOF.
+        f.seek(SeekFrom::End(0)).unwrap();
+        match verify_in_place(&mut f, &dest, 2, &expect).unwrap() {
+            Verified::Matches(md5) => assert_eq!(md5.to_hex(), expect),
+            Verified::Mismatch { md5, .. } => {
+                panic!("an intact file must match, got {md5}")
+            }
+        }
+
+        // Only the second chunk is damaged: chunk 0 is the one a patch would
+        // have written, chunk 1 is outside it.
+        let mut bad = good.clone();
+        bad[70] ^= 0xff;
+        std::fs::write(&path, &bad).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        f.seek(SeekFrom::End(0)).unwrap();
+        match verify_in_place(&mut f, &dest, 2, &expect).unwrap() {
+            Verified::Mismatch { md5, still_bad } => {
+                assert_eq!(
+                    still_bad,
+                    vec![1],
+                    "the extra scan names the chunk that is still wrong"
+                );
+                assert_eq!(md5, Md5::from(md5::compute(&bad)));
+            }
+            Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
+        }
     }
 }
