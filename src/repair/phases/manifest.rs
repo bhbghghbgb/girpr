@@ -9,6 +9,13 @@
 //! Manifests are never cached inside `game_dir` (V1-SIMPLIFICATION S1: the
 //! blob is streamed into memory, parsed, and not kept) — see
 //! [`crate::sophon::fetch_manifest`].
+//!
+//! The selected manifests are fetched **concurrently**, but the fan-out is
+//! bounded: one decoded manifest can be tens of MiB, so opening every fetch at
+//! once would trade latency for peak memory. The bound is a small dedicated
+//! cap, not the file-worker count. Results are put back in selection order
+//! before anything reads them, so the plan's per-manifest order and the error
+//! `fetch_latest` reports do not depend on completion order.
 
 use std::collections::HashMap;
 
@@ -60,6 +67,11 @@ fn in_selection_order<T, E>(
 /// Fetch every wanted manifest of the latest build concurrently, bounded, and
 /// keep each one's chunk URL prefix next to its file list (the plan needs the
 /// pairing).
+///
+/// The output is in selection order. A failure is reported for the **first**
+/// manifest in selection order that failed, not the first to finish: the
+/// message is about what is wrong with the build, and completion order is an
+/// accident of the network.
 pub async fn fetch_latest(
     http: &Client,
     sleep: &dyn Sleep,
@@ -98,6 +110,11 @@ pub async fn fetch_latest(
 /// Build the chunk-reuse map from the local build. Fully best-effort: a
 /// manifest that will not fetch is skipped, and a missing local build simply
 /// yields an empty map (every chunk then downloads).
+///
+/// The fetches are concurrent and bounded the same way as [`fetch_latest`],
+/// and the assembled `wanted` list is in selection order: when two manifests
+/// describe the same path, the earlier one wins the first-occurrence rules in
+/// [`sophon::build_local_chunk_map`].
 pub async fn local_reuse_map(
     http: &Client,
     sleep: &dyn Sleep,
