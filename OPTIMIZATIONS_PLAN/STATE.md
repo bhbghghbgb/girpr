@@ -31,7 +31,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T17 | C2 + C9 - one lock for every mutating run | completed | 8800aad, 14cffba, cc204d9, d698d8c | RC-07 |
 | T18 | A1 - narrow the public surface | completed | c0dd7de, 9007c90 | RC-07 |
 | T19 | A2 - make `--jobs` the primary flag | completed | fa79ffd, c1c875a, 14bef05 | RC-07 |
-| T20 | A3 - exercise the post-phase in dry-run | todo | | RC-08 |
+| T20 | A3 - exercise the post-phase in dry-run | in_progress | | RC-08 |
 | T21 | A4 - one emitter and one progress driver | todo | | RC-08 |
 | T22 | A5 - return an exit code and flush logs | todo | | RC-08 |
 | T23 | P9 - buffer the file log sink | todo | | RC-09 |
