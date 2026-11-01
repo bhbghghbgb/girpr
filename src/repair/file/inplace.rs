@@ -631,9 +631,16 @@ enum Tier {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::{Seek, SeekFrom};
+    use std::sync::Arc;
 
     use super::*;
+    use crate::repair::phases::manifest::LocalChunkMap;
+    use crate::repair::phases::plan::RepairPlan;
+    use crate::repair::scan::ScanReport;
+    use crate::report::Summary;
+    use crate::sleep::NoSleep;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
     /// not ignored and then blamed on the re-open. A directory at the target
@@ -880,5 +887,117 @@ mod tests {
             }
             Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
         }
+    }
+
+    fn test_ctx(scan: Option<Arc<ScanReport>>) -> FileCtx {
+        FileCtx {
+            game_dir: std::path::PathBuf::new(),
+            root: None,
+            http: reqwest::Client::new(),
+            plan: Arc::new(RepairPlan {
+                latest: String::new(),
+                files: Vec::new(),
+                url_prefix_by_file: Default::default(),
+            }),
+            local_map: Arc::new(LocalChunkMap::new()),
+            scan,
+            summary: Arc::new(Summary::new()),
+            dry_run: true,
+            repair_mode: RepairMode::Inplace,
+            sleep: Arc::new(NoSleep),
+        }
+    }
+
+    /// The plan scan is reusable only when the open file is still the one the
+    /// scan saw: the same length and an exactly equal modification time. Any
+    /// uncertainty falls back to a fresh read.
+    #[test]
+    fn the_guard_reuses_only_an_unchanged_plan_scan() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "reuse_guard");
+        let path = dir.join("a.dat");
+        let bytes = b"abcdef";
+        std::fs::write(&path, bytes).unwrap();
+        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "a.dat".into(),
+            size: bytes.len() as i64,
+            md5: format!("{:x}", md5::compute(bytes)),
+            chunks: Vec::new(),
+        };
+        let verdict = Verdict {
+            file_md5: file.md5.clone(),
+            dest_ok: Vec::new(),
+            source_ok: Vec::new(),
+            file_len: bytes.len() as u64,
+            modified: Some(recorded),
+        };
+        let report = ScanReport {
+            files: HashMap::from([("a.dat".to_string(), verdict)]),
+            bytes: bytes.len() as u64,
+            damaged_chunks: 0,
+        };
+        let ctx = test_ctx(Some(Arc::new(report)));
+
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, &file, &path, &handle).is_some(),
+            "the same length and mtime is the one reusable shape"
+        );
+
+        // A changed modification time, with the length held fixed.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded + Duration::from_secs(1))
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, &file, &path, &handle).is_none(),
+            "a different mtime means a different snapshot"
+        );
+
+        // A changed length, with the recorded mtime restored.
+        std::fs::write(&path, b"abcdefg").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded)
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, &file, &path, &handle).is_none(),
+            "a different length is never reused"
+        );
+
+        // The same file again, but the report has no verdict for it.
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded)
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        let no_verdict = test_ctx(Some(Arc::new(ScanReport::default())));
+        assert!(
+            reusable_verdict(&no_verdict, &file, &path, &handle).is_none(),
+            "a missing verdict is not reusable"
+        );
+
+        // And without a scan there is nothing to reuse.
+        let no_scan = test_ctx(None);
+        assert!(reusable_verdict(&no_scan, &file, &path, &handle).is_none());
     }
 }

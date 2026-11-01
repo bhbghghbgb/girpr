@@ -440,6 +440,109 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
 }
 
+/// A `--scan` repair and an unscanned repair of the same damage are the same
+/// repair: same bytes, same exit code, and the same chunk accounting.
+///
+/// The scan only changes where the in-place writer gets its verdicts. When the
+/// file has not changed since the plan phase, the guarded reuse must be
+/// invisible: the file, the counters, and the per-file stats all have to match
+/// the run that read the file itself.
+#[tokio::test]
+async fn a_scanned_repair_and_an_unscanned_repair_agree() {
+    let size = 64usize;
+    let old = vec![
+        chunk("old_x", 0x71, size, 0),
+        chunk("old_k", 0x72, size, size as i64),
+        chunk("old_m", 0x73, size, 3 * size as i64),
+    ];
+    let new = vec![
+        chunk("new_k", 0x72, size, 0),
+        chunk("new_m", 0x73, size, size as i64),
+        chunk("new_f", 0x74, size, 2 * size as i64),
+    ];
+    let spec = FixtureSpec::new(vec![FileSpec::new("game/parity.dat", new)])
+        .with_old(vec![FileSpec::new("game/parity.dat", old.clone())])
+        .with_disk("game/parity.dat", lay_out(&old));
+
+    let args = ["--repair-mode", "inplace", "--max-write-bytes", "1048576"];
+
+    let scanned_rig = Rig::start(&spec).await;
+    scanned_rig.at_local_version();
+    let mut scanned_args = vec!["--scan"];
+    scanned_args.extend_from_slice(&args);
+    let scanned = scanned_rig.run(&scanned_args).await;
+
+    let plain_rig = Rig::start(&spec).await;
+    plain_rig.at_local_version();
+    let plain = plain_rig.run(&args).await;
+
+    assert_eq!(scanned.code, 0, "{}\n{}", scanned.stdout, scanned.stderr);
+    assert_eq!(
+        scanned.code, plain.code,
+        "the scan must not change the exit code"
+    );
+    assert_eq!(
+        snapshot(&scanned_rig.game()),
+        snapshot(&plain_rig.game()),
+        "the two runs must leave the same bytes on disk"
+    );
+    for key in [
+        "total",
+        "skipped",
+        "repaired",
+        "failed",
+        "download_bytes",
+        "write_bytes",
+        "kept_bytes",
+    ] {
+        assert_eq!(
+            scanned.num("summary", key),
+            plain.num("summary", key),
+            "SUMMARY {key} must not depend on where the scan came from"
+        );
+    }
+    assert_eq!(
+        in_place_chunk_stats(&scanned.log),
+        in_place_chunk_stats(&plain.log),
+        "the per-file chunk accounting must be identical"
+    );
+    assert!(
+        scanned
+            .log
+            .contains("reusing the plan scan in the in-place writer"),
+        "the scanned run must take the guarded reuse on an unchanged file"
+    );
+}
+
+/// The `chunks_*` figures from the one `repaired in place` line in a trace log.
+fn in_place_chunk_stats(log: &str) -> BTreeMap<&'static str, u64> {
+    let line = log
+        .lines()
+        .find(|l| l.contains("repaired in place"))
+        .unwrap_or_else(|| panic!("no `repaired in place` line in:\n{log}"));
+    [
+        "chunks_total",
+        "chunks_kept",
+        "chunks_reused",
+        "chunks_downloaded",
+    ]
+    .into_iter()
+    .map(|key| {
+        let marker = format!("{key}=");
+        let at = line
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no {key} in: {line}"));
+        let value = line[at + marker.len()..]
+            .split_whitespace()
+            .next()
+            .unwrap_or_else(|| panic!("no value for {key} in: {line}"))
+            .parse()
+            .unwrap_or_else(|e| panic!("{key} is not a number in: {line} ({e})"));
+        (key, value)
+    })
+    .collect()
+}
+
 /// With no local manifest the reuse map is empty, so **every** chunk is
 /// fetched — the other side of the same boundary.
 ///
