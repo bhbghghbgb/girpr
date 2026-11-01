@@ -21,7 +21,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T07 | C8 - one temp-file naming rule | completed | 6739ad8, d47582f, 78477e4 | RC-02 |
 | T08 | P1 - overlap metadata calls | completed | eb8fe99, a88c94f | RC-03 |
 | T09 | P2 - fetch manifests concurrently | completed | 8244a36, ebbbb14, 8a32496 | RC-03 |
-| T10 | P4 - move blocking phases off workers; parallel check | todo | | RC-04 |
+| T10 | P4 - move blocking phases off workers; parallel check | in_progress | | RC-04 |
 | T11 | P5 - size the runtime for `--jobs` | todo | | RC-04 |
 | T12 | P6 - verify with one whole-file digest | todo | | RC-05 |
 | T13 | P7 - reuse the temp source handle | todo | | RC-05 |
