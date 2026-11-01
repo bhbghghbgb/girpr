@@ -113,9 +113,14 @@ pub async fn run(
             return Ok(PostOutcome::DeleteCeiling);
         }
         let bytes = purge::apply_purge(&purge_plan, dry).map_err(RunFailure::write)?;
-        summary
-            .deleted_extra_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
+        // A dry run lists the candidates; nothing is deleted, so nothing may
+        // be counted as freed space. `apply_purge` returns 0 in dry-run today,
+        // and the gate keeps that invariant local to the counter as well.
+        if !dry {
+            summary
+                .deleted_extra_bytes
+                .fetch_add(bytes, Ordering::Relaxed);
+        }
     }
     // `config.ini` is bumped last so the on-disk version only
     // advances once the bytes are in place. A dry run never put any bytes in
