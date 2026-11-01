@@ -186,6 +186,30 @@ impl Meter {
             .store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
+    /// Add `n` without wrapping, using a single `fetch_add` when the result
+    /// cannot overflow.
+    ///
+    /// `AtomicU64::fetch_add` wraps, and a meter that wrapped would read near
+    /// `u64::MAX` — switching a ceiling off and corrupting the reported
+    /// figures. The common case is far from that edge, so it loads once and
+    /// takes `fetch_add`; only a value within `n` of the top takes the
+    /// compare-and-swap loop with `saturating_add`.
+    fn add_saturating(cell: &AtomicU64, n: u64) {
+        let cur = cell.load(Ordering::Relaxed);
+        if cur.checked_add(n).is_some() {
+            cell.fetch_add(n, Ordering::Relaxed);
+            return;
+        }
+        let mut cur = cur;
+        loop {
+            let next = cur.saturating_add(n);
+            match cell.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
+                Ok(_) => return,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
     /// Charge `n` bytes against the live ceiling — all or nothing.
     ///
     /// Reserving *before* the resource is consumed is what makes the stop
@@ -195,6 +219,16 @@ impl Meter {
     /// blocks the charge, which is the caller's signal to stop the run.
     pub fn charge_live(&self, n: u64) -> bool {
         let limit = self.live_limit.load(Ordering::Relaxed);
+        if limit == u64::MAX {
+            // No ceiling: there is nothing to compare against, so a plain
+            // `fetch_add` answers "yes" without a compare-exchange loop. The
+            // ceiling is installed once, before any task starts (and stored as
+            // this sentinel), so it cannot appear mid-run; a meter whose
+            // sentinel is replaced between this load and the add would merely
+            // charge one reservation it would otherwise have refused.
+            Self::add_saturating(&self.live, n);
+            return true;
+        }
         let mut cur = self.live.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
@@ -260,20 +294,7 @@ impl Meter {
         if delta < 0 {
             self.refund_live(delta.unsigned_abs());
         } else if delta > 0 {
-            let n = delta as u64;
-            let mut cur = self.live.load(Ordering::Relaxed);
-            loop {
-                let next = cur.saturating_add(n);
-                match self.live.compare_exchange_weak(
-                    cur,
-                    next,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
-                ) {
-                    Ok(_) => break,
-                    Err(actual) => cur = actual,
-                }
-            }
+            Self::add_saturating(&self.live, delta as u64);
         }
     }
 
@@ -290,6 +311,14 @@ impl Meter {
     /// is exact, and the one that crossed it is the one that says so.
     pub fn settle(&self, n: u64) -> bool {
         let limit = self.settled_limit.load(Ordering::Relaxed);
+        if limit == u64::MAX {
+            // No ceiling: the charge can never report "out of budget", so the
+            // compare-and-swap that fuses charge and check has nothing to
+            // check. See `charge_live` for the install-once assumption and the
+            // saturation note. The limited path below keeps its single CAS.
+            Self::add_saturating(&self.settled, n);
+            return true;
+        }
         let mut cur = self.settled.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
