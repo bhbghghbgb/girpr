@@ -344,6 +344,17 @@ pub fn md5_file(path: &Path) -> Result<String> {
 /// [`md5_file`] as a digest, for a gate that compares bytes.
 pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    md5_reader_digest(&mut f)
+}
+
+/// The whole-file MD5 of a handle the caller already holds.
+///
+/// The handle's position is whatever the caller's last read or write left it
+/// at, so the digest always starts at the beginning of the file — the same
+/// rule [`scan_reader`] follows. This is the verify gate that only needs the
+/// whole-file answer: it does not build a digest per range.
+pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
+    f.seek(SeekFrom::Start(0))?;
     let mut buf = vec![0u8; MD5_BUF];
     let mut ctx = md5::Context::new();
     loop {
@@ -612,6 +623,32 @@ mod tests {
         let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
         assert_eq!(scan.dest_ok, vec![true]);
         assert_eq!(scan.file_len, data.len() as u64);
+    }
+
+    #[test]
+    fn a_handle_digest_agrees_with_the_file_digest_at_any_position() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "reader_digest");
+        let large: Vec<u8> = (0..(MD5_BUF + 17)).map(|i| (i % 251) as u8).collect();
+        for (name, data) in [
+            ("empty", Vec::new()),
+            ("small", b"small file".to_vec()),
+            ("large", large),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, &data).unwrap();
+            let want = Md5::from(md5::compute(&data));
+            let mut f = File::open(&path).unwrap();
+            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name}");
+            // The handle is left at EOF by the read; the next digest still
+            // starts at the beginning of the file.
+            f.seek(SeekFrom::End(0)).unwrap();
+            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name} at EOF");
+            assert_eq!(
+                md5_reader_digest(&mut f).unwrap(),
+                md5_file_digest(&path).unwrap(),
+                "{name}: the handle digest and the path digest are one answer"
+            );
+        }
     }
 
     #[test]
