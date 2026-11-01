@@ -34,7 +34,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T20 | A3 - exercise the post-phase in dry-run | completed | d32c395, bb1368c, c4285e7, f221aad, f0fa925 | RC-08 |
 | T21 | A4 - one emitter and one progress driver | completed | 0948590, b8d5068, c56681c | RC-08 |
 | T22 | A5 - return an exit code and flush logs | completed | dc8f7cd, 54ec0ee, e197cd3 | RC-08 |
-| T23 | P9 - buffer the file log sink | todo | | RC-09 |
+| T23 | P9 - buffer the file log sink | in_progress | | RC-09 |
 | T24 | P11 - remove purge/scope per-pass allocations | todo | | RC-09 |
 | T25 | P13 - fast-path unlimited meters | todo | | RC-09 |
 | T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | todo | | RC-09 |
