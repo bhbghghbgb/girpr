@@ -65,7 +65,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
 | RC-01 | T01-T04 | done | 262dcdc | T03 fixed: deprecated atomic API in `adjust_live` |
-| RC-02 | T05-T07 | pending | | |
+| RC-02 | T05-T07 | in_progress | | |
 | RC-03 | T08-T09 | pending | | |
 | RC-04 | T10-T11 | pending | | |
 | RC-05 | T12-T15 | pending | | |
