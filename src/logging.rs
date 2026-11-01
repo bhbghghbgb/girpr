@@ -27,8 +27,15 @@
 //! failing the run, so [`init_tracing`] is infallible. [`flush_log`] is the
 //! explicit last write: the binary calls it on every exit path after logging is
 //! installed, so a buffered sink cannot lose the tail of the run.
+//!
+//! The file sink is buffered for the run and explicitly flushed at exit and on
+//! the fatal paths. That is the durability promise: a normal exit keeps the
+//! whole log, and a failure that reaches a flush path keeps it too; an exit
+//! that skips the flush, such as `kill -9`, can lose the tail. The console
+//! layer is not buffered, because its ordering and broken-pipe behavior are
+//! separate contracts.
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
@@ -43,7 +50,18 @@ use tracing_subscriber::prelude::*;
 /// environment variables that answer for the flags.
 pub const PROJECT: &str = "girpr";
 
+/// How much of the file log is held in memory between writes.
+///
+/// One buffer per run, not per event: the file layer renders many small
+/// records, and batching them cuts both the write syscalls and the time the
+/// shared sink's mutex is held under load.
+const FILE_BUFFER_CAPACITY: usize = 64 * 1024;
+
 /// The file layer's writer, shared between the subscriber and [`flush_log`].
+///
+/// The box holds a `BufWriter<File>` when a file was opened, and
+/// [`std::io::sink`] when the plan has no file; the sink stays unbuffered
+/// because buffering nothing buys nothing.
 type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
 
 /// The sink [`flush_log`] reaches, set once by [`init_tracing`].
@@ -176,8 +194,9 @@ pub fn init_tracing(
 ///
 /// The file is the record of the run, so the caller flushes it explicitly on
 /// every path after [`init_tracing`] rather than trusting a `Drop` that an
-/// abrupt exit would skip. It is safe when no file was opened — the sink writes
-/// nowhere — and when logging was never installed, in which case there is
+/// abrupt exit would skip. For a buffered file this is what pushes the last
+/// records out of the buffer; for the sink it is a no-op. It is safe when no
+/// file was opened and when logging was never installed, in which case there is
 /// nothing to flush.
 ///
 /// A flush failure is reported once on stderr and never changes the exit code:
@@ -199,15 +218,21 @@ fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
 }
 
 /// Open the log file for appending, creating the parent directory if needed.
-fn open_log_file(path: &Path) -> std::io::Result<std::fs::File> {
+///
+/// The file is buffered so the file layer's many small records become few
+/// writes. [`flush_log`] is what empties the buffer at exit; a dropped
+/// [`BufWriter`] would flush on its own, but the process exits through paths
+/// that skip destructors, which is why the explicit flush exists.
+fn open_log_file(path: &Path) -> std::io::Result<BufWriter<std::fs::File>> {
     let dir = path
         .parent()
         .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
     std::fs::create_dir_all(dir)?;
-    std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
+        .open(path)?;
+    Ok(BufWriter::with_capacity(FILE_BUFFER_CAPACITY, file))
 }
 
 #[cfg(test)]
