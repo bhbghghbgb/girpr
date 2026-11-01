@@ -261,11 +261,19 @@ impl Meter {
             self.refund_live(delta.unsigned_abs());
         } else if delta > 0 {
             let n = delta as u64;
-            let _ = self
-                .live
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
-                    Some(cur.saturating_add(n))
-                });
+            let mut cur = self.live.load(Ordering::Relaxed);
+            loop {
+                let next = cur.saturating_add(n);
+                match self.live.compare_exchange_weak(
+                    cur,
+                    next,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                ) {
+                    Ok(_) => break,
+                    Err(actual) => cur = actual,
+                }
+            }
         }
     }
 
