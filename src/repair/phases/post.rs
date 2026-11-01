@@ -258,6 +258,44 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
     classify_deprecated(std::fs::metadata(path))
 }
 
+/// Suffix appended to the destination file name to form the copy's temp
+/// sibling. The whole name is kept, so the real extension survives.
+const PUBLISH_TMP_SUFFIX: &str = ".girpr_tmp";
+
+/// Copy `src` to `target` without ever publishing a partial file.
+///
+/// The bytes go to a temp sibling in the destination directory (same volume, so
+/// the publish is a rename, not another copy), and only a complete temp file is
+/// renamed over `target`. On any failure the temp sibling is removed, `target`
+/// is left exactly as it was, and the caller keeps `src`.
+///
+/// The caller creates the destination directory and removes `src` only after
+/// this returns `Ok`.
+fn copy_publish_with(
+    src: &Path,
+    target: &Path,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> std::io::Result<()> {
+    let Some(name) = target.file_name() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "audio cache destination has no file name",
+        ));
+    };
+    let mut tmp_name = name.to_os_string();
+    tmp_name.push(PUBLISH_TMP_SUFFIX);
+    let tmp = target.with_file_name(tmp_name);
+    if let Err(e) = copy(src, &tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
+}
+
 /// Move `audio_pkg_cache_dir/**/*` into `audio_pkg_res_dir`, Starward parity
 /// (`GameInstallService.cs:427-445,643-661`).
 ///
@@ -370,12 +408,14 @@ fn move_audio_cache(
         match std::fs::rename(&src, &target) {
             Ok(()) => moved += 1,
             Err(rename_err) => {
-                match std::fs::copy(&src, &target) {
-                    Ok(_) => {
-                        // Only now is there a destination: the source is
-                        // removed **after** a successful copy, never before.
-                        // Removing it unconditionally would delete a cache
-                        // file that had no copy if the copy failed.
+                // The copy fallback publishes through a temp sibling, so a
+                // truncated copy can never be mistaken for a complete one.
+                match copy_publish_with(&src, &target, |from, to| std::fs::copy(from, to)) {
+                    Ok(()) => {
+                        // Only now is there a complete destination: the source
+                        // is removed **after** it, never before. Removing it
+                        // unconditionally would delete a cache file that had no
+                        // copy if the copy failed.
                         match std::fs::remove_file(&src) {
                             Ok(()) => moved += 1,
                             Err(e) => {
@@ -389,7 +429,8 @@ fn move_audio_cache(
                         }
                     }
                     Err(copy_err) => {
-                        // Keep the source when the copy fails, and say why.
+                        // Keep the source when the copy fails, say why, and do
+                        // not claim the move: the target was never published.
                         kept += 1;
                         tracing::warn!(
                             src = %src.display(),
