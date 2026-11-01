@@ -736,4 +736,68 @@ mod tests {
             DeprecatedStat::AlreadyGone
         ));
     }
+
+    /// A dry run names the deprecated file it would delete, leaves it in
+    /// place, and counts no bytes.
+    #[test]
+    fn a_dry_run_lists_the_deprecated_delete() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_deprecated", "dry_run");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("old")).unwrap();
+        std::fs::write(base.join("old/legacy.dll"), b"12345").unwrap();
+        let summary = Summary::new();
+
+        let logs = logs_of(|| {
+            delete_deprecated(
+                base,
+                &["old/legacy.dll".to_string()],
+                &summary,
+                &PathScope::default(),
+                true,
+            )
+        });
+
+        assert!(
+            logs.contains("would delete deprecated old/legacy.dll (5 bytes)"),
+            "the dry run names the delete and its size: {logs}"
+        );
+        assert_eq!(
+            std::fs::read(base.join("old/legacy.dll")).unwrap(),
+            b"12345",
+            "a dry run deletes nothing"
+        );
+        assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    /// A dry run names each audio cache file it would move and leaves both
+    /// sides alone.
+    #[test]
+    fn a_dry_run_lists_the_audio_cache_move() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "dry_run");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::write(base.join("Audio/cache/track_1.pcm"), b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                true,
+            )
+        });
+
+        assert!(
+            logs.contains("would move audio cache track_1.pcm -> res"),
+            "the dry run names the move: {logs}"
+        );
+        assert!(
+            base.join("Audio/cache/track_1.pcm").exists(),
+            "the source stays in place"
+        );
+        assert!(
+            !base.join("Audio/res/track_1.pcm").exists(),
+            "nothing is published at the destination"
+        );
+    }
 }

@@ -4046,6 +4046,75 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
 }
 
 #[tokio::test]
+async fn dry_run_lists_the_post_phase_and_changes_nothing() {
+    // A dry run answers "what would this run do?" end to end, so it reaches
+    // the post-phase's read-only paths: the deprecated deletes, the audio
+    // cache move and the cleanup. It lists them, deletes and moves nothing,
+    // counts no bytes, and stops before the `config.ini` bump.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            scan_dir: "Audio/scan.txt".to_string(),
+            res_dir: "Audio/res".to_string(),
+            cache_dir: "Audio/cache".to_string(),
+            deprecated_files: vec!["old/legacy.dll".to_string()],
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dry_run_post");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
+    write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.dry_run = true;
+    ctx.purge_after = true;
+    let (summary, code) = run(ctx).await.expect("dry-run runs the post-phase");
+    assert_eq!(code, 0);
+
+    assert_eq!(
+        read_game_file(&dir, "old/legacy.dll").unwrap(),
+        &[0x7Eu8; 50],
+        "dry-run must not delete deprecated files"
+    );
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_some(),
+        "dry-run must not delete orphans"
+    );
+    assert_eq!(
+        read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
+        &[0x3Bu8; 128],
+        "dry-run must not move the audio cache"
+    );
+    assert!(
+        read_game_file(&dir, "Audio/res/track_1.pcm").is_none(),
+        "nothing may appear in the res dir"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "a dry run counts no deleted bytes"
+    );
+    assert!(
+        !dir.join("config.ini").exists(),
+        "a dry run must not bump config.ini"
+    );
+    assert!(
+        mock.first_target_with("getGameDeprecatedFileConfigs")
+            .is_some(),
+        "the dry run fetches the list it lists"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn check_only_and_print_plan_issue_no_deprecated_file_call() {
     // The deprecated list is fetched during the plan phase, and these modes
     // never reach the post-phase, so they skip that network call:
