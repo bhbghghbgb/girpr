@@ -13,7 +13,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | ID | Title | Status | Commits | Batch |
 |---|---|---|---|---|
 | T01 | C1 - closed stdout is not a panic | pending_review | 37473e0, 587af78 | RC-01 |
-| T02 | C5 - reject oversized JSON numbers | in_progress | | RC-01 |
+| T02 | C5 - reject oversized JSON numbers | pending_review | 0bf3646, 7f7190e | RC-01 |
 | T03 | C6 - harden meter subtraction | todo | | RC-01 |
 | T04 | C7 - use a Windows path key, not Unicode lowercase | todo | | RC-01 |
 | T05 | C3 - never publish a partial audio target | todo | | RC-02 |
