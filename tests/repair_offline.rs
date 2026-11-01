@@ -1252,6 +1252,7 @@ async fn a_second_run_against_the_same_install_is_refused() {
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     // Hold the lock, as a first run would.
     let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+    let lock_path = _lock.path().to_path_buf();
 
     let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
@@ -1259,10 +1260,15 @@ async fn a_second_run_against_the_same_install_is_refused() {
     assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
     let msg = format!("{:#}", err.source);
     assert!(
-        msg.contains("girpr.lock"),
+        msg.contains(lock_path.to_string_lossy().as_ref()),
         "the refusal names the file: {msg}"
     );
-    assert!(msg.contains(&std::process::id().to_string()), "{msg}");
+    // An exclusive OS lock can hide the body from another process; either
+    // the pid or that fact is named.
+    assert!(
+        msg.contains(&std::process::id().to_string()) || msg.contains("body is unreadable"),
+        "{msg}"
+    );
 
     // A **scoped** run does not take the lock — the lock's path is outside
     // the scope, so it does not exist to the run — and is not refused.
@@ -1273,7 +1279,7 @@ async fn a_second_run_against_the_same_install_is_refused() {
 
     // The lock is released when the run that holds it ends.
     drop(_lock);
-    assert!(!dir.join("girpr.lock").exists());
+    assert!(!lock_path.exists());
     let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the next run is not refused");
@@ -1285,10 +1291,10 @@ async fn a_second_run_against_the_same_install_is_refused() {
 }
 
 #[tokio::test]
-async fn the_cleanup_never_eats_the_lock() {
-    // The lock lives at the game dir's root and is not in the manifest. The
-    // files-cleanup must not eat it: a run that holds it would lose its
-    // exclusion.
+async fn a_legacy_in_install_lock_is_left_alone() {
+    // Older runs put the lock at the game dir's root. This run locks outside
+    // the install and must not delete the old file behind the user's back;
+    // the files-cleanup keeps it for the same reason.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("lock_purge");
@@ -1297,31 +1303,16 @@ async fn the_cleanup_never_eats_the_lock() {
         write_game_file(&dir, &f.rel, &f.data);
     }
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
-    // A lock left behind by a run that was killed: old enough to be taken
-    // over, so this run takes it — and the cleanup must not eat it.
-    let lock = dir.join("girpr.lock");
-    std::fs::write(&lock, b"pid=1\n").unwrap();
-    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_times(std::fs::FileTimes::new().set_modified(old))
-        .unwrap();
+    let legacy = dir.join("girpr.lock");
+    std::fs::write(&legacy, b"pid=1\n").unwrap();
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
     let (_, code) = repair::run(ctx).await.expect("the purge runs");
     assert_eq!(code, 0);
-    // The run took the stale lock over and released it again on the way
-    // out, so the file is gone — but the *cleanup* did not eat it: the run
-    // that holds the lock is the only thing that removes it, and it did so
-    // at the very end. The classification that keeps it is pinned by
-    // `purge::tests::the_lock_is_kept_by_the_cleanup`.
-    assert!(
-        !dir.join("girpr.lock").exists(),
-        "the run released its own lock"
-    );
+    // The old lock is an ordinary unexpected file that the cleanup keeps;
+    // only the new temp-dir lock is the run's own.
+    assert!(legacy.exists(), "the legacy in-install lock is left alone");
     assert!(
         read_game_file(&dir, "stray/orphan.dat").is_none(),
         "the orphan is still purged"
