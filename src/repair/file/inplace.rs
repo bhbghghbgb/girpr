@@ -314,25 +314,25 @@ async fn attempt_inplace_inner(
 
     // 5. verify. One more read: the whole-file MD5 is the gate, and the
     // per-chunk verdicts name the culprit when it does not match.
-    let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if Md5::parse_hex(&after.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
-        return Ok(repaired_in_place(stats, &after.file_md5));
-    }
+    let still_bad = match verify_in_place(&mut handle, &dest_ranges, file.chunks.len(), &file.md5)?
+    {
+        Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),
+        Verified::Mismatch { md5, still_bad } => {
+            if still_bad.is_empty() {
+                anyhow::bail!(
+                    "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
+                    file.rel,
+                    file.md5,
+                    md5
+                );
+            }
+            still_bad
+        }
+    };
 
     // Redo only the chunks that are still wrong. A chunk that fails here
     // passed its own MD5, so the damage is elsewhere: a second pass names
     // it instead of re-fetching the whole file.
-    let still_bad: Vec<usize> = (0..file.chunks.len())
-        .filter(|&i| !after.dest_ok[i])
-        .collect();
-    if still_bad.is_empty() {
-        anyhow::bail!(
-            "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
-            file.rel,
-            file.md5,
-            after.file_md5
-        );
-    }
     tracing::warn!(
         file = %file.rel,
         chunks = still_bad.len(),
@@ -344,16 +344,52 @@ async fn attempt_inplace_inner(
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
-    let final_scan = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if !Md5::parse_hex(&final_scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
+    let final_md5 = util::md5::md5_reader_digest(&mut handle)?;
+    if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel,
             file.md5,
-            final_scan.file_md5
+            final_md5
         );
     }
-    Ok(repaired_in_place(stats, &final_scan.file_md5))
+    Ok(repaired_in_place(stats, final_md5))
+}
+
+/// What one verification pass over the in-place target answered.
+enum Verified {
+    /// The whole-file digest is the manifest's; nothing else had to be read.
+    Matches(Md5),
+    /// The digest did not match. `still_bad` is one entry per chunk, in plan
+    /// order, from the extra scan that names what to redo.
+    Mismatch { md5: Md5, still_bad: Vec<usize> },
+}
+
+/// Verify the target with one whole-file digest, and scan the ranges only
+/// when that digest fails.
+///
+/// The success path only needs the whole-file MD5, so it costs one digest over
+/// the file's bytes. The per-chunk verdicts exist to say which chunks to redo;
+/// they are needed after a mismatch and never on success, so the scan that
+/// produces them runs only then.
+fn verify_in_place(
+    handle: &mut std::fs::File,
+    dest_ranges: &[util::ScanRange<'_>],
+    chunks_len: usize,
+    expect: &str,
+) -> Result<Verified> {
+    let after = util::md5::md5_reader_digest(handle)?;
+    if Md5::parse_hex(expect).is_ok_and(|expected| expected == after) {
+        return Ok(Verified::Matches(after));
+    }
+    let scan = util::scan_reader(handle, dest_ranges, &[])?;
+    let still_bad = (0..chunks_len)
+        .filter(|&i| !scan.dest_ok.get(i).copied().unwrap_or(false))
+        .collect();
+    Ok(Verified::Mismatch {
+        md5: after,
+        still_bad,
+    })
 }
 
 /// Map the scan's per-source-range verdicts back onto one verdict per chunk.
@@ -381,7 +417,7 @@ fn source_ok_by_chunk(
 /// Both paths end the same way: one `repaired in place` line carrying the
 /// file's chunk accounting, then the stats the caller promotes. Keeping it in
 /// one place stops the two paths' log blocks from drifting apart.
-fn repaired_in_place(stats: &ChunkStats, md5: &str) -> Inplace {
+fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
     tracing::info!(
         chunks_total = stats.chunks_total,
         chunks_kept = stats.chunks_kept,
