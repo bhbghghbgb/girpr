@@ -11,7 +11,9 @@
 //! module (which calls it) and `audio` (which owns the file format).
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 
 use anyhow::{Context, Result};
 use tokio::task::JoinError;
@@ -137,6 +139,55 @@ async fn drain<T>(read: tokio::task::JoinHandle<T>) {
     let _ = read.await;
 }
 
+/// A sibling future that may have settled while the primary was awaited.
+enum Settled<F: Future> {
+    /// The sibling finished first; its answer is kept.
+    Ready(F::Output),
+    /// The sibling is still running and can be awaited or dropped.
+    Running(Pin<Box<F>>),
+}
+
+impl<F: Future> Settled<F> {
+    /// Take the sibling's answer, waiting for it if it is still running.
+    async fn wait(self) -> F::Output {
+        match self {
+            Self::Ready(value) => value,
+            Self::Running(future) => future.await,
+        }
+    }
+}
+
+/// Await `primary` while keeping `sibling` alive; return as soon as `primary`
+/// settles.
+///
+/// A sibling that settles first is retained rather than polled again, so the
+/// caller can still use its answer when the primary succeeds. When the primary
+/// settles first the returned [`Settled::Running`] is dropped by an early
+/// return, which cancels the sibling's remaining retry schedule instead of
+/// waiting it out. The primary is never cancelled, so an authoritative result
+/// (including this phase's exit-code precedence) is not lost.
+async fn settle_primary<P, S>(primary: P, sibling: S) -> (P::Output, Settled<S>)
+where
+    P: Future,
+    S: Future,
+{
+    tokio::pin!(primary);
+    let mut sibling = Box::pin(sibling);
+    let mut settled = None;
+    loop {
+        tokio::select! {
+            result = &mut primary => {
+                let sibling = match settled {
+                    Some(value) => Settled::Ready(value),
+                    None => Settled::Running(sibling),
+                };
+                return (result, sibling);
+            }
+            result = &mut sibling, if settled.is_none() => settled = Some(result),
+        }
+    }
+}
+
 /// Normalise one server/config directory spelling to the `/` form every gate
 /// and sink shares, and validate its containment at the boundary.
 ///
@@ -181,10 +232,12 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         })
     };
 
-    // 2. First server wave: the two calls are independent. `join!`, not
-    // `try_join!`, so the error chosen below depends on the inputs rather than
-    // on which future happened to be polled first.
-    let (config_result, branch_result) = tokio::join!(hyp.game_config(), hyp.game_branch());
+    // 2. First server wave: the two calls are independent. The config call is
+    // the primary result: its mode decides the documented exit class, so it is
+    // never cancelled. The branch answer is retained when it settles first, and
+    // cancelled when the config call fails or refuses the mode.
+    let (config_result, branch_pending) =
+        settle_primary(hyp.game_config(), hyp.game_branch()).await;
     let mut config = match config_result
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)
@@ -205,7 +258,8 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // have no per-file chunk manifests to patch from, so refuse rather than
     // guess (a wrong mode would otherwise surface later as a -202 from getBuild,
     // i.e. exit 2 instead of the documented usage error). The mode check stays
-    // authoritative even though the branch call has already gone out.
+    // authoritative even though the branch call has already gone out; the
+    // branch future is dropped here, so its retry schedule is not awaited.
     // See `Starward.Core/HoYoPlay/GameConfig.cs:DownloadMode` for the value set.
     if config.default_download_mode != crate::hyp::DOWNLOAD_MODE_CHUNK {
         return Err(RunFailure::usage(anyhow::anyhow!(
@@ -213,7 +267,9 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             config.default_download_mode
         )));
     }
-    let game_branch = branch_result
+    let game_branch = branch_pending
+        .wait()
+        .await
         .context("getGameBranches")
         .map_err(RunFailure::metadata)?;
     let branch = game_branch.main;
@@ -295,15 +351,16 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // 4. Second server wave: the latest build is fatal; the local one only
     // feeds chunk reuse (S2). A missing local version, or a server that no
     // longer serves that tag (retcode -202), just means more downloads — never
-    // a wrong result.
+    // a wrong result. The latest call is primary, so a local-build retry
+    // schedule is cancelled when the latest call fails.
     let local_build_fut = async {
         match local_version.as_deref() {
             Some(lv) => Some(hyp.chunk_build(&branch, Some(lv)).await),
             None => None,
         }
     };
-    let (latest_result, local_result) =
-        tokio::join!(hyp.chunk_build(&branch, None), local_build_fut);
+    let (latest_result, local_pending) =
+        settle_primary(hyp.chunk_build(&branch, None), local_build_fut).await;
     let latest_build = match latest_result
         .context("getBuild(latest)")
         .map_err(RunFailure::metadata)
@@ -316,7 +373,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             return Err(failure);
         }
     };
-    let local_build = match (local_version.as_deref(), local_result) {
+    let local_build = match (local_version.as_deref(), local_pending.wait().await) {
         (Some(lv), Some(Ok(b))) => {
             tracing::info!("local build manifest loaded for dedup (tag={lv})");
             Some(b)
@@ -387,8 +444,109 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::RepairMode;
+    use crate::repair::scope::{Limits, PathScope};
+    use crate::report::OutputFormat;
+    use crate::sleep::{NoSleep, Sleep};
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    /// A `RunCtx` pointed at one loopback base, with every flag at its
+    /// default so only the metadata phase is exercised.
+    fn ctx(game_dir: std::path::PathBuf, base: String) -> RunCtx {
+        RunCtx {
+            game_dir,
+            biz: crate::Biz::Hk4eGlobal,
+            audio: HashSet::new(),
+            audio_explicit: false,
+            path_scope: PathScope::default(),
+            limits: Limits::default(),
+            repair_mode: RepairMode::Auto,
+            repair_mode_explicit: false,
+            jobs: 1,
+            check_only: false,
+            scan: false,
+            purge_only: false,
+            fail_fast: false,
+            dry_run: false,
+            print_plan: false,
+            plan_out: None,
+            purge_after: false,
+            purge_before: false,
+            output: OutputFormat::Text,
+            hyp_base_override: Some(base.clone()),
+            sophon_base_override: Some(base),
+            sleep: Arc::new(NoSleep),
+        }
+    }
+
+    #[derive(Clone)]
+    enum Reply {
+        Body(&'static str),
+        Status(&'static str),
+    }
+
+    const NOT_FOUND: Reply = Reply::Status("404 Not Found");
+
+    /// Serve `getGameConfigs` and `getGameBranches` on an ephemeral loopback
+    /// port; any other target is a `404`.
+    async fn serve(config: Reply, branch: Reply) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let base = format!("http://{}", listener.local_addr().expect("addr"));
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    continue;
+                };
+                let config = config.clone();
+                let branch = branch.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let mut got = 0;
+                    while got < buf.len() {
+                        match socket.read(&mut buf[got..]).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                got += n;
+                                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&buf[..got]).to_string();
+                    let target = head
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let reply = if target.contains("getGameBranches") {
+                        &branch
+                    } else if target.contains("getGameConfigs") {
+                        &config
+                    } else {
+                        &NOT_FOUND
+                    };
+                    let (status, body) = match reply {
+                        Reply::Body(body) => ("200 OK", body.as_bytes()),
+                        Reply::Status(status) => (*status, &[][..]),
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(head.as_bytes()).await;
+                    let _ = socket.write_all(body).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        base
+    }
 
     /// Each local read keeps the documented exit class, and the join-failure
     /// constructor follows it.
@@ -436,6 +594,66 @@ mod tests {
         }
     }
 
+    /// A primary that settles first leaves the sibling unawaited: the caller
+    /// can drop it, which is the cancellation an early return performs.
+    #[tokio::test]
+    async fn a_settled_primary_cancels_the_sibling_retry_schedule() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let attempts = Arc::new(AtomicUsize::new(0));
+
+        struct Mark(Arc<AtomicBool>);
+        impl Drop for Mark {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let mark = Mark(dropped.clone());
+        let sibling = {
+            let attempts = attempts.clone();
+            async move {
+                // Held by the future from construction, so dropping it before
+                // the first poll still marks the cancellation.
+                let _mark = mark;
+                // The first retry's wait is instant, but the attempt after it
+                // never settles. Awaiting this sibling would hang the phase.
+                NoSleep.sleep(Duration::from_secs(1)).await;
+                attempts.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+            }
+        };
+
+        let (primary, pending) = settle_primary(std::future::ready("config failed"), sibling).await;
+        assert_eq!(primary, "config failed");
+        drop(pending);
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the sibling future was dropped, not awaited"
+        );
+        assert!(
+            attempts.load(Ordering::SeqCst) <= 1,
+            "the retry schedule was not followed"
+        );
+    }
+
+    /// A sibling that settles first keeps its answer, including an error, for
+    /// the primary's success path.
+    #[tokio::test]
+    async fn a_sibling_error_is_kept_when_the_primary_succeeds() {
+        let sibling = async {
+            tokio::task::yield_now().await;
+            Err::<(), _>("branch failed")
+        };
+        let primary = async {
+            tokio::task::yield_now().await;
+            Ok::<_, &str>("config")
+        };
+
+        let (config, pending) = settle_primary(primary, sibling).await;
+        assert_eq!(config, Ok("config"));
+        assert_eq!(pending.wait().await, Err("branch failed"));
+    }
+
     /// Draining a read waits for it rather than detaching it.
     #[tokio::test]
     async fn drain_waits_for_the_read_to_finish() {
@@ -449,6 +667,32 @@ mod tests {
         assert!(
             done.load(Ordering::SeqCst),
             "drain returns only after the read has completed"
+        );
+    }
+
+    /// The config call's terminal failure is the phase's error even while the
+    /// branch call is still retrying; the branch answer is never substituted.
+    #[tokio::test]
+    async fn a_config_failure_is_authoritative_over_a_retrying_branch() {
+        let base = serve(
+            Reply::Body(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
+            Reply::Status("500 Internal Server Error"),
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "config_failure");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let failure = match fetch(&ctx, &dir).await {
+            Ok(_) => panic!("a terminal config failure must stop the phase"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.exit_code, RunExit::Metadata);
+        let text = format!("{:#}", failure);
+        assert!(text.contains("getGameConfigs"), "{text}");
+        assert!(text.contains("-1001"), "{text}");
+        assert!(
+            !text.contains("getGameBranches"),
+            "the branch error must not replace the config one: {text}"
         );
     }
 }
