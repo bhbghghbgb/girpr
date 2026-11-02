@@ -16,7 +16,10 @@ use std::time::Duration;
 use crate::sleep::Sleep;
 
 /// One attempt's answer, when the attempt has no state to carry forward.
-#[allow(clippy::enum_variant_names)] // `Retry::Retry` is the answer itself; "transient" would be a second name for it
+// `Retry` is the loop's answer and `Retry::Retry` is its natural third variant
+// beside `Done` and `Fatal`; the variant is public, so renaming it to satisfy
+// the lint would only rename the API.
+#[allow(clippy::enum_variant_names)]
 pub enum Retry<T> {
     /// The attempt succeeded.
     Done(T),
