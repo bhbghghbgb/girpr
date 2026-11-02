@@ -80,7 +80,7 @@ use crate::sophon::SophonChunk;
 use crate::util;
 
 use crate::repair::phases::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan, validate_chunk_ranges};
+use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan, validate_chunk_ranges};
 use crate::repair::scan::ScanReport;
 
 mod inplace;
@@ -493,7 +493,15 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     let mut writes = FileWrites::default();
     while attempt <= max_attempts {
         let outcome = if inplace {
-            inplace::attempt_inplace(ctx, file, prefix, &final_path, &mut writes).await
+            inplace::attempt_inplace(
+                ctx,
+                FileId::new(idx),
+                file,
+                prefix,
+                &final_path,
+                &mut writes,
+            )
+            .await
         } else {
             temp::attempt_temp(ctx, file, prefix, &tmp_path, &final_path, &mut writes).await
         };

@@ -15,6 +15,7 @@ use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
 use crate::config::RepairMode;
+use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
 use crate::repair::scan::{Verdict, scan_ranges};
 use crate::sophon::SophonChunk;
@@ -50,6 +51,7 @@ use anyhow::{Context, Result};
 /// does not need write access to the target.
 pub(super) async fn attempt_inplace(
     ctx: &FileCtx,
+    id: FileId,
     file: &PlannedFile,
     prefix: &str,
     final_path: &std::path::Path,
@@ -64,12 +66,13 @@ pub(super) async fn attempt_inplace(
     // reported `download_bytes` — "the bytes of the files that were actually
     // repaired" — does not count them. The settle happens where the file is
     // promoted, in `repair_all`.
-    attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats, writes).await
+    attempt_inplace_inner(ctx, id, file, prefix, final_path, &mut stats, writes).await
 }
 
 /// The body of the in-place repair — see [`attempt_inplace`].
 async fn attempt_inplace_inner(
     ctx: &FileCtx,
+    id: FileId,
     file: &PlannedFile,
     prefix: &str,
     final_path: &std::path::Path,
@@ -110,7 +113,7 @@ async fn attempt_inplace_inner(
     // correct, and which sources are intact. Under `--scan` the plan phase
     // already took that read; reuse it only when the guard proves the file is
     // still the one that was scanned.
-    let mut scan = match reusable_verdict(ctx, file, final_path, &handle) {
+    let mut scan = match reusable_verdict(ctx, id, file, final_path, &handle) {
         Some(v) => {
             let age_secs = v
                 .modified
@@ -444,11 +447,12 @@ fn source_ok_by_chunk(
 /// every uncertainty costs the read rather than risking a wrong write.
 fn reusable_verdict<'a>(
     ctx: &'a FileCtx,
+    id: FileId,
     file: &PlannedFile,
     path: &std::path::Path,
     handle: &std::fs::File,
 ) -> Option<&'a Verdict> {
-    let verdict = ctx.scan.as_deref()?.files.get(&file.rel)?;
+    let verdict = ctx.scan.as_deref()?.get(id)?;
     if verdict.dest_ok.len() != file.chunks.len() || verdict.source_ok.len() != file.chunks.len() {
         return None;
     }
@@ -631,7 +635,6 @@ enum Tier {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::io::{Seek, SeekFrom};
     use std::sync::Arc;
 
@@ -942,15 +945,16 @@ mod tests {
             modified: Some(recorded),
         };
         let report = ScanReport {
-            files: HashMap::from([("a.dat".to_string(), verdict)]),
+            files: vec![Some(verdict)],
             bytes: bytes.len() as u64,
             damaged_chunks: 0,
         };
         let ctx = test_ctx(Some(Arc::new(report)));
+        let id = FileId::new(0);
 
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, &file, &path, &handle).is_some(),
+            reusable_verdict(&ctx, id, &file, &path, &handle).is_some(),
             "the same length and mtime is the one reusable shape"
         );
 
@@ -963,7 +967,7 @@ mod tests {
             .unwrap();
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, &file, &path, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
             "a different mtime means a different snapshot"
         );
 
@@ -977,7 +981,7 @@ mod tests {
             .unwrap();
         let handle = std::fs::File::open(&path).unwrap();
         assert!(
-            reusable_verdict(&ctx, &file, &path, &handle).is_none(),
+            reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
             "a different length is never reused"
         );
 
@@ -992,12 +996,12 @@ mod tests {
         let handle = std::fs::File::open(&path).unwrap();
         let no_verdict = test_ctx(Some(Arc::new(ScanReport::default())));
         assert!(
-            reusable_verdict(&no_verdict, &file, &path, &handle).is_none(),
+            reusable_verdict(&no_verdict, id, &file, &path, &handle).is_none(),
             "a missing verdict is not reusable"
         );
 
         // And without a scan there is nothing to reuse.
         let no_scan = test_ctx(None);
-        assert!(reusable_verdict(&no_scan, &file, &path, &handle).is_none());
+        assert!(reusable_verdict(&no_scan, id, &file, &path, &handle).is_none());
     }
 }

@@ -19,7 +19,7 @@ use futures::StreamExt;
 use crate::report::{self, Summary};
 use crate::util::{self, Md5};
 
-use super::plan::{PlannedFile, RepairPlan};
+use super::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::scan::{ScanReport, Verdict};
 
 /// Verify the whole plan; returns the number of damaged files.
@@ -69,7 +69,7 @@ pub async fn verify_plan(
                         || util::contained_join(&game_dir, &f.rel),
                         |root| root.join(&f.rel),
                     );
-                    let outcome = match scan.as_deref().and_then(|s| s.files.get(&f.rel)) {
+                    let outcome = match scan.as_deref().and_then(|s| s.get(FileId::new(idx))) {
                         Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
                         None => check_one(f, &path, DigestSource::Read),
                     };
@@ -284,7 +284,6 @@ fn check_one(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -371,10 +370,14 @@ mod tests {
             planned("c.dat", 7, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
         ]));
         let scan = Some(Arc::new(ScanReport {
-            files: HashMap::from([(
-                "b.dat".to_string(),
-                verdict("00000000000000000000000000000000", vec![true, false, false]),
-            )]),
+            files: vec![
+                None,
+                Some(verdict(
+                    "00000000000000000000000000000000",
+                    vec![true, false, false],
+                )),
+                None,
+            ],
             bytes: 0,
             damaged_chunks: 0,
         }));

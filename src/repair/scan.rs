@@ -22,7 +22,6 @@
 //! over the finished temp file, not a verdict about the target, so it keeps
 //! its own read.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -32,7 +31,7 @@ use futures::StreamExt;
 use super::file::Mode;
 use crate::config::RepairMode;
 use crate::repair::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan};
+use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util;
@@ -65,8 +64,10 @@ impl Verdict {
 /// The scan of the whole plan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanReport {
-    /// Per planned file, by rel path.
-    pub files: HashMap<String, Verdict>,
+    /// Per planned file, in `plan.files` order. `None` is a file the scan did
+    /// not reach: a task that panicked or was cancelled, or a plan this report
+    /// was not built from.
+    pub files: Vec<Option<Verdict>>,
     /// The bytes the scan read.
     pub bytes: u64,
     /// The chunks that are wrong where they belong, over the whole plan.
@@ -74,6 +75,11 @@ pub struct ScanReport {
 }
 
 impl ScanReport {
+    /// The verdict for one planned file, when the scan produced one.
+    pub fn get(&self, id: FileId) -> Option<&Verdict> {
+        self.files.get(id.index()).and_then(Option::as_ref)
+    }
+
     /// The bytes the repair will really download, per file, in `plan.files`
     /// order.
     ///
@@ -114,9 +120,8 @@ impl ScanReport {
         requested: RepairMode,
         local_map: &LocalChunkMap,
     ) -> Vec<u64> {
-        plan.files
-            .iter()
-            .map(|f| {
+        plan.iter()
+            .map(|(id, f)| {
                 let sources = reuse::sources_for(&f.chunks, local_map.get(&f.rel));
                 // The run's cached root when it has one; otherwise resolve the
                 // base here, exactly as `contained_join` always did.
@@ -130,13 +135,7 @@ impl ScanReport {
                     // escapes is not readable, so nothing is reusable.
                     Err(_) => return all_chunks_download_bytes(&f.chunks),
                 };
-                est_file_download_bytes(
-                    &f.chunks,
-                    self.files.get(&f.rel),
-                    &sources,
-                    requested,
-                    resolved,
-                )
+                est_file_download_bytes(&f.chunks, self.get(id), &sources, requested, resolved)
             })
             .collect()
     }
@@ -215,7 +214,6 @@ fn est_file_download_bytes(
 
 /// One file's scan, before it is folded into the report.
 struct Scanned {
-    rel: String,
     verdict: Verdict,
     bytes: u64,
 }
@@ -240,23 +238,26 @@ pub async fn scan_plan(
     // The install root is resolved once here, not once per file, and shared by
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
-    let mut stream = futures::stream::iter(0..plan.files.len())
+    let total_files = plan.files.len();
+    let mut stream = futures::stream::iter(0..total_files)
         .map(move |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.to_path_buf();
             let local_map = Arc::clone(&local_map);
             let root = root.clone();
             async move {
-                tokio::task::spawn_blocking(move || {
+                let result = tokio::task::spawn_blocking(move || {
                     scan_one(&game_dir, root.as_deref(), &plan.files[idx], &local_map)
                 })
-                .await
+                .await;
+                (idx, result)
             }
         })
         .buffer_unordered(jobs.max(1));
 
     let mut out = ScanReport::default();
-    while let Some(res) = stream.next().await {
+    out.files.resize(total_files, None);
+    while let Some((idx, res)) = stream.next().await {
         let scanned = match res {
             Ok(scanned) => scanned,
             Err(e) => {
@@ -274,10 +275,10 @@ pub async fn scan_plan(
         };
         out.bytes += scanned.bytes;
         out.damaged_chunks += scanned.verdict.damaged_chunks();
-        out.files.insert(scanned.rel, scanned.verdict);
+        out.files[idx] = Some(scanned.verdict);
     }
     tracing::info!(
-        files = out.files.len(),
+        files = out.files.iter().filter(|verdict| verdict.is_some()).count(),
         bytes = out.bytes,
         damaged_chunks = out.damaged_chunks,
         "scan"
@@ -352,7 +353,6 @@ fn scan_one(
             );
             let n = file.chunks.len();
             return Scanned {
-                rel: file.rel.clone(),
                 bytes: 0,
                 verdict: Verdict {
                     file_md5: util::EMPTY_MD5.to_string(),
@@ -385,7 +385,6 @@ fn scan_one(
         source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
     }
     Scanned {
-        rel: file.rel.clone(),
         bytes: scan.file_len,
         verdict: Verdict {
             file_md5: scan.file_md5,
