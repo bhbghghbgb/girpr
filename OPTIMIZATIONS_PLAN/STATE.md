@@ -99,13 +99,13 @@ until the main tasks and rework are done.
 
 | ID | Source | Area | Description | Status |
 |---|---|---|---|---|
-| F01 | RC-01 review | `src/hyp.rs` | `num_from_string` string branches discard the `ParseIntError` detail; keep the parse reason for diagnosability. | todo |
+| F01 | RC-01 review | `src/hyp.rs` | `num_from_string` string branches discard the `ParseIntError` detail; keep the parse reason for diagnosability. | completed |
 | F02 | RC-01 review | `src/report/emit.rs` | Non-`BrokenPipe` stdout errors warn per call with no latch; revisit only if log flooding is observed. | dropped (no observed flooding; latch is speculative) |
 | F03 | RC-01 review | `tools/sync` | Sibling crate still folds path keys with `str::to_lowercase` (same Unicode-fold class of issue). | todo |
 | F04 | RC-01 review | `src/repair/scope/filter.rs` | Glob case-insensitive matching differs from `path_key`; cross-reference the two docs. | todo |
 | F05 | RC-02 review | `src/repair/phases/post.rs` | `copy_publish_with` keeps its own `PUBLISH_TMP_SUFFIX` append; adopt `util::path::temp_sibling`. | todo |
 | F06 | RC-02 review | `src/repair/scope/report.rs` | Temp-then-rename replaces a symlink at the target and resets the target's mode; document the trade. | todo |
-| F07 | T02 implementer | `src/hyp.rs` | Negative sizes are still accepted and clamped to zero; decide whether to reject them explicitly. | todo |
+| F07 | T02 implementer | `src/hyp.rs` | Negative sizes are still accepted and clamped to zero; decide whether to reject them explicitly. | completed |
 | F08 | T03 implementer | `src/repair/scope/ledger.rs` | `Summary::release_ram_bytes` still uses unchecked `fetch_sub`; consider the same saturation guard. | todo |
 | F09 | T05 implementer | `src/repair/phases/post.rs` | The copy-fallback caller path is only unit-tested through the injected helper, not a real failed rename. | todo |
 | F10 | T05 implementer | `src/repair/phases/post.rs` | The fixed temp sibling name would collide if two moves target the same path concurrently. | dropped (one run at a time under the lock makes the collision unreachable) |
@@ -162,7 +162,7 @@ until the main tasks and rework are done.
 | F61 | RC-11 review | `src/util/ini.rs` | `write_config_ini` now creates a missing game directory through the helper where it previously failed. | todo |
 | F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | todo |
 | F63 | RC-11 review | `src/repair/file/mod.rs` | A comment still budgets 5 × (15 s + 10 s); with the final sleep removed it is ~100 s. | todo |
-| F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | todo |
+| F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | completed |
 | F65 | T28 implementer | `src/util/ini.rs` tests | No config-specific "no temp left" assertion after the helper extraction. | todo |
 | F66 | T28 implementer | `src/util/atomic.rs` | Error context is artifact-neutral; artifact-specific labels would need a parameter. | todo |
 | F67 | RC-12 review | `src/repair/phases/post.rs` | `move_audio_cache` still strips the cache prefix manually; it could use `rel_from_base`. | todo |
@@ -219,6 +219,8 @@ until the main tasks and rework are done.
 | F118 | RC-18 review | `tests/repair_offline.rs` | Module docs still describe the pre-split case layout ("first ten cases", "three cases run the real binary"). | todo |
 | F119 | T46 implementer | `tests/cli_contract.rs` | Only the JSON plane is pinned; the text plane relies on unit tests. | todo |
 | F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | todo |
+| F121 | HYP-01 review | `docs/07-panic-audit.md` | Still describes `num_from_string` as `u64 as i64` wrapping above `i64::MAX`; the visitor uses `i64::try_from`. | todo |
+| F122 | HYP-01 review | `src/hyp.rs` | `ManifestFile.compressed_size` is deserialized but never read; its doc implies an in-crate clamp that does not exist. | todo |
 
 ## Follow-up batches
 
@@ -226,7 +228,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 
 | Batch | Follow-ups | Status | Notes |
 |---|---|---|---|
-| HYP-01 | F01, F07, F64 | pending_review | Wave A; hyp number parsing and retry seams; medium; 87db654, 3337ea1, eaf0b2c |
+| HYP-01 | F01, F07, F64 | done | Wave A; hyp number parsing and retry seams; medium; 87db654, 3337ea1, eaf0b2c |
 | PATHKEY-01 | F03, F04 | todo | Wave A; path-key folding outside the lock; medium |
 | LEDGER-01 | F08, F101 | todo | Wave A; meter saturation on add and release; medium |
 | RETRY-01 | F62, F81 | todo | Wave A; retry jitter spread and clippy variant names; low |
@@ -258,7 +260,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-01 | F32, F112, F113 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; low |
 | TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
-| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; low |
+| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and the pass-through field doc; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
