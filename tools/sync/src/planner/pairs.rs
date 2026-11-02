@@ -12,6 +12,7 @@ use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
+use crate::util::path_key;
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -120,9 +121,9 @@ fn shared_pairs<'a>(
         CasePairing::Lowercase => {
             let mut slow: HashMap<String, &String> = HashMap::new();
             for k in src.keys() {
-                slow.insert(k.to_lowercase(), k);
+                slow.insert(path_key(k), k);
             }
-            for (lkey, drel) in dst.keys().map(|k| (k.to_lowercase(), k)) {
+            for (lkey, drel) in dst.keys().map(|k| (path_key(k), k)) {
                 if let Some(srel) = slow.get(&lkey) {
                     out.push((srel, drel));
                 }

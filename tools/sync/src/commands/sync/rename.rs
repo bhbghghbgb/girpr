@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::report::{Record, Report};
+use crate::util::path_key;
 
 /// The point of a case-fix step a test hook asks to fail at.
 ///
@@ -71,11 +72,11 @@ fn case_renames<'a>(
     // lower -> rel, per side.
     let mut slow: HashMap<String, &String> = HashMap::new();
     for k in src.keys() {
-        slow.insert(k.to_lowercase(), k);
+        slow.insert(path_key(k), k);
     }
     let mut dlow: HashMap<String, &String> = HashMap::new();
     for k in dm.keys() {
-        dlow.insert(k.to_lowercase(), k);
+        dlow.insert(path_key(k), k);
     }
     let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
     by_lower.sort();

@@ -14,6 +14,7 @@ use crate::diff::Diff;
 use crate::effective::EffRec;
 use crate::hardlink::{Identity, info};
 use crate::link::link_ancestor_above;
+use crate::util::path_key;
 
 use super::build::Plan;
 use super::link::{
@@ -286,7 +287,7 @@ pub(crate) fn ensure_link_safe(
     // A dry run names the link with its pre-rename spelling while `fix_dirs`
     // is keyed by src's casing, so the carve-out has to compare cases too.
     let fixed_lower: HashSet<String> = if on_disk.is_some() {
-        plan.fix_dirs.iter().map(|f| f.to_lowercase()).collect()
+        plan.fix_dirs.iter().map(|f| path_key(f)).collect()
     } else {
         HashSet::new()
     };
@@ -310,7 +311,7 @@ pub(crate) fn ensure_link_safe(
             // link above the fixed one would have been returned first and is
             // still refused.
             if fixed.contains(link.as_str())
-                || (!fixed_lower.is_empty() && fixed_lower.contains(&link.to_lowercase()))
+                || (!fixed_lower.is_empty() && fixed_lower.contains(&path_key(&link)))
             {
                 continue;
             }
@@ -500,7 +501,7 @@ pub(crate) fn ensure_mkdir_targets_free(
     let dst_lower: HashMap<String, &EffRec> = if case_sensitive {
         HashMap::new()
     } else {
-        dm.iter().map(|(k, v)| (k.to_lowercase(), v)).collect()
+        dm.iter().map(|(k, v)| (path_key(k), v)).collect()
     };
     let paired = |rel: &str| dst_after_rename(rel, dm, &dst_lower, case_sensitive);
     // A src directory the plan will fix rather than mkdir, because dst holds a
@@ -554,7 +555,7 @@ fn dst_after_rename<'a>(
     if case_sensitive {
         dm.get(rel)
     } else {
-        lower.get(&rel.to_lowercase()).copied()
+        lower.get(&path_key(rel)).copied()
     }
 }
 

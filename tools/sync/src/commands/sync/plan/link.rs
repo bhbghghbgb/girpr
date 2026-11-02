@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
 use crate::link::try_is_link;
+use crate::util::path_key;
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
@@ -315,7 +316,7 @@ pub(super) fn spare_link_components(
 pub(super) fn folded_keys(dm: &HashMap<String, EffRec>) -> HashMap<String, String> {
     #[cfg(windows)]
     {
-        dm.keys().map(|k| (k.to_lowercase(), k.clone())).collect()
+        dm.keys().map(|k| (path_key(k), k.clone())).collect()
     }
     #[cfg(not(windows))]
     {
@@ -334,7 +335,7 @@ pub(super) fn map_spelling<'a>(
     if let Some((key, _)) = dm.get_key_value(rel) {
         return Some(key.as_str());
     }
-    folded.get(&rel.to_lowercase()).map(String::as_str)
+    folded.get(&path_key(rel)).map(String::as_str)
 }
 
 /// Spare `alias` and every link on its way to the root.

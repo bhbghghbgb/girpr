@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use crate::effective::EffRec;
 use crate::hash::{AlgoSet, DigestSet};
 use crate::planner::{CasePairing, Required, StatTrust};
+use crate::util::path_key;
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -298,11 +299,11 @@ pub fn diff_maps(
         // well defined.
         let mut slow: HashMap<String, &String> = HashMap::new();
         for k in src.keys() {
-            slow.insert(k.to_lowercase(), k);
+            slow.insert(path_key(k), k);
         }
         let mut dlow: HashMap<String, &String> = HashMap::new();
         for k in dst.keys() {
-            dlow.insert(k.to_lowercase(), k);
+            dlow.insert(path_key(k), k);
         }
         let classify = |lk: &str, d: &mut Diff| match (slow.get(lk), dlow.get(lk)) {
             (Some(srel), None) => d.missing.push((*srel).clone()),
