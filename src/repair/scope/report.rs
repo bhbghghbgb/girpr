@@ -19,7 +19,6 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -28,7 +27,7 @@ use serde::Serialize;
 
 use crate::config::RepairMode;
 use crate::repair::file::{Mode, resolve_mode};
-use crate::repair::phases::plan::RepairPlan;
+use crate::repair::phases::plan::{FileId, RepairPlan};
 use crate::repair::purge::PurgePlan;
 use crate::report::Record;
 use crate::util;
@@ -65,7 +64,8 @@ pub struct DiskPlan {
     pub est_write_bytes: u64,
     /// The free space the run needs beyond the install.
     pub est_extra_bytes: u64,
-    per_file: HashMap<String, FileDisk>,
+    /// Per planned file, in `plan.files` order.
+    per_file: Vec<FileDisk>,
 }
 
 impl DiskPlan {
@@ -102,6 +102,10 @@ impl DiskPlan {
                         error = %format!("{e:#}"),
                         "disk plan: path escapes the game dir; file omitted from the estimate"
                     );
+                    out.per_file.push(FileDisk {
+                        mode: "inplace",
+                        extra_bytes: 0,
+                    });
                     continue;
                 }
             };
@@ -125,26 +129,23 @@ impl DiskPlan {
             // the `PLAN` line lie) is not an answer to a corrupt manifest.
             out.est_write_bytes = out.est_write_bytes.saturating_add(size);
             peak = peak.max(extra);
-            out.per_file.insert(
-                f.rel.clone(),
-                FileDisk {
-                    mode: match mode {
-                        Mode::Inplace => "inplace",
-                        Mode::Temp => "temp",
-                    },
-                    extra_bytes: extra,
+            out.per_file.push(FileDisk {
+                mode: match mode {
+                    Mode::Inplace => "inplace",
+                    Mode::Temp => "temp",
                 },
-            );
+                extra_bytes: extra,
+            });
         }
         // The peak is per file, and `jobs` files are in flight at once.
         out.est_extra_bytes = peak.saturating_mul(jobs.max(1) as u64);
         out
     }
 
-    /// The figures for one file. A file the plan does not know about has no
-    /// figures — the plan is the only input.
-    pub fn for_file(&self, rel: &str) -> FileDisk {
-        self.per_file.get(rel).copied().unwrap_or(FileDisk {
+    /// The figures for one planned file. An id the plan does not know about has
+    /// no figures — the plan is the only input.
+    pub fn for_id(&self, id: FileId) -> FileDisk {
+        self.per_file.get(id.index()).copied().unwrap_or(FileDisk {
             mode: "inplace",
             extra_bytes: 0,
         })
@@ -323,7 +324,7 @@ impl<'a> PlanDocument<'a> {
                             n.saturating_add(c.compressed_size.max(0) as u64)
                         })
                     });
-                    let d = disk.for_file(&f.rel);
+                    let d = disk.for_id(FileId::new(i));
                     RepairEntry {
                         rel: &f.rel,
                         size: f.size,
@@ -393,7 +394,7 @@ impl<'a> PlanDocument<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::phases::plan::{FileId, PlannedFile};
     use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
     use std::sync::Arc;
@@ -547,14 +548,14 @@ mod tests {
 
         let plan = plan();
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 4);
-        assert_eq!(disk.for_file("game/foo.dat").mode, "inplace");
+        assert_eq!(disk.for_id(FileId::new(0)).mode, "inplace");
         assert_eq!(
-            disk.for_file("game/foo.dat").extra_bytes,
+            disk.for_id(FileId::new(0)).extra_bytes,
             0,
             "a file that is already the right size needs nothing"
         );
         assert_eq!(
-            disk.for_file("game/bar.dat").extra_bytes,
+            disk.for_id(FileId::new(1)).extra_bytes,
             64,
             "a file that is not there has to be created"
         );
@@ -566,8 +567,8 @@ mod tests {
 
         // The temp path duplicates every file.
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 4);
-        assert_eq!(disk.for_file("game/foo.dat").mode, "temp");
-        assert_eq!(disk.for_file("game/foo.dat").extra_bytes, 128);
+        assert_eq!(disk.for_id(FileId::new(0)).mode, "temp");
+        assert_eq!(disk.for_id(FileId::new(0)).extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
     }
 
@@ -586,12 +587,12 @@ mod tests {
 
         let disk = DiskPlan::new(&dir, None, &plan(), RepairMode::Discard, 4);
         assert_eq!(
-            disk.for_file("game/foo.dat").extra_bytes,
+            disk.for_id(FileId::new(0)).extra_bytes,
             0,
             "a full-size target is deleted and rewritten in place: no second copy"
         );
         assert_eq!(
-            disk.for_file("game/bar.dat").extra_bytes,
+            disk.for_id(FileId::new(1)).extra_bytes,
             64 - 16,
             "a truncated target still grows to its manifest size"
         );

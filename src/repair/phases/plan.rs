@@ -150,6 +150,21 @@ pub struct Layout {
     pub overlaps: Vec<(u64, u64)>,
 }
 
+/// A planned file's position in [`RepairPlan::files`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FileId(usize);
+
+impl FileId {
+    pub(crate) fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// The position in [`RepairPlan::files`] this id names.
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
 /// The sorted, deduped work list for one run.
 pub struct RepairPlan {
     pub latest: String,
@@ -157,6 +172,29 @@ pub struct RepairPlan {
 }
 
 impl RepairPlan {
+    /// The file `id` names, or `None` when the id is not from this plan.
+    pub fn file(&self, id: FileId) -> Option<&PlannedFile> {
+        self.files.get(id.index())
+    }
+
+    /// The number of planned files.
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Whether the plan has no files.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// Every planned file with the id that addresses it, in plan order.
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, &PlannedFile)> {
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (FileId::new(index), file))
+    }
+
     /// Paths the files-cleanup must treat as expected (docs/02 step 7).
     ///
     /// Borrowed so a caller that needs its own key (the purge keys the keep
