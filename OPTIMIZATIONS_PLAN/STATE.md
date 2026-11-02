@@ -81,7 +81,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-15 | T35-T36 | done | | Both completed without fixes |
 | RC-16 | T37-T43 | done | | All completed without fixes; T43 gate passed (+26%) |
 | RC-17 | T44-T45 | done | | Both completed without fixes |
-| RC-18 | T46-T47 | pending | | |
+| RC-18 | T46-T47 | in_progress | | |
 
 ## Rework
 
