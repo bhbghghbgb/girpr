@@ -10,7 +10,7 @@
 use std::io::Write;
 
 use super::mode::{open_inplace, open_rw};
-use super::temp::write_downloaded_chunk;
+use super::temp::{DownloadedChunk, write_downloaded_chunk};
 use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
@@ -481,7 +481,15 @@ async fn patch_chunks(
             )?;
             stats.chunks_reused += 1;
         } else {
-            write_downloaded_chunk(ctx, prefix, c, handle, stats, writes).await?;
+            write_downloaded_chunk(DownloadedChunk {
+                ctx,
+                prefix,
+                c,
+                out: &mut *handle,
+                stats: &mut *stats,
+                writes: &mut *writes,
+            })
+            .await?;
         }
     }
 
@@ -537,7 +545,15 @@ async fn verify_and_retry(
     );
     for &i in &still_bad {
         let c = &file.chunks[i];
-        write_downloaded_chunk(ctx, prefix, c, handle, stats, writes).await?;
+        write_downloaded_chunk(DownloadedChunk {
+            ctx,
+            prefix,
+            c,
+            out: &mut *handle,
+            stats: &mut *stats,
+            writes: &mut *writes,
+        })
+        .await?;
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;

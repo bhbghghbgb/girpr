@@ -124,25 +124,35 @@ async fn repair_attempt_inner(
     // open the path once more instead of failing the file.
     let mut src_handle: Option<File> = None;
     for c in &file.chunks {
-        let outcome = try_reuse_slice(
+        let end = chunk_end(c)?;
+        let outcome = try_reuse_slice(&mut ReuseCall {
             ctx,
-            final_path,
+            src: final_path,
             c,
+            end,
             reuse_entries,
-            &mut f,
-            &mut scratch,
-            &mut src_handle,
-            &mut tmp_len,
-            writes,
-        )?;
+            out: &mut f,
+            scratch: &mut scratch,
+            src_handle: &mut src_handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut *writes,
+        })?;
         match outcome {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
             ChunkOutcome::Reused => {
                 stats.chunks_reused += 1;
-                tmp_len = tmp_len.max(chunk_end(c)?);
+                tmp_len = tmp_len.max(end);
             }
             ChunkOutcome::Download => {
-                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats, writes).await
+                if let Err(e) = write_downloaded_chunk(DownloadedChunk {
+                    ctx,
+                    prefix,
+                    c,
+                    out: &mut f,
+                    stats: &mut *stats,
+                    writes: &mut *writes,
+                })
+                .await
                 {
                     // The chunk's bytes may have landed in the `_tmp` before
                     // its digest was known, and the temp mode resumes by
@@ -163,7 +173,7 @@ async fn repair_attempt_inner(
                     );
                     return Err(e);
                 }
-                tmp_len = tmp_len.max(chunk_end(c)?);
+                tmp_len = tmp_len.max(end);
             }
         }
     }
@@ -258,6 +268,24 @@ fn chunk_failure_after_rollback(
     ))
 }
 
+/// One chunk's reuse attempt and the per-file state it shares.
+///
+/// The chunk, its manifest pair, and its validated end are per chunk; `out`,
+/// `scratch`, `src_handle`, `tmp_len`, and `writes` live across the file's
+/// chunks. Naming them keeps the copy path's inputs readable at the call site.
+struct ReuseCall<'a> {
+    ctx: &'a FileCtx,
+    src: &'a std::path::Path,
+    c: &'a SophonChunk,
+    end: u64,
+    reuse_entries: Option<&'a FileReuse>,
+    out: &'a mut File,
+    scratch: &'a mut Vec<u8>,
+    src_handle: &'a mut Option<File>,
+    tmp_len: &'a mut u64,
+    writes: &'a mut FileWrites,
+}
+
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
 /// `false` when there is no candidate or the slice does not verify, so the
 /// caller falls back to downloading.
@@ -268,32 +296,21 @@ fn chunk_failure_after_rollback(
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
-#[allow(clippy::too_many_arguments)] // the per-file scratch is one more input; a bundle would churn both callers
-fn try_reuse_slice(
-    ctx: &FileCtx,
-    src: &std::path::Path,
-    c: &SophonChunk,
-    reuse_entries: Option<&FileReuse>,
-    out: &mut File,
-    scratch: &mut Vec<u8>,
-    src_handle: &mut Option<File>,
-    tmp_len: &mut u64,
-    writes: &mut FileWrites,
-) -> Result<ChunkOutcome> {
-    let end = chunk_end(c)?;
+fn try_reuse_slice(call: &mut ReuseCall<'_>) -> Result<ChunkOutcome> {
+    let c = call.c;
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
     // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
     // before failing shut. Mirrors Starward's
     // `if (fs.Length < chunk.Offset + chunk.UncompressedSize)` skip.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343
-    if *tmp_len >= end {
+    if *call.tmp_len >= call.end {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
         return Ok(ChunkOutcome::Resumed);
     }
-    out.seek(SeekFrom::Start(c.offset as u64))?;
+    call.out.seek(SeekFrom::Start(c.offset as u64))?;
 
-    let candidate = reuse_entries.and_then(|reuse| reuse.get(c));
+    let candidate = call.reuse_entries.and_then(|reuse| reuse.get(c));
     let Some(entry) = candidate else {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download");
         return Ok(ChunkOutcome::Download);
@@ -303,21 +320,23 @@ fn try_reuse_slice(
     // Take the file out while it is in use. A failed read leaves the slot
     // empty, so the next chunk tries a fresh open once rather than holding on
     // to a handle that is known to be unusable.
-    let mut sf = match src_handle.take() {
+    let mut sf = match call.src_handle.take() {
         Some(sf) => sf,
-        None => match File::open(src).with_context(|| format!("open {}", src.display())) {
-            Ok(sf) => sf,
-            Err(e) => {
-                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-                return Ok(ChunkOutcome::Download);
+        None => {
+            match File::open(call.src).with_context(|| format!("open {}", call.src.display())) {
+                Ok(sf) => sf,
+                Err(e) => {
+                    tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                    return Ok(ChunkOutcome::Download);
+                }
             }
-        },
+        }
     };
     let digest = match util::md5::md5_reader_slice_digest(
         &mut sf,
         ro as u64,
         c.uncompressed_size as u64,
-        scratch,
+        &mut *call.scratch,
     ) {
         Ok(h) => h,
         Err(e) => {
@@ -326,7 +345,7 @@ fn try_reuse_slice(
         }
     };
     if !digest.matches_hex(&c.uncompressed_md5) {
-        *src_handle = Some(sf);
+        *call.src_handle = Some(sf);
         tracing::debug!(chunk = %c.id, slice_md5 = %digest, "reuse slice md5 mismatch -> download");
         return Ok(ChunkOutcome::Download);
     }
@@ -338,7 +357,7 @@ fn try_reuse_slice(
         return Ok(ChunkOutcome::Download);
     }
     let mut remaining = c.uncompressed_size as u64;
-    let buf = scratch_slice(scratch, COPY_BUF);
+    let buf = scratch_slice(&mut *call.scratch, COPY_BUF);
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
         let n = match sf.read(&mut buf[..want]) {
@@ -351,18 +370,18 @@ fn try_reuse_slice(
         if n == 0 {
             // Short slice: fall through to the download, which re-seeks
             // to `c.offset` and overwrites the partial copy.
-            *src_handle = Some(sf);
+            *call.src_handle = Some(sf);
             tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
             return Ok(ChunkOutcome::Download);
         }
         // The write ceiling counts *this* copy: it goes into `*_tmp` and
         // appears in neither `download_bytes` nor the plan's estimate.
-        reserve_write(ctx, n as u64)?;
-        out.write_all(&buf[..n])?;
-        note_write(ctx, writes, n as u64)?;
+        reserve_write(call.ctx, n as u64)?;
+        call.out.write_all(&buf[..n])?;
+        note_write(call.ctx, &mut *call.writes, n as u64)?;
         remaining -= n as u64;
     }
-    *src_handle = Some(sf);
+    *call.src_handle = Some(sf);
     Ok(ChunkOutcome::Reused)
 }
 
@@ -430,6 +449,17 @@ impl sophon::ChunkSink for ChunkFileSink<'_> {
     }
 }
 
+/// One chunk to download into a file: where it comes from, where its decoded
+/// bytes land, and the per-file counters the write updates.
+pub(super) struct DownloadedChunk<'a> {
+    pub(super) ctx: &'a FileCtx,
+    pub(super) prefix: &'a str,
+    pub(super) c: &'a SophonChunk,
+    pub(super) out: &'a mut File,
+    pub(super) stats: &'a mut ChunkStats,
+    pub(super) writes: &'a mut FileWrites,
+}
+
 /// Download → zstd decode → digest → write at the chunk offset.
 ///
 /// The chunk is **streamed**: the compressed body is decoded as it arrives and
@@ -441,14 +471,15 @@ impl sophon::ChunkSink for ChunkFileSink<'_> {
 /// NOTE(starward-parity): Starward writes the decompressed chunk straight into
 /// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
-pub(super) async fn write_downloaded_chunk(
-    ctx: &FileCtx,
-    prefix: &str,
-    c: &SophonChunk,
-    out: &mut File,
-    stats: &mut ChunkStats,
-    writes: &mut FileWrites,
-) -> Result<()> {
+pub(super) async fn write_downloaded_chunk(chunk: DownloadedChunk<'_>) -> Result<()> {
+    let DownloadedChunk {
+        ctx,
+        prefix,
+        c,
+        out,
+        stats,
+        writes,
+    } = chunk;
     // Reserve before fetching, not after: the pre-flight estimate is a *lower
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
     // compare-and-swap is what actually bounds the run. Reserving the manifest's
@@ -483,16 +514,16 @@ pub(super) async fn write_downloaded_chunk(
     // ceiling is a ceiling: a settle that pushes the live figure past it trips
     // the stop right there, even if this was the run's last chunk.
     let mut consumed = 0u64;
-    let digest = match sophon::stream_chunk_to(
-        &ctx.http,
-        ctx.sleep.as_ref(),
-        prefix,
-        &c.id,
+    let digest = match sophon::stream_chunk_to(sophon::ChunkFetch {
+        client: &ctx.http,
+        sleep: ctx.sleep.as_ref(),
+        url_prefix: prefix,
+        id: &c.id,
         expected,
-        reserved,
-        &mut consumed,
-        &mut sink,
-    )
+        max_compressed: reserved,
+        consumed: &mut consumed,
+        sink: &mut sink,
+    })
     .await
     {
         Ok(d) => d,
@@ -772,17 +803,18 @@ mod tests {
         let mut handle = None;
 
         let first = chunk_at("c0", &md5, 0, 4);
-        let outcome = try_reuse_slice(
-            &ctx,
-            &src,
-            &first,
-            Some(&reuse),
-            &mut out,
-            &mut scratch,
-            &mut handle,
-            &mut tmp_len,
-            &mut writes,
-        )
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &src,
+            c: &first,
+            end: chunk_end(&first).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
         .unwrap();
         assert!(matches!(outcome, ChunkOutcome::Reused));
         assert!(handle.is_some(), "the first reuse keeps the source handle");
@@ -791,17 +823,18 @@ mod tests {
         // open file; the held handle is what the next chunk must use either way.
         let _ = std::fs::remove_file(&src);
         let second = chunk_at("c1", &md5, 4, 4);
-        let outcome = try_reuse_slice(
-            &ctx,
-            &src,
-            &second,
-            Some(&reuse),
-            &mut out,
-            &mut scratch,
-            &mut handle,
-            &mut tmp_len,
-            &mut writes,
-        )
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &src,
+            c: &second,
+            end: chunk_end(&second).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
         .unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Reused),
@@ -827,17 +860,18 @@ mod tests {
         let mut tmp_len = 0u64;
         let mut handle = None;
 
-        let outcome = try_reuse_slice(
-            &ctx,
-            &src,
-            &c,
-            Some(&reuse),
-            &mut out,
-            &mut scratch,
-            &mut handle,
-            &mut tmp_len,
-            &mut writes,
-        )
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &src,
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
         .unwrap();
         assert!(matches!(outcome, ChunkOutcome::Download));
         assert!(handle.is_none(), "a failed open leaves no handle behind");
@@ -865,17 +899,18 @@ mod tests {
         let mut handle = None;
         let mut tmp_len = 8u64;
 
-        let outcome = try_reuse_slice(
-            &ctx,
-            &missing,
-            &c,
-            None,
-            &mut out,
-            &mut scratch,
-            &mut handle,
-            &mut tmp_len,
-            &mut writes,
-        )
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &missing,
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: None,
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
         .unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Resumed),
@@ -884,17 +919,18 @@ mod tests {
 
         rollback_tmp(&mut out, &tmp, c.offset.max(0) as u64).unwrap();
         tmp_len = c.offset.max(0) as u64;
-        let outcome = try_reuse_slice(
-            &ctx,
-            &missing,
-            &c,
-            None,
-            &mut out,
-            &mut scratch,
-            &mut handle,
-            &mut tmp_len,
-            &mut writes,
-        )
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &missing,
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: None,
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
         .unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Download),
