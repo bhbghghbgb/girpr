@@ -125,6 +125,14 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::{self, Visitor};
+
+    /// Parse the string shape, keeping the parser's reason so the serde error
+    /// names both the offending value and why it was rejected.
+    fn parse_size(v: &str) -> std::result::Result<i64, String> {
+        v.parse::<i64>()
+            .map_err(|e| format!("size {v:?} is not an integer that fits an i64: {e}"))
+    }
+
     struct V;
     impl Visitor<'_> for V {
         type Value = i64;
@@ -139,12 +147,10 @@ where
                 .map_err(|_| E::custom(format!("size {v} is larger than i64::MAX ({})", i64::MAX)))
         }
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
-            v.parse::<i64>()
-                .map_err(|_| E::custom(format!("size {v:?} is not an integer that fits an i64")))
+            parse_size(v).map_err(E::custom)
         }
         fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
-            v.parse::<i64>()
-                .map_err(|_| E::custom(format!("size {v:?} is not an integer that fits an i64")))
+            parse_size(&v).map_err(E::custom)
         }
     }
     deserializer.deserialize_any(V)
@@ -547,6 +553,22 @@ mod tests {
 
         assert!(parse(r#"{"n":18446744073709551615}"#).is_err());
         assert!(parse(r#"{"n":"9223372036854775808"}"#).is_err());
+
+        // A string that does not parse keeps the parser's reason: the message
+        // must say *why* the value was rejected, not just that it was.
+        let not_a_number = parse(r#"{"n":"abc"}"#).unwrap_err().to_string();
+        assert!(
+            not_a_number.contains("invalid digit found in string"),
+            "{not_a_number}"
+        );
+        let too_large = parse(r#"{"n":"9223372036854775808"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(too_large.contains("9223372036854775808"), "{too_large}");
+        assert!(
+            too_large.contains("number too large to fit in target type"),
+            "{too_large}"
+        );
     }
 
     fn client_for(biz: Biz) -> HypClient {
