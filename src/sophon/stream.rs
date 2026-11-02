@@ -282,8 +282,34 @@ enum StreamError {
     Content(anyhow::Error),
 }
 
+/// The inputs of one streamed chunk fetch.
+///
+/// The URL prefix and chunk id name the object; `expected` and
+/// `max_compressed` are the manifest's two sizes and the reservation made for
+/// the body. `consumed` and `sink` are the fetch's mutable state, carried
+/// across attempts so a retry starts the sink over without forgetting the
+/// bytes the failed attempt spent.
+pub struct ChunkFetch<'a, S: ChunkSink> {
+    /// The HTTP client.
+    pub client: &'a reqwest::Client,
+    /// The wait between attempts.
+    pub sleep: &'a dyn Sleep,
+    /// The chunk's URL prefix.
+    pub url_prefix: &'a str,
+    /// The chunk id appended to the prefix.
+    pub id: &'a str,
+    /// The expected decompressed size, enforced as the bytes go.
+    pub expected: u64,
+    /// The compressed bytes reserved for the body.
+    pub max_compressed: u64,
+    /// Compressed bytes spent by this call, across attempts.
+    pub consumed: &'a mut u64,
+    /// Where the decoded bytes land.
+    pub sink: &'a mut S,
+}
+
 /// Stream one chunk's compressed body, decode it, and write the decoded bytes
-/// into `sink` — digested on the way past.
+/// into the fetch's sink — digested on the way past.
 ///
 /// The chunk is never resident as a whole: the compressed body is decoded as
 /// it arrives and the decoded bytes are written into the sink as they are
@@ -307,36 +333,36 @@ enum StreamError {
 /// The digest is known when the stream ends, which is one byte too late to
 /// gate the write — the one thing the streaming path gives up. The file-level
 /// gate (the whole-file MD5) is what decides whether the file is good.
-#[allow(clippy::too_many_arguments)] // one parameter per input the fetch path needs
-pub async fn stream_chunk_to(
-    client: &reqwest::Client,
-    sleep: &dyn Sleep,
-    url_prefix: &str,
-    id: &str,
-    expected: u64,
-    max_compressed: u64,
-    consumed: &mut u64,
-    sink: &mut impl ChunkSink,
-) -> Result<ChunkDigest> {
-    let url = join_url(url_prefix, id);
-    let url = url.as_str();
+pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<ChunkDigest> {
+    let ChunkFetch {
+        client,
+        sleep,
+        url_prefix,
+        id,
+        expected,
+        max_compressed,
+        consumed,
+        sink,
+    } = fetch;
     retry_state(
         ATTEMPTS,
         sleep,
         (consumed, sink),
         |(consumed, sink), attempt| async move {
-            match try_stream_chunk(
-                client,
-                url,
-                id,
-                attempt,
-                expected,
-                max_compressed,
-                &mut *consumed,
-                &mut *sink,
-            )
-            .await
-            {
+            let result = {
+                let mut fetch = ChunkFetch {
+                    client,
+                    sleep,
+                    url_prefix,
+                    id,
+                    expected,
+                    max_compressed,
+                    consumed: &mut *consumed,
+                    sink: &mut *sink,
+                };
+                try_stream_chunk(&mut fetch, attempt).await
+            };
+            match result {
                 Retry::Done(d) => RetryState::Done(d),
                 Retry::Fatal(e) => {
                     tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
@@ -362,18 +388,14 @@ pub async fn stream_chunk_to(
 /// Whatever the attempt delivered is added to `consumed` before it returns,
 /// on every path: this is the only place that sees the compressed byte count
 /// of an attempt that did not finish.
-#[allow(clippy::too_many_arguments)]
-async fn try_stream_chunk(
-    client: &reqwest::Client,
-    url: &str,
-    id: &str,
+async fn try_stream_chunk<S: ChunkSink>(
+    fetch: &mut ChunkFetch<'_, S>,
     attempt: u32,
-    expected: u64,
-    max_compressed: u64,
-    consumed: &mut u64,
-    sink: &mut impl ChunkSink,
 ) -> Retry<ChunkDigest> {
-    let resp = match client.get(url).send().await {
+    let id = fetch.id;
+    let url = join_url(fetch.url_prefix, fetch.id);
+    let url = url.as_str();
+    let resp = match fetch.client.get(url).send().await {
         Ok(r) => r,
         Err(e) => return Retry::Retry(anyhow::anyhow!("GET chunk: {}", e)),
     };
@@ -392,23 +414,25 @@ async fn try_stream_chunk(
     tracing::trace!(chunk = %id, attempt, "chunk downloaded");
     // A retry starts the chunk over: the decoded bytes are written as they are
     // produced, so a failed attempt may have left half a chunk behind.
-    if let Err(e) = sink.restart() {
+    if let Err(e) = fetch.sink.restart() {
         return Retry::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
     }
     let digest = match stream_body(
         resp.bytes_stream(),
-        Some(expected),
-        Some(max_compressed),
-        sink,
+        Some(fetch.expected),
+        Some(fetch.max_compressed),
+        &mut *fetch.sink,
     )
     .await
     {
         Ok(v) => {
-            *consumed = consumed.saturating_add(v.compressed_bytes);
+            let total = fetch.consumed.saturating_add(v.compressed_bytes);
+            *fetch.consumed = total;
             v
         }
         Err(f) => {
-            *consumed = consumed.saturating_add(f.compressed_bytes);
+            let total = fetch.consumed.saturating_add(f.compressed_bytes);
+            *fetch.consumed = total;
             return match f.error {
                 StreamError::Transport(e) => Retry::Retry(e),
                 StreamError::Content(e) => Retry::Fatal(e),

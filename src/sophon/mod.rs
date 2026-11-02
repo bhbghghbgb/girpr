@@ -20,4 +20,4 @@ pub use self::filter::select_manifests;
 pub use self::map::ReuseEntry;
 pub use self::map::{FileReuse, build_local_chunk_map};
 pub use self::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest, WantedManifest};
-pub use self::stream::{ChunkSink, fetch_manifest, stream_chunk_to};
+pub use self::stream::{ChunkFetch, ChunkSink, fetch_manifest, stream_chunk_to};

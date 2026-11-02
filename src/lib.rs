@@ -82,7 +82,7 @@ pub mod test_support {
     pub use crate::report::{Record, summary_record};
     pub use crate::sleep::{NoSleep, RealSleep};
     pub use crate::sophon::{
-        ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
+        ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };
     pub use crate::util::EMPTY_MD5;
 }
