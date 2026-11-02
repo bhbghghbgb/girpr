@@ -18,8 +18,9 @@ use crate::sleep::Sleep;
 
 /// One attempt's answer, when the attempt has no state to carry forward.
 // `Retry` is the loop's answer and `Retry::Retry` is its natural third variant
-// beside `Done` and `Fatal`; the variant is public, so renaming it to satisfy
-// the lint would only rename the API.
+// beside `Done` and `Fatal`. The module is private, so this name is internal,
+// but the repetition is deliberate: renaming the variant would churn every
+// call site for a lint about a name that already reads as intended.
 #[allow(clippy::enum_variant_names)]
 pub enum Retry<T> {
     /// The attempt succeeded.
