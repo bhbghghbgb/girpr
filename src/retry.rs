@@ -11,6 +11,7 @@
 //! while it runs instead of borrowing it from the closure.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::sleep::Sleep;
@@ -87,6 +88,7 @@ where
     Fut: Future<Output = RetryState<T, S>>,
 {
     let mut last_err: Option<anyhow::Error> = None;
+    let salt = next_salt();
     for n in 1..=attempts {
         match attempt(state, n).await {
             RetryState::Done(v) => return Ok(v),
@@ -97,7 +99,7 @@ where
             }
         }
         if n < attempts {
-            sleep.sleep(backoff(n)).await;
+            sleep.sleep(backoff(n, salt)).await;
         }
     }
     Err(last_err
@@ -105,16 +107,39 @@ where
         .context(format!("after {attempts} attempts")))
 }
 
+/// Distinguishes one retry loop from every other loop in this process.
+static NEXT_SALT: AtomicU64 = AtomicU64::new(0);
+
+/// A salt for one retry loop: unique within the process, and varied across
+/// runs by the process id.
+fn next_salt() -> u64 {
+    let instance = NEXT_SALT.fetch_add(1, Ordering::Relaxed);
+    u64::from(std::process::id()).wrapping_add(instance)
+}
+
 /// The wait before the next attempt: `attempt` seconds, plus a small spread.
 ///
-/// The spread is derived from the attempt number and the process id, so two
-/// runs started together do not retry in lockstep and a test can still use
-/// [`crate::sleep::NoSleep`] and assert attempt counts instead of durations.
-fn backoff(attempt: u32) -> Duration {
-    let n = u64::from(attempt);
-    let salt = u64::from(std::process::id());
-    let spread = (salt ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)) % 251;
-    Duration::from_secs(n) + Duration::from_millis(spread)
+/// The spread is derived from the attempt number and the loop's [`next_salt`],
+/// so loops started together do not retry in lockstep while a test can still
+/// use [`crate::sleep::NoSleep`] and assert attempt counts instead of
+/// durations.
+fn backoff(attempt: u32, salt: u64) -> Duration {
+    Duration::from_secs(u64::from(attempt)) + jitter(attempt, salt)
+}
+
+/// The spread added to an attempt's whole seconds.
+///
+/// The range is just under 251 ms, and the multiplier shares no factor with it,
+/// so distinct loop salts land on distinct spreads by construction (until the
+/// salt space wraps, far beyond any realistic number of concurrent loops).
+fn jitter(attempt: u32, salt: u64) -> Duration {
+    const RANGE: u64 = 250_000_000;
+    const MULTIPLIER: u64 = 0x9E37_79B1;
+
+    let mixed = salt
+        .wrapping_mul(MULTIPLIER)
+        .wrapping_add(u64::from(attempt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    Duration::from_nanos(mixed % RANGE)
 }
 
 #[cfg(test)]
@@ -139,6 +164,17 @@ mod tests {
             self.0.lock().expect("recording sleep").push(d);
             Box::pin(async {})
         }
+    }
+
+    /// The wait for `attempt` keeps its whole seconds and stays under the
+    /// spread bound; the exact spread belongs to the loop's salt.
+    fn assert_backoff(d: Duration, attempt: u32) {
+        let base = Duration::from_secs(u64::from(attempt));
+        assert!(d >= base, "{d:?} is shorter than {base:?}");
+        assert!(
+            d < base + Duration::from_millis(251),
+            "{d:?} exceeds the spread bound"
+        );
     }
 
     #[tokio::test]
@@ -174,7 +210,10 @@ mod tests {
         .expect("the third attempt succeeds");
         assert_eq!(value, 3);
         assert_eq!(seen, vec![1, 2, 3]);
-        assert_eq!(sleep.waits(), vec![backoff(1), backoff(2)]);
+        let waits = sleep.waits();
+        assert_eq!(waits.len(), 2);
+        assert_backoff(waits[0], 1);
+        assert_backoff(waits[1], 2);
     }
 
     #[tokio::test]
@@ -203,15 +242,11 @@ mod tests {
         .await
         .expect_err("all attempts fail");
         assert_eq!(calls, 5);
-        assert_eq!(
-            sleep.waits().len(),
-            4,
-            "the final attempt must not pay for a wait"
-        );
-        assert_eq!(
-            sleep.waits(),
-            vec![backoff(1), backoff(2), backoff(3), backoff(4)]
-        );
+        let waits = sleep.waits();
+        assert_eq!(waits.len(), 4, "the final attempt must not pay for a wait");
+        for (wait, attempt) in waits.iter().zip(1..) {
+            assert_backoff(*wait, attempt);
+        }
         let chain = format!("{err:#}");
         assert!(chain.contains("after 5 attempts"), "{chain}");
         assert!(chain.contains("attempt 5"), "{chain}");
@@ -245,9 +280,48 @@ mod tests {
     #[test]
     fn backoff_is_linear_with_a_bounded_spread() {
         for n in 1..=5 {
-            let d = backoff(n);
-            assert!(d >= Duration::from_secs(u64::from(n)));
-            assert!(d < Duration::from_secs(u64::from(n)) + Duration::from_millis(251));
+            for salt in [0, 1, 7, u64::MAX] {
+                assert_backoff(backoff(n, salt), n);
+            }
         }
+    }
+
+    #[tokio::test]
+    async fn concurrent_retries_at_the_same_attempt_get_distinct_delays() {
+        const CALLERS: usize = 8;
+        let sleep = RecordingSleep::default();
+        let mut callers = Vec::with_capacity(CALLERS);
+        for _ in 0..CALLERS {
+            let sleep = sleep.clone();
+            callers.push(tokio::spawn(async move {
+                retry(2, &sleep, |n| async move {
+                    if n == 1 {
+                        Retry::Retry(anyhow::anyhow!("again"))
+                    } else {
+                        Retry::Done(())
+                    }
+                })
+                .await
+                .expect("the second attempt succeeds");
+            }));
+        }
+        for caller in callers {
+            caller.await.expect("the retry task runs");
+        }
+
+        let waits = sleep.waits();
+        assert_eq!(waits.len(), CALLERS);
+        let mut spreads: Vec<Duration> = waits
+            .into_iter()
+            .map(|wait| wait - Duration::from_secs(1))
+            .collect();
+        let count = spreads.len();
+        spreads.sort_unstable();
+        spreads.dedup();
+        assert_eq!(
+            spreads.len(),
+            count,
+            "concurrent retries at the same attempt shared a delay"
+        );
     }
 }
