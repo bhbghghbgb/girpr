@@ -8,6 +8,9 @@ description = "The log-file and log-level policy every project in the girpr work
 name = "girpr_log"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 # Only for the timestamp in a default log file name.
 chrono = { version = "0.4", features = ["clock"] }

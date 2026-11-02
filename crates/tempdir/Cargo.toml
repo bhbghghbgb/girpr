@@ -8,4 +8,7 @@ description = "The scratch-directory policy every project in the girpr workspace
 name = "girpr_tempdir"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]

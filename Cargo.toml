@@ -14,6 +14,24 @@ members = [".", "crates/log", "crates/tempdir", "tools/sync", "tools/capture"]
 # The tools stay members, so they share the lockfile and build on request.
 default-members = ["."]
 
+# The shared policy for packages that opt in with `[lints] workspace = true`.
+# Deliberately small: a lint joins this table only when a real class of bug
+# motivates it. Warnings stay warnings; CI decides whether to deny them.
+[workspace.lints.rust]
+# The product has no `unsafe`; the allocator instrument in `tests/peak_heap.rs`
+# is the one deliberate exception and says so itself.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+# A panic in the repair path is a failed run, not a diagnostic. Existing
+# `expect`s carry a message; the warning keeps new ones deliberate.
+unwrap_used = "warn"
+expect_used = "warn"
+
+[lints]
+workspace = true
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
