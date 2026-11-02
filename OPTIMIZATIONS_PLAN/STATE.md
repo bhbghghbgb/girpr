@@ -57,7 +57,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T43 | B7 - evaluate the md-5 upgrade (conditional) | completed | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
 | T44 | T1 - regression tests for the fixed failure paths | completed | 9894d6e | RC-17 |
 | T45 | T2 - log phase and per-file durations | completed | b4b0d84, 1d95c1a, 7c54827 | RC-17 |
-| T46 | T4 - pin the output-contract ordering | in_progress | | RC-18 |
+| T46 | T4 - pin the output-contract ordering | pending_review | 1bb253d, b58c967 | RC-18 |
 | T47 | T3 - split the large integration test | todo | | RC-18 |
 
 ## Review batches
