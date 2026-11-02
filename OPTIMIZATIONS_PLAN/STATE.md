@@ -41,7 +41,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T27 | D1 - per-file facts live on the file | completed | 3576cf4, 07c556d, 52158e8, 1449a7f | RC-10 |
 | T28 | D3 - one atomic-write helper | completed | 0ba2419, 29396b3, 1f2707b | RC-11 |
 | T29 | D2 - one retry/backoff scaffold | completed | fea2efe, c665a40, 526f78c, 01776f9, a41eda4 | RC-11 |
-| T30 | D4 - one rel-path spelling helper | todo | | RC-12 |
+| T30 | D4 - one rel-path spelling helper | in_progress | | RC-12 |
 | T31 | D5 - one per-range to per-chunk remap | todo | | RC-12 |
 | T32 | D7 - reconcile documentation with the code | todo | | RC-13 |
 | T33 | D6 - remove test-only production API | todo | | RC-13 |
