@@ -252,3 +252,47 @@ impl RunCtx {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{RunExit, RunFailure};
+
+    /// The numbers are the automation contract, so pin both the named variant
+    /// and the integer it converts to.
+    #[test]
+    fn every_named_code_keeps_its_documented_number() {
+        let cases = [
+            (RunExit::Success, 0),
+            (RunExit::Usage, 1),
+            (RunExit::Metadata, 2),
+            (RunExit::Write, 3),
+            (RunExit::CheckFailed, 4),
+            (RunExit::Limit, 5),
+        ];
+        for (code, number) in cases {
+            assert_eq!(code.code(), number, "{code:?}");
+        }
+    }
+
+    #[test]
+    fn every_failure_constructor_carries_its_documented_code() {
+        let cases = [
+            (
+                RunFailure::usage(anyhow::anyhow!("bad request")),
+                RunExit::Usage,
+            ),
+            (
+                RunFailure::metadata(anyhow::anyhow!("bad metadata")),
+                RunExit::Metadata,
+            ),
+            (
+                RunFailure::write(anyhow::anyhow!("bad write")),
+                RunExit::Write,
+            ),
+        ];
+        for (failure, expected) in cases {
+            assert_eq!(failure.exit_code, expected);
+            assert_eq!(RunExit::from(failure), expected);
+        }
+    }
+}

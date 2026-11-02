@@ -1008,7 +1008,7 @@ async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Summary, note_stopped};
+    use super::{RunExit, Summary, finish, note_stopped, phases};
 
     /// `SUMMARY`'s `stopped=` names the **first** ceiling to bind: a later
     /// phase that also hits one must not rewrite the answer.
@@ -1018,5 +1018,19 @@ mod tests {
         note_stopped(&mut summary, "--max-write-bytes");
         note_stopped(&mut summary, "--max-delete-bytes");
         assert_eq!(summary.flags.stopped, Some("--max-write-bytes"));
+    }
+
+    /// A clean post-phase is success; only a delete ceiling is a limit.
+    #[test]
+    fn the_post_outcomes_keep_their_documented_codes() {
+        let cases = [
+            (phases::post::PostOutcome::Ok, RunExit::Success),
+            (phases::post::PostOutcome::DeletedNothing, RunExit::Success),
+            (phases::post::PostOutcome::DeleteCeiling, RunExit::Limit),
+        ];
+        for (outcome, expected) in cases {
+            let mut summary = Summary::new();
+            assert_eq!(finish(outcome, &mut summary), expected);
+        }
     }
 }
