@@ -636,4 +636,29 @@ mod tests {
         };
         assert_eq!(v.damaged_chunks(), 2);
     }
+
+    #[test]
+    fn the_report_returns_verdicts_by_file_id() {
+        let report = ScanReport {
+            files: vec![
+                None,
+                Some(Verdict {
+                    file_md5: "present".into(),
+                    dest_ok: vec![],
+                    source_ok: vec![],
+                    file_len: 0,
+                    modified: None,
+                }),
+            ],
+            bytes: 0,
+            damaged_chunks: 0,
+        };
+
+        assert!(report.get(FileId::new(0)).is_none());
+        assert_eq!(report.get(FileId::new(1)).unwrap().file_md5, "present");
+        assert!(
+            report.get(FileId::new(2)).is_none(),
+            "an id outside the report is not a verdict"
+        );
+    }
 }

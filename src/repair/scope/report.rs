@@ -572,6 +572,27 @@ mod tests {
         assert_eq!(disk.est_extra_bytes, 128 * 4);
     }
 
+    /// A path that cannot be resolved keeps its place in the per-file table:
+    /// dropping it would shift every later file onto the wrong id.
+    #[test]
+    fn the_disk_plan_keeps_its_place_when_a_path_cannot_be_resolved() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "aligned");
+        let mut plan = plan();
+        plan.files.truncate(2);
+        plan.files[1].rel = "../escape.dat".into();
+
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 1);
+        assert_eq!(disk.for_id(FileId::new(0)).mode, "temp");
+        assert_eq!(
+            disk.for_id(FileId::new(1)),
+            FileDisk {
+                mode: "inplace",
+                extra_bytes: 0,
+            },
+            "the unresolved file still occupies its own slot"
+        );
+    }
+
     /// E-2: `discard` deletes the target before writing, so it never needs a
     /// second copy (that is `temp`'s cost). For a target that is already the
     /// right size, the extra disk is 0; a truncated target still has to grow by

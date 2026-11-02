@@ -654,6 +654,28 @@ mod tests {
     }
 
     #[test]
+    fn file_ids_follow_the_sorted_plan_order() {
+        let per = vec![(
+            "http://x".to_string(),
+            vec![
+                manifest_file("b.dat", 2, vec![]),
+                manifest_file("a.dat", 1, vec![]),
+            ],
+        )];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+
+        assert_eq!(plan.len(), 2);
+        assert!(!plan.is_empty());
+        let order: Vec<(usize, &str)> = plan
+            .iter()
+            .map(|(id, f)| (id.index(), f.rel.as_str()))
+            .collect();
+        assert_eq!(order, vec![(0, "a.dat"), (1, "b.dat")]);
+        assert_eq!(plan.file(FileId::new(1)).unwrap().rel, "b.dat");
+        assert!(plan.file(FileId::new(2)).is_none());
+    }
+
+    #[test]
     fn plan_dedups_across_manifests_and_drops_folders() {
         let dup = SophonChunkFile {
             file: "a\\b.dat".into(),
