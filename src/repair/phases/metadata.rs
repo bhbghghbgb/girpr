@@ -131,6 +131,12 @@ impl ReadClass {
     }
 }
 
+/// Await a blocking read whose value is no longer needed, so an early return
+/// does not detach it from the run.
+async fn drain<T>(read: tokio::task::JoinHandle<T>) {
+    let _ = read.await;
+}
+
 /// Normalise one server/config directory spelling to the `/` form every gate
 /// and sink shares, and validate its containment at the boundary.
 ///
@@ -179,9 +185,16 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // `try_join!`, so the error chosen below depends on the inputs rather than
     // on which future happened to be polled first.
     let (config_result, branch_result) = tokio::join!(hyp.game_config(), hyp.game_branch());
-    let mut config = config_result
+    let mut config = match config_result
         .context("getGameConfigs")
-        .map_err(RunFailure::metadata)?;
+        .map_err(RunFailure::metadata)
+    {
+        Ok(config) => config,
+        Err(failure) => {
+            drain(version_read).await;
+            return Err(failure);
+        }
+    };
     let local_version = match version_read.await {
         Ok(inner) => inner?,
         Err(e) => return Err(LocalRead::Version.join_failure(e)),
@@ -291,9 +304,18 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     };
     let (latest_result, local_result) =
         tokio::join!(hyp.chunk_build(&branch, None), local_build_fut);
-    let latest_build = latest_result
+    let latest_build = match latest_result
         .context("getBuild(latest)")
-        .map_err(RunFailure::metadata)?;
+        .map_err(RunFailure::metadata)
+    {
+        Ok(build) => build,
+        Err(failure) => {
+            drain(ignore_read).await;
+            drain(blacklist_read).await;
+            drain(audio_read).await;
+            return Err(failure);
+        }
+    };
     let local_build = match (local_version.as_deref(), local_result) {
         (Some(lv), Some(Ok(b))) => {
             tracing::info!("local build manifest loaded for dedup (tag={lv})");
@@ -306,15 +328,20 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         _ => None,
     };
 
-    let ignore = match ignore_read.await {
+    // Await every read before classifying, so one failing read does not leave
+    // its siblings detached. The order below keeps the existing precedence.
+    let ignore_result = ignore_read.await;
+    let blacklist_result = blacklist_read.await;
+    let audio_result = audio_read.await;
+    let ignore = match ignore_result {
         Ok(inner) => inner?,
         Err(e) => return Err(LocalRead::Ignore.join_failure(e)),
     };
-    let blacklist = match blacklist_read.await {
+    let blacklist = match blacklist_result {
         Ok(inner) => inner?,
         Err(e) => return Err(LocalRead::Blacklist.join_failure(e)),
     };
-    let audio = match audio_read.await {
+    let audio = match audio_result {
         Ok(inner) => inner?,
         Err(e) => return Err(LocalRead::Audio.join_failure(e)),
     };
@@ -360,6 +387,8 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     /// Each local read keeps the documented exit class, and the join-failure
     /// constructor follows it.
@@ -405,5 +434,21 @@ mod tests {
             assert_eq!(failure.exit_code, exit, "{read:?}");
             assert!(format!("{failure:#}").contains("boom"), "{read:?}");
         }
+    }
+
+    /// Draining a read waits for it rather than detaching it.
+    #[tokio::test]
+    async fn drain_waits_for_the_read_to_finish() {
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = done.clone();
+        let read = tokio::task::spawn(async move {
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        drain(read).await;
+        assert!(
+            done.load(Ordering::SeqCst),
+            "drain returns only after the read has completed"
+        );
     }
 }
