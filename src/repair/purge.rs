@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 
 use crate::repair::phases::plan::RepairPlan;
 use crate::repair::scope::PathScope;
-use crate::util::path::path_key;
+use crate::util::path::{path_key, rel_from_base};
 
 /// One file the files-cleanup has decided to delete.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,7 +175,9 @@ pub fn plan_purge(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> Purge
             // sweep must not take it: without this, an empty directory has no
             // kept file to mark its ancestors (`mark_kept_ancestors` walks up
             // from *files*) and the sweep would delete an out-of-scope path.
-            let rel = rel_path(path, game_dir);
+            let Some(rel) = rel_from_base(path, game_dir) else {
+                continue;
+            };
             if !scope.is_visible(&rel) {
                 hidden += 1;
                 continue;
@@ -187,7 +189,9 @@ pub fn plan_purge(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> Purge
             continue;
         }
         let path = e.path();
-        let rel = rel_path(path, game_dir);
+        let Some(rel) = rel_from_base(path, game_dir) else {
+            continue;
+        };
         // Match the scope once and hand the answer to the classifier: rule 0
         // needs exactly this value, and the `hidden` count needs it too.
         let visible = scope.is_visible(&rel);
@@ -337,14 +341,6 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
             );
         }
     }
-}
-
-/// `/`-separated rel path of `p` under `game_dir`.
-fn rel_path(p: &Path, game_dir: &Path) -> String {
-    p.strip_prefix(game_dir)
-        .unwrap_or(p)
-        .to_string_lossy()
-        .replace('\\', "/")
 }
 
 /// Metadata files the files-cleanup must keep.

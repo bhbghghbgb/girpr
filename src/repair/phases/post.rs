@@ -26,6 +26,7 @@ use walkdir::WalkDir;
 use crate::config::{RunCtx, RunFailure};
 use crate::report::Summary;
 use crate::util;
+use crate::util::path::join_rel;
 
 use super::metadata::Meta;
 use crate::repair::purge;
@@ -489,16 +490,6 @@ fn move_audio_cache(
     // for a run that moved nothing.
     if moved + kept > 0 {
         tracing::info!(moved, kept, "audio cache -> res");
-    }
-}
-
-/// Join two rel path fragments into the `/`-separated form the scope matches on.
-fn join_rel(dir_rel: &str, name: &std::path::Path) -> String {
-    let name = name.to_string_lossy().replace('\\', "/");
-    if dir_rel.is_empty() {
-        name
-    } else {
-        format!("{dir_rel}/{name}")
     }
 }
 
