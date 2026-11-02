@@ -15,7 +15,9 @@
 //! once would trade latency for peak memory. The bound is a small dedicated
 //! cap, not the file-worker count. Results are put back in selection order as
 //! they arrive, so the plan's per-manifest order and the error `fetch_latest`
-//! reports do not depend on completion order.
+//! reports do not depend on completion order. Once the first failure in
+//! selection order is settled, the remaining fetches are dropped instead of
+//! waited out.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -158,6 +160,11 @@ impl<'a> ManifestFetches<'a> {
 
     /// The next manifest in selection order with its result, waiting only for
     /// that selection's fetch.
+    ///
+    /// An error result is returned as soon as every earlier selection has
+    /// succeeded, which is the first failure in selection order. A caller that
+    /// then stops iterating drops the fan-out, cancelling the fetches that
+    /// have not finished instead of waiting out a slow sibling.
     #[allow(clippy::expect_used)] // every selected manifest is fetched once
     async fn next_ordered(&mut self) -> Option<(&'a ChunkManifestMeta, ManifestResult)> {
         while self.ordered.has_next() {
@@ -182,7 +189,9 @@ impl<'a> ManifestFetches<'a> {
 /// The output is in selection order. A failure is reported for the **first**
 /// manifest in selection order that failed, not the first to finish: the
 /// message is about what is wrong with the build, and completion order is an
-/// accident of the network.
+/// accident of the network. Once that failure is settled — every earlier
+/// selection has succeeded — the remaining fetches are cancelled rather than
+/// awaited.
 pub async fn fetch_latest(
     http: &Client,
     sleep: &dyn Sleep,
@@ -201,11 +210,10 @@ pub async fn fetch_latest(
         BuildKind::Latest,
     );
     let mut per_manifest: Vec<(String, Vec<SophonChunkFile>)> = Vec::new();
-    let mut fetched = Vec::new();
+    // The loop visits selections left to right, so the first error it meets is
+    // the first failure in selection order. Returning here drops `fetches` and
+    // with it every fetch still in flight.
     while let Some((m, files)) = fetches.next_ordered().await {
-        fetched.push((m, files));
-    }
-    for (m, files) in fetched {
         let files = files
             .with_context(|| format!("manifest {}", m.matching_field))
             .map_err(RunFailure::metadata)?;
@@ -342,6 +350,9 @@ mod tests {
     enum Reply {
         Body(Vec<u8>),
         Status(&'static str),
+        /// Read the request and keep the socket open without answering, so an
+        /// uncancelled fetch would wait forever.
+        Never,
     }
 
     /// Serve `id -> reply` on an ephemeral loopback port.
@@ -380,6 +391,10 @@ mod tests {
                     let (status, body) = match routes.iter().find(|(rid, _)| *rid == id) {
                         Some((_, Reply::Body(body))) => ("200 OK", body.clone()),
                         Some((_, Reply::Status(status))) => (*status, Vec::new()),
+                        Some((_, Reply::Never)) => {
+                            std::future::pending::<()>().await;
+                            unreachable!("a never-answering route holds the socket open")
+                        }
                         None => ("404 Not Found", Vec::new()),
                     };
                     let head = format!(
@@ -434,6 +449,41 @@ mod tests {
         );
         assert_eq!(ordered.take_next(), Some((2, Ok("third"))));
         assert!(!ordered.has_next());
+    }
+
+    /// The first manifest fails at once while a later one never answers. The
+    /// error is returned without waiting for the sibling: once the failure is
+    /// settled in selection order the rest of the fan-out is cancelled. The
+    /// timeout is a guard against the test hanging, not a performance bound.
+    #[tokio::test]
+    async fn fetch_latest_cancels_fetches_after_the_first_failure_settles() {
+        let base = serve(vec![
+            ("down", Reply::Status("404 Not Found")),
+            ("hang", Reply::Never),
+        ])
+        .await;
+        let build = build(
+            &base,
+            vec![meta("game", "down", ""), meta("extra", "hang", "")],
+        );
+        let client = Client::new();
+        let failure = tokio::time::timeout(
+            Duration::from_secs(5),
+            fetch_latest(
+                &client,
+                &NoSleep,
+                &build,
+                &HashSet::new(),
+                &HashSet::new(),
+                4,
+            ),
+        )
+        .await
+        .expect("the error does not wait for the hanging manifest")
+        .expect_err("the game manifest is down");
+        let message = failure.to_string();
+        assert!(message.contains("manifest game"), "{message}");
+        assert!(!message.contains("manifest extra"), "{message}");
     }
 
     /// The first manifest fails slowly (a retryable 500) while a later one
