@@ -39,8 +39,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T25 | P13 - fast-path unlimited meters | pending_review | af8e5bf, e799311 | RC-09 |
 | T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | skipped | | RC-09 |
 | T27 | D1 - per-file facts live on the file | completed | 3576cf4, 07c556d, 52158e8, 1449a7f | RC-10 |
-| T28 | D3 - one atomic-write helper | pending_review | 0ba2419, 29396b3, 1f2707b | RC-11 |
-| T29 | D2 - one retry/backoff scaffold | pending_review | fea2efe, c665a40, 526f78c, 01776f9, a41eda4 | RC-11 |
+| T28 | D3 - one atomic-write helper | completed | 0ba2419, 29396b3, 1f2707b | RC-11 |
+| T29 | D2 - one retry/backoff scaffold | completed | fea2efe, c665a40, 526f78c, 01776f9, a41eda4 | RC-11 |
 | T30 | D4 - one rel-path spelling helper | todo | | RC-12 |
 | T31 | D5 - one per-range to per-chunk remap | todo | | RC-12 |
 | T32 | D7 - reconcile documentation with the code | todo | | RC-13 |
@@ -74,7 +74,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-08 | T20-T22 | done | f0fa925 | T20 fixed: docs' deprecated-list dry-run contract |
 | RC-09 | T23-T26 | pending | | |
 | RC-10 | T27 | done | | Completed without fixes |
-| RC-11 | T28-T29 | in_progress | | |
+| RC-11 | T28-T29 | done | | Both completed without fixes |
 | RC-12 | T30-T31 | pending | | |
 | RC-13 | T32-T33 | pending | | |
 | RC-14 | T34 | pending | | |
@@ -158,6 +158,13 @@ until the main tasks and rework are done.
 | F57 | RC-10 review | `src/repair/phases/plan.rs` | `FileId` derived `Debug` prints `FileId(0)` rather than the index as the task asked. | todo |
 | F58 | T27 implementer | `src/repair/phases/plan.rs`, `src/repair/scan.rs` | `RepairPlan::files` and `ScanReport::files` stay public, so callers can bypass the id accessors. | todo |
 | F59 | T27 implementer | `src/repair/scope/report.rs` | `DiskPlan::for_id` returns a default for an out-of-range id; `PlanDocument` uses raw indices. | todo |
+| F60 | RC-11 review | `src/util/atomic.rs` | Module docs link a `pub(crate)` `temp_sibling`, which may warn under `cargo doc`. | todo |
+| F61 | RC-11 review | `src/util/ini.rs` | `write_config_ini` now creates a missing game directory through the helper where it previously failed. | todo |
+| F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | todo |
+| F63 | RC-11 review | `src/repair/file/mod.rs` | A comment still budgets 5 × (15 s + 10 s); with the final sleep removed it is ~100 s. | todo |
+| F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | todo |
+| F65 | T28 implementer | `src/util/ini.rs` tests | No config-specific "no temp left" assertion after the helper extraction. | todo |
+| F66 | T28 implementer | `src/util/atomic.rs` | Error context is artifact-neutral; artifact-specific labels would need a parameter. | todo |
 
 ## Follow-up batches
 
