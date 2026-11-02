@@ -166,30 +166,9 @@ pub fn write_scan_file(game_dir: &Path, scan_dir: &str, langs: &HashSet<String>)
         .map(|(_, name)| *name)
         .collect();
     let p = crate::util::contained_join(game_dir, scan_dir)?;
-    if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create audio scan dir {}", parent.display()))?;
-    }
-    let tmp = crate::util::path::temp_sibling(&p);
-    let published = std::fs::write(&tmp, lines.join("\n"))
-        .with_context(|| format!("write audio scan tmp {}", tmp.display()))
-        .and_then(|()| {
-            std::fs::rename(&tmp, &p)
-                .with_context(|| format!("publish audio scan file {}", p.display()))
-        });
-    if let Err(e) = published {
-        if let Err(cleanup) = std::fs::remove_file(&tmp)
-            && cleanup.kind() != std::io::ErrorKind::NotFound
-        {
-            tracing::warn!(
-                path = %tmp.display(),
-                error = %cleanup,
-                "could not remove the audio scan temp file"
-            );
-        }
-        return Err(e);
-    }
-    Ok(())
+    // A partial file reads as an empty selection, so publish only the whole
+    // list; the scan file is advisory, so it does not need a durable sync.
+    crate::util::atomic::write_atomic(&p, lines.join("\n").as_bytes(), false)
 }
 
 #[cfg(test)]

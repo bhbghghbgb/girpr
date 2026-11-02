@@ -19,7 +19,6 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::Context;
@@ -351,43 +350,15 @@ impl<'a> PlanDocument<'a> {
 
     /// Render to the file named by `--plan-out`.
     ///
-    /// The document is serialized straight into a temp file beside the target
-    /// and then renamed, so a full disk or a crash cannot leave a truncated
-    /// plan where the caller asked for a parseable one.
+    /// The document is serialized into a temp file beside the target and then
+    /// renamed, so a full disk or a crash cannot leave a truncated plan where
+    /// the caller asked for a parseable one. The plan is an advisory artifact,
+    /// so it is published without a durable sync.
     pub fn write_to(&self, path: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create dir {}", parent.display()))?;
-        }
-        // Appended to the whole name, not `with_extension`: `plan.v1.json`
-        // becomes `plan.v1.json.girpr_tmp`, which stays beside the target.
-        let tmp = util::path::temp_sibling(path);
-        let published = (|| -> anyhow::Result<()> {
-            let file = std::fs::File::create(&tmp)
-                .with_context(|| format!("create plan tmp {}", tmp.display()))?;
-            let mut writer = std::io::BufWriter::new(file);
-            serde_json::to_writer_pretty(&mut writer, self).context("serialize plan")?;
-            writer.write_all(b"\n").context("serialize plan")?;
-            writer
-                .flush()
-                .with_context(|| format!("flush plan tmp {}", tmp.display()))?;
-            // Close before publishing; a reader must see the whole file.
-            drop(writer);
-            std::fs::rename(&tmp, path).with_context(|| format!("publish plan {}", path.display()))
-        })();
-        if let Err(e) = published {
-            if let Err(cleanup) = std::fs::remove_file(&tmp)
-                && cleanup.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(
-                    path = %tmp.display(),
-                    error = %cleanup,
-                    "could not remove the plan temp file"
-                );
-            }
-            return Err(e);
-        }
-        Ok(())
+        util::atomic::write_atomic_with(path, false, |writer| {
+            serde_json::to_writer_pretty(&mut *writer, self).context("serialize plan")?;
+            writer.write_all(b"\n").context("serialize plan")
+        })
     }
 }
 
@@ -828,7 +799,7 @@ mod tests {
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
         let err = doc.write_to(&path).unwrap_err();
-        assert!(format!("{err:#}").contains("publish plan"), "{err:#}");
+        assert!(format!("{err:#}").contains("publish"), "{err:#}");
         assert!(
             !dir.join("plan.json.girpr_tmp").exists(),
             "a failed write must not leave the temp behind"

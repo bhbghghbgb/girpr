@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
-use super::path::{clean_rel, temp_sibling};
+use super::atomic::write_atomic;
+use super::path::clean_rel;
 
 /// Parse `config.ini` last `game_version=` match.
 /// NOTE(starward-parity): last-match-wins mirrors `GetLocalGameVersionAsync`
@@ -406,33 +405,9 @@ pub fn write_config_ini(
         tracing::info!("would write config.ini game_version={}", latest);
         return Ok(());
     }
-    let tmp = temp_sibling(&path);
-    let write = (|| -> Result<()> {
-        let mut f = File::create(&tmp)?;
-        f.write_all(out.as_bytes())?;
-        if !test_no_fsync() {
-            // `write_all` only reaches the page cache. Publishing the rename
-            // over a config whose version bump is not durable is exactly the
-            // failure this sync exists to prevent, so its error is fatal.
-            f.sync_all()
-                .with_context(|| format!("sync {}", tmp.display()))?;
-        }
-        Ok(())
-    })();
-    if let Err(e) = write {
-        match std::fs::remove_file(&tmp) {
-            Ok(()) => {}
-            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
-            Err(cleanup) => tracing::debug!(
-                path = %tmp.display(),
-                error = %cleanup,
-                "could not remove the config.ini temp after a failed write"
-            ),
-        }
-        return Err(e);
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    // The version bump must survive a power loss, so the temp is synced before
+    // the rename; the test hook skips only that sync, never the write or rename.
+    write_atomic(&path, out.as_bytes(), !test_no_fsync())
 }
 
 #[cfg(test)]

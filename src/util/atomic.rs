@@ -48,7 +48,7 @@ pub(crate) fn write_atomic_with(
     durable: bool,
     write: impl FnOnce(&mut dyn Write) -> Result<()>,
 ) -> Result<()> {
-    publish(path, durable, File::create, write)
+    publish(path, durable, |p| File::create(p), write)
 }
 
 /// The extra operation publishing needs from the temp file handle.
