@@ -73,7 +73,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-07 | T17-T19 | done | | All three completed without fixes |
 | RC-08 | T20-T22 | done | f0fa925 | T20 fixed: docs' deprecated-list dry-run contract |
 | RC-09 | T23-T26 | pending | | |
-| RC-10 | T27 | pending | | |
+| RC-10 | T27 | in_progress | | |
 | RC-11 | T28-T29 | pending | | |
 | RC-12 | T30-T31 | pending | | |
 | RC-13 | T32-T33 | pending | | |
