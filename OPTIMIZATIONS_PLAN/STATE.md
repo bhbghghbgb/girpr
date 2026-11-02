@@ -160,7 +160,7 @@ until the main tasks and rework are done.
 | F59 | T27 implementer | `src/repair/scope/report.rs` | `DiskPlan::for_id` returns a default for an out-of-range id; `PlanDocument` uses raw indices. | todo |
 | F60 | RC-11 review | `src/util/atomic.rs` | Module docs link a `pub(crate)` `temp_sibling`, which may warn under `cargo doc`. | todo |
 | F61 | RC-11 review | `src/util/ini.rs` | `write_config_ini` now creates a missing game directory through the helper where it previously failed. | todo |
-| F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | todo |
+| F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | completed |
 | F63 | RC-11 review | `src/repair/file/mod.rs` | A comment still budgets 5 × (15 s + 10 s); with the final sleep removed it is ~100 s. | todo |
 | F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | completed |
 | F65 | T28 implementer | `src/util/ini.rs` tests | No config-specific "no temp left" assertion after the helper extraction. | todo |
@@ -179,7 +179,7 @@ until the main tasks and rework are done.
 | F78 | RC-14 review | `src/repair/mod.rs`, `src/repair/file/inplace.rs` | Four new `too_many_arguments` allows are parameter bags for T35 to absorb. | dropped (superseded by F82 (current five-site inventory)) |
 | F79 | RC-14 review | `src/repair/file/inplace.rs`, `src/repair/mod.rs` | Trim/tier decisions and plan-step guards have only end-to-end coverage. | todo |
 | F80 | T34 implementer | `src/repair/mod.rs` | `build_and_assert_plan` is still ~150 lines and could split further. | todo |
-| F81 | T34 implementer | `src/retry.rs` | Clippy `enum_variant_names` warning predates the work and is still present. | todo |
+| F81 | T34 implementer | `src/retry.rs` | Clippy `enum_variant_names` warning predates the work and is still present. | completed |
 | F82 | RC-15 review | `src/repair/mod.rs`, `src/repair/file/mod.rs`, `src/repair/file/inplace.rs` | Five `too_many_arguments` allows remain outside T35's four sites. | todo |
 | F83 | RC-15 review | `src/report/emit.rs` | `ReportProvenance` exposes every field publicly; a constructor or narrower visibility would harden it. | todo |
 | F84 | T35 implementer | `src/sophon/stream.rs` | The streaming path joins the URL per attempt; carrying the joined URL would avoid the allocation. | dropped (negligible allocation on a network-bound path) |
@@ -227,6 +227,8 @@ until the main tasks and rework are done.
 | F126 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test's failure on the old shape is probabilistic; a test-only pause seam would make it deterministic. | todo |
 | F127 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test spawns ~16k threads (1-3 s); trim rounds if CI time matters. | todo |
 | F128 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The unlimited charge/settle hot path is now a CAS loop; revisit only if profiling shows counter contention (e.g. sharding). | dropped (no profile shows counter contention; speculative) |
+| F129 | RETRY-01 review | `src/retry.rs` | The jitter doc's "distinct by construction" holds only until the salt times the multiplier wraps (~6.9e9), not merely the counter. | todo |
+| F130 | RETRY-01 review | `src/retry.rs` | No explicit test that `jitter` is injective over a fixed attempt's caller range; the invariant is implicit. | todo |
 
 ## Follow-up batches
 
@@ -237,7 +239,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-01 | F01, F07, F64 | done | Wave A; hyp number parsing and retry seams; medium; 87db654, 3337ea1, eaf0b2c |
 | PATHKEY-01 | F03, F04 | done | Wave A; path-key folding outside the lock; medium; 2956bec, 0708ab5 |
 | LEDGER-01 | F08, F101 | done | Wave A; meter saturation on add and release; medium; 42eea14, 0a2c5f5 |
-| RETRY-01 | F62, F81 | pending_review | Wave A; retry jitter spread and clippy variant names; low; 24c2a99, f4589fb |
+| RETRY-01 | F62, F81 | done | Wave A; retry jitter spread and clippy variant names; low; 24c2a99, f4589fb, ef9daf3 |
 | METADATA-01 | F13, F14, F17 | todo | Wave A; metadata join cancellation and error mapping; medium |
 | MANIFEST-01 | F15, F16 | todo | Wave A; manifest fetch reindex dedup and cancellation; medium |
 | JOBS-01 | F22, F40, F44 | todo | Wave A; `--jobs`/`--io-threads` validation and warnings; medium |
@@ -263,10 +265,10 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MD5-TYPE-01 | F24 | todo | Wave D, after PLANID-01; carry `Md5` through scan results; medium |
 | PATHHELPERS-01 | F67, F68, F69, F71 | todo | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low |
 | REFACTOR-01 | F80, F82 | todo | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium |
-| TEST-REGRESSION-01 | F32, F112, F113, F126, F127 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low |
+| TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low |
 | TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
-| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
+| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | SYNC-01 | F123, F125 | todo | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
