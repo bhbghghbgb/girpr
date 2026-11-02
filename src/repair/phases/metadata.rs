@@ -14,7 +14,10 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tokio::task::JoinError;
 
+#[cfg(test)]
+use crate::config::RunExit;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient, production_bases};
 use crate::util;
@@ -56,6 +59,75 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
         (Some(h), None) => HypClient::new_with_bases(ctx.biz, h, default_sophon, sleep.clone()),
         (None, Some(s)) => HypClient::new_with_bases(ctx.biz, default_hyp, s, sleep.clone()),
         (None, None) => HypClient::new_with_bases(ctx.biz, default_hyp, default_sophon, sleep),
+    }
+}
+
+/// The blocking local reads and the exit class each one's join failure takes.
+///
+/// The classification lives in one place rather than at each `await`: the
+/// version and audio reads are user-facing setup (exit 1), while the ignore and
+/// blacklist lists are inputs to the repair metadata (exit 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalRead {
+    Version,
+    Ignore,
+    Blacklist,
+    Audio,
+}
+
+impl LocalRead {
+    /// Every read, in the order the normal path reports a failure.
+    #[cfg(test)]
+    const ALL: [Self; 4] = [Self::Version, Self::Ignore, Self::Blacklist, Self::Audio];
+
+    /// The label the join failure and the task's own context share.
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Version => "read local game version",
+            Self::Ignore => "read res_category ignore list",
+            Self::Blacklist => "read blacklist",
+            Self::Audio => "resolve audio selection",
+        }
+    }
+
+    /// The documented exit class for this read's failure.
+    const fn class(self) -> ReadClass {
+        match self {
+            Self::Version | Self::Audio => ReadClass::Usage,
+            Self::Ignore | Self::Blacklist => ReadClass::Metadata,
+        }
+    }
+
+    /// The join failure for this read, with the read's label as context.
+    fn join_failure(self, error: JoinError) -> RunFailure {
+        self.class()
+            .failure(anyhow::anyhow!("{}: {error}", self.label()))
+    }
+}
+
+/// The two exit classes a local read can carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReadClass {
+    Usage,
+    Metadata,
+}
+
+impl ReadClass {
+    /// The `RunFailure` constructor for this class.
+    fn failure(self, source: anyhow::Error) -> RunFailure {
+        match self {
+            Self::Usage => RunFailure::usage(source),
+            Self::Metadata => RunFailure::metadata(source),
+        }
+    }
+
+    /// The exit code this class resolves to, for the classification test.
+    #[cfg(test)]
+    const fn exit(self) -> RunExit {
+        match self {
+            Self::Usage => RunExit::Usage,
+            Self::Metadata => RunExit::Metadata,
+        }
     }
 }
 
@@ -110,9 +182,10 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let mut config = config_result
         .context("getGameConfigs")
         .map_err(RunFailure::metadata)?;
-    let local_version = version_read
-        .await
-        .map_err(|e| RunFailure::usage(anyhow::anyhow!("read local game version: {e}")))??;
+    let local_version = match version_read.await {
+        Ok(inner) => inner?,
+        Err(e) => return Err(LocalRead::Version.join_failure(e)),
+    };
     tracing::info!("local game_version: {local_version:?}");
 
     // Chunk repair is the only mode this tool implements; FILE and LDIFF modes
@@ -233,15 +306,18 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         _ => None,
     };
 
-    let ignore = ignore_read.await.map_err(|e| {
-        RunFailure::metadata(anyhow::anyhow!("read res_category ignore list: {e}"))
-    })??;
-    let blacklist = blacklist_read
-        .await
-        .map_err(|e| RunFailure::metadata(anyhow::anyhow!("read blacklist: {e}")))??;
-    let audio = audio_read
-        .await
-        .map_err(|e| RunFailure::usage(anyhow::anyhow!("resolve audio selection: {e}")))??;
+    let ignore = match ignore_read.await {
+        Ok(inner) => inner?,
+        Err(e) => return Err(LocalRead::Ignore.join_failure(e)),
+    };
+    let blacklist = match blacklist_read.await {
+        Ok(inner) => inner?,
+        Err(e) => return Err(LocalRead::Blacklist.join_failure(e)),
+    };
+    let audio = match audio_read.await {
+        Ok(inner) => inner?,
+        Err(e) => return Err(LocalRead::Audio.join_failure(e)),
+    };
     // The write itself is deferred to the execution phase: the repair reads
     // the in-memory `audio` above, never the file.
     //
@@ -279,4 +355,55 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         blacklist,
         audio,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each local read keeps the documented exit class, and the join-failure
+    /// constructor follows it.
+    #[test]
+    fn every_local_read_keeps_its_documented_exit_class() {
+        let table = [
+            (
+                LocalRead::Version,
+                "read local game version",
+                ReadClass::Usage,
+                RunExit::Usage,
+            ),
+            (
+                LocalRead::Ignore,
+                "read res_category ignore list",
+                ReadClass::Metadata,
+                RunExit::Metadata,
+            ),
+            (
+                LocalRead::Blacklist,
+                "read blacklist",
+                ReadClass::Metadata,
+                RunExit::Metadata,
+            ),
+            (
+                LocalRead::Audio,
+                "resolve audio selection",
+                ReadClass::Usage,
+                RunExit::Usage,
+            ),
+        ];
+        assert_eq!(
+            LocalRead::ALL.len(),
+            table.len(),
+            "the table covers every local read"
+        );
+        for (read, label, class, exit) in table {
+            assert!(LocalRead::ALL.contains(&read), "{read:?} is in ALL");
+            assert_eq!(read.label(), label, "{read:?}");
+            assert_eq!(read.class(), class, "{read:?}");
+            assert_eq!(read.class().exit(), exit, "{read:?}");
+            let failure = read.class().failure(anyhow::anyhow!("boom"));
+            assert_eq!(failure.exit_code, exit, "{read:?}");
+            assert!(format!("{failure:#}").contains("boom"), "{read:?}");
+        }
+    }
 }
