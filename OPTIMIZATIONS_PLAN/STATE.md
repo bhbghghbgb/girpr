@@ -52,7 +52,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T38 | B2 - remove the `regex` dependency | pending_review | 4567a8f, a244131 | RC-16 |
 | T39 | B3 - use `futures-util` directly | pending_review | 4c64d0e | RC-16 |
 | T40 | B4 - build the product by default | pending_review | b4ee7e9, 73370de | RC-16 |
-| T41 | B5 - tune the release profile | in_progress | | RC-16 |
+| T41 | B5 - tune the release profile | pending_review | 53cd8ef | RC-16 |
 | T42 | B6 - add a workspace lint policy | todo | | RC-16 |
 | T43 | B7 - evaluate the md-5 upgrade (conditional) | todo | | RC-16 |
 | T44 | T1 - regression tests for the fixed failure paths | todo | | RC-17 |
