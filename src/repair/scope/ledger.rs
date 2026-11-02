@@ -186,21 +186,18 @@ impl Meter {
             .store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
-    /// Add `n` without wrapping, using a single `fetch_add` when the result
-    /// cannot overflow.
+    /// Add `n` without wrapping, saturating at [`u64::MAX`].
     ///
     /// `AtomicU64::fetch_add` wraps, and a meter that wrapped would read near
     /// `u64::MAX` — switching a ceiling off and corrupting the reported
-    /// figures. The common case is far from that edge, so it loads once and
-    /// takes `fetch_add`; only a value within `n` of the top takes the
-    /// compare-and-swap loop with `saturating_add`.
+    /// figures. A load followed by `fetch_add` is not enough: another thread
+    /// can push the cell past the top between the two, so the decision to add
+    /// has to be the same atomic step that performs it. The compare-and-swap
+    /// loop does that — it retries with whatever the cell holds whenever it
+    /// moved, so every value it commits is `saturating_add` applied to the
+    /// value it replaces, and no interleaving can wrap.
     fn add_saturating(cell: &AtomicU64, n: u64) {
-        let cur = cell.load(Ordering::Relaxed);
-        if cur.checked_add(n).is_some() {
-            cell.fetch_add(n, Ordering::Relaxed);
-            return;
-        }
-        let mut cur = cur;
+        let mut cur = cell.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
             match cell.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -761,6 +758,45 @@ mod tests {
         assert_eq!(m.settled(), u64::MAX);
         assert!(m.settle(1));
         assert_eq!(m.settled(), u64::MAX, "the settle saturates, not wraps");
+    }
+
+    /// A charge within `n` of the top is decided by the same atomic step that
+    /// performs it, so two threads that both see room cannot both take it and
+    /// wrap the counter. A load followed by `fetch_add` loses exactly this
+    /// race: every thread sees `MAX - 1` as room for one more byte.
+    ///
+    /// The window between the load and the add is only a few instructions, so
+    /// one round says little; every round starts a fresh meter at `MAX - 1` and
+    /// releases the threads together, and a wrap in any round leaves the
+    /// counter far below `u64::MAX` for the rest of that round.
+    #[test]
+    fn concurrent_charges_cannot_wrap_a_meter_near_the_top() {
+        use std::sync::Barrier;
+
+        for _ in 0..256 {
+            let s = Arc::new(Summary::default());
+            assert!(s.reserve_download_bytes(u64::MAX - 1));
+            let start = Arc::new(Barrier::new(65));
+            let handles: Vec<_> = (0..64)
+                .map(|_| {
+                    let s = s.clone();
+                    let start = start.clone();
+                    std::thread::spawn(move || {
+                        start.wait();
+                        assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
+                    })
+                })
+                .collect();
+            start.wait();
+            for h in handles {
+                h.join().unwrap();
+            }
+            assert_eq!(
+                s.download.live(),
+                u64::MAX,
+                "charges at the top saturate, never wrap"
+            );
+        }
     }
 
     /// A ceiling installed after construction is still honored: the setter
