@@ -640,8 +640,56 @@ async fn execute_phase(
 
     // === execution phase: everything below may touch the disk ===
 
-    // 5. prepare `game_dir` (create when missing, unless read-only). Deferred
-    // from the top of the run so a refusal above creates nothing.
+    // 5. prepare `game_dir`, then take the single-writer lock.
+    let (game_dir, root) = prepare_install(ctx, game_dir, readonly)?;
+    let _lock = acquire_lock(ctx, &game_dir, readonly)?;
+
+    // 5.1 the explicit `--audio` selection.
+    write_explicit_audio(ctx, &game_dir, &meta, readonly)?;
+
+    // 5.2 files-cleanup before.
+    run_purge_before(ctx, purge_plan.as_ref(), &mut summary)?;
+
+    // 5.5 check-only: verify only, then return. Nothing is written.
+    if ctx.check_only {
+        return Ok(run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await);
+    }
+
+    // 5.6 purge-only: every phase but the repair loop.
+    if ctx.purge_only {
+        return run_purge_only(ctx, &game_dir, purge_keys, &meta, &deprecated, summary).await;
+    }
+
+    // 6. repair files (bounded file parallelism, sequential chunks per file).
+    summary = run_repair(ctx, http, &game_dir, root, &plan, local_map, scan, summary).await;
+    if let Some(code) = apply_run_flags(ctx, &mut summary) {
+        return Ok((summary, code));
+    }
+    if summary.files_failed.load(Ordering::Relaxed) > 0 {
+        return Ok((summary, 3));
+    }
+
+    // 7. post phase, when the run actually mutates the install or lists what a
+    // dry run would mutate.
+    let mutates = !readonly;
+    let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
+    if mutates || lists_dry_run {
+        return run_post(ctx, &game_dir, purge_keys, &meta, &deprecated, summary).await;
+    }
+
+    Ok((summary, 0))
+}
+
+/// Step 5 of the execute half: create `game_dir` when the run may write, then
+/// canonicalize it again and resolve the execute-phase install root.
+///
+/// `create_dir_all` is deferred from the top of the run so a refusal in the
+/// plan half creates nothing.
+fn prepare_install(
+    ctx: &RunCtx,
+    game_dir: PathBuf,
+    readonly: bool,
+) -> Result<(PathBuf, Option<util::PathRoot>), RunFailure> {
     if !readonly {
         std::fs::create_dir_all(&ctx.game_dir)
             .context("create game dir")
@@ -653,87 +701,136 @@ async fn execute_phase(
     // The plan-phase root cached the pre-create form (or a missing tail). The
     // base exists now, so resolve it again for the execute-phase callers.
     let root = util::PathRoot::new(&game_dir).ok();
+    Ok((game_dir, root))
+}
 
-    // The single-writer lock. Two runs against one install can write
-    // conflicting bytes into the same file, so every run that mutates the
-    // install takes the lock. The lock lives outside the install, keyed by
-    // the canonical game dir, so a path scope cannot hide it from one run
-    // while another run mutates the same files.
-    let _lock = if lock::takes_lock(readonly, ctx.check_only, ctx.print_plan) {
-        let lock = lock::Lock::acquire(&game_dir)
-            .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
-        tracing::info!(path = %lock.path().display(), "single-writer lock taken");
-        Some(lock)
-    } else {
-        None
-    };
+/// Take the single-writer lock when this run mutates the install.
+///
+/// Two runs against one install can write conflicting bytes into the same
+/// file, so every run that mutates the install takes the lock. The lock lives
+/// outside the install, keyed by the canonical game dir, so a path scope cannot
+/// hide it from one run while another run mutates the same files.
+fn acquire_lock(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    readonly: bool,
+) -> Result<Option<lock::Lock>, RunFailure> {
+    if !lock::takes_lock(readonly, ctx.check_only, ctx.print_plan) {
+        return Ok(None);
+    }
+    let lock = lock::Lock::acquire(game_dir)
+        .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+    tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+    Ok(Some(lock))
+}
 
-    // 5.1 the explicit `--audio` selection, written now rather than in
-    // `metadata`: the plan half is documented to leave the install untouched,
-    // and this write creates the scan file and its parent. Every refusal is
-    // already behind us, and the repair reads the in-memory `meta.audio`, so
-    // the timing changes nothing else. The path itself was validated
-    // (containment and scope) in `metadata`.
+/// Step 5.1: write the explicit `--audio` selection now rather than in
+/// `metadata`.
+///
+/// The plan half is documented to leave the install untouched, and this write
+/// creates the scan file and its parent. Every refusal is already behind us, and
+/// the repair reads the in-memory `meta.audio`, so the timing changes nothing
+/// else. The path itself was validated (containment and scope) in `metadata`.
+fn write_explicit_audio(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    meta: &Meta,
+    readonly: bool,
+) -> Result<(), RunFailure> {
     if ctx.audio_explicit && !readonly && !meta.config.audio_pkg_scan_dir.is_empty() {
-        audio::write_scan_file(&game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
+        audio::write_scan_file(game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
             .context("write audio scan file")
             .map_err(RunFailure::write)?;
     }
+    Ok(())
+}
 
-    // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
-    // space for the repair itself. Skipped entirely in `--check-only`
-    // (verification reports damage; it must not delete). In `--dry-run` it runs
-    // in log-only mode.
+/// Step 5.2: the up-front files-cleanup.
+///
+/// The plan built in step 4.1 is executed here to free space for the repair
+/// itself. Skipped entirely in `--check-only` (verification reports damage; it
+/// must not delete). In `--dry-run` it runs in log-only mode.
+fn run_purge_before(
+    ctx: &RunCtx,
+    purge_plan: Option<&PurgePlan>,
+    summary: &mut Summary,
+) -> Result<(), RunFailure> {
     if ctx.purge_before
         && !ctx.check_only
-        && let Some(pp) = purge_plan.as_ref()
+        && let Some(pp) = purge_plan
     {
         let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
     }
+    Ok(())
+}
 
-    // 5.5 check-only: verify only, then return. Nothing is written.
-    if ctx.check_only {
-        // The execute-phase root was built after `create_dir_all` and the
-        // second canonicalize above, so it is the current form for these
-        // files; no per-file re-resolution is needed.
-        let summary = Arc::new(summary);
-        let bad = phases::check::verify_plan(
-            &game_dir,
-            root.as_ref(),
-            Arc::clone(&plan),
-            Arc::clone(&summary),
-            ctx.output,
-            scan.clone(),
-            ctx.jobs,
-        )
-        .await;
-        summary.files_failed.store(bad, Ordering::Relaxed);
-        // The phase's ticker is stopped when `verify_plan` returns, but its
-        // aborted task may not have dropped its clone yet; `snapshot` reads the
-        // same counters either way.
-        let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
-        return Ok((summary, if bad == 0 { 0 } else { 4 }));
-    }
+/// Step 5.5: verify only, then return. Nothing is written.
+async fn run_check_only(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    scan: Option<Arc<ScanReport>>,
+    summary: Summary,
+) -> (Summary, i32) {
+    // The execute-phase root was built after `create_dir_all` and the second
+    // canonicalize, so it is the current form for these files; no per-file
+    // re-resolution is needed.
+    let summary = Arc::new(summary);
+    let bad = phases::check::verify_plan(
+        game_dir,
+        root,
+        Arc::clone(plan),
+        Arc::clone(&summary),
+        ctx.output,
+        scan,
+        ctx.jobs,
+    )
+    .await;
+    summary.files_failed.store(bad, Ordering::Relaxed);
+    // The phase's ticker is stopped when `verify_plan` returns, but its
+    // aborted task may not have dropped its clone yet; `snapshot` reads the
+    // same counters either way.
+    let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
+    (summary, if bad == 0 { 0 } else { 4 })
+}
 
-    // 5.6 purge-only: `check_only` inverted — every phase but the repair loop.
-    // One early return, beside the `--check-only` one. It **implies** the
-    // cleanup (a flag that cleaned up nothing would be a lie), and
-    // `config.ini` is **not** bumped: a cleanup does not put the bytes in
-    // place, so claiming the newer version would desync the launcher the same way
-    // a scoped run does, and on an already-current install it is a no-op anyway.
-    if ctx.purge_only {
-        summary.flags.config_bumped_zero = true;
-        tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome =
-            phases::post::run(ctx, &game_dir, purge_keys, &meta, &summary, &deprecated).await?;
-        let code = finish(outcome, &mut summary);
-        return Ok((summary, code));
-    }
+/// Step 5.6: `check_only` inverted — every phase but the repair loop.
+///
+/// It **implies** the cleanup (a flag that cleaned up nothing would be a lie),
+/// and `config.ini` is **not** bumped: a cleanup does not put the bytes in
+/// place, so claiming the newer version would desync the launcher the same way
+/// a scoped run does, and on an already-current install it is a no-op anyway.
+async fn run_purge_only(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    meta: &Meta,
+    deprecated: &[String],
+    mut summary: Summary,
+) -> Result<(Summary, i32), RunFailure> {
+    summary.flags.config_bumped_zero = true;
+    tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
+    let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
+    let code = finish(outcome, &mut summary);
+    Ok((summary, code))
+}
 
-    // 6. repair files (bounded file parallelism, sequential chunks per file).
+/// Step 6: the repair loop.
+#[allow(clippy::too_many_arguments)] // one parameter per input the loop needs
+async fn run_repair(
+    ctx: &RunCtx,
+    http: reqwest::Client,
+    game_dir: &Path,
+    root: Option<util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    local_map: Arc<manifest::LocalChunkMap>,
+    scan: Option<Arc<ScanReport>>,
+    mut summary: Summary,
+) -> Summary {
     summary.set_download_limit(ctx.limits.download_bytes);
     summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
     summary.set_write_limit(ctx.limits.write_bytes);
@@ -745,11 +842,11 @@ async fn execute_phase(
         ram_budget = ?ctx.ram_budget(),
         "repair mode"
     );
-    summary = file::repair_all(
+    file::repair_all(
         http,
-        game_dir.clone(),
+        game_dir.to_path_buf(),
         root,
-        plan.clone(),
+        Arc::clone(plan),
         local_map,
         scan,
         summary,
@@ -759,29 +856,25 @@ async fn execute_phase(
         ctx.repair_mode,
         ctx.sleep.clone(),
     )
-    .await;
-    if let Some(code) = apply_run_flags(ctx, &mut summary) {
-        return Ok((summary, code));
-    }
-    if summary.files_failed.load(Ordering::Relaxed) > 0 {
-        return Ok((summary, 3));
-    }
+    .await
+}
 
-    // 7. post phase. It runs when the run actually mutates the install, and
-    // for `--dry-run` so the listing covers what the post-phase would do.
-    // `--check-only` already returned above and `--print-plan` never reaches
-    // the execution phase, but they are named here so the read-only modes stay
-    // visibly post-phase-free rather than relying on that.
-    let mutates = !readonly;
-    let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
-    if mutates || lists_dry_run {
-        let outcome =
-            phases::post::run(ctx, &game_dir, purge_keys, &meta, &summary, &deprecated).await?;
-        let code = finish(outcome, &mut summary);
-        return Ok((summary, code));
-    }
-
-    Ok((summary, 0))
+/// Step 7: the post phase.
+///
+/// It runs when the run actually mutates the install, and for `--dry-run` so
+/// the listing covers what the post-phase would do. `--check-only` already
+/// returned above and `--print-plan` never reaches the execution phase.
+async fn run_post(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    meta: &Meta,
+    deprecated: &[String],
+    mut summary: Summary,
+) -> Result<(Summary, i32), RunFailure> {
+    let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
+    let code = finish(outcome, &mut summary);
+    Ok((summary, code))
 }
 
 /// Fill in the conditional `SUMMARY` keys, then name any runtime hard stop.
