@@ -8,62 +8,11 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, build_fixture, build_fixture_spec,
-    read_game_file, temp_dir, write_game_file,
+    ctx_for, load_counters, read_game_file, scope, temp_dir, write_game_file,
 };
-use girpr::test_support::{Limits, NoSleep, PathScope, RepairMode, summary_record};
-use girpr::{Biz, OutputFormat, RunCtx, Summary, run};
-use std::collections::HashSet;
-use std::sync::Arc;
+use girpr::test_support::summary_record;
+use girpr::{RunCtx, run};
 use std::sync::atomic::Ordering;
-
-/// Compile a path scope for a test, the way `Args::into_ctx` does.
-fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
-    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
-    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
-    PathScope::new(&inc, &exc).expect("test globs must compile")
-}
-
-fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
-    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
-}
-
-fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz: Biz) -> RunCtx {
-    RunCtx {
-        game_dir,
-        biz,
-        audio: HashSet::new(),
-        audio_explicit: false,
-        path_scope: PathScope::default(),
-        limits: Limits::default(),
-        repair_mode: RepairMode::Auto,
-        repair_mode_explicit: false,
-        jobs,
-        check_only: false,
-        scan: false,
-        purge_only: false,
-        fail_fast: false,
-        dry_run: false,
-        print_plan: false,
-        plan_out: None,
-        purge_after: false,
-        purge_before: false,
-        output: OutputFormat::Text,
-        hyp_base_override: Some(mock.hyp_base.clone()),
-        sophon_base_override: Some(mock.sophon_base.clone()),
-        // Tests skip retry backoff: a failed fetch is retried immediately.
-        sleep: Arc::new(NoSleep),
-    }
-}
-
-fn load_counters(s: &Summary) -> (u64, u64, u64, u64, u64) {
-    (
-        s.files_skipped.load(Ordering::Relaxed),
-        s.files_repaired.load(Ordering::Relaxed),
-        s.files_failed.load(Ordering::Relaxed),
-        s.download.settled(),
-        s.deleted_extra_bytes.load(Ordering::Relaxed),
-    )
-}
 
 #[tokio::test]
 async fn purge_after_deletes_orphans_keeps_manifest_and_config() {

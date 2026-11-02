@@ -25,8 +25,103 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use girpr::test_support::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+use girpr::test_support::{
+    Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
+};
+use girpr::{Biz, OutputFormat, RunCtx, Summary};
 use prost::Message as _;
+
+// ---------------------------------------------------------------------------
+// shared test harness
+// ---------------------------------------------------------------------------
+
+/// Compile a path scope for a test, the way `Args::into_ctx` does.
+pub fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
+    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
+    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+    PathScope::new(&inc, &exc).expect("test globs must compile")
+}
+
+pub fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
+    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
+}
+
+pub fn ctx_for_biz(
+    game_dir: std::path::PathBuf,
+    mock: &MockServer,
+    jobs: usize,
+    biz: Biz,
+) -> RunCtx {
+    RunCtx {
+        game_dir,
+        biz,
+        audio: HashSet::new(),
+        audio_explicit: false,
+        path_scope: PathScope::default(),
+        limits: Limits::default(),
+        repair_mode: RepairMode::Auto,
+        repair_mode_explicit: false,
+        jobs,
+        check_only: false,
+        scan: false,
+        purge_only: false,
+        fail_fast: false,
+        dry_run: false,
+        print_plan: false,
+        plan_out: None,
+        purge_after: false,
+        purge_before: false,
+        output: OutputFormat::Text,
+        hyp_base_override: Some(mock.hyp_base.clone()),
+        sophon_base_override: Some(mock.sophon_base.clone()),
+        // Tests skip retry backoff: a failed fetch is retried immediately.
+        sleep: Arc::new(NoSleep),
+    }
+}
+
+pub fn load_counters(s: &Summary) -> (u64, u64, u64, u64, u64) {
+    (
+        s.files_skipped.load(Ordering::Relaxed),
+        s.files_repaired.load(Ordering::Relaxed),
+        s.files_failed.load(Ordering::Relaxed),
+        s.download.settled(),
+        s.deleted_extra_bytes.load(Ordering::Relaxed),
+    )
+}
+
+/// The value of one `key=value` field on a `key=value` line.
+pub fn field(line: &str, name: &str) -> u64 {
+    line.split_whitespace()
+        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no {name} in {line}"))
+}
+
+/// A game dir that does not exist yet, pointed at by `parent/missing`.
+pub fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
+    parent.join("not-created-yet")
+}
+
+/// Run the shipped binary. The endpoint overrides are the only seam a
+/// *binary-level* test can use, and this is where that seam is exercised: the
+/// library tests inject `RunCtx::hyp_base_override` directly,
+/// which proves nothing about whether a flag reaches `HypClient`.
+///
+/// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
+/// the single runtime thread the mock server needs to answer on.
+pub async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
+    cmd.args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().await.expect("run girpr");
+    (
+        out.status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)

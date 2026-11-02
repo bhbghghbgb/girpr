@@ -9,29 +9,8 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, read_game_file, temp_dir, write_game_file,
+    build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
 };
-
-/// Run the shipped binary. The endpoint overrides are the only seam a
-/// *binary-level* test can use, and this is where that seam is exercised: the
-/// library tests inject `RunCtx::hyp_base_override` directly,
-/// which proves nothing about whether a flag reaches `HypClient`.
-///
-/// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
-/// the single runtime thread the mock server needs to answer on.
-async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
-    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
-    cmd.args(args);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().await.expect("run girpr");
-    (
-        out.status.code().expect("process must exit normally"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
 
 /// Run the shipped binary with the reading end of its stdout pipe gone.
 ///

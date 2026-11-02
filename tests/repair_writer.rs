@@ -9,70 +9,12 @@ mod common;
 
 use common::{
     LATEST_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_with_lies,
-    build_moved_fixture, read_game_file, temp_dir, write_game_file,
+    build_moved_fixture, ctx_for, field, load_counters, read_game_file, scope, temp_dir,
+    write_game_file,
 };
-use girpr::test_support::{Limits, NoSleep, PathScope, RepairMode, summary_record};
-use girpr::{Biz, OutputFormat, RunCtx, Summary, run};
-use std::collections::HashSet;
-use std::sync::Arc;
+use girpr::run;
+use girpr::test_support::{RepairMode, summary_record};
 use std::sync::atomic::Ordering;
-
-/// Compile a path scope for a test, the way `Args::into_ctx` does.
-fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
-    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
-    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
-    PathScope::new(&inc, &exc).expect("test globs must compile")
-}
-
-fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
-    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
-}
-
-fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz: Biz) -> RunCtx {
-    RunCtx {
-        game_dir,
-        biz,
-        audio: HashSet::new(),
-        audio_explicit: false,
-        path_scope: PathScope::default(),
-        limits: Limits::default(),
-        repair_mode: RepairMode::Auto,
-        repair_mode_explicit: false,
-        jobs,
-        check_only: false,
-        scan: false,
-        purge_only: false,
-        fail_fast: false,
-        dry_run: false,
-        print_plan: false,
-        plan_out: None,
-        purge_after: false,
-        purge_before: false,
-        output: OutputFormat::Text,
-        hyp_base_override: Some(mock.hyp_base.clone()),
-        sophon_base_override: Some(mock.sophon_base.clone()),
-        // Tests skip retry backoff: a failed fetch is retried immediately.
-        sleep: Arc::new(NoSleep),
-    }
-}
-
-fn load_counters(s: &Summary) -> (u64, u64, u64, u64, u64) {
-    (
-        s.files_skipped.load(Ordering::Relaxed),
-        s.files_repaired.load(Ordering::Relaxed),
-        s.files_failed.load(Ordering::Relaxed),
-        s.download.settled(),
-        s.deleted_extra_bytes.load(Ordering::Relaxed),
-    )
-}
-
-/// The value of one `key=value` field on a `key=value` line.
-fn field(line: &str, name: &str) -> u64 {
-    line.split_whitespace()
-        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no {name} in {line}"))
-}
 
 // ---------------------------------------------------------------------------
 // --max-write-bytes, --fail-fast, --purge-only
