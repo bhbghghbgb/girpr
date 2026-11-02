@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
@@ -25,25 +24,23 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
     };
-    Ok(game_version_re()
-        .captures_iter(&text)
-        .last()
-        .map(|c| c[1].trim().to_string()))
+    Ok(text.lines().filter_map(game_version_line).last())
 }
 
-/// The `game_version` line pattern, compiled once per process.
+/// The value of one `game_version` line, if it has the documented shape.
 ///
-/// The pattern is a literal, so parsing it once is enough; it is called per run
-/// in production but often in tests. Semantics are fixed: `^` anchors at the
-/// line start (no leading whitespace before `game_version`), `\s*` around `=`,
-/// at least one character of value, trailing whitespace trimmed, and the caller
-/// takes the **last** match.
-fn game_version_re() -> &'static regex::Regex {
-    static GAME_VERSION: OnceLock<regex::Regex> = OnceLock::new();
-    GAME_VERSION.get_or_init(|| {
-        regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
-            .expect("the game_version pattern is a literal")
-    })
+/// The key must start the line exactly (no leading whitespace) and be exactly
+/// `game_version`; optional whitespace may surround the first `=`, and the
+/// value is everything after it, trimmed of surrounding whitespace. A later
+/// `=` stays in the value. A line with nothing after `=` is not a match; the
+/// caller keeps the **last** match.
+fn game_version_line(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("game_version")?;
+    let rest = rest.trim_start().strip_prefix('=')?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.trim().to_string())
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
@@ -460,7 +457,7 @@ mod tests {
         assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
     }
 
-    /// The cached pattern keeps the documented shape: no leading whitespace
+    /// The line scan keeps the documented shape: no leading whitespace
     /// before the key, whitespace allowed around `=`, a value of at least one
     /// character, trailing whitespace trimmed, and the last match wins.
     #[test]
@@ -476,6 +473,30 @@ mod tests {
             "5.1.0",
             "the indented and the empty-value lines must not match"
         );
+    }
+
+    #[test]
+    fn version_line_shapes() {
+        let cases = [
+            ("game_version=1.0.0", Some("1.0.0")),
+            (" game_version=1.0.0", None),
+            ("\tgame_version=1.0.0", None),
+            ("game_version=", None),
+            ("game_version", None),
+            ("game_version_extra=1.0.0", None),
+            ("Game_version=1.0.0", None),
+            ("game_version\t=\t1.0.0\t", Some("1.0.0")),
+            ("game_version = 1.0.0   ", Some("1.0.0")),
+            ("game_version=1=2=3", Some("1=2=3")),
+            ("game_version=   ", Some("")),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(
+                game_version_line(line).as_deref(),
+                expected,
+                "line {line:?}"
+            );
+        }
     }
 
     #[test]
