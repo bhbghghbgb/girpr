@@ -10,6 +10,9 @@ path = "src/main.rs"
 
 [workspace]
 members = [".", "crates/log", "crates/tempdir", "tools/sync", "tools/capture"]
+# A root `cargo build`/`cargo test` means the product, not its dev tools.
+# The tools stay members, so they share the lockfile and build on request.
+default-members = ["."]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
