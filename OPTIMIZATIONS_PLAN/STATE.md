@@ -34,9 +34,9 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T20 | A3 - exercise the post-phase in dry-run | completed | d32c395, bb1368c, c4285e7, f221aad, f0fa925 | RC-08 |
 | T21 | A4 - one emitter and one progress driver | completed | 0948590, b8d5068, c56681c | RC-08 |
 | T22 | A5 - return an exit code and flush logs | completed | dc8f7cd, 54ec0ee, e197cd3 | RC-08 |
-| T23 | P9 - buffer the file log sink | pending_review | 16e2902, 11acd42 | RC-09 |
-| T24 | P11 - remove purge/scope per-pass allocations | pending_review | debba64, 68242fe, a9d5b20, f7d2165 | RC-09 |
-| T25 | P13 - fast-path unlimited meters | pending_review | af8e5bf, e799311 | RC-09 |
+| T23 | P9 - buffer the file log sink | completed | 16e2902, 11acd42 | RC-09 |
+| T24 | P11 - remove purge/scope per-pass allocations | completed | debba64, 68242fe, a9d5b20, f7d2165 | RC-09 |
+| T25 | P13 - fast-path unlimited meters | completed | af8e5bf, e799311 | RC-09 |
 | T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | skipped | | RC-09 |
 | T27 | D1 - per-file facts live on the file | completed | 3576cf4, 07c556d, 52158e8, 1449a7f | RC-10 |
 | T28 | D3 - one atomic-write helper | completed | 0ba2419, 29396b3, 1f2707b | RC-11 |
@@ -72,7 +72,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-06 | T16 | done | | Completed without fixes |
 | RC-07 | T17-T19 | done | | All three completed without fixes |
 | RC-08 | T20-T22 | done | f0fa925 | T20 fixed: docs' deprecated-list dry-run contract |
-| RC-09 | T23-T26 | in_progress | | |
+| RC-09 | T23-T26 | done | | T23-T25 completed without fixes; T26 skip confirmed |
 | RC-10 | T27 | done | | Completed without fixes |
 | RC-11 | T28-T29 | done | | Both completed without fixes |
 | RC-12 | T30-T31 | done | | Both completed without fixes |
@@ -186,6 +186,24 @@ until the main tasks and rework are done.
 | F85 | RC-15 review | `src/config.rs`, `tests/repair_offline.rs` | `PartialEq<i32> for RunExit` is a numeric escape hatch; convert test assertions to variants and drop it. | todo |
 | F86 | RC-15 review | `src/repair/phases/check.rs`, `src/main.rs` | Prose still describes exit codes as bare numbers. | todo |
 | F87 | T36 implementer | `src/config.rs` | `From<RunFailure> for RunExit` is exercised only by tests; no production caller yet. | todo |
+| F88 | T37 implementer | `tools/capture` | The tool still depends on `tokio` with `full`; scoped out of the build batch. | todo |
+| F89 | T37 implementer | `Cargo.toml` | `reqwest` unifies tokio's `net`/`fs`/`io-util`/`sync` into any build; reqwest's own surface, not removable here. | todo |
+| F90 | T38 implementer | `src/util/ini.rs` | The old pattern's `\s*` could match a newline; the hand-written line scan intentionally does not, and nothing depends on it. | todo |
+| F91 | T38 implementer | `src/util/ini.rs` | `read_game_version` and `parse_ini` share the "first `=`" rule without a common helper. | todo |
+| F92 | T39 implementer | `Cargo.toml` | `futures-util` defaults pull `futures-macro` and `slab`; a `std`-only feature set could shrink the graph. | todo |
+| F93 | T39 implementer | `src/sophon/stream.rs` | The `Stream` bound names `futures-core` directly; `futures_util::stream::Stream` would be the same trait. | todo |
+| F94 | T40 implementer | repo | No CI exists; a future CI job must run `cargo check -p girsync -p gircap` or a workspace job. | todo |
+| F95 | T40 implementer | `README.md` | The nextest note hard-codes a test count that drifts. | todo |
+| F96 | T41 implementer | `Cargo.toml` | Release builds strip symbols; crash triage may want `strip = "debuginfo"` or a separate profile. | todo |
+| F97 | T42 implementer | `clippy.toml` | Revisit `allow-unwrap-in-tests`/`allow-expect-in-tests` to replace the code-level test allows. | todo |
+| F98 | T43 implementer | `Cargo.toml` | `md-5`'s optional `asm`/`md5-asm` backend may beat the portable path on x86; measure separately. | todo |
+| F99 | T43 implementer | `tools/sync`, `tools/capture` | Both tools still depend on `md5 0.7`; a separate migration could retire it from the lockfile. | todo |
+| F100 | T43 implementer | `src/repair/scan.rs` | The scan clones a context per range when resolving verdicts; unchanged here. | todo |
+| F101 | RC-09 review | `src/repair/scope/ledger.rs` | `add_saturating` loads then `fetch_add`, so additions within `n` of `u64::MAX` could still wrap. | todo |
+| F102 | RC-09 review | `src/repair/mod.rs` | `PurgeKeys::new` folds the expected set on the async runtime before `spawn_blocking`. | todo |
+| F103 | RC-09 review | `src/repair/purge.rs` | `mark_kept_ancestors` allocates one `PathBuf` per newly marked ancestor. | todo |
+| F104 | RC-09 review | `src/util/path.rs` | The T26 skip rests on a one-off measurement with no retained harness to re-check on other installs. | todo |
+| F105 | RC-09 review | `src/logging.rs`, docs | Buffering delays external `tail -f` by up to 64 KiB; worth stating if log streaming is supported. | todo |
 
 ## Follow-up batches
 
