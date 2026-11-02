@@ -74,6 +74,7 @@ use tracing::Instrument;
 use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
+use crate::retry::{RetryState, retry_state};
 use crate::sleep::Sleep;
 #[cfg(test)]
 use crate::sophon::SophonChunk;
@@ -471,9 +472,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
 
     // The mode for this file. `--repair-mode temp` never uses the in-place
     // path; the rest decide from what the target is.
-    let mut mode = resolve_mode(ctx.repair_mode, &final_path);
-    let mut inplace = mode == Mode::Inplace;
-
+    let mode = resolve_mode(ctx.repair_mode, &final_path);
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
     // mean that while the *first* file alone spends 5 × (15 s of chunk-fetch
@@ -486,67 +485,91 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     } else {
         MAX_ATTEMPTS
     };
-    let mut attempt = 1;
     // The file's settled writes, accumulated across its attempts. It outlives
     // an attempt on purpose: a chunk an abandoned attempt wrote is in the install,
     // and `kept_bytes` is the complement of this figure.
-    let mut writes = FileWrites::default();
-    while attempt <= max_attempts {
-        let outcome = if inplace {
-            inplace::attempt_inplace(
-                ctx,
-                FileId::new(idx),
-                file,
-                prefix,
-                &final_path,
-                &mut writes,
-            )
-            .await
-        } else {
-            temp::attempt_temp(ctx, file, prefix, &tmp_path, &final_path, &mut writes).await
-        };
-        match outcome {
-            Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
-            Ok(Inplace::DryRun) => return Ok(Repaired::DryRun),
-            Ok(Inplace::Repaired(stats)) => {
-                let mut stats = stats;
-                stats.mode = mode;
-                stats.settled_writes = writes.settled;
-                return Ok(Repaired::Repaired(stats));
-            }
-            // The target cannot be opened for writing, so this file cannot
-            // be written where it lies. The temp path can: it does not need
-            // write access to the target. The switch is permanent for this
-            // file — an attempt is not spent on it.
-            Ok(Inplace::Unavailable(reason)) => {
-                tracing::warn!(file = %file.rel, reason, "cannot write the target in place -> writing it through a temp file");
-                mode = Mode::Temp;
-                inplace = false;
-                continue;
-            }
-            // The ceiling, not the file: this must not be counted as a
-            // failure and must not be retried.
-            Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
-                tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
-                return Ok(Repaired::Stopped);
-            }
-            Err(e) => {
-                tracing::warn!(attempt, "attempt failed: {e:#}");
-                // `--fail-fast` cuts the backoff short. Without it, one bad
-                // file spends 5 × linear sleep (and each of those attempts has
-                // its own 5× chunk retry inside `stream_chunk_to`) before the
-                // run even starts on the next file.
-                if attempt == max_attempts || ctx.summary.aborted() {
-                    return Err(e);
+    let state = AttemptState {
+        writes: FileWrites::default(),
+        mode,
+        inplace: mode == Mode::Inplace,
+    };
+    let final_path = final_path.as_path();
+    let tmp_path = tmp_path.as_path();
+    retry_state(
+        max_attempts,
+        ctx.sleep.as_ref(),
+        state,
+        |mut state, attempt| async move {
+            loop {
+                let outcome = if state.inplace {
+                    inplace::attempt_inplace(
+                        ctx,
+                        FileId::new(idx),
+                        file,
+                        prefix,
+                        final_path,
+                        &mut state.writes,
+                    )
+                    .await
+                } else {
+                    temp::attempt_temp(
+                        ctx,
+                        file,
+                        prefix,
+                        tmp_path,
+                        final_path,
+                        &mut state.writes,
+                    )
+                    .await
+                };
+                match outcome {
+                    Ok(Inplace::Skipped) => return RetryState::Done(Repaired::Skipped),
+                    Ok(Inplace::DryRun) => return RetryState::Done(Repaired::DryRun),
+                    Ok(Inplace::Repaired(mut stats)) => {
+                        stats.mode = state.mode;
+                        stats.settled_writes = state.writes.settled;
+                        return RetryState::Done(Repaired::Repaired(stats));
+                    }
+                    // The target cannot be opened for writing, so this file cannot
+                    // be written where it lies. The temp path can: it does not need
+                    // write access to the target. The switch is permanent for this
+                    // file — an attempt is not spent on it.
+                    Ok(Inplace::Unavailable(reason)) => {
+                        tracing::warn!(file = %file.rel, reason, "cannot write the target in place -> writing it through a temp file");
+                        state.mode = Mode::Temp;
+                        state.inplace = false;
+                        continue;
+                    }
+                    // The ceiling, not the file: this must not be counted as a
+                    // failure and must not be retried.
+                    Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
+                        tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
+                        return RetryState::Done(Repaired::Stopped);
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, "attempt failed: {e:#}");
+                        // `--fail-fast` cuts the backoff short. Without it, one bad
+                        // file spends 5 × linear sleep (and each of those attempts has
+                        // its own 5× chunk retry inside `stream_chunk_to`) before the
+                        // run even starts on the next file.
+                        if ctx.summary.aborted() {
+                            return RetryState::Fatal(e);
+                        }
+                        return RetryState::Retry(state, e);
+                    }
                 }
-                ctx.sleep
-                    .sleep(std::time::Duration::from_secs(attempt as u64))
-                    .await;
-                attempt += 1;
             }
-        }
-    }
-    unreachable!("attempt loop always returns")
+        },
+    )
+    .await
+}
+
+/// The state a file's next attempt starts from: its settled writes, the path
+/// chosen for it, and whether it is the in-place one.
+struct AttemptState {
+    writes: FileWrites,
+    mode: Mode,
+    inplace: bool,
 }
 
 /// What one attempt at a file decided.
