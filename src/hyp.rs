@@ -513,6 +513,7 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -601,6 +602,118 @@ mod tests {
             Arc::new(crate::sleep::NoSleep),
         )
         .unwrap()
+    }
+
+    /// A throwaway HTTP server that answers the nth request with the nth body,
+    /// repeating the last one, and counts the requests it saw.
+    async fn serve_bodies(bodies: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
+        assert!(!bodies.is_empty(), "the server needs at least one body");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the test server");
+        let addr = listener.local_addr().expect("the test server address");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let n = counter.fetch_add(1, Ordering::Relaxed);
+                let body = bodies[n.min(bodies.len() - 1)];
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    /// A retryable retcode on the first call and a real node on the second: the
+    /// caller must see the second answer, and the server both requests.
+    #[tokio::test]
+    async fn get_node_retries_a_retryable_retcode_and_takes_the_next_answer() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1,"message":"busy","data":null}"#,
+            r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"exe_file_name":"GenshinImpact.exe"}]}}"#,
+        ])
+        .await;
+        let list: Vec<GameConfig> = client_for(Biz::Hk4eGlobal)
+            .get_node(&base, "launch_configs")
+            .await
+            .expect("the second attempt answers");
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(list[0].exe_file_name, "GenshinImpact.exe");
+    }
+
+    /// An invalid-params retcode is answered identically every time, so the
+    /// first answer must end the call.
+    #[tokio::test]
+    async fn get_node_stops_on_a_terminal_retcode() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1001,"message":"invalid params","data":null}"#,
+        ])
+        .await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_node::<Vec<GameConfig>>(&base, "launch_configs")
+            .await
+            .expect_err("invalid params is final");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a terminal retcode must not be retried"
+        );
+        let chain = format!("{err:#}");
+        assert!(chain.contains("-1001"), "{chain}");
+        assert!(
+            !chain.contains("after 5 attempts"),
+            "a fatal answer must not be dressed up as exhaustion: {chain}"
+        );
+    }
+
+    /// `get_direct` uses the same retry rule: a transient failure is retried,
+    /// and the successful body is returned as the node itself.
+    #[tokio::test]
+    async fn get_direct_retries_a_retryable_retcode_and_takes_the_next_answer() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1,"message":"busy","data":null}"#,
+            r#"{"retcode":0,"message":"OK","data":{"build_id":"build_test"}}"#,
+        ])
+        .await;
+        let build: ChunkBuild = client_for(Biz::Hk4eGlobal)
+            .get_direct(&base)
+            .await
+            .expect("the second attempt answers");
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(build.build_id, "build_test");
+    }
+
+    /// `-202` is terminal *and* has its own meaning: the caller must get
+    /// [`SophonNotFound`] after one request, not a retried generic error.
+    #[tokio::test]
+    async fn get_direct_stops_on_a_fatal_retcode() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-202,"message":"not found","data":null}"#,
+        ])
+        .await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_direct::<ChunkBuild>(&base)
+            .await
+            .expect_err("an unknown tag is final");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a fatal retcode must not be retried"
+        );
+        assert!(
+            err.downcast_ref::<SophonNotFound>().is_some(),
+            "the caller needs the not-found marker: {err:#}"
+        );
     }
 
     /// The channel query is per-launcher (`LauncherConfig.Channel/SubChannel`),
