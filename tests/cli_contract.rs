@@ -780,6 +780,19 @@ const REPORT_KEYS: &[&str] = &[
     "diff_tags",
 ];
 
+/// The keys `PLAN` carries, in order. `scan_bytes` sits between
+/// `est_extra_bytes` and `purge_files` only when `--scan` asked for it.
+const PLAN_KEYS: &[&str] = &[
+    "files",
+    "est_download_bytes",
+    "est_write_bytes",
+    "est_extra_bytes",
+    "purge_files",
+    "purge_bytes",
+    "max_chunk_bytes",
+    "scoped",
+];
+
 /// The keys `PROGRESS` carries, in order. A short run may emit none.
 const PROGRESS_KEYS: &[&str] = &[
     "done",
@@ -1010,6 +1023,19 @@ fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
     i
 }
 
+/// A damaged copy of the two-file fixture: one clean file, one corrupt file.
+fn seed_one_damaged_one_clean(dir: &std::path::Path) {
+    let fx = build_fixture();
+    // `bar.dat` is intact, so the plan is a skip; `foo.dat` is the same length
+    // with a flipped tail, so its digest fails and the repair rebuilds it.
+    write_game_file(dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut damaged = fx.files[0].data.clone();
+    for byte in damaged.iter_mut().skip(64) {
+        *byte ^= 0xFF;
+    }
+    write_game_file(dir, &fx.files[0].rel, &damaged);
+}
+
 /// A tiny repair pins the order and the one-record-per-event rule: `REPORT`
 /// once, then (if the run is long enough) any `PROGRESS` ticks, then exactly
 /// one `SUMMARY` last.
@@ -1017,18 +1043,133 @@ fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
 async fn a_tiny_repair_emits_report_then_exactly_one_summary() {
     let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
     let dir = temp_dir("golden_repair");
-    let fx = build_fixture();
     // One clean file and one damaged file: the repair skips one and rebuilds
     // the other, so the run is short and its `SUMMARY` is the base shape.
-    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
-    let mut damaged = fx.files[0].data.clone();
-    for byte in damaged.iter_mut().skip(64) {
-        *byte ^= 0xFF;
-    }
-    write_game_file(&dir, &fx.files[0].rel, &damaged);
+    seed_one_damaged_one_clean(&dir);
 
     let run = run_data_plane(&dir, &mock, &[]).await;
     assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
     assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
     mock.stop();
+}
+
+/// `--print-plan` adds exactly one `PLAN` between `REPORT` and the run's single
+/// `SUMMARY`, and writes nothing.
+#[tokio::test]
+async fn print_plan_emits_one_plan_between_report_and_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("golden_print_plan");
+    seed_one_damaged_one_clean(&dir);
+
+    let run = run_data_plane(&dir, &mock, &["--print-plan"]).await;
+    assert_eq!(run.code, 0, "--print-plan exits 0:\n{}", run.stderr);
+    assert_golden(
+        &run,
+        &[
+            ("report", REPORT_KEYS),
+            ("plan", PLAN_KEYS),
+            ("summary", SUMMARY_KEYS),
+        ],
+    );
+    mock.stop();
+}
+
+/// `--check-only` is `REPORT` and the single terminal `SUMMARY`, with no
+/// `PLAN`; a damaged install is exit `4`.
+#[tokio::test]
+async fn check_only_emits_report_then_exactly_one_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("golden_check_only");
+    seed_one_damaged_one_clean(&dir);
+
+    let run = run_data_plane(&dir, &mock, &["--check-only"]).await;
+    assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+    mock.stop();
+}
+
+/// A synthetic sequence, so the golden's own failure modes are testable
+/// without a run.
+fn synthetic(records: &[(&str, &[&str])]) -> DataPlaneRun {
+    DataPlaneRun {
+        code: 0,
+        records: records
+            .iter()
+            .map(|(event, keys)| {
+                (
+                    (*event).to_string(),
+                    keys.iter().map(|key| (*key).to_string()).collect(),
+                )
+            })
+            .collect(),
+        stdout: "synthetic records".to_string(),
+        stderr: String::new(),
+    }
+}
+
+/// The golden is only worth keeping if it rejects the breaking changes:
+/// `SUMMARY` moving before `PLAN`, a second `SUMMARY`, a `PROGRESS` after the
+/// run is over, and a renamed field key.
+#[test]
+fn the_golden_rejects_a_reorder_a_duplicate_a_late_progress_and_a_rename() {
+    let golden: &[(&str, &[&str])] = &[
+        ("report", REPORT_KEYS),
+        ("plan", PLAN_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ];
+    const RENAMED_EXIT: &[&str] = &[
+        "total",
+        "skipped",
+        "repaired",
+        "failed",
+        "download_bytes",
+        "deleted_extra_bytes",
+        "exit_code",
+    ];
+    let cases = [
+        (
+            "SUMMARY before PLAN",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("plan", PLAN_KEYS),
+            ]),
+        ),
+        (
+            "a second SUMMARY",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("summary", SUMMARY_KEYS),
+            ]),
+        ),
+        (
+            "PROGRESS after SUMMARY",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+                ("progress", PROGRESS_KEYS),
+            ]),
+        ),
+        (
+            "a renamed SUMMARY key",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", RENAMED_EXIT),
+            ]),
+        ),
+    ];
+    for (what, run) in cases {
+        assert!(
+            check_golden(&run, golden).is_err(),
+            "the golden must reject {what}"
+        );
+    }
+    assert!(
+        check_golden(&synthetic(golden), golden).is_ok(),
+        "the matching sequence must be accepted"
+    );
 }
