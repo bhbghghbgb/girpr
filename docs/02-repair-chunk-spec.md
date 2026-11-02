@@ -97,7 +97,7 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    the calls above — API-sourced, not from config). Under `--output json` this is
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
-   list. This is the lazy call: fetched best-effort during the plan phase, never in
+   list. This call is fetched best-effort during the plan phase, never in
    `--check-only`/`--print-plan`, and in `--dry-run` only because the post-phase (Step 7)
    lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
    **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
@@ -228,12 +228,12 @@ Per file `F`:
    the attempt and retries the whole file (up to 5×).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
-5. **Verify** — one more read: `if md5==F.md5` the file is good, and the structured `repaired`
-   event is logged (`chunks_total`/`chunks_reused`/`chunks_downloaded`/`chunks_kept`,
-   `download_bytes`, `final_md5`). Else the per-chunk verdicts name the culprit and only
-   those are redone; if they still do not match, the file is counted as failed and the run
-   continues — after all files, `Ok(summary, 3)` (skips the post-phase so `config.ini` is
-   not bumped while damaged) — not `Err(RunFailure::write)`.
+5. **Verify** — one whole-file digest: `if md5==F.md5` the file is good, and the structured
+   `repaired` event is logged (`chunks_total`/`chunks_reused`/`chunks_downloaded`/`chunks_kept`,
+   `download_bytes`, `final_md5`). Else a second read scans the chunk ranges, the per-chunk
+   verdicts name the culprit, and only those are redone; if they still do not match, the file is
+   counted as failed and the run continues — after all files, `Ok(summary, 3)` (skips the
+   post-phase so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
 6. A target that cannot be opened for writing is written the temp way, loudly: write
    `{path}_tmp` (kept, not truncated), work only on chunks with
    `offset+uncompressed_size > have` (the already-complete prefix is kept; the final

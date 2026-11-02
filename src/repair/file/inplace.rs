@@ -42,9 +42,10 @@ use anyhow::{Context, Result};
 ///    file are read into RAM, so the write order cannot destroy them;
 /// 4. **patch** — the wrong chunks are written, ascending: from the staged
 ///    bytes when there are any, from a download otherwise;
-/// 5. **verify** — one more read. The whole-file MD5 is the gate; if it does
-///    not match, the per-chunk verdicts name the culprit and only those are
-///    redone.
+/// 5. **verify** — the whole-file MD5 is computed from one read and is the
+///    gate. Only when it does not match does a second pass read the chunk
+///    ranges, so the per-chunk verdicts can name the culprit; only those
+///    chunks are redone.
 ///
 /// A target that cannot be opened for writing answers [`Inplace::Unavailable`]
 /// and the caller writes that file the other way — through a `_tmp`, which
@@ -338,8 +339,8 @@ async fn attempt_inplace_inner(
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
 
-    // 5. verify. One more read: the whole-file MD5 is the gate, and the
-    // per-chunk verdicts name the culprit when it does not match.
+    // 5. verify. One whole-file digest is the gate. Only when it fails does
+    // the range scan run, and its per-chunk verdicts name the culprit.
     let still_bad = match verify_in_place(&mut handle, &dest_ranges, file.chunks.len(), &file.md5)?
     {
         Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),

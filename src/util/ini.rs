@@ -254,6 +254,11 @@ fn test_no_fsync() -> bool {
 /// `[General]` — a deliberate deviation from Collapse's generic `[default]`
 /// bucket, since game-dir files are `[General]`-scoped.
 ///
+/// `dry_run` skips the write and logs the version it would write. No production
+/// caller sets it: `--dry-run` and `--purge-only` return before this function
+/// (the bump is skipped in both), and the post-phase passes `false`. The
+/// parameter is therefore unreachable from the CLI today.
+///
 /// See Collapse
 /// `CollapseLauncher/Classes/GameManagement/Versioning/GameVersionBase.IniConfig.cs`
 /// (`UpdateGameVersion`, `UpdateGameChannels`, `DefaultIniVersion`) and

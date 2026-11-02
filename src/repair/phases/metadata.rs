@@ -1,9 +1,10 @@
 //! Local state + server metadata (docs/02 steps 1–2).
 //!
-//! Five HoYoPlay/Sophon calls: `getGameConfigs` and `getGameBranches` run as one
+//! Four HoYoPlay calls: `getGameConfigs` and `getGameBranches` run as one
 //! wave, then `getBuild(latest)` and `getBuild(local, best-effort)` as another,
 //! while the local files are read in parallel. The deprecated-file list is *not*
-//! fetched here; it is lazy and lives in the post-phase.
+//! fetched here: `repair::plan_phase` fetches it (for a run that reaches the
+//! post-phase or a dry run) and passes it to the post-phase.
 //!
 //! The audio selection is resolved here rather than in step 1 because it needs
 //! `audio_pkg_scan_dir` from `getGameConfigs`; the work is split between this
@@ -22,7 +23,8 @@ use crate::repair::audio;
 
 /// Everything steps 3+ need from steps 1–2.
 pub struct Meta {
-    /// Client, kept for the lazy `deprecated_files` call in the post-phase.
+    /// Client, kept for the plan-phase manifest fetches and the
+    /// `deprecated_files` call.
     pub hyp: HypClient,
     pub config: GameConfig,
     /// `getGameBranches` `main` package (branch/package_id/password/tag).
