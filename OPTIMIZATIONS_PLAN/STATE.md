@@ -57,8 +57,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T43 | B7 - evaluate the md-5 upgrade (conditional) | completed | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
 | T44 | T1 - regression tests for the fixed failure paths | completed | 9894d6e | RC-17 |
 | T45 | T2 - log phase and per-file durations | completed | b4b0d84, 1d95c1a, 7c54827 | RC-17 |
-| T46 | T4 - pin the output-contract ordering | pending_review | 1bb253d, b58c967 | RC-18 |
-| T47 | T3 - split the large integration test | pending_review | 10e8849, 9fb6863 | RC-18 |
+| T46 | T4 - pin the output-contract ordering | completed | 1bb253d, b58c967 | RC-18 |
+| T47 | T3 - split the large integration test | completed | 10e8849, 9fb6863 | RC-18 |
 
 ## Review batches
 
@@ -81,7 +81,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-15 | T35-T36 | done | | Both completed without fixes |
 | RC-16 | T37-T43 | done | | All completed without fixes; T43 gate passed (+26%) |
 | RC-17 | T44-T45 | done | | Both completed without fixes |
-| RC-18 | T46-T47 | in_progress | | |
+| RC-18 | T46-T47 | done | | Both completed without fixes |
 
 ## Rework
 
@@ -214,6 +214,11 @@ until the main tasks and rework are done.
 | F113 | RC-17 review | `tests/repair_offline.rs` | The duration process test always passes `--scan`; absence of `phase=scan` on an unscanned run is unasserted. | todo |
 | F114 | T45 implementer | `src/phase.rs` | `phase=plan` excludes the scan and `publish_plan`; purge execution is not timed at all. | todo |
 | F115 | T45 implementer | `src/phase.rs` | `PhaseTimer` logs on drop during an error path, reporting time-to-failure as if the phase completed. | todo |
+| F116 | RC-18 review | `tests/cli_contract.rs` | `check_golden` allows `PROGRESS` between `REPORT` and `PLAN`, wider than the documented window. | todo |
+| F117 | RC-18 review | `README.md` | The data-plane section omits the one-record-per-event rule and that `PLAN` precedes `SUMMARY`. | todo |
+| F118 | RC-18 review | `tests/repair_offline.rs` | Module docs still describe the pre-split case layout ("first ten cases", "three cases run the real binary"). | todo |
+| F119 | T46 implementer | `tests/cli_contract.rs` | Only the JSON plane is pinned; the text plane relies on unit tests. | todo |
+| F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | todo |
 
 ## Follow-up batches
 
