@@ -83,7 +83,7 @@ use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
 use girpr_tempdir::TempDir;
-use server::{Bridge, Bundle, Origins};
+use server::{Bridge, Bundle, Origins, md5_hex};
 
 // ---------------------------------------------------------------------------
 // gate: locating a bundle
@@ -601,7 +601,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         let bytes = std::fs::read(&target)
             .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));
         assert_eq!(
-            format!("{:x}", md5::compute(&bytes)),
+            md5_hex(&bytes),
             capture.result_md5,
             "{}: the patched file must equal expectations.result_md5",
             capture.id

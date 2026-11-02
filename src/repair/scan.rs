@@ -604,7 +604,7 @@ mod tests {
         // non-existent source intact and hide the download from the estimate.
         let x = vec![0x58u8; 10];
         let y = vec![0x59u8; 10];
-        let md5_x = format!("{:x}", md5::compute(&x));
+        let md5_x = util::md5::md5_digest(&x).to_hex();
         let mut bytes = x.clone();
         bytes.extend_from_slice(&y);
         let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "no_source");
@@ -612,7 +612,7 @@ mod tests {
         let file = PlannedFile {
             rel: "a.dat".into(),
             size: 20,
-            md5: format!("{:x}", md5::compute(&bytes)),
+            md5: util::md5::md5_digest(&bytes).to_hex(),
             url_prefix: Arc::from(""),
             chunks: vec![chunk_at("c0", &md5_x, 10, 10)],
         };

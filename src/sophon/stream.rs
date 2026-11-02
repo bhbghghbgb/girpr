@@ -648,7 +648,7 @@ mod tests {
         assert_eq!(digest.bytes, buffered.len() as u64);
         assert_eq!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&buffered)),
+            crate::util::md5::md5_digest(&buffered).to_hex(),
             "the same digest as the buffered path"
         );
         assert_eq!(
@@ -683,7 +683,7 @@ mod tests {
         );
         assert_ne!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&payload)),
+            crate::util::md5::md5_digest(&payload).to_hex(),
             "a corrupt payload must not carry the wanted digest"
         );
     }
@@ -822,7 +822,7 @@ mod tests {
         );
         assert_eq!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&raw)),
+            crate::util::md5::md5_digest(&raw).to_hex(),
             "the checksum is of the decompressed bytes"
         );
         assert_eq!(digest.bytes, raw.len() as u64);

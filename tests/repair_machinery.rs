@@ -52,7 +52,7 @@ use std::path::{Path, PathBuf};
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
-    temp_dir,
+    md5hex, temp_dir,
 };
 use girpr_tempdir::TempDir;
 
@@ -249,10 +249,7 @@ fn snapshot(game: &Path) -> BTreeMap<String, (u64, String)> {
                 .to_string_lossy()
                 .replace('\\', "/");
             let bytes = std::fs::read(&path).expect("read file");
-            out.insert(
-                rel,
-                (bytes.len() as u64, format!("{:x}", md5::compute(&bytes))),
-            );
+            out.insert(rel, (bytes.len() as u64, md5hex(&bytes)));
         }
     }
     let mut out = BTreeMap::new();

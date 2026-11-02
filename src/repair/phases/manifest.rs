@@ -167,6 +167,7 @@ mod tests {
     use crate::hyp::{ChunkManifestMeta, ManifestFile, ManifestUrl};
     use crate::sleep::{NoSleep, SleepFuture};
     use crate::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+    use crate::util::md5::md5_digest;
     use prost::Message;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -180,7 +181,7 @@ mod tests {
         let manifest = SophonChunkManifest { chuncks: files };
         let mut raw = Vec::new();
         manifest.encode(&mut raw).expect("prost encode");
-        let checksum = format!("{:x}", md5::compute(&raw));
+        let checksum = md5_digest(&raw).to_hex();
         (
             zstd::encode_all(raw.as_slice(), 3).expect("zstd encode"),
             checksum,
@@ -190,7 +191,7 @@ mod tests {
     /// One file with one chunk at `offset`, so two manifests can describe the
     /// same path differently.
     fn file(path: &str, offset: i64) -> SophonChunkFile {
-        let digest = format!("{:x}", md5::compute(b"payload"));
+        let digest = md5_digest(b"payload").to_hex();
         SophonChunkFile {
             file: path.into(),
             chunks: vec![SophonChunk {

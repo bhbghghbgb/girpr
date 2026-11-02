@@ -86,8 +86,12 @@ pub struct FixtureManifest {
 /// manifests are available" (i.e. chunk reuse is available).
 pub const LATEST_TAG: &str = "9.9.9-test";
 
-fn md5hex(data: &[u8]) -> String {
-    format!("{:x}", md5::compute(data))
+pub fn md5hex(data: &[u8]) -> String {
+    use md5::Digest as _;
+    md5::Md5::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn zstd_bytes(data: &[u8]) -> Vec<u8> {

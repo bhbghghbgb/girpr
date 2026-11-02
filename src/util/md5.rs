@@ -428,7 +428,7 @@ mod tests {
     use super::*;
 
     fn hex(data: &[u8]) -> String {
-        format!("{:x}", md5::compute(data))
+        md5_digest(data).to_hex()
     }
 
     /// Ranges with **owned** MD5s, so a test can build a list without
@@ -468,6 +468,36 @@ mod tests {
     fn the_empty_md5_constant_is_the_empty_files_md5() {
         assert_eq!(hex(b""), EMPTY_MD5);
         assert_eq!(Md5::EMPTY.to_hex(), EMPTY_MD5);
+    }
+
+    #[test]
+    fn the_rfc_1321_vectors_hold() {
+        let million_a = "a".repeat(1_000_000);
+        let cases = [
+            ("", "d41d8cd98f00b204e9800998ecf8427e"),
+            ("a", "0cc175b9c0f1b6a831c399e269772661"),
+            ("abc", "900150983cd24fb0d6963f7d28e17f72"),
+            ("message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
+            (
+                "abcdefghijklmnopqrstuvwxyz",
+                "c3fcd3d76192e4007dfb496cca67e13b",
+            ),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                "d174ab98d277d9f5a5611c2c9f419d9f",
+            ),
+            (
+                "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+                "57edf4a22be3c955ac49da2e2107b67a",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(hex(input.as_bytes()), want, "{input:?}");
+        }
+        assert_eq!(
+            hex(million_a.as_bytes()),
+            "7707d6ae4e027c70eea2a935c2296f21"
+        );
     }
 
     #[test]
@@ -646,7 +676,7 @@ mod tests {
         ] {
             let path = dir.join(name);
             std::fs::write(&path, &data).unwrap();
-            let want = Md5::from(md5::compute(&data));
+            let want = md5_digest(&data);
             let mut f = File::open(&path).unwrap();
             assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name}");
             // The handle is left at EOF by the read; the next digest still

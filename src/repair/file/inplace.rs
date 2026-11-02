@@ -945,7 +945,7 @@ mod tests {
     fn an_inplace_scan_never_checks_a_source_less_chunk_at_offset_zero() {
         let x = vec![0x58u8; 10];
         let y = vec![0x59u8; 10];
-        let md5_x = format!("{:x}", md5::compute(&x));
+        let md5_x = util::md5::md5_digest(&x).to_hex();
         let mut bytes = x.clone();
         bytes.extend_from_slice(&y);
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "no_source_offset");
@@ -1015,10 +1015,10 @@ mod tests {
         good.extend_from_slice(&[0x42u8; 64]);
         std::fs::write(&path, &good).unwrap();
 
-        let md5_0 = format!("{:x}", md5::compute(&good[..64]));
-        let md5_1 = format!("{:x}", md5::compute(&good[64..]));
+        let md5_0 = util::md5::md5_digest(&good[..64]).to_hex();
+        let md5_1 = util::md5::md5_digest(&good[64..]).to_hex();
         let dest: Vec<util::ScanRange<'_>> = vec![(0, 64, &md5_0), (64, 64, &md5_1)];
-        let expect = format!("{:x}", md5::compute(&good));
+        let expect = util::md5::md5_digest(&good).to_hex();
 
         let mut f = std::fs::OpenOptions::new()
             .read(true)
@@ -1053,7 +1053,7 @@ mod tests {
                     vec![1],
                     "the extra scan names the chunk that is still wrong"
                 );
-                assert_eq!(md5, Md5::from(md5::compute(&bad)));
+                assert_eq!(md5, util::md5::md5_digest(&bad));
             }
             Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
         }
@@ -1100,7 +1100,7 @@ mod tests {
         let file = PlannedFile {
             rel: "a.dat".into(),
             size: bytes.len() as i64,
-            md5: format!("{:x}", md5::compute(bytes)),
+            md5: util::md5::md5_digest(bytes).to_hex(),
             url_prefix: Arc::from(""),
             chunks: Vec::new(),
         };

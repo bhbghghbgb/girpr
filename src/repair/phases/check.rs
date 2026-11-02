@@ -363,7 +363,7 @@ mod tests {
         let base = &*dir;
         std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
         std::fs::write(base.join("b.dat"), b"bbbb").unwrap();
-        let clean_md5 = format!("{:x}", md5::compute(b"aaaa"));
+        let clean_md5 = util::md5::md5_digest(b"aaaa").to_hex();
         let plan = Arc::new(plan_of(vec![
             planned("a.dat", 4, &clean_md5),
             planned("b.dat", 4, "ffffffffffffffffffffffffffffffff"),
