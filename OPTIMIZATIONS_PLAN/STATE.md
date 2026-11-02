@@ -47,7 +47,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T33 | D6 - remove test-only production API | completed | d47cd56, da2b5a2, bad95ca | RC-13 |
 | T34 | D8 - split the functions doing too much | completed | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
 | T35 | D9 - replace parameter bags with structs | pending_review | 09c40dc, 4660afd, 6fd9670, 63961bc | RC-15 |
-| T36 | D10 - name every exit code | todo | | RC-15 |
+| T36 | D10 - name every exit code | in_progress | | RC-15 |
 | T37 | B1 - trim the tokio feature set | todo | | RC-16 |
 | T38 | B2 - remove the `regex` dependency | todo | | RC-16 |
 | T39 | B3 - use `futures-util` directly | todo | | RC-16 |
