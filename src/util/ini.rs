@@ -254,11 +254,6 @@ fn test_no_fsync() -> bool {
 /// `[General]` — a deliberate deviation from Collapse's generic `[default]`
 /// bucket, since game-dir files are `[General]`-scoped.
 ///
-/// `dry_run` skips the write and logs the version it would write. No production
-/// caller sets it: `--dry-run` and `--purge-only` return before this function
-/// (the bump is skipped in both), and the post-phase passes `false`. The
-/// parameter is therefore unreachable from the CLI today.
-///
 /// See Collapse
 /// `CollapseLauncher/Classes/GameManagement/Versioning/GameVersionBase.IniConfig.cs`
 /// (`UpdateGameVersion`, `UpdateGameChannels`, `DefaultIniVersion`) and
@@ -270,7 +265,6 @@ pub fn write_config_ini(
     latest: &str,
     biz: &str,
     channel: (&str, &str, &str),
-    dry_run: bool,
 ) -> Result<()> {
     struct Section {
         /// First-seen spelling (e.g. `General`); `General` when created.
@@ -405,10 +399,6 @@ pub fn write_config_ini(
             let _ = writeln!(out, "{k}={v}");
         }
         out.push('\n');
-    }
-    if dry_run {
-        tracing::info!("would write config.ini game_version={}", latest);
-        return Ok(());
     }
     // The version bump must survive a power loss, so the temp is synced before
     // the rename; the test hook skips only that sync, never the write or rename.
@@ -744,14 +734,7 @@ mod tests {
             "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
         )
         .unwrap();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
         let lines: Vec<&str> = text.lines().collect();
@@ -777,14 +760,7 @@ mod tests {
         assert_eq!(sorted, expected, "{text}");
         // Rerun is byte-identical (no duplicate keys, stable order).
         let snapshot = text.clone();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert_eq!(text2, snapshot, "rerun must be byte-identical");
         for key in [
@@ -833,14 +809,7 @@ mod tests {
              cps=old\n",
         )
         .unwrap();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         // Sections survive: [General] + [Launcher], nothing flattened.
         assert!(
@@ -877,14 +846,7 @@ mod tests {
         assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Rerun byte-identical.
         let snapshot = text.clone();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("config.ini")).unwrap(),
             snapshot
@@ -896,7 +858,7 @@ mod tests {
     #[test]
     fn config_bump_creates_missing_and_handles_headerless() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "headerless");
-        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
         assert!(text.contains("game_version=5.1.0"), "{text}");
@@ -905,7 +867,7 @@ mod tests {
         assert!(text.contains("sdk_version=\n"), "{text}");
 
         std::fs::write(dir.join("config.ini"), "fps=60\ngame_version=1.0.0\n").unwrap();
-        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
         let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text2.contains("fps=60"), "{text2}");
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
