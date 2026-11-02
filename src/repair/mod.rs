@@ -53,7 +53,7 @@ pub use phases::metadata::Meta;
 pub use phases::plan::RepairPlan;
 pub use purge::PurgePlan;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -62,6 +62,7 @@ use anyhow::Context;
 use crate::config::{RunCtx, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
+use crate::sophon::SophonChunkFile;
 use crate::util;
 
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
@@ -173,12 +174,91 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // `--purge-before` and `--purge-after` delete the same things; only the
     // timing differs.
 
-    // 1 + 2. local state and server metadata.
-    let meta = metadata::fetch(ctx, &game_dir).await?;
+    // 1 + 2 + 2.5. local state, server metadata, and the begin report.
+    let meta = fetch_and_report(ctx, &game_dir).await?;
 
-    // 2.5 begin report to stdout (mirrored to log): versions + API-sourced
-    // metadata, so a stdout parser sees what is on disk and what it will
-    // become before any repair starts.
+    // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
+    let http = meta.hyp.http();
+    let (per_manifest, local_map) = load_manifests_and_reuse(ctx, &meta, &http, summary).await?;
+
+    // 4. work list, purge candidates, deprecated list, scan, estimates, and the
+    // ceilings — everything decided before a byte is written.
+    let Some(work) = build_and_assert_plan(
+        ctx,
+        summary,
+        &game_dir,
+        root.as_ref(),
+        &meta,
+        per_manifest,
+        &local_map,
+        readonly,
+    )
+    .await?
+    else {
+        // Exit `5`, returned rather than raised: it is "the run failed", not
+        // "the run was misconfigured", and routing it through the normal return
+        // gives every exit path one uniform SUMMARY tail.
+        // Nothing has been written at this point — no directory created, no
+        // `_tmp` opened, no file deleted, no `config.ini` touched.
+        return Ok(PlanOutcome::Finished(5));
+    };
+
+    // 4.7 `--print-plan` / `--plan-out`: report the whole plan and stop.
+    // Read-only by construction — this returns before `create_dir_all`, so no
+    // `game_dir`, no `_tmp`, no delete, no `config.ini` write. It does **not**
+    // imply `--check-only`: it answers "what would you do", not "what is wrong".
+    //
+    // The ceilings above still apply, and still trip here: narrowing what is
+    // verified is not a licence to skip the assertion.
+    publish_plan(
+        ctx,
+        &game_dir,
+        root.as_ref(),
+        &work.plan,
+        work.purge_plan.as_ref(),
+        work.scan.as_deref(),
+        &work.est_download_by_file,
+        work.est_download_bytes,
+    )
+    .await?;
+    if ctx.print_plan {
+        return Ok(PlanOutcome::Finished(0));
+    }
+
+    Ok(PlanOutcome::Ready(Box::new(PlanPhase {
+        game_dir,
+        meta,
+        http,
+        plan: work.plan,
+        purge_plan: work.purge_plan,
+        purge_keys: work.purge_keys,
+        scan: work.scan,
+        deprecated: work.deprecated,
+        local_map,
+    })))
+}
+
+/// The plan half's decision, before `--print-plan` / `--plan-out` publish it.
+///
+/// This is an output bag for [`build_and_assert_plan`], not a new phase: the
+/// caller hands it straight to [`publish_plan`] and then to [`PlanPhase`].
+struct PlanWork {
+    plan: Arc<RepairPlan>,
+    purge_plan: Option<PurgePlan>,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    deprecated: Vec<String>,
+    scan: Option<Arc<ScanReport>>,
+    /// The per-file download estimate. One derivation feeds both the `PLAN`
+    /// total and the `--plan-out` document.
+    est_download_by_file: Vec<u64>,
+    est_download_bytes: u64,
+}
+
+/// Steps 1 + 2 of the plan half: local state and server metadata, then the
+/// begin report to stdout (mirrored to log), so a stdout parser sees what is on
+/// disk and what it will become before any repair starts.
+async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
+    let meta = metadata::fetch(ctx, game_dir).await?;
     report::emit(
         &report::report_record(
             &meta.local_version,
@@ -191,12 +271,26 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         ),
         ctx.output,
     );
+    Ok(meta)
+}
 
-    // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
-    let http = meta.hyp.http();
+/// Step 3: the latest manifests (with each manifest's chunk URL prefix kept)
+/// and the local chunk-reuse map.
+async fn load_manifests_and_reuse(
+    ctx: &RunCtx,
+    meta: &Meta,
+    http: &reqwest::Client,
+    summary: &mut Summary,
+) -> Result<
+    (
+        Vec<(String, Vec<SophonChunkFile>)>,
+        Arc<manifest::LocalChunkMap>,
+    ),
+    RunFailure,
+> {
     let sleep = ctx.sleep.as_ref();
     let per_manifest = manifest::fetch_latest(
-        &http,
+        http,
         sleep,
         &meta.latest_build,
         &meta.audio,
@@ -206,7 +300,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     .await?;
     let local_map = Arc::new(
         manifest::local_reuse_map(
-            &http,
+            http,
             sleep,
             meta.local_build.as_ref(),
             &meta.audio,
@@ -231,9 +325,25 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
             "unavailable"
         });
     }
+    Ok((per_manifest, local_map))
+}
 
-    // 4. work list. The plan outlives the repair loop (the post-phase purge
-    // needs it), so it is shared rather than moved into the tasks.
+/// Step 4: the work list, the purge candidates, the deprecated list, the scan,
+/// the download estimate, and the scope-of-work ceilings.
+///
+/// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
+/// `PlanOutcome::Finished(5)` return so a helper never hands back an exit code.
+#[allow(clippy::too_many_arguments)] // the plan inputs are all distinct, already-built values
+async fn build_and_assert_plan(
+    ctx: &RunCtx,
+    summary: &mut Summary,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    meta: &Meta,
+    per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
+    local_map: &Arc<manifest::LocalChunkMap>,
+    readonly: bool,
+) -> Result<Option<PlanWork>, RunFailure> {
     let scope = &ctx.path_scope;
     let plan = Arc::new(
         phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
@@ -279,7 +389,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         None
     };
     let purge_plan = if let Some(keys) = purge_keys.as_ref() {
-        let purge_game_dir = game_dir.clone();
+        let purge_game_dir = game_dir.to_path_buf();
         let keys = Arc::clone(keys);
         let purge_scope = ctx.path_scope.clone();
         Some(
@@ -357,10 +467,10 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     let scan = if ctx.scan {
         Some(Arc::new(
             scan::scan_plan(
-                &game_dir,
-                root.as_ref(),
+                game_dir,
+                root,
                 Arc::clone(&plan),
-                Arc::clone(&local_map),
+                Arc::clone(local_map),
                 ctx.jobs,
             )
             .await,
@@ -392,14 +502,8 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // `PLAN` total below and the `--plan-out` document further down. A second
     // derivation would be a second answer.
     let est_download_by_file: Vec<u64> = match &scan {
-        Some(s) => s.est_download_bytes_by_file(
-            &plan,
-            &game_dir,
-            root.as_ref(),
-            ctx.repair_mode,
-            &local_map,
-        ),
-        None => plan.est_download_bytes_by_file(&local_map),
+        Some(s) => s.est_download_bytes_by_file(&plan, game_dir, root, ctx.repair_mode, local_map),
+        None => plan.est_download_bytes_by_file(local_map),
     };
     let est_download_bytes = est_download_by_file
         .iter()
@@ -422,29 +526,41 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         for hit in &hits {
             tracing::error!("limit exceeded: {hit}");
         }
-        // Exit `5`, returned rather than raised: it is "the run failed", not
-        // "the run was misconfigured", and routing it through the normal return
-        // gives every exit path one uniform SUMMARY tail.
-        // Nothing has been written at this point — no directory created, no
-        // `_tmp` opened, no file deleted, no `config.ini` touched.
-        return Ok(PlanOutcome::Finished(5));
+        return Ok(None);
     }
 
-    // 4.7 `--print-plan`: report the whole plan and stop. Read-only by
-    // construction — this returns before `create_dir_all`, so no `game_dir`,
-    // no `_tmp`, no delete, no `config.ini` write. It does **not** imply
-    // `--check-only`: it answers "what would you do", not "what is wrong".
-    //
-    // The ceilings above still apply, and still trip here: narrowing what is
-    // verified is not a licence to skip the assertion.
-    // Both consumers of the disk figures need the same table: the `PLAN` line
-    // and the `--plan-out` document. Compute it when either was asked for, so
-    // the document is written for a run that does the work as well as for
-    // `--print-plan`.
+    Ok(Some(PlanWork {
+        plan,
+        purge_plan,
+        purge_keys,
+        deprecated,
+        scan,
+        est_download_by_file,
+        est_download_bytes,
+    }))
+}
+
+/// Step 4.7: publish the plan when `--print-plan` or `--plan-out` asked for it.
+///
+/// Both consumers of the disk figures need the same table: the `PLAN` line and
+/// the `--plan-out` document. Compute it when either was asked for, so the
+/// document is written for a run that does the work as well as for
+/// `--print-plan`.
+#[allow(clippy::too_many_arguments)] // the published plan is one document over several borrowed parts
+async fn publish_plan(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    purge_plan: Option<&PurgePlan>,
+    scan: Option<&ScanReport>,
+    est_download_by_file: &[u64],
+    est_download_bytes: u64,
+) -> Result<(), RunFailure> {
     let disk = if ctx.print_plan || ctx.plan_out.is_some() {
-        let disk_game_dir = game_dir.clone();
-        let disk_root = root.clone();
-        let disk_plan = Arc::clone(&plan);
+        let disk_game_dir = game_dir.to_path_buf();
+        let disk_root = root.cloned();
+        let disk_plan = Arc::clone(plan);
         let repair_mode = ctx.repair_mode;
         let jobs = ctx.jobs;
         Some(
@@ -469,12 +585,12 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     };
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
-            &plan,
-            purge_plan.as_ref(),
+            plan,
+            purge_plan,
             est_download_bytes,
-            scope.is_active(),
+            ctx.path_scope.is_active(),
             disk.as_ref().expect("the print-plan branch asks for it"),
-            scan.as_ref().map(|s| s.bytes),
+            scan.map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
@@ -487,29 +603,15 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // write.
     if let Some(out) = ctx.plan_out.as_deref() {
         let doc = scope::report::PlanDocument::new(
-            &plan,
-            purge_plan.as_ref(),
-            &est_download_by_file,
+            plan,
+            purge_plan,
+            est_download_by_file,
             disk.as_ref().expect("the plan-out branch asks for it"),
         );
-        doc.write_to(std::path::Path::new(out))
+        doc.write_to(Path::new(out))
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
     }
-    if ctx.print_plan {
-        return Ok(PlanOutcome::Finished(0));
-    }
-
-    Ok(PlanOutcome::Ready(Box::new(PlanPhase {
-        game_dir,
-        meta,
-        http,
-        plan,
-        purge_plan,
-        purge_keys,
-        scan,
-        deprecated,
-        local_map,
-    })))
+    Ok(())
 }
 
 /// The execute half: everything here may touch the disk.
