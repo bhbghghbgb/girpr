@@ -35,7 +35,8 @@
 //! APIs), `sophon` (chunk-manifest protobuf, fetch/verify/parse, manifest
 //! filter, local chunk-reuse map), `biz` (biz → launcher id / game id /
 //! channel tuple), `report` (run counters, the record data plane and every
-//! stdout line), `sleep` (the injectable wait) and `util` (MD5, `config.ini`,
+//! stdout line), `retry` (the shared attempt/backoff loop), `sleep` (the
+//! injectable wait) and `util` (MD5, `config.ini`,
 //! ignore/blacklist files, server-path containment).
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
@@ -49,6 +50,7 @@ mod hyp;
 mod logging;
 mod repair;
 mod report;
+mod retry;
 mod sleep;
 mod sophon;
 mod util;
