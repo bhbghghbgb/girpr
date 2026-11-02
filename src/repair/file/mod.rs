@@ -452,12 +452,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         std::fs::create_dir_all(parent)?;
     }
     tracing::debug!(expect_size = file.size, expect_md5 = %file.md5, chunks = file.chunks.len(), "check start");
-    let prefix = ctx
-        .plan
-        .url_prefix_by_file
-        .get(&file.rel)
-        .cloned()
-        .unwrap_or_default();
+    let prefix = file.url_prefix.as_ref();
     // NOTE(starward-parity): temp-then-atomic-promote. Starward writes
     // `FullPath + "_tmp"` (OpenOrCreate), verifies MD5, then `Move(tmp, final,
     // true)` and `Delete(tmp)` on mismatch — same contract here, including the
@@ -498,9 +493,9 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     let mut writes = FileWrites::default();
     while attempt <= max_attempts {
         let outcome = if inplace {
-            inplace::attempt_inplace(ctx, file, &prefix, &final_path, &mut writes).await
+            inplace::attempt_inplace(ctx, file, prefix, &final_path, &mut writes).await
         } else {
-            temp::attempt_temp(ctx, file, &prefix, &tmp_path, &final_path, &mut writes).await
+            temp::attempt_temp(ctx, file, prefix, &tmp_path, &final_path, &mut writes).await
         };
         match outcome {
             Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
@@ -823,6 +818,7 @@ mod tests {
             rel: "f.bin".into(),
             size: 20,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks: chunks.clone(),
         };
 
@@ -855,9 +851,9 @@ mod tests {
                 rel: TEST_PANIC_REL.into(),
                 size: 4,
                 md5: String::new(),
+                url_prefix: Arc::from(""),
                 chunks: Vec::new(),
             }],
-            url_prefix_by_file: Default::default(),
         });
         let summary = repair_all(
             reqwest::Client::new(),

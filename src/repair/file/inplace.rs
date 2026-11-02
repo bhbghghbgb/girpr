@@ -897,7 +897,6 @@ mod tests {
             plan: Arc::new(RepairPlan {
                 latest: String::new(),
                 files: Vec::new(),
-                url_prefix_by_file: Default::default(),
             }),
             local_map: Arc::new(LocalChunkMap::new()),
             scan,
@@ -932,6 +931,7 @@ mod tests {
             rel: "a.dat".into(),
             size: bytes.len() as i64,
             md5: format!("{:x}", md5::compute(bytes)),
+            url_prefix: Arc::from(""),
             chunks: Vec::new(),
         };
         let verdict = Verdict {

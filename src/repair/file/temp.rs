@@ -648,7 +648,6 @@ mod tests {
             plan: Arc::new(RepairPlan {
                 latest: String::new(),
                 files: Vec::new(),
-                url_prefix_by_file: Default::default(),
             }),
             local_map: Arc::new(LocalChunkMap::new()),
             scan: None,
@@ -703,6 +702,7 @@ mod tests {
             rel: "game/foo.dat".into(),
             size: 64,
             md5: String::new(),
+            url_prefix: Arc::from(""),
             chunks: Vec::new(),
         };
 

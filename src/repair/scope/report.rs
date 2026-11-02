@@ -396,7 +396,7 @@ mod tests {
     use crate::repair::phases::plan::PlannedFile;
     use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
-    use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn chunk(id: &str, size: i64) -> crate::sophon::SophonChunk {
         crate::sophon::SophonChunk {
@@ -418,22 +418,24 @@ mod tests {
                     rel: "game/foo.dat".into(),
                     size: 128,
                     md5: "a".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![chunk("c0", 10), chunk("c1", 20)],
                 },
                 PlannedFile {
                     rel: "game/bar.dat".into(),
                     size: 64,
                     md5: "b".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![chunk("c2", 30)],
                 },
                 PlannedFile {
                     rel: "game/empty.dat".into(),
                     size: 0,
                     md5: "c".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![],
                 },
             ],
-            url_prefix_by_file: HashMap::new(),
         }
     }
 
@@ -703,10 +705,10 @@ mod tests {
                     rel: rel.into(),
                     size: i64::MAX,
                     md5: "m".into(),
+                    url_prefix: Arc::from(""),
                     chunks: vec![],
                 })
                 .collect(),
-            url_prefix_by_file: HashMap::new(),
         };
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 3);
         assert_eq!(disk.est_write_bytes, u64::MAX);
@@ -726,13 +728,13 @@ mod tests {
                 rel: "game/huge.dat".into(),
                 size: 192,
                 md5: "m".into(),
+                url_prefix: Arc::from(""),
                 chunks: vec![
                     chunk("c0", i64::MAX),
                     chunk("c1", i64::MAX),
                     chunk("c2", i64::MAX),
                 ],
             }],
-            url_prefix_by_file: HashMap::new(),
         };
         let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
         assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);

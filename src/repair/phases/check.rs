@@ -291,6 +291,7 @@ mod tests {
             rel: rel.into(),
             size,
             md5: md5.into(),
+            url_prefix: Arc::from(""),
             chunks: Vec::new(),
         }
     }
@@ -299,7 +300,6 @@ mod tests {
         RepairPlan {
             latest: "9.9".into(),
             files,
-            url_prefix_by_file: HashMap::new(),
         }
     }
 

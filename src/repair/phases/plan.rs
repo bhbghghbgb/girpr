@@ -13,7 +13,7 @@
 //! makes any-version → latest work: the local manifest is only ever an
 //! optimization (chunk reuse), never an input to correctness.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,6 +32,9 @@ pub struct PlannedFile {
     pub rel: String,
     pub size: i64,
     pub md5: String,
+    /// The chunk URL prefix this file's chunks live under. Shared per manifest
+    /// so a manifest's files do not each own a copy of the same string.
+    pub url_prefix: Arc<str>,
     /// The file's chunks, **sorted by offset** (see `build_plan`) and with
     /// the empty ones dropped.
     pub chunks: Vec<SophonChunk>,
@@ -151,9 +154,6 @@ pub struct Layout {
 pub struct RepairPlan {
     pub latest: String,
     pub files: Vec<PlannedFile>,
-    /// The chunk URL prefix each file's chunks live under, shared per manifest
-    /// so a manifest's files do not each own a copy of the same string.
-    pub url_prefix_by_file: HashMap<String, Arc<str>>,
 }
 
 impl RepairPlan {
@@ -285,7 +285,6 @@ pub fn build_plan(
     scope: &PathScope,
 ) -> Result<RepairPlan> {
     let mut files: Vec<PlannedFile> = Vec::new();
-    let mut prefix: HashMap<String, Arc<str>> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (url_prefix, list) in per_manifest {
         // One allocation per manifest: every file in the list shares it.
@@ -308,7 +307,6 @@ pub fn build_plan(
             if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(path_key(&rel)) {
                 continue;
             }
-            prefix.insert(rel.clone(), Arc::clone(&url_prefix));
             // The chunk list is made **ascending by offset** here, once,
             // because everything downstream depends on it and nothing
             // upstream guarantees it: the manifest is whatever the server
@@ -325,6 +323,7 @@ pub fn build_plan(
                 rel,
                 size: f.size,
                 md5: f.md5.clone(),
+                url_prefix: Arc::clone(&url_prefix),
                 chunks,
             };
             // Validate **before** the empty-chunk drop: a zero-size chunk is an
@@ -369,7 +368,6 @@ pub fn build_plan(
     Ok(RepairPlan {
         latest: latest_tag.to_string(),
         files,
-        url_prefix_by_file: prefix,
     })
 }
 
@@ -397,6 +395,7 @@ mod tests {
             rel: "f.dat".into(),
             size,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks,
         }
     }
@@ -613,10 +612,7 @@ mod tests {
             vec!["a.dat", "b.dat"]
         );
         assert_eq!(plan.latest, "5.0");
-        assert_eq!(
-            plan.url_prefix_by_file.get("a.dat").unwrap().as_ref(),
-            "http://x"
-        );
+        assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
     }
 
     #[test]
@@ -644,10 +640,7 @@ mod tests {
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
-        assert_eq!(
-            plan.url_prefix_by_file.get("a/b.dat").unwrap().as_ref(),
-            "http://x"
-        );
+        assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
         assert_eq!(plan.expected_paths().len(), 1);
     }
 
@@ -709,6 +702,7 @@ mod tests {
             rel: "f.bin".into(),
             size: 64,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks: vec![huge.clone(), huge.clone(), huge],
         };
         assert_eq!(est_file_download_bytes(&file, None), u64::MAX);
@@ -768,10 +762,6 @@ mod tests {
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
         assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
-        assert!(
-            !plan.url_prefix_by_file.contains_key("game/bar.dat"),
-            "a dropped path must not keep a prefix entry either"
-        );
     }
 
     // -----------------------------------------------------------------------

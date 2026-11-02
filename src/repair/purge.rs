@@ -493,7 +493,7 @@ mod tests {
     use crate::repair::phases::plan::PlannedFile;
     use crate::repair::scope::{LimitHit, Limits, Preflight};
     use girpr_tempdir::TempDir;
-    use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn purge_fixture() -> (HashSet<String>, HashSet<String>) {
         let expected: HashSet<String> = ["game.dat".to_string()].into_iter().collect();
@@ -524,10 +524,10 @@ mod tests {
                     rel: (*rel).into(),
                     size: 4,
                     md5: String::new(),
+                    url_prefix: Arc::from(""),
                     chunks: vec![],
                 })
                 .collect(),
-            url_prefix_by_file: HashMap::new(),
         }
     }
 

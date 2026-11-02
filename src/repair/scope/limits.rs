@@ -225,8 +225,8 @@ mod tests {
     use super::*;
     use crate::repair::phases::plan::PlannedFile;
     use crate::repair::purge::PurgeCandidate;
-    use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     fn plan(n: usize) -> RepairPlan {
         RepairPlan {
@@ -236,10 +236,10 @@ mod tests {
                     rel: format!("f{i}.dat"),
                     size: 1,
                     md5: String::new(),
+                    url_prefix: Arc::from(""),
                     chunks: vec![],
                 })
                 .collect(),
-            url_prefix_by_file: HashMap::new(),
         }
     }
 

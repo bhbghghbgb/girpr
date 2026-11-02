@@ -593,6 +593,7 @@ mod tests {
             rel: "a.dat".into(),
             size: 20,
             md5: format!("{:x}", md5::compute(&bytes)),
+            url_prefix: Arc::from(""),
             chunks: vec![chunk_at("c0", &md5_x, 10, 10)],
         };
 
