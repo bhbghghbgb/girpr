@@ -528,6 +528,72 @@ mod tests {
         }
     }
 
+    /// The on-disk rel spelling is one rule for both walks: strip the walk
+    /// base, then report `/`. A path outside the base has no spelling and
+    /// reports `None`; the base itself reports the empty rel.
+    #[test]
+    fn rel_from_base_strips_the_walk_base_and_uses_slashes() {
+        let base = Path::new("Game");
+        assert_eq!(
+            rel_from_base(&base.join("a.pck"), base).as_deref(),
+            Some("a.pck")
+        );
+        assert_eq!(
+            rel_from_base(&base.join("Audio/cache/sub/a.pck"), base).as_deref(),
+            Some("Audio/cache/sub/a.pck")
+        );
+        // The base names no file: it is under itself, and the empty rel says so.
+        assert_eq!(rel_from_base(base, base).as_deref(), Some(""));
+        // A sibling, or an ancestor, cannot be spelled relative to the base.
+        assert_eq!(rel_from_base(Path::new("Other/a.pck"), base), None);
+        assert_eq!(rel_from_base(base, &base.join("sub")), None);
+    }
+
+    /// A name that is not UTF-8 is still reported: the rel is lossy by design,
+    /// so the scope and the log get a string instead of the walk refusing the
+    /// file. Both platforms can build the fixture from an unpaired surrogate or
+    /// an invalid byte.
+    #[test]
+    fn rel_from_base_reports_a_non_utf8_name_lossily() {
+        let base = Path::new("Game");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"bad\xff.pck");
+            assert_eq!(
+                rel_from_base(&base.join(name), base).unwrap(),
+                "bad\u{fffd}.pck"
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            // An unpaired surrogate has no UTF-8 encoding.
+            let name =
+                std::ffi::OsString::from_wide(&[0x62, 0x61, 0x64, 0xD800, 0x2E, 0x70, 0x63, 0x6B]);
+            assert_eq!(
+                rel_from_base(&base.join(&name), base).unwrap(),
+                "bad\u{fffd}.pck"
+            );
+        }
+    }
+
+    /// The join helper is the post-phase's spelling: a rel dir and a walk name,
+    /// one separator, `/` on every platform, and an empty dir adds none.
+    #[test]
+    fn join_rel_adds_one_separator_and_normalises_the_name() {
+        assert_eq!(join_rel("", Path::new("a.pck")), "a.pck");
+        assert_eq!(
+            join_rel("Audio/cache", Path::new("sub/a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+        // A name Windows spelled with `\` is reported in the `/` form.
+        assert_eq!(
+            join_rel("Audio/cache", Path::new("sub\\a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+    }
+
     /// Every atomic writer names its temp the same way: the suffix is appended
     /// to the whole file name, so no extension is replaced and a multi-dot name
     /// keeps its shape.
