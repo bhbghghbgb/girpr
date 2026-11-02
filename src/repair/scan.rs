@@ -26,7 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 
 use super::file::Mode;
 use crate::config::RepairMode;
@@ -239,7 +239,7 @@ pub async fn scan_plan(
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let total_files = plan.files.len();
-    let mut stream = futures::stream::iter(0..total_files)
+    let mut stream = futures_util::stream::iter(0..total_files)
         .map(move |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.to_path_buf();

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 
 use crate::report::{self, Summary};
 use crate::util::{self, Md5};
@@ -50,7 +50,7 @@ pub async fn verify_plan(
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let game_dir = game_dir.to_path_buf();
-    let mut outcomes: Vec<(usize, CheckOutcome)> = futures::stream::iter(0..plan.files.len())
+    let mut outcomes: Vec<(usize, CheckOutcome)> = futures_util::stream::iter(0..plan.files.len())
         .map(|idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.clone();

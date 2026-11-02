@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::StreamExt;
+use futures_util::StreamExt;
 use prost::Message;
 use std::io::Write;
 
@@ -476,7 +476,7 @@ async fn stream_body<S, B, E>(
     sink: &mut impl ChunkSink,
 ) -> Result<ChunkDigest, StreamFailure>
 where
-    S: futures::Stream<Item = Result<B, E>> + Unpin,
+    S: futures_core::Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
     E: std::fmt::Display,
 {
@@ -616,7 +616,7 @@ mod tests {
         max_compressed: Option<u64>,
     ) -> Result<(Vec<u8>, ChunkDigest), StreamError> {
         let mut sink: Vec<u8> = Vec::new();
-        let body = futures::stream::iter(pieces(compressed, 4096));
+        let body = futures_util::stream::iter(pieces(compressed, 4096));
         let digest = stream_body(body, expected, max_compressed, &mut sink)
             .await
             .map_err(|f| f.error)?;
@@ -715,7 +715,7 @@ mod tests {
         body.push(Err(std::io::Error::other("the connection dropped")));
         let mut sink: Vec<u8> = Vec::new();
         let f = stream_body(
-            futures::stream::iter(body),
+            futures_util::stream::iter(body),
             Some(payload.len() as u64),
             Some(compressed.len() as u64),
             &mut sink,
@@ -738,7 +738,7 @@ mod tests {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
         let compressed = frame(&payload);
         let mut sink: Vec<u8> = Vec::new();
-        let body = futures::stream::iter(pieces(&compressed, compressed.len()));
+        let body = futures_util::stream::iter(pieces(&compressed, compressed.len()));
         let f = stream_body(
             body,
             Some(payload.len() as u64),
@@ -809,7 +809,7 @@ mod tests {
         let compressed = frame(&raw);
         // The buffer the API's `uncompressed_size` sizes.
         let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
-        let body = futures::stream::iter(pieces(&compressed, 4096));
+        let body = futures_util::stream::iter(pieces(&compressed, 4096));
         let digest = stream_body(body, None, None, &mut sink)
             .await
             .expect("the frame decodes");

@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use futures::StreamExt;
+use futures_util::StreamExt;
 use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
@@ -88,7 +88,7 @@ pub async fn fetch_latest(
     let manifests = sophon::select_manifests(latest_build, audio_langs, ignore);
     let limit = manifest_concurrency(jobs);
     tracing::info!("manifest concurrency={limit}");
-    let results = futures::stream::iter(manifests.iter().copied().enumerate())
+    let results = futures_util::stream::iter(manifests.iter().copied().enumerate())
         .map(|(index, m)| async move {
             let files = sophon::fetch_manifest(http, sleep, m).await;
             (index, files)
@@ -134,7 +134,7 @@ pub async fn local_reuse_map(
     let manifests = sophon::select_manifests(local_build, audio_langs, ignore);
     let limit = manifest_concurrency(jobs);
     tracing::info!("local manifest concurrency={limit}");
-    let results = futures::stream::iter(manifests.iter().copied().enumerate())
+    let results = futures_util::stream::iter(manifests.iter().copied().enumerate())
         .map(|(index, m)| async move {
             let files = sophon::fetch_manifest(http, sleep, m).await;
             (index, files)
