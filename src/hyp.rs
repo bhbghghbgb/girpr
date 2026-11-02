@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::Biz;
+use crate::retry::{Retry, retry};
 use crate::sleep::{RealSleep, Sleep};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
@@ -285,27 +286,37 @@ impl HypClient {
 
     async fn get_node<T: DeserializeOwned>(&self, url: &str, node: &str) -> Result<T> {
         tracing::debug!(api = "hyp", url = %url, "GET");
-        let mut last_err = anyhow::anyhow!("no attempts");
-        for attempt in 1..=5 {
-            let r = self.client.get(url).send().await;
-            match r {
+        retry(5, self.sleep.as_ref(), |attempt| async move {
+            match self.client.get(url).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = resp.bytes().await.context("read body")?;
+                    let body = match resp.bytes().await {
+                        Ok(body) => body,
+                        Err(e) => {
+                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                        }
+                    };
                     tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
-                    let w: NodeWrapper =
-                        serde_json::from_slice(&body).context("parse hyp wrapper")?;
+                    let w: NodeWrapper = match serde_json::from_slice(&body) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            return Retry::Fatal(
+                                anyhow::Error::from(e).context("parse hyp wrapper"),
+                            );
+                        }
+                    };
                     if w.retcode != 0 {
                         tracing::debug!(api = "hyp", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
-                        last_err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                             "hyp api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
                             url
                         );
                         if terminal_retcode(w.retcode) {
-                            return Err(last_err);
+                            return Retry::Fatal(err);
                         }
+                        Retry::Retry(err)
                     } else {
                         let node_val = w
                             .data
@@ -314,48 +325,48 @@ impl HypClient {
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
                         tracing::debug!(api = "hyp", url = %url, node, attempt, "ok");
-                        let v: T = serde_json::from_value(node_val).context("parse hyp node")?;
-                        return Ok(v);
+                        match serde_json::from_value(node_val) {
+                            Ok(v) => Retry::Done(v),
+                            Err(e) => Retry::Fatal(
+                                anyhow::Error::from(e).context("parse hyp node"),
+                            ),
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::debug!(api = "hyp", url = %url, attempt, "http error: {}", e);
-                    last_err = anyhow::anyhow!("http {}", e);
+                    Retry::Retry(anyhow::anyhow!("http {}", e))
                 }
             }
-            self.sleep
-                .sleep(std::time::Duration::from_secs(attempt))
-                .await;
-        }
-        Err(last_err)
+        })
+        .await
     }
 
     async fn get_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
         // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
         // Returns retcode -202 when tag unknown -> caller maps to None.
         tracing::debug!(api = "sophon", url = %url, "GET");
-        let mut last_err = anyhow::anyhow!("no attempts");
-        for attempt in 1..=5 {
-            let resp = self.client.get(url).send().await;
-            match resp {
+        retry(5, self.sleep.as_ref(), |attempt| async move {
+            match self.client.get(url).send().await {
                 Ok(r) => {
                     let status = r.status();
-                    let body = r.bytes().await.context("read body")?;
+                    let body = match r.bytes().await {
+                        Ok(body) => body,
+                        Err(e) => {
+                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                        }
+                    };
                     tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
                     let w: Wrapper<T> = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
                             tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
-                            last_err = anyhow::anyhow!("parse sophon wrapper: {}", e);
-                            self.sleep
-                                .sleep(std::time::Duration::from_secs(attempt))
-                                .await;
-                            continue;
+                            return Retry::Retry(anyhow::anyhow!("parse sophon wrapper: {}", e));
                         }
                     };
                     if w.retcode != 0 {
                         tracing::debug!(api = "sophon", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
-                        last_err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                             "sophon api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
@@ -365,28 +376,26 @@ impl HypClient {
                             // Distinct from the other terminal codes: the caller
                             // maps this one to "no local manifest" and falls back,
                             // where an invalid-params code is a hard stop.
-                            return Err(SophonNotFound.into());
+                            return Retry::Fatal(SophonNotFound.into());
                         }
                         if terminal_retcode(w.retcode) {
-                            return Err(last_err);
+                            return Retry::Fatal(err);
                         }
+                        Retry::Retry(err)
                     } else if let Some(d) = w.data {
                         tracing::debug!(api = "sophon", url = %url, attempt, "ok");
-                        return Ok(d);
+                        Retry::Done(d)
                     } else {
-                        last_err = anyhow::anyhow!("sophon api empty data url={}", url);
+                        Retry::Retry(anyhow::anyhow!("sophon api empty data url={}", url))
                     }
                 }
                 Err(e) => {
                     tracing::debug!(api = "sophon", url = %url, attempt, "http error: {}", e);
-                    last_err = anyhow::anyhow!("http {}", e);
+                    Retry::Retry(anyhow::anyhow!("http {}", e))
                 }
             }
-            self.sleep
-                .sleep(std::time::Duration::from_secs(attempt))
-                .await;
-        }
-        Err(last_err)
+        })
+        .await
     }
 
     pub async fn game_config(&self) -> Result<GameConfig> {
