@@ -46,8 +46,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T32 | D7 - reconcile documentation with the code | completed | b92f90d, 8e3f127 | RC-13 |
 | T33 | D6 - remove test-only production API | completed | d47cd56, da2b5a2, bad95ca | RC-13 |
 | T34 | D8 - split the functions doing too much | completed | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
-| T35 | D9 - replace parameter bags with structs | pending_review | 09c40dc, 4660afd, 6fd9670, 63961bc | RC-15 |
-| T36 | D10 - name every exit code | pending_review | 66b37a6, 487b7ad, bc12be9 | RC-15 |
+| T35 | D9 - replace parameter bags with structs | completed | 09c40dc, 4660afd, 6fd9670, 63961bc | RC-15 |
+| T36 | D10 - name every exit code | completed | 66b37a6, 487b7ad, bc12be9 | RC-15 |
 | T37 | B1 - trim the tokio feature set | todo | | RC-16 |
 | T38 | B2 - remove the `regex` dependency | todo | | RC-16 |
 | T39 | B3 - use `futures-util` directly | todo | | RC-16 |
@@ -78,7 +78,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-12 | T30-T31 | done | | Both completed without fixes |
 | RC-13 | T32-T33 | done | 8e3f127 | T32 fixed: legacy-vs-active lock in settings docs |
 | RC-14 | T34 | done | | Completed without fixes |
-| RC-15 | T35-T36 | in_progress | | |
+| RC-15 | T35-T36 | done | | Both completed without fixes |
 | RC-16 | T37-T43 | pending | | |
 | RC-17 | T44-T45 | pending | | |
 | RC-18 | T46-T47 | pending | | |
@@ -180,6 +180,12 @@ until the main tasks and rework are done.
 | F79 | RC-14 review | `src/repair/file/inplace.rs`, `src/repair/mod.rs` | Trim/tier decisions and plan-step guards have only end-to-end coverage. | todo |
 | F80 | T34 implementer | `src/repair/mod.rs` | `build_and_assert_plan` is still ~150 lines and could split further. | todo |
 | F81 | T34 implementer | `src/retry.rs` | Clippy `enum_variant_names` warning predates the work and is still present. | todo |
+| F82 | RC-15 review | `src/repair/mod.rs`, `src/repair/file/mod.rs`, `src/repair/file/inplace.rs` | Five `too_many_arguments` allows remain outside T35's four sites. | todo |
+| F83 | RC-15 review | `src/report/emit.rs` | `ReportProvenance` exposes every field publicly; a constructor or narrower visibility would harden it. | todo |
+| F84 | T35 implementer | `src/sophon/stream.rs` | The streaming path joins the URL per attempt; carrying the joined URL would avoid the allocation. | todo |
+| F85 | RC-15 review | `src/config.rs`, `tests/repair_offline.rs` | `PartialEq<i32> for RunExit` is a numeric escape hatch; convert test assertions to variants and drop it. | todo |
+| F86 | RC-15 review | `src/repair/phases/check.rs`, `src/main.rs` | Prose still describes exit codes as bare numbers. | todo |
+| F87 | T36 implementer | `src/config.rs` | `From<RunFailure> for RunExit` is exercised only by tests; no production caller yet. | todo |
 
 ## Follow-up batches
 
