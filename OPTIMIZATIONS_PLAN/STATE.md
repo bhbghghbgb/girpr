@@ -43,8 +43,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T29 | D2 - one retry/backoff scaffold | completed | fea2efe, c665a40, 526f78c, 01776f9, a41eda4 | RC-11 |
 | T30 | D4 - one rel-path spelling helper | completed | 4ee251b, 48d4499, fb85754 | RC-12 |
 | T31 | D5 - one per-range to per-chunk remap | completed | 9090504, d81083e | RC-12 |
-| T32 | D7 - reconcile documentation with the code | pending_review | b92f90d | RC-13 |
-| T33 | D6 - remove test-only production API | pending_review | d47cd56, da2b5a2, bad95ca | RC-13 |
+| T32 | D7 - reconcile documentation with the code | completed | b92f90d, 8e3f127 | RC-13 |
+| T33 | D6 - remove test-only production API | completed | d47cd56, da2b5a2, bad95ca | RC-13 |
 | T34 | D8 - split the functions doing too much | todo | | RC-14 |
 | T35 | D9 - replace parameter bags with structs | todo | | RC-15 |
 | T36 | D10 - name every exit code | todo | | RC-15 |
@@ -76,7 +76,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-10 | T27 | done | | Completed without fixes |
 | RC-11 | T28-T29 | done | | Both completed without fixes |
 | RC-12 | T30-T31 | done | | Both completed without fixes |
-| RC-13 | T32-T33 | in_progress | | |
+| RC-13 | T32-T33 | done | 8e3f127 | T32 fixed: legacy-vs-active lock in settings docs |
 | RC-14 | T34 | pending | | |
 | RC-15 | T35-T36 | pending | | |
 | RC-16 | T37-T43 | pending | | |
@@ -171,6 +171,10 @@ until the main tasks and rework are done.
 | F70 | RC-12 review | `src/repair/file/inplace.rs` | `source_ok_by_range` is the inverse mapping; cross-reference or pin it near the shared remap. | todo |
 | F71 | T30 implementer | `src/util/path.rs` | `join_rel` assumes an already-clean `dir_rel` with no trailing separator. | todo |
 | F72 | T30 implementer | `src/util/mod.rs` | The `path` module summary does not mention the two new rel helpers. | todo |
+| F73 | RC-13 review | `src/repair/mod.rs`, `README.md`, `docs/02` | `--print-plan --dry-run` still fetches the deprecated list, contradicting the documented contract. | todo |
+| F74 | RC-13 review | `src/report/emit.rs` | Public docs link to the private `write_line`, leaving a rustdoc warning. | todo |
+| F75 | T33 implementer | `tools/sync` | The sibling crate has its own unrelated `Record::event` implementation. | todo |
+| F76 | T33 implementer | `src/util/ini.rs` | No pure `render_config_ini` helper; future tests observing rendering without writing would need one. | todo |
 
 ## Follow-up batches
 
