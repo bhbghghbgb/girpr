@@ -59,7 +59,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 
-use crate::config::{RunCtx, RunFailure};
+use crate::config::{RunCtx, RunExit, RunFailure};
 use crate::hyp::HypClient;
 use crate::report::{self, Summary};
 use crate::sophon::SophonChunkFile;
@@ -71,15 +71,12 @@ use scan::ScanReport;
 
 /// Bring one install to the latest live version.
 ///
-/// Returns the run counters and the process exit code:
-/// `0` ok (or `--check-only` clean) · `1` usage/config · `2` metadata/network ·
-/// `3` write/verify · `4` `--check-only` found damage. Fatal classes come back
-/// as [`RunFailure`], which carries the same codes.
+/// Returns the run counters and the process exit code as a [`RunExit`].
 ///
 /// The work is split in two halves: `plan_phase` decides everything and
 /// touches nothing, then `execute_phase` carries it out. This function is
 /// only the phase order.
-pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
+pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
     // The counters accumulate across both halves and an early plan return still
     // has to hand them back, so `run` owns the `Summary` and lends it out.
     let mut summary = Summary::default();
@@ -135,16 +132,16 @@ enum PlanOutcome {
     ///
     /// Boxed so the enum stays one word; `PlanPhase` is the whole run state.
     Ready(Box<PlanPhase>),
-    /// The run ends in the plan half: `5` for a scope ceiling, `0` for
-    /// `--print-plan`.
-    Finished(i32),
+    /// The run ends in the plan half: [`RunExit::Limit`] for a scope ceiling,
+    /// [`RunExit::Success`] for `--print-plan`.
+    Finished(RunExit),
 }
 
 /// The plan half: decide everything, touch nothing.
 ///
 /// Metadata → `REPORT` → manifests → `build_plan` → the purge plan → the
 /// deprecated list → the scan → the ceilings → `--print-plan` / `--plan-out`.
-/// The two early exits here (`--print-plan` `0`, a scope ceiling `5`) are
+/// The two early exits here (`--print-plan` success, a scope ceiling) are
 /// [`PlanOutcome::Finished`]; the run never reaches `create_dir_all`.
 ///
 /// `summary` arrives empty and leaves with the plan-phase flags and totals set;
@@ -195,12 +192,12 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     )
     .await?
     else {
-        // Exit `5`, returned rather than raised: it is "the run failed", not
+        // A limit, returned rather than raised: it is "the run failed", not
         // "the run was misconfigured", and routing it through the normal return
         // gives every exit path one uniform SUMMARY tail.
         // Nothing has been written at this point — no directory created, no
         // `_tmp` opened, no file deleted, no `config.ini` touched.
-        return Ok(PlanOutcome::Finished(5));
+        return Ok(PlanOutcome::Finished(RunExit::Limit));
     };
 
     // 4.7 `--print-plan` / `--plan-out`: report the whole plan and stop.
@@ -222,7 +219,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     )
     .await?;
     if ctx.print_plan {
-        return Ok(PlanOutcome::Finished(0));
+        return Ok(PlanOutcome::Finished(RunExit::Success));
     }
 
     Ok(PlanOutcome::Ready(Box::new(PlanPhase {
@@ -332,7 +329,7 @@ async fn load_manifests_and_reuse(
 /// the download estimate, and the scope-of-work ceilings.
 ///
 /// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
-/// `PlanOutcome::Finished(5)` return so a helper never hands back an exit code.
+/// [`PlanOutcome::Finished`] return so a helper never hands back an exit code.
 #[allow(clippy::too_many_arguments)] // the plan inputs are all distinct, already-built values
 async fn build_and_assert_plan(
     ctx: &RunCtx,
@@ -618,13 +615,14 @@ async fn publish_plan(
 ///
 /// Entered only with a completed [`PlanPhase`], so every refusal has already
 /// happened and `create_dir_all` below is the first mutation. The early returns
-/// keep their order and codes: `--check-only` (`0`/`4`), `--purge-only` (`0`/`5`),
-/// a runtime ceiling (`5`), a failed file (`3`), then the post-phase (`0`/`5`).
+/// keep their order and meaning: `--check-only` (success/found damage),
+/// `--purge-only` (success/limit), a runtime ceiling (limit), a failed file
+/// (write), then the post-phase (success/limit).
 async fn execute_phase(
     ctx: &RunCtx,
     phase: PlanPhase,
     mut summary: Summary,
-) -> Result<(Summary, i32), RunFailure> {
+) -> Result<(Summary, RunExit), RunFailure> {
     let PlanPhase {
         game_dir,
         meta,
@@ -666,7 +664,7 @@ async fn execute_phase(
         return Ok((summary, code));
     }
     if summary.files_failed.load(Ordering::Relaxed) > 0 {
-        return Ok((summary, 3));
+        return Ok((summary, RunExit::Write));
     }
 
     // 7. post phase, when the run actually mutates the install or lists what a
@@ -677,7 +675,7 @@ async fn execute_phase(
         return run_post(ctx, &game_dir, purge_keys, &meta, &deprecated, summary).await;
     }
 
-    Ok((summary, 0))
+    Ok((summary, RunExit::Success))
 }
 
 /// Step 5 of the execute half: create `game_dir` when the run may write, then
@@ -775,7 +773,7 @@ async fn run_check_only(
     plan: &Arc<RepairPlan>,
     scan: Option<Arc<ScanReport>>,
     summary: Summary,
-) -> (Summary, i32) {
+) -> (Summary, RunExit) {
     // The execute-phase root was built after `create_dir_all` and the second
     // canonicalize, so it is the current form for these files; no per-file
     // re-resolution is needed.
@@ -795,7 +793,12 @@ async fn run_check_only(
     // aborted task may not have dropped its clone yet; `snapshot` reads the
     // same counters either way.
     let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
-    (summary, if bad == 0 { 0 } else { 4 })
+    let code = if bad == 0 {
+        RunExit::Success
+    } else {
+        RunExit::CheckFailed
+    };
+    (summary, code)
 }
 
 /// Step 5.6: `check_only` inverted — every phase but the repair loop.
@@ -811,7 +814,7 @@ async fn run_purge_only(
     meta: &Meta,
     deprecated: &[String],
     mut summary: Summary,
-) -> Result<(Summary, i32), RunFailure> {
+) -> Result<(Summary, RunExit), RunFailure> {
     summary.flags.config_bumped_zero = true;
     tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
     let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
@@ -871,7 +874,7 @@ async fn run_post(
     meta: &Meta,
     deprecated: &[String],
     mut summary: Summary,
-) -> Result<(Summary, i32), RunFailure> {
+) -> Result<(Summary, RunExit), RunFailure> {
     let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
     let code = finish(outcome, &mut summary);
     Ok((summary, code))
@@ -882,10 +885,10 @@ async fn run_post(
 /// Every key here is emitted **only when its flag was passed**: the
 /// `is_some` / `explicit` checks are the whole rule, kept in one function so
 /// it can be read against the rendering order in
-/// [`crate::report::summary::conditional_extras`]. Returns `Some(5)` when a
-/// runtime ceiling bound, after recording it in `stopped=`; the caller must
-/// return that code without running the post-phase.
-fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<i32> {
+/// [`crate::report::summary::conditional_extras`]. Returns
+/// [`RunExit::Limit`] when a runtime ceiling bound, after recording it in
+/// `stopped=`; the caller must return that code without running the post-phase.
+fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<RunExit> {
     // The byte figures, when their ceilings were asked for. The **settled**
     // one is what the repair achieved; the **spent** one is what it cost.
     // They are the same number in a clean run and differ exactly when the
@@ -936,7 +939,7 @@ fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<i32> {
         stopped.figure()
     );
     note_stopped(summary, flag);
-    Some(5)
+    Some(RunExit::Limit)
 }
 
 /// Record which ceiling bound the run, keeping the first one that did.
@@ -953,19 +956,21 @@ fn note_stopped(summary: &mut Summary, flag: &'static str) {
 /// Turn a post-phase outcome into the run's exit code, and say which ceiling
 /// bound.
 ///
-/// A runtime hard stop in the cleanup is exit `5` like every other limit, and
-/// `stopped=--max-delete-bytes` says which one — deletion is the one
+/// A runtime hard stop in the cleanup is [`RunExit::Limit`] like every other
+/// limit, and `stopped=--max-delete-bytes` says which one — deletion is the one
 /// irreversible act in the tool, so a bounded delete that got refused has to be
 /// visible.
-fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
+fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> RunExit {
     match outcome {
-        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => 0,
+        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => {
+            RunExit::Success
+        }
         phases::post::PostOutcome::DeleteCeiling => {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );
             note_stopped(summary, "--max-delete-bytes");
-            5
+            RunExit::Limit
         }
     }
 }

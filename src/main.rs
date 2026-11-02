@@ -6,7 +6,9 @@ use std::process::ExitCode;
 use clap::Parser;
 use clap::error::ErrorKind;
 
-use girpr::{Args, RunCtx, emit, flush_log, init_tracing, run as repair_run, summary_record};
+use girpr::{
+    Args, RunCtx, RunExit, emit, flush_log, init_tracing, run as repair_run, summary_record,
+};
 
 fn main() -> ExitCode {
     let args = parse_args();
@@ -72,7 +74,7 @@ fn main() -> ExitCode {
 
     let code = runtime.block_on(run(ctx));
     flush_log();
-    exit_code(code)
+    exit_code(code.code())
 }
 
 /// Map a documented exit code (`0`..=`5`) to what the process returns.
@@ -97,7 +99,7 @@ fn worker_threads(available: usize, jobs: usize) -> usize {
 ///
 /// The caller builds the runtime first, so nothing here decides *how* the
 /// pipeline is scheduled.
-async fn run(ctx: RunCtx) -> i32 {
+async fn run(ctx: RunCtx) -> RunExit {
     // `output` is logged with the rest of the run's shape because every data-plane
     // line in the file after this one is rendered in it. A log file with no
     // record of the plane is a log file whose `SUMMARY` line cannot be parsed
@@ -120,13 +122,13 @@ async fn run(ctx: RunCtx) -> i32 {
             // The run's last record. This is the only `SUMMARY` call site: a
             // phase never emits it, so every return path ends with exactly one.
             // stdout for parsing + log so a stderr-only capture still keeps it.
-            emit(&summary_record(&summary, code), output);
+            emit(&summary_record(&summary, code.code()), output);
             code
         }
         Err(f) => {
             tracing::error!("fatal(exit={}): {:#}", f.exit_code.code(), f.source);
             eprintln!("FATAL {:#}", f.source);
-            f.exit_code.code()
+            f.exit_code
         }
     }
 }

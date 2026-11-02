@@ -1177,7 +1177,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
         assert!(
             !line.contains(k),
@@ -1194,7 +1194,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     ctx.repair_mode_explicit = true;
     let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("repair_mode=auto"), "{line}");
     assert!(line.contains("inplace=1"), "{line}");
     assert!(line.contains("temp=0"), "{line}");
@@ -1211,7 +1211,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     ctx.limits.ram_bytes = Some(0);
     let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("ram_bytes=0"), "{line}");
 
     mock.stop();
@@ -1884,7 +1884,7 @@ async fn include_repairs_exactly_the_selected_file() {
     );
     // ...and says so in the machine contract, so a test can assert the fact
     // instead of reading the file.
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("scoped=1"), "{line}");
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("plan_files=1"), "{line}");
@@ -1993,7 +1993,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
     assert!(!summary.flags.limited);
     // And the conditional keys are absent, so an unflagged `SUMMARY` carries
     // only the always-on ones.
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     for k in ["scoped", "config_bumped", "plan_files", "limited"] {
         assert!(
             !line.contains(k),
@@ -2585,7 +2585,7 @@ async fn a_tripped_ceiling_still_emits_a_summary_tail() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(1);
     let (summary, code) = run(ctx).await.expect("refusal is not an error");
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert_eq!(
         line,
         "SUMMARY total=2 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
@@ -2658,7 +2658,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     let (summary, code) = run(ctx).await.expect("the boundary passes");
     assert_eq!(code, 0);
     assert_eq!(summary.download.settled(), est);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(
         line.contains(&format!("plan_download_bytes={est}")),
         "{line}"
@@ -2810,7 +2810,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
         "a stopped file is not promoted"
     );
 
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("stopped=--max-download-bytes"), "{line}");
     assert!(line.contains("limited=1"), "{line}");
 
@@ -2833,7 +2833,7 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
         .expect("plain run");
     assert_eq!(code, 0);
     for format in [OutputFormat::Text, OutputFormat::Json] {
-        let line = summary_record(&summary, code).render(format);
+        let line = summary_record(&summary, code.code()).render(format);
         for k in [
             "limited",
             "scoped",
@@ -3351,7 +3351,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
         "and the reported figure is no larger than it"
     );
 
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("stopped=--max-write-bytes"), "{line}");
     assert!(line.contains("write_bytes="), "{line}");
 
@@ -3382,7 +3382,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
         .expect("run");
     assert_eq!(code, 0);
     assert!(summary.write.settled() > 0, "it was counted");
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(!line.contains("write_bytes"), "{line}");
     // `download_bytes` is the network; `write_bytes` is the disk. They are not the
     // same quantity and never were — that is the whole reason `--max-write-bytes`
@@ -3403,7 +3403,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
     assert!(summary.flags.stopped.is_none());
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("write_bytes="), "{line}");
     assert!(!line.contains("stopped="), "{line}");
 
@@ -3430,7 +3430,7 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(!line.contains("_spent"), "{line}");
 
     // With the ceilings on, both figures are: what the repair achieved and
@@ -3447,7 +3447,7 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     ctx.limits.write_bytes = Some(1 << 20);
     let (summary, code) = run(ctx).await.expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("download_bytes_spent="), "{line}");
     assert!(line.contains("write_bytes_spent="), "{line}");
     // The settled download figure is the base key, and in a clean run it is
@@ -3519,7 +3519,7 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     // number here: nothing was wasted, the run simply ran out of budget.
     assert_eq!(summary.write.live(), summary.write.settled());
 
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(
         line.contains("stopped=--max-verified-write-bytes"),
         "{line}"
@@ -3629,7 +3629,7 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     // was fetched twice.
     assert_eq!(summary.download.live(), summary.download.settled());
 
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(
         line.contains("stopped=--max-verified-download-bytes"),
         "{line}"
@@ -3922,7 +3922,7 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     assert_eq!(summary.files_total, 0, "the repair plan really was empty");
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
     assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 512);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("config_bumped=0"), "{line}");
     assert!(line.contains("scoped=1"), "{line}");
 
@@ -4005,7 +4005,7 @@ async fn purge_only_cleans_up_without_repairing() {
         !dir.join("config.ini").exists(),
         "purge-only must not bump config.ini"
     );
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("config_bumped=0"), "{line}");
 
     mock.stop();
@@ -4725,7 +4725,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         .await
         .expect("run");
     assert_eq!(code, 0);
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=ok"), "{line}");
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
     assert!(
@@ -4758,7 +4758,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
         .await
         .expect("a degraded run still succeeds");
     assert_eq!(code, 0, "the fallback is not an error");
-    let line = summary_record(&summary, code).text();
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
         mock.chunk_hits(),
