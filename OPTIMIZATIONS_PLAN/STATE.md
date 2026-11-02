@@ -113,8 +113,8 @@ until the main tasks and rework are done.
 | F12 | T07 implementer | `src/repair/purge.rs` | A purge test hard-codes the `.girpr_tmp` spelling instead of using the shared name helper. | todo |
 | F13 | RC-03 review | `src/repair/phases/metadata.rs` | `join!` waits out a sibling's retry schedule after an authoritative failure; cancel it once its error is settled. | completed |
 | F14 | RC-03 review | `src/repair/phases/metadata.rs` | Spawn-join failures are mapped ad hoc (ignore/blacklist vs audio/version exit classes). | completed |
-| F15 | RC-03 review | `src/repair/phases/manifest.rs` | Bounded-fetch reindex plumbing and the concurrency log line are duplicated for latest and local. | todo |
-| F16 | RC-03 review | `src/repair/phases/manifest.rs` | A fast failure still waits for slower siblings; reorder incrementally and cancel the rest. | todo |
+| F15 | RC-03 review | `src/repair/phases/manifest.rs` | Bounded-fetch reindex plumbing and the concurrency log line are duplicated for latest and local. | completed |
+| F16 | RC-03 review | `src/repair/phases/manifest.rs` | A fast failure still waits for slower siblings; reorder incrementally and cancel the rest. | completed |
 | F17 | T08 implementer | `src/repair/phases/metadata.rs` | Blocking local reads are dropped unawaited on early return; drain them for stricter lifetime hygiene. | completed |
 | F18 | T09 implementer | `tests/common` | The mock models a single latest manifest; multi-manifest integration coverage needs fixture work. | todo |
 | F19 | RC-04 review | `src/repair/phases/check.rs` | `--check-only` emits progress only after the whole verify pass; a ticker should keep it live. | todo |
@@ -234,6 +234,9 @@ until the main tasks and rework are done.
 | F133 | METADATA-01 review | `src/repair/phases/metadata.rs` | No fetch-level test that a branch error settling first is retained when config succeeds. | todo |
 | F134 | METADATA-01 review | `src/repair/phases/metadata.rs` | The enum doc implies one exit class per read, but inner read errors differ from join errors. | todo |
 | F135 | METADATA-01 review | `tests/repair_offline.rs` | The non-chunk mode test asserts the branch request was issued, which depends on polling order under cancellation. | todo |
+| F136 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | The mock `serve` spawns listener/per-connection tasks with no shutdown, relying on runtime teardown. | todo |
+| F137 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | `OrderedResults` is only unit-tested via manual `push`, not driven through an out-of-order stream. | todo |
+| F138 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | `local_reuse_map` still awaits every fetch after a failure; early exit would need a different policy. | dropped (speculative future policy; shared fan-out already supports it) |
 
 ## Follow-up batches
 
@@ -246,7 +249,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LEDGER-01 | F08, F101 | done | Wave A; meter saturation on add and release; medium; 42eea14, 0a2c5f5 |
 | RETRY-01 | F62, F81 | done | Wave A; retry jitter spread and clippy variant names; low; 24c2a99, f4589fb, ef9daf3 |
 | METADATA-01 | F13, F14, F17 | done | Wave A; metadata join cancellation and error mapping; medium; b29da6c, 7714bea, bbaeda1, dc93735 |
-| MANIFEST-01 | F15, F16 | pending_review | Wave A; manifest fetch reindex dedup and cancellation; medium; 68402c6, 9ca2194 |
+| MANIFEST-01 | F15, F16 | done | Wave A; manifest fetch reindex dedup and cancellation; medium; 68402c6, 9ca2194, 309ff77 |
 | JOBS-01 | F22, F40, F44 | todo | Wave A; `--jobs`/`--io-threads` validation and warnings; medium |
 | LOGGING-01 | F49, F54, F55 | todo | Wave A; log flush lifecycle and tests; low |
 | LOCK-01 | F35, F36, F37, F45 | todo | Wave A; lock safety, key hashing, holder diagnostics; high |
@@ -276,6 +279,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | SYNC-01 | F123, F125 | todo | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | todo | Wave D; metadata classification tests, label constants and doc precision; low |
+| MANIFEST-02 | F136, F137 | todo | Wave D; manifest mock shutdown and out-of-order stream coverage; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
