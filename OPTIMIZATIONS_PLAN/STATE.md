@@ -44,7 +44,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T30 | D4 - one rel-path spelling helper | completed | 4ee251b, 48d4499, fb85754 | RC-12 |
 | T31 | D5 - one per-range to per-chunk remap | completed | 9090504, d81083e | RC-12 |
 | T32 | D7 - reconcile documentation with the code | pending_review | b92f90d | RC-13 |
-| T33 | D6 - remove test-only production API | in_progress | | RC-13 |
+| T33 | D6 - remove test-only production API | pending_review | d47cd56, da2b5a2, bad95ca | RC-13 |
 | T34 | D8 - split the functions doing too much | todo | | RC-14 |
 | T35 | D9 - replace parameter bags with structs | todo | | RC-15 |
 | T36 | D10 - name every exit code | todo | | RC-15 |
