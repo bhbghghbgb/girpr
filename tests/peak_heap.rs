@@ -54,7 +54,7 @@ use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use girpr::test_support::{ChunkSink, RealSleep, stream_chunk_to};
+use girpr::test_support::{ChunkFetch, ChunkSink, RealSleep, stream_chunk_to};
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -271,16 +271,16 @@ async fn the_chunk_paths_peak_live_heap() {
     {
         let mut sink = FileSink::new(&path);
         let mut consumed = 0u64;
-        stream_chunk_to(
-            &client,
-            &RealSleep,
-            &base,
-            "chunk",
-            payload.len() as u64,
-            frame.len() as u64,
-            &mut consumed,
-            &mut sink,
-        )
+        stream_chunk_to(ChunkFetch {
+            client: &client,
+            sleep: &RealSleep,
+            url_prefix: &base,
+            id: "chunk",
+            expected: payload.len() as u64,
+            max_compressed: frame.len() as u64,
+            consumed: &mut consumed,
+            sink: &mut sink,
+        })
         .await
         .expect("the warm-up fetch");
     }
@@ -289,16 +289,16 @@ async fn the_chunk_paths_peak_live_heap() {
     // bytes are written into the file.
     let mut sink = FileSink::new(&path);
     let mut consumed = 0u64;
-    let (streamed, digest) = measure(stream_chunk_to(
-        &client,
-        &RealSleep,
-        &base,
-        "chunk",
-        payload.len() as u64,
-        frame.len() as u64,
-        &mut consumed,
-        &mut sink,
-    ))
+    let (streamed, digest) = measure(stream_chunk_to(ChunkFetch {
+        client: &client,
+        sleep: &RealSleep,
+        url_prefix: &base,
+        id: "chunk",
+        expected: payload.len() as u64,
+        max_compressed: frame.len() as u64,
+        consumed: &mut consumed,
+        sink: &mut sink,
+    }))
     .await;
     let digest = digest.expect("the streamed fetch");
     assert_eq!(digest.bytes, payload.len() as u64, "the whole chunk landed");
