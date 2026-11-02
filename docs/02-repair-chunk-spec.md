@@ -355,10 +355,11 @@ optimization).
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
 1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
-   `{the single-writer lock}` ∪ `{blacklisted paths}`. `config.ini` and the
-   single-writer lock are the only metadata keeps: neither appears in a chunk
-   manifest, and `config.ini` lives inside `game_dir` but the tool rewrites it
-   after patching. The exe needs no keep (the game flags unknown
+   `{the legacy in-install girpr.lock}` ∪ `{blacklisted paths}`. `config.ini`
+   and the legacy lock are the only metadata keeps: neither appears in a chunk
+   manifest. The run's own lock lives outside `game_dir`, so only a leftover
+   from an older run is kept. `config.ini` lives inside `game_dir` and the tool
+   rewrites it after patching. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
    `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
