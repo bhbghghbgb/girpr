@@ -120,6 +120,11 @@ pub struct ChunkManifestMeta {
     pub manifest_download: ManifestUrl,
 }
 
+/// Deserialize an API size from either a JSON number or a JSON string.
+///
+/// Any `i64` is accepted, including a negative one. These sizes are hints, not
+/// promises; the consumers clamp a negative value to zero instead of treating
+/// the whole build as unparseable.
 fn num_from_string<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -156,6 +161,11 @@ where
     deserializer.deserialize_any(V)
 }
 
+/// A manifest's sizes as the API reports them.
+///
+/// Both sizes are hints, not promises. A negative one is kept as reported and
+/// clamped to zero where it is used, so a bogus field costs a skipped estimate
+/// or reallocation, not a failed build.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ManifestFile {
     #[serde(default)]
@@ -527,15 +537,18 @@ mod tests {
         assert_eq!(v[0].main.tag, "5.0.0");
     }
 
+    #[derive(Debug, Deserialize)]
+    struct Size {
+        #[serde(deserialize_with = "num_from_string")]
+        n: i64,
+    }
+
+    fn parse(json: &str) -> std::result::Result<Size, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
     #[test]
     fn num_from_string_both_shapes() {
-        #[derive(Debug, Deserialize)]
-        struct S {
-            #[serde(deserialize_with = "num_from_string")]
-            n: i64,
-        }
-        let parse = |json: &str| serde_json::from_str::<S>(json);
-
         let a = parse(r#"{"n":12}"#).unwrap();
         let b = parse(r#"{"n":"34"}"#).unwrap();
         assert_eq!((a.n, b.n), (12, 34));
@@ -569,6 +582,15 @@ mod tests {
             too_large.contains("number too large to fit in target type"),
             "{too_large}"
         );
+    }
+
+    /// A negative size is accepted rather than rejected: it is a hint, and the
+    /// consumers clamp it to zero where they use it.
+    #[test]
+    fn negative_sizes_are_kept_for_the_consumer_to_clamp() {
+        let num = parse(r#"{"n":-1}"#).unwrap();
+        let string = parse(r#"{"n":"-1"}"#).unwrap();
+        assert_eq!((num.n, string.n), (-1, -1));
     }
 
     fn client_for(biz: Biz) -> HypClient {
