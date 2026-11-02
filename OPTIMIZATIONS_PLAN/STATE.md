@@ -55,7 +55,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T41 | B5 - tune the release profile | completed | 53cd8ef | RC-16 |
 | T42 | B6 - add a workspace lint policy | completed | 21e49a7, 50faff7 | RC-16 |
 | T43 | B7 - evaluate the md-5 upgrade (conditional) | completed | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
-| T44 | T1 - regression tests for the fixed failure paths | todo | | RC-17 |
+| T44 | T1 - regression tests for the fixed failure paths | in_progress | | RC-17 |
 | T45 | T2 - log phase and per-file durations | todo | | RC-17 |
 | T46 | T4 - pin the output-contract ordering | todo | | RC-18 |
 | T47 | T3 - split the large integration test | todo | | RC-18 |
