@@ -79,7 +79,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-13 | T32-T33 | done | 8e3f127 | T32 fixed: legacy-vs-active lock in settings docs |
 | RC-14 | T34 | done | | Completed without fixes |
 | RC-15 | T35-T36 | done | | Both completed without fixes |
-| RC-16 | T37-T43 | pending | | |
+| RC-16 | T37-T43 | in_progress | | |
 | RC-17 | T44-T45 | pending | | |
 | RC-18 | T46-T47 | pending | | |
 
