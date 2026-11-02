@@ -45,7 +45,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T31 | D5 - one per-range to per-chunk remap | completed | 9090504, d81083e | RC-12 |
 | T32 | D7 - reconcile documentation with the code | completed | b92f90d, 8e3f127 | RC-13 |
 | T33 | D6 - remove test-only production API | completed | d47cd56, da2b5a2, bad95ca | RC-13 |
-| T34 | D8 - split the functions doing too much | in_progress | | RC-14 |
+| T34 | D8 - split the functions doing too much | pending_review | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
 | T35 | D9 - replace parameter bags with structs | todo | | RC-15 |
 | T36 | D10 - name every exit code | todo | | RC-15 |
 | T37 | B1 - trim the tokio feature set | todo | | RC-16 |
