@@ -52,3 +52,12 @@ girpr-tempdir = { path = "crates/tempdir" }
 # `net` and `io-util`: the fake artifact servers accept connections and read
 # requests.
 tokio = { version = "1", features = ["test-util", "process", "net", "io-util"] }
+
+# The shipped artifact is a single CLI binary, so trade build time for a
+# smaller, slightly faster one: thin LTO and one codegen unit, and no debug
+# info. Unwinding stays enabled so that `Drop`-based cleanup of locks and
+# temporary files still runs on a panic.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
