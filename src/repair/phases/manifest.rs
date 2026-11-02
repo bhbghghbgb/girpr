@@ -13,17 +13,19 @@
 //! The selected manifests are fetched **concurrently**, but the fan-out is
 //! bounded: one decoded manifest can be tens of MiB, so opening every fetch at
 //! once would trade latency for peak memory. The bound is a small dedicated
-//! cap, not the file-worker count. Results are put back in selection order
-//! before anything reads them, so the plan's per-manifest order and the error
-//! `fetch_latest` reports do not depend on completion order.
+//! cap, not the file-worker count. Results are put back in selection order as
+//! they arrive, so the plan's per-manifest order and the error `fetch_latest`
+//! reports do not depend on completion order.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 
 use anyhow::Context;
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 
 use crate::hyp::ChunkBuild;
+use crate::hyp::ChunkManifestMeta;
 use crate::sleep::Sleep;
 use crate::sophon::{self, FileReuse, SophonChunkFile, WantedManifest};
 
@@ -51,22 +53,126 @@ fn manifest_concurrency(jobs: usize) -> usize {
     jobs.clamp(1, MAX_MANIFEST_CONCURRENCY)
 }
 
-/// Put concurrent fetch results back into selection order.
-///
-/// `buffer_unordered` yields in completion order; callers iterate the returned
-/// slots by selection index, so the plan's manifest order and the first error
-/// they report are independent of which fetch finished first. Every selection
-/// produces exactly one result, so a slot is filled by the time a caller reads
-/// it.
-fn in_selection_order<T, E>(
-    results: Vec<(usize, Result<T, E>)>,
-    len: usize,
-) -> Vec<Option<Result<T, E>>> {
-    let mut slots: Vec<Option<Result<T, E>>> = (0..len).map(|_| None).collect();
-    for (index, result) in results {
-        slots[index] = Some(result);
+/// Which build's manifests a fan-out belongs to, for the log line.
+#[derive(Clone, Copy)]
+enum BuildKind {
+    Latest,
+    Local,
+}
+
+impl BuildKind {
+    /// The wording that distinguishes the two fan-outs in the log.
+    const fn log_prefix(self) -> &'static str {
+        match self {
+            Self::Latest => "manifest",
+            Self::Local => "local manifest",
+        }
     }
-    slots
+}
+
+/// Results indexed by selection, drained left to right.
+///
+/// `buffer_unordered` yields in completion order; pushing each result into its
+/// slot lets a caller walk selection order without waiting for every fetch.
+/// A slot that is not filled yet leaves [`Self::take_next`] empty, while
+/// [`Self::has_next`] is still true, so "not yet" and "finished" stay distinct.
+struct OrderedResults<T> {
+    slots: Vec<Option<T>>,
+    next: usize,
+}
+
+impl<T> OrderedResults<T> {
+    fn new(len: usize) -> Self {
+        Self {
+            slots: (0..len).map(|_| None).collect(),
+            next: 0,
+        }
+    }
+
+    /// Whether a selection index is still waiting to be drained.
+    fn has_next(&self) -> bool {
+        self.next < self.slots.len()
+    }
+
+    /// Record a result that arrived for `index`; it is read once every earlier
+    /// selection has been drained.
+    fn push(&mut self, index: usize, value: T) {
+        self.slots[index] = Some(value);
+    }
+
+    /// Take the next selection's result if it has arrived.
+    fn take_next(&mut self) -> Option<(usize, T)> {
+        if !self.has_next() {
+            return None;
+        }
+        let value = self.slots[self.next].take()?;
+        let index = self.next;
+        self.next += 1;
+        Some((index, value))
+    }
+}
+
+/// The outcome of fetching one selected manifest.
+type ManifestResult = anyhow::Result<Vec<SophonChunkFile>>;
+
+/// A completion-ordered stream of `(selection index, result)` pairs.
+type ManifestStream<'a> = Pin<Box<dyn Stream<Item = (usize, ManifestResult)> + 'a>>;
+
+/// A bounded, concurrent fetch of the selected manifests of one build, read
+/// back in selection order.
+struct ManifestFetches<'a> {
+    manifests: Vec<&'a ChunkManifestMeta>,
+    results: ManifestStream<'a>,
+    ordered: OrderedResults<ManifestResult>,
+}
+
+impl<'a> ManifestFetches<'a> {
+    /// Start fetching `build`'s selected manifests, at most
+    /// [`MAX_MANIFEST_CONCURRENCY`] at once.
+    fn start(
+        http: &'a Client,
+        sleep: &'a dyn Sleep,
+        build: &'a ChunkBuild,
+        audio_langs: &'a std::collections::HashSet<String>,
+        ignore: &'a std::collections::HashSet<String>,
+        jobs: usize,
+        kind: BuildKind,
+    ) -> Self {
+        let manifests = sophon::select_manifests(build, audio_langs, ignore);
+        let limit = manifest_concurrency(jobs);
+        tracing::info!("{} concurrency={limit}", kind.log_prefix());
+        // The stream owns its copy of the selection (plain references), so it
+        // does not borrow the vector the struct keeps for lookups.
+        let results = futures_util::stream::iter(manifests.clone().into_iter().enumerate())
+            .map(move |(index, m)| async move {
+                let files = sophon::fetch_manifest(http, sleep, m).await;
+                (index, files)
+            })
+            .buffer_unordered(limit);
+        Self {
+            ordered: OrderedResults::new(manifests.len()),
+            manifests,
+            results: Box::pin(results),
+        }
+    }
+
+    /// The next manifest in selection order with its result, waiting only for
+    /// that selection's fetch.
+    #[allow(clippy::expect_used)] // every selected manifest is fetched once
+    async fn next_ordered(&mut self) -> Option<(&'a ChunkManifestMeta, ManifestResult)> {
+        while self.ordered.has_next() {
+            if let Some((index, result)) = self.ordered.take_next() {
+                return Some((self.manifests[index], result));
+            }
+            let (index, result) = self
+                .results
+                .next()
+                .await
+                .expect("every selected manifest is fetched once");
+            self.ordered.push(index, result);
+        }
+        None
+    }
 }
 
 /// Fetch every wanted manifest of the latest build concurrently, bounded, and
@@ -77,7 +183,6 @@ fn in_selection_order<T, E>(
 /// manifest in selection order that failed, not the first to finish: the
 /// message is about what is wrong with the build, and completion order is an
 /// accident of the network.
-#[allow(clippy::expect_used)] // every selected manifest has a slot; a missing one is an internal bug
 pub async fn fetch_latest(
     http: &Client,
     sleep: &dyn Sleep,
@@ -86,25 +191,22 @@ pub async fn fetch_latest(
     ignore: &std::collections::HashSet<String>,
     jobs: usize,
 ) -> Result<Vec<(String, Vec<SophonChunkFile>)>, RunFailure> {
-    let manifests = sophon::select_manifests(latest_build, audio_langs, ignore);
-    let limit = manifest_concurrency(jobs);
-    tracing::info!("manifest concurrency={limit}");
-    let results = futures_util::stream::iter(manifests.iter().copied().enumerate())
-        .map(|(index, m)| async move {
-            let files = sophon::fetch_manifest(http, sleep, m).await;
-            (index, files)
-        })
-        .buffer_unordered(limit)
-        .collect::<Vec<_>>()
-        .await;
-
+    let mut fetches = ManifestFetches::start(
+        http,
+        sleep,
+        latest_build,
+        audio_langs,
+        ignore,
+        jobs,
+        BuildKind::Latest,
+    );
     let mut per_manifest: Vec<(String, Vec<SophonChunkFile>)> = Vec::new();
-    for (m, slot) in manifests
-        .iter()
-        .zip(in_selection_order(results, manifests.len()))
-    {
-        let files = slot
-            .expect("every selected manifest is fetched once")
+    let mut fetched = Vec::new();
+    while let Some((m, files)) = fetches.next_ordered().await {
+        fetched.push((m, files));
+    }
+    for (m, files) in fetched {
+        let files = files
             .with_context(|| format!("manifest {}", m.matching_field))
             .map_err(RunFailure::metadata)?;
         tracing::info!("manifest {}: {} entries", m.matching_field, files.len());
@@ -120,8 +222,8 @@ pub async fn fetch_latest(
 /// The fetches are concurrent and bounded the same way as [`fetch_latest`],
 /// and the assembled `wanted` list is in selection order: when two manifests
 /// describe the same path, the earlier one wins the first-occurrence rules in
-/// [`sophon::build_local_chunk_map`].
-#[allow(clippy::expect_used)] // every selected manifest has a slot; a missing one is an internal bug
+/// [`sophon::build_local_chunk_map`]. Unlike [`fetch_latest`], a failure does
+/// not settle the fan-out: every reachable manifest still contributes.
 pub async fn local_reuse_map(
     http: &Client,
     sleep: &dyn Sleep,
@@ -133,24 +235,19 @@ pub async fn local_reuse_map(
     let Some(local_build) = local_build else {
         return LocalChunkMap::new();
     };
-    let manifests = sophon::select_manifests(local_build, audio_langs, ignore);
-    let limit = manifest_concurrency(jobs);
-    tracing::info!("local manifest concurrency={limit}");
-    let results = futures_util::stream::iter(manifests.iter().copied().enumerate())
-        .map(|(index, m)| async move {
-            let files = sophon::fetch_manifest(http, sleep, m).await;
-            (index, files)
-        })
-        .buffer_unordered(limit)
-        .collect::<Vec<_>>()
-        .await;
+    let mut fetches = ManifestFetches::start(
+        http,
+        sleep,
+        local_build,
+        audio_langs,
+        ignore,
+        jobs,
+        BuildKind::Local,
+    );
 
     let mut wanted: Vec<WantedManifest> = Vec::new();
-    for (m, slot) in manifests
-        .iter()
-        .zip(in_selection_order(results, manifests.len()))
-    {
-        match slot.expect("every selected manifest is fetched once") {
+    while let Some((m, result)) = fetches.next_ordered().await {
+        match result {
             Ok(files) => wanted.push(WantedManifest {
                 meta: (*m).clone(),
                 files,
@@ -309,22 +406,34 @@ mod tests {
         }
     }
 
-    /// The re-index step, with results arriving out of order: the first error
-    /// a caller walking left to right meets is the second selection, not the
-    /// first completion.
+    /// A result for a later selection is retained without unblocking the
+    /// caller, so the output is read in selection order even when the network
+    /// finishes out of order.
     #[test]
-    fn out_of_order_results_are_reindexed_by_selection() {
-        let results = vec![(2, Ok("third")), (1, Err("second")), (0, Ok("first"))];
-        let ordered: Vec<_> = in_selection_order(results, 3)
-            .into_iter()
-            .map(|slot| slot.expect("every selection has a result"))
-            .collect();
-        assert_eq!(ordered, vec![Ok("first"), Err("second"), Ok("third")]);
-        assert_eq!(
-            ordered.iter().position(|r| r.is_err()),
-            Some(1),
-            "the first error is the first in selection order"
+    fn results_are_reordered_incrementally_in_selection_order() {
+        let mut ordered = OrderedResults::new(3);
+        ordered.push(2, Ok::<_, &str>("third"));
+        assert!(
+            ordered.take_next().is_none(),
+            "a later selection does not unblock the first"
         );
+        ordered.push(1, Err("second"));
+        assert!(
+            ordered.take_next().is_none(),
+            "the first selection is still missing"
+        );
+
+        ordered.push(0, Ok("first"));
+        assert_eq!(ordered.take_next(), Some((0, Ok("first"))));
+        let (index, result) = ordered.take_next().expect("the second is ready");
+        assert_eq!(index, 1);
+        assert_eq!(
+            result,
+            Err("second"),
+            "the first failure in selection order"
+        );
+        assert_eq!(ordered.take_next(), Some((2, Ok("third"))));
+        assert!(!ordered.has_next());
     }
 
     /// The first manifest fails slowly (a retryable 500) while a later one
