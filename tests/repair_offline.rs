@@ -4811,6 +4811,105 @@ async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String
     )
 }
 
+/// Run the shipped binary with the reading end of its stdout pipe gone.
+///
+/// The pipe is dropped immediately after the child exists, so the run's first
+/// data-plane write meets the closed consumer. stderr is still collected; stdout
+/// is deliberately not, because there is no reader left to collect it.
+async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (i32, String) {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
+    cmd.args(args);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().expect("spawn girpr");
+    drop(child.stdout.take());
+    let out = child.wait_with_output().await.expect("wait for girpr");
+    (
+        out.status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A consumer that stops reading stdout (`| head` is the everyday shape) must
+/// not turn a finished repair into a panic or a different exit code.
+///
+/// The pipe is closed before the run emits, so the `REPORT`/`SUMMARY` writer
+/// meets `BrokenPipe`. That is the end of the data plane, not a failed run: the
+/// exit code stays the one the run earned, the log still gets the same records,
+/// and the install is repaired exactly as it would have been.
+#[tokio::test]
+async fn a_closed_stdout_does_not_change_the_exit_code_or_the_repair() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("closed_stdout");
+    let fx2 = build_fixture();
+    // bar.dat is intact; foo.dat is missing and must be repaired.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    let game = dir.to_string_lossy().into_owned();
+    let log = dir.join("run.log");
+    let log_arg = log.to_string_lossy().into_owned();
+
+    let (code, stderr) = run_binary_with_closed_stdout(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--log-file",
+            &log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+
+    assert_eq!(code, 0, "a closed stdout is not a failed run: {stderr}");
+    assert!(
+        !stderr.contains("panicked"),
+        "the closed pipe must not panic: {stderr}"
+    );
+
+    // The run earned its install state: the missing file was repaired, the
+    // intact one was left alone, and the version was bumped.
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).as_deref(),
+        Some(fx2.files[0].data.as_slice()),
+        "the missing file is still repaired"
+    );
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[1].rel).as_deref(),
+        Some(fx2.files[1].data.as_slice()),
+        "the intact file is untouched"
+    );
+    let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
+    assert!(cfg.contains("game_version=9.9.9-test"), "{cfg}");
+
+    // The log mirror is written before stdout, so the run's record survives the
+    // closed pipe. The closed-stdout note also proves the test exercised the
+    // branch rather than writing into a live pipe.
+    let log_body = std::fs::read_to_string(&log).expect("log file");
+    assert!(
+        log_body.contains("stdout closed") || log_body.contains("stdout write failed"),
+        "the run met the closed stdout and carried on: {log_body}"
+    );
+    assert!(
+        log_body
+            .lines()
+            .any(|line| line.contains(" SUMMARY total=") && line.contains("exit=0")),
+        "the final record still reaches the log: {log_body}"
+    );
+
+    mock.stop();
+}
+
 /// A successful run's last record reaches the file before the process returns,
 /// not merely the console: the log is the record of the run.
 #[tokio::test]
