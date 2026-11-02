@@ -37,7 +37,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T23 | P9 - buffer the file log sink | pending_review | 16e2902, 11acd42 | RC-09 |
 | T24 | P11 - remove purge/scope per-pass allocations | pending_review | debba64, 68242fe, a9d5b20, f7d2165 | RC-09 |
 | T25 | P13 - fast-path unlimited meters | pending_review | af8e5bf, e799311 | RC-09 |
-| T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | in_progress | | RC-09 |
+| T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | skipped | | RC-09 |
 | T27 | D1 - per-file facts live on the file | todo | | RC-10 |
 | T28 | D3 - one atomic-write helper | todo | | RC-11 |
 | T29 | D2 - one retry/backoff scaffold | todo | | RC-11 |
@@ -170,3 +170,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 - `reverted` means the original work was undone and a rework row was added.
 - `skipped` means the task was stale or no longer applicable; record why.
 - Task ordering is the report's overall ordering; do not reorder the table.
+- T26 skipped with evidence: path resolution measured ~1.5% of wall clock warm
+  (~1.9% cold) on a 10k-file install, below the 2-3% gate, and a parent-prefix
+  cache cannot remove the leaf `canonicalize`, so the containment window would
+  buy ~0.7% end-to-end. No code change.
