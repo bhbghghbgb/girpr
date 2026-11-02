@@ -55,8 +55,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T41 | B5 - tune the release profile | completed | 53cd8ef | RC-16 |
 | T42 | B6 - add a workspace lint policy | completed | 21e49a7, 50faff7 | RC-16 |
 | T43 | B7 - evaluate the md-5 upgrade (conditional) | completed | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
-| T44 | T1 - regression tests for the fixed failure paths | pending_review | 9894d6e | RC-17 |
-| T45 | T2 - log phase and per-file durations | pending_review | b4b0d84, 1d95c1a, 7c54827 | RC-17 |
+| T44 | T1 - regression tests for the fixed failure paths | completed | 9894d6e | RC-17 |
+| T45 | T2 - log phase and per-file durations | completed | b4b0d84, 1d95c1a, 7c54827 | RC-17 |
 | T46 | T4 - pin the output-contract ordering | todo | | RC-18 |
 | T47 | T3 - split the large integration test | todo | | RC-18 |
 
@@ -80,7 +80,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-14 | T34 | done | | Completed without fixes |
 | RC-15 | T35-T36 | done | | Both completed without fixes |
 | RC-16 | T37-T43 | done | | All completed without fixes; T43 gate passed (+26%) |
-| RC-17 | T44-T45 | in_progress | | |
+| RC-17 | T44-T45 | done | | Both completed without fixes |
 | RC-18 | T46-T47 | pending | | |
 
 ## Rework
@@ -208,6 +208,12 @@ until the main tasks and rework are done.
 | F107 | RC-16 review | tests/benchmarks | The MD5 throughput claim has no committed reproduction; add a small `#[ignore]`d benchmark or script. | todo |
 | F108 | RC-16 review | `tests/common/mod.rs`, `tests/artifact_bridge/server.rs`, `tests/peak_heap.rs` | The same `md5_hex` loop is duplicated three times; one shared helper would do. | todo |
 | F109 | RC-16 review | `tools/sync`, `tools/capture` | The dev tools stay outside the lint policy; consider a tools-only lint check when next touched. | todo |
+| F110 | T44 implementer | `tests/repair_offline.rs`, `tests/common/mod.rs` | Manifest ordering is pinned only at module level; a binary-level case needs a fixture that fails one selected manifest. | todo |
+| F111 | RC-17 review | `tests/repair_machinery.rs` | No end-to-end stale-verdict case that mutates a file between the plan scan and the repair. | todo |
+| F112 | RC-17 review | `src/repair/phases/post.rs` | Partial-copy tests stop at the helper; the post-phase outcome/config.ini unbumped claim is not asserted. | todo |
+| F113 | RC-17 review | `tests/repair_offline.rs` | The duration process test always passes `--scan`; absence of `phase=scan` on an unscanned run is unasserted. | todo |
+| F114 | T45 implementer | `src/phase.rs` | `phase=plan` excludes the scan and `publish_plan`; purge execution is not timed at all. | todo |
+| F115 | T45 implementer | `src/phase.rs` | `PhaseTimer` logs on drop during an error path, reporting time-to-failure as if the phase completed. | todo |
 
 ## Follow-up batches
 
