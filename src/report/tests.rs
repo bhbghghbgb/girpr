@@ -24,7 +24,6 @@ fn text_and_json_are_two_renderings_of_one_record() {
         r#"{"event":"summary","total":4,"word":"a b\"c"}"#,
         "the event name is the label lowercased, and the order is report order"
     );
-    assert_eq!(rec.event(), "summary");
     assert_eq!(rec.label(), "SUMMARY");
     assert_eq!(
         rec.fields().iter().map(|(k, _)| *k).collect::<Vec<_>>(),
