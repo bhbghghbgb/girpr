@@ -89,6 +89,96 @@ async fn attempt_inplace_inner(
     // maps those verdicts back to the chunk they belong to.
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
 
+    // 1 + 2. open, scan (or reuse the plan scan), the skip check, dry-run.
+    let (mut handle, mut scan) = match open_and_scan(
+        ctx,
+        id,
+        file,
+        final_path,
+        &dest_ranges,
+        &source_ranges,
+        &source_owner,
+    )? {
+        OpenScan::Finished(outcome) => return Ok(outcome),
+        OpenScan::Ready { handle, scan } => (handle, scan),
+    };
+
+    // `--repair-mode discard`: the target is deleted and written from scratch.
+    (handle, scan) = discard_if_requested(
+        ctx,
+        final_path,
+        handle,
+        scan,
+        dest_ranges.len(),
+        source_ranges.len(),
+    )?;
+
+    // The chunks that are not correct where they belong, and the stats that
+    // describe them.
+    let bad = plan_bad_chunks(file, &mut scan, &source_owner, stats);
+
+    // The eager/deferred trim decision.
+    trim_dead_tail(file, &sources, &handle, final_path)?;
+
+    // 3. the tier, and the staging that goes with it.
+    let (tier, payload, _reservation) = choose_tier(ctx, file, &sources, &scan.source_ok, &bad);
+    let captured = stage_sources(
+        file,
+        &sources,
+        &scan.source_ok,
+        &bad,
+        tier,
+        payload,
+        &mut handle,
+    )?;
+
+    // 4. patch, including the hole fill and the final length.
+    patch_chunks(
+        ctx,
+        writes,
+        &mut handle,
+        file,
+        prefix,
+        final_path,
+        &sources,
+        &scan.source_ok,
+        &bad,
+        &captured,
+        tier,
+        stats,
+    )
+    .await?;
+
+    // 5. verify, redo what is still wrong, verify again.
+    verify_and_retry(ctx, writes, &mut handle, &dest_ranges, file, prefix, stats).await
+}
+
+/// What [`open_and_scan`] ended with.
+enum OpenScan {
+    /// The attempt is over before any patch: skipped, dry-run, or unavailable.
+    Finished(Inplace),
+    /// The target is open and scanned; the patch can proceed.
+    Ready {
+        handle: std::fs::File,
+        scan: util::Scan,
+    },
+}
+
+/// Steps 1 and 2 of the in-place repair: open the target and scan it.
+///
+/// The scan is one read that answers everything: the whole-file MD5 (the skip
+/// check), which chunks are already correct where they belong, and which reuse
+/// sources are intact. Under `--scan` the plan phase already took that read;
+/// [`reusable_verdict`] decides whether it can be reused.
+fn open_and_scan(
+    ctx: &FileCtx,
+    id: FileId,
+    file: &PlannedFile,
+    final_path: &std::path::Path,
+    dest_ranges: &[util::ScanRange<'_>],
+    source_ranges: &[util::ScanRange<'_>],
+    source_owner: &[usize],
+) -> Result<OpenScan> {
     // 1. open. A dry run changes nothing: no file is created and no
     // attribute is cleared, so the target is only read.
     let mut handle = match open_inplace(ctx, final_path) {
@@ -97,16 +187,16 @@ async fn attempt_inplace_inner(
             // A dry run on a file that is not there: nothing is correct, so
             // the file would be repaired.
             tracing::info!("would repair");
-            return Ok(Inplace::DryRun);
+            return Ok(OpenScan::Finished(Inplace::DryRun));
         }
         Err(e) => {
             // The target cannot be opened for writing. That is not a failed
             // file: the temp path does not need write access to the target,
             // so the repair still happens — through the other path.
             tracing::debug!(error = %format!("{e:#}"), "in-place open failed");
-            return Ok(Inplace::Unavailable(
+            return Ok(OpenScan::Finished(Inplace::Unavailable(
                 "the target cannot be opened for writing",
-            ));
+            )));
         }
     };
 
@@ -114,7 +204,7 @@ async fn attempt_inplace_inner(
     // correct, and which sources are intact. Under `--scan` the plan phase
     // already took that read; reuse it only when the guard proves the file is
     // still the one that was scanned.
-    let mut scan = match reusable_verdict(ctx, id, file, final_path, &handle) {
+    let scan = match reusable_verdict(ctx, id, file, final_path, &handle) {
         Some(v) => {
             let age_secs = v
                 .modified
@@ -129,10 +219,10 @@ async fn attempt_inplace_inner(
                 file_md5: v.file_md5.clone(),
                 file_len: v.file_len,
                 dest_ok: v.dest_ok.clone(),
-                source_ok: source_ok_by_range(v, &source_owner),
+                source_ok: source_ok_by_range(v, source_owner),
             }
         }
-        None => util::scan_reader(&mut handle, &dest_ranges, &source_ranges)
+        None => util::scan_reader(&mut handle, dest_ranges, source_ranges)
             .with_context(|| format!("scan {}", file.rel))?,
     };
     tracing::debug!(
@@ -143,32 +233,54 @@ async fn attempt_inplace_inner(
     );
     if Md5::parse_hex(&scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
         tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
-        return Ok(Inplace::Skipped);
+        return Ok(OpenScan::Finished(Inplace::Skipped));
     }
     if ctx.dry_run {
         tracing::info!("would repair");
-        return Ok(Inplace::DryRun);
+        return Ok(OpenScan::Finished(Inplace::DryRun));
     }
+    Ok(OpenScan::Ready { handle, scan })
+}
 
-    // `--repair-mode discard`: the target is deleted and written from
-    // scratch. Zero peak extra disk, and a full download for the file — the
-    // trade the mode exists to offer. The delete happens *after* the skip
-    // check, so an intact file is never deleted.
-    if ctx.repair_mode == RepairMode::Discard {
-        drop(handle);
-        discard_target(final_path)?;
-        handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
-        // The file is gone: every chunk has to be written, and there is
-        // nothing left to reuse from. `absent` is per range, not per chunk, so
-        // it is remapped below like every other scan.
-        scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
+/// `--repair-mode discard`: delete the target and write it from scratch.
+///
+/// Zero peak extra disk, and a full download for the file — the trade the mode
+/// exists to offer. The delete happens *after* the skip check, so an intact
+/// file is never deleted. Every other mode returns the open handle and its scan
+/// unchanged.
+fn discard_if_requested(
+    ctx: &FileCtx,
+    final_path: &std::path::Path,
+    handle: std::fs::File,
+    scan: util::Scan,
+    dest_len: usize,
+    source_len: usize,
+) -> Result<(std::fs::File, util::Scan)> {
+    if ctx.repair_mode != RepairMode::Discard {
+        return Ok((handle, scan));
     }
+    drop(handle);
+    discard_target(final_path)?;
+    let handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
+    // The file is gone: every chunk has to be written, and there is nothing
+    // left to reuse from. `absent` is per range, not per chunk, so it is
+    // remapped below like every other scan.
+    let scan = util::Scan::absent(dest_len, source_len);
+    Ok((handle, scan))
+}
 
+/// The chunks that are not correct where they belong, plus the kept-chunk
+/// accounting the repaired log reports.
+fn plan_bad_chunks(
+    file: &PlannedFile,
+    scan: &mut util::Scan,
+    source_owner: &[usize],
+    stats: &mut ChunkStats,
+) -> Vec<usize> {
     // Back to one source verdict per chunk, in the plan's order: a chunk with
     // no source has no intact source, by definition. Everything below indexes
     // `source_ok` by chunk, and the discard scan is per range like the rest.
-    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
-    scan.source_ok = source_ok;
+    scan.source_ok = source_ok_by_chunk(file.chunks.len(), source_owner, &scan.source_ok);
 
     // The chunks that are not correct where they belong. `file.chunks` is
     // sorted by offset (the plan guarantees it), so this list is ascending
@@ -178,20 +290,26 @@ async fn attempt_inplace_inner(
         .collect();
     stats.chunks_kept = (file.chunks.len() - bad.len()) as u64;
     tracing::debug!(bad = bad.len(), kept = stats.chunks_kept, "in-place plan");
+    bad
+}
 
-    // The eager trim: when no reuse candidate reaches past the target's
-    // end, the tail is dead weight and can be released before a single byte
-    // is written.
-    //
-    // **The other half is logged too.** The trim's outcome is not in the
-    // output contract — the file ends at the target size either way, and the
-    // difference is the *peak* disk usage, which nothing reports. The log is
-    // the only place the outcome is visible, so both branches say which one
-    // they took.
-    let have = handle_len(&handle)
+/// The eager trim: when no reuse candidate reaches past the target's end, the
+/// tail is dead weight and can be released before a single byte is written.
+///
+/// **The other half is logged too.** The trim's outcome is not in the output
+/// contract — the file ends at the target size either way, and the difference
+/// is the *peak* disk usage, which nothing reports. The log is the only place
+/// the outcome is visible, so both branches say which one they took.
+fn trim_dead_tail(
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    handle: &std::fs::File,
+    final_path: &std::path::Path,
+) -> Result<()> {
+    let have = handle_len(handle)
         .with_context(|| format!("stat {} before the trim", final_path.display()))?;
     if have > file.size.max(0) as u64 {
-        if trim_is_free(file, &file.chunks, &sources) {
+        if trim_is_free(file, &file.chunks, sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
             handle.set_len(file.size.max(0) as u64)?;
         } else {
@@ -206,19 +324,28 @@ async fn attempt_inplace_inner(
             );
         }
     }
+    Ok(())
+}
 
-    // 3. the tier, and the staging that goes with it.
-    //
-    // `Staged` reads the bytes that have to move into RAM, so **every**
-    // source survives and the writes run forward. `Ordered` reads each
-    // source from the file at the moment it is written, and the write
-    // order is the one that keeps the most of them alive.
-    //
-    // The budget picks the tier; it never refuses the file. A file that
-    // cannot get its reservation is written in the ordered direction, which
-    // produces the same file with less reuse.
-    let payload = staged_payload(&file.chunks, &sources, &scan.source_ok, &bad);
-    let (tier, _reservation) = match ctx.summary.max_ram_bytes() {
+/// Step 3: pick the write tier and reserve the staged payload.
+///
+/// `Staged` reads the bytes that have to move into RAM, so **every** source
+/// survives and the writes run forward. `Ordered` reads each source from the
+/// file at the moment it is written, and the write order is the one that keeps
+/// the most of them alive.
+///
+/// The budget picks the tier; it never refuses the file. A file that cannot get
+/// its reservation is written in the ordered direction, which produces the same
+/// file with less reuse.
+fn choose_tier<'a>(
+    ctx: &'a FileCtx,
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+) -> (Tier, u64, Option<RamReservation<'a>>) {
+    let payload = staged_payload(&file.chunks, sources, source_ok, bad);
+    let (tier, reservation) = match ctx.summary.max_ram_bytes() {
         // "stage nothing at all" is a mode, not a shortage.
         Some(0) => (Tier::Ordered, None),
         _ if payload == 0 => (Tier::Staged, None),
@@ -241,28 +368,60 @@ async fn attempt_inplace_inner(
             }
         }
     };
+    (tier, payload, reservation)
+}
 
+/// Step 3 continued: read every staged source into RAM, hash-gated.
+///
+/// Every byte written is hash-gated before it lands, and a staged source is a
+/// write's source: gate it here too.
+fn stage_sources(
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+    tier: Tier,
+    payload: u64,
+    handle: &mut std::fs::File,
+) -> Result<Vec<Option<Vec<u8>>>> {
     let mut captured: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
-    if matches!(tier, Tier::Staged) && payload > 0 {
-        for &i in &bad {
-            if !scan.source_ok[i] {
-                continue;
-            }
-            let Some(off) = sources[i] else { continue };
-            let c = &file.chunks[i];
-            let bytes = util::read_range(&mut handle, off, c.uncompressed_size.max(0) as u64)
-                .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
-            // Every byte written is hash-gated before it lands, and a staged
-            // source is a write's source: gate it here too.
-            let h = Md5::from(md5::compute(&bytes));
-            if !h.matches_hex(&c.uncompressed_md5) {
-                tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
-                continue;
-            }
-            captured[i] = Some(bytes);
-        }
+    if !matches!(tier, Tier::Staged) || payload == 0 {
+        return Ok(captured);
     }
+    for &i in bad {
+        if !source_ok[i] {
+            continue;
+        }
+        let Some(off) = sources[i] else { continue };
+        let c = &file.chunks[i];
+        let bytes = util::read_range(handle, off, c.uncompressed_size.max(0) as u64)
+            .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
+        let h = Md5::from(md5::compute(&bytes));
+        if !h.matches_hex(&c.uncompressed_md5) {
+            tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
+            continue;
+        }
+        captured[i] = Some(bytes);
+    }
+    Ok(captured)
+}
 
+/// Step 4: write the wrong chunks, fill the holes, and end at the target size.
+#[allow(clippy::too_many_arguments)] // one parameter per piece of the patch decision
+async fn patch_chunks(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    handle: &mut std::fs::File,
+    file: &PlannedFile,
+    prefix: &str,
+    final_path: &std::path::Path,
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+    captured: &[Option<Vec<u8>>],
+    tier: Tier,
+    stats: &mut ChunkStats,
+) -> Result<()> {
     // The order (ordered tier only): the direction that keeps the most
     // sources alive, and which sources those are. Only the sources the scan
     // found intact can be salvaged — the rest have to be downloaded.
@@ -272,9 +431,9 @@ async fn attempt_inplace_inner(
             let chunks: Vec<&SophonChunk> = bad.iter().map(|&i| &file.chunks[i]).collect();
             let srcs: Vec<Option<u64>> = bad
                 .iter()
-                .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
+                .map(|&i| if source_ok[i] { sources[i] } else { None })
                 .collect();
-            let usable = handle_len(&handle)
+            let usable = handle_len(handle)
                 .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
             let o = reuse::salvage_order_refs(&chunks, &srcs, usable);
             tracing::info!(
@@ -288,9 +447,9 @@ async fn attempt_inplace_inner(
         }
     };
 
-    // 4. patch. Ascending in the staged tier (forward writes), in the
-    // salvage order in the ordered tier. One scratch buffer serves the whole
-    // patch: the chunks are written one at a time, so the copy pieces reuse it.
+    // Ascending in the staged tier (forward writes), in the salvage order in
+    // the ordered tier. One scratch buffer serves the whole patch: the chunks
+    // are written one at a time, so the copy pieces reuse it.
     let mut scratch = Vec::new();
     let mut write_order: Vec<usize> = (0..bad.len()).collect();
     if let Some(o) = &order
@@ -304,7 +463,7 @@ async fn attempt_inplace_inner(
         let dst = c.offset.max(0) as u64;
         if let Some(bytes) = &captured[i] {
             // A staged source: the bytes are already verified.
-            write_at(ctx, writes, &mut handle, dst, bytes)?;
+            write_at(ctx, writes, handle, dst, bytes)?;
             stats.chunks_reused += 1;
         } else if let Some(o) = &order
             && o.live[k]
@@ -314,7 +473,7 @@ async fn attempt_inplace_inner(
             copy_within(
                 ctx,
                 writes,
-                &mut handle,
+                handle,
                 &mut scratch,
                 src,
                 dst,
@@ -322,7 +481,7 @@ async fn attempt_inplace_inner(
             )?;
             stats.chunks_reused += 1;
         } else {
-            write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
+            write_downloaded_chunk(ctx, prefix, c, handle, stats, writes).await?;
         }
     }
 
@@ -331,18 +490,29 @@ async fn attempt_inplace_inner(
     // ordered tier a hole can still hold a source that a later chunk needs.
     let layout = file.layout();
     for (offset, len) in &layout.gaps {
-        zero_fill(ctx, writes, &mut handle, *offset, *len)?;
+        zero_fill(ctx, writes, handle, *offset, *len)?;
     }
 
     // The file must end at its manifest size: shorter means the tail is
     // missing, longer means it is dead weight.
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
+    Ok(())
+}
 
-    // 5. verify. One whole-file digest is the gate. Only when it fails does
-    // the range scan run, and its per-chunk verdicts name the culprit.
-    let still_bad = match verify_in_place(&mut handle, &dest_ranges, file.chunks.len(), &file.md5)?
-    {
+/// Step 5: verify, redo only the still-wrong chunks, then verify again.
+async fn verify_and_retry(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    handle: &mut std::fs::File,
+    dest_ranges: &[util::ScanRange<'_>],
+    file: &PlannedFile,
+    prefix: &str,
+    stats: &mut ChunkStats,
+) -> Result<Inplace> {
+    // One whole-file digest is the gate. Only when it fails does the range
+    // scan run, and its per-chunk verdicts name the culprit.
+    let still_bad = match verify_in_place(handle, dest_ranges, file.chunks.len(), &file.md5)? {
         Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),
         Verified::Mismatch { md5, still_bad } => {
             if still_bad.is_empty() {
@@ -367,11 +537,11 @@ async fn attempt_inplace_inner(
     );
     for &i in &still_bad {
         let c = &file.chunks[i];
-        write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
+        write_downloaded_chunk(ctx, prefix, c, handle, stats, writes).await?;
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
-    let final_md5 = util::md5::md5_reader_digest(&mut handle)?;
+    let final_md5 = util::md5::md5_reader_digest(handle)?;
     if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
         anyhow::bail!(
             "final md5 mismatch for {}: expect {} got {}",
