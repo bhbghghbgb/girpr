@@ -83,14 +83,14 @@ from records, left untouched in the destination. For `girpr` "both sides" is
 easy to forget.
 
 That is stronger than "skip it in the repair loop", and the difference is where
-the bugs are. `plan.expected_paths()` is the *only* manifest-derived input to the
+the bugs are. `plan.expected_rels()` is the *only* manifest-derived input to the
 keep set, so narrowing the plan alone leaves the purge with a **narrower**
 keep-set than an unfiltered run — the worst possible outcome. Every site that
 touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
+| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_rels()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
 | `repair::phases::check::verify_plan` | already narrowed |
 | `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |

@@ -88,9 +88,8 @@ impl PurgeKeys {
         server_keep: &HashSet<String>,
         blacklist: &HashSet<String>,
     ) -> Self {
-        // The expected set is keyed straight from the plan's rels: the raw-
-        // spelling `expected_paths()` set would be immediately re-keyed into a
-        // second one.
+        // The expected set is keyed straight from the plan's rels: an owned
+        // raw-spelling set would only be re-keyed into a second one.
         Self {
             expected: plan.expected_rels().map(path_key).collect(),
             server_keep: server_keep.iter().map(|r| path_key(r)).collect(),

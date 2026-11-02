@@ -83,7 +83,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// The caller builds the cleaned form rather than returning the input: `a/./b`
 /// must not survive as `a/./b`, because the plan stores this string and every
 /// later comparison (the purge's expected set, the reuse map, the scope) works
-/// on the plain form. A leading `.` in particular would make `expected_paths()`
+/// on the plain form. A leading `.` in particular would make the plan's rels
 /// disagree with the purge walk — which reports `game/foo.dat` — and the
 /// cleanup would delete the file this run just repaired.
 fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {

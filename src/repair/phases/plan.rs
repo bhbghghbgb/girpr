@@ -203,12 +203,6 @@ impl RepairPlan {
         self.files.iter().map(|f| f.rel.as_str())
     }
 
-    /// The same paths as owned `String`s, for callers that want the raw
-    /// spelling. [`Self::expected_rels`] is the allocation-free view.
-    pub fn expected_paths(&self) -> HashSet<String> {
-        self.expected_rels().map(str::to_string).collect()
-    }
-
     /// `Σ compressed_size` over every planned file, against a local reuse map.
     ///
     /// This is a **lower bound, not a promise**: `try_reuse_slice` falls back
@@ -313,7 +307,7 @@ pub(crate) fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
 /// deleted by `--purge-*` (docs/01: blacklisted entries are never deleted).
 ///
 /// A path outside `scope` is dropped **here**, before the plan exists, so
-/// `files_total`, the repair loop and `expected_paths()` all see the same
+/// `files_total`, the repair loop and `expected_rels()` all see the same
 /// narrowed world. Dropping it later instead would leave the purge with a
 /// *narrower* keep-set than an unfiltered run.
 pub fn build_plan(
@@ -701,7 +695,7 @@ mod tests {
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
         assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
-        assert_eq!(plan.expected_paths().len(), 1);
+        assert_eq!(plan.expected_rels().count(), 1);
     }
 
     /// A manifest path is server data. Anything that can leave `game_dir` is
@@ -770,8 +764,8 @@ mod tests {
 
     /// A leading `.` component is accepted but must not survive into the
     /// plan: the purge walk reports the plain form, so a stored `./game/foo.dat`
-    /// would not match `expected_paths()` and `--purge-after` would delete the
-    /// file the run just repaired.
+    /// would not match the purge's expected set and `--purge-after` would delete
+    /// the file the run just repaired.
     #[test]
     fn a_leading_dot_component_is_stripped_from_the_plan() {
         let f = SophonChunkFile {
@@ -785,10 +779,13 @@ mod tests {
         let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
-        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
+        assert_eq!(
+            plan.expected_rels().collect::<Vec<_>>(),
+            vec!["game/foo.dat"]
+        );
     }
 
-    /// The scope is applied *before* the plan exists, so `expected_paths()` —
+    /// The scope is applied *before* the plan exists, so `expected_rels()` —
     /// the only manifest-derived input to the files-cleanup's keep set — is
     /// narrowed too. Applying it anywhere downstream instead would leave the
     /// cleanup with a narrower keep set than an unfiltered run.
@@ -821,7 +818,10 @@ mod tests {
         .unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
-        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
+        assert_eq!(
+            plan.expected_rels().collect::<Vec<_>>(),
+            vec!["game/foo.dat"]
+        );
     }
 
     // -----------------------------------------------------------------------
