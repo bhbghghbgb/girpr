@@ -544,8 +544,35 @@ impl Summary {
     }
 
     /// Give a reservation back: the file that held it is done.
+    ///
+    /// A release larger than the reserved figure saturates at zero and warns:
+    /// the counter is what the next reservation compares against its ceiling,
+    /// and wrapping it to a figure near `u64::MAX` would refuse every later
+    /// reservation for the rest of the run. The warning keeps the caller's
+    /// logic error visible without panicking a release run.
     pub fn release_ram_bytes(&self, n: u64) {
-        self.ram_reserved.fetch_sub(n, Ordering::Relaxed);
+        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_sub(n);
+            match self.ram_reserved.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    if cur < n {
+                        tracing::warn!(
+                            release = n,
+                            reserved = cur,
+                            "release exceeds the staged RAM figure; saturating at zero"
+                        );
+                    }
+                    return;
+                }
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// The peak staged payload of the run.
@@ -886,6 +913,32 @@ mod tests {
         assert_eq!(s.max_ram_bytes(), None);
         assert!(s.reserve_ram_bytes(1 << 30));
         assert!(s.reserve_ram_bytes(u64::MAX / 2));
+    }
+
+    /// A release larger than the reservation saturates at zero and warns: a
+    /// wrapped figure would sit near `u64::MAX` and refuse every later
+    /// reservation for the rest of the run.
+    #[test]
+    fn a_ram_release_never_takes_the_reserved_figure_below_zero() {
+        let mut s = Summary::default();
+        s.set_ram_limit(Some(100));
+        assert!(s.reserve_ram_bytes(100));
+        s.release_ram_bytes(30);
+        s.release_ram_bytes(30);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 40);
+        let logs = crate::repair::test_support::logs_of(|| s.release_ram_bytes(1000));
+        assert_eq!(
+            s.ram_reserved.load(Ordering::Relaxed),
+            0,
+            "the release saturates instead of wrapping"
+        );
+        assert!(
+            logs.contains("release") && logs.contains("1000"),
+            "the attempted release is reported: {logs}"
+        );
+        // The ceiling still bounds the figure after the oversized release.
+        assert!(s.reserve_ram_bytes(100));
+        assert!(!s.reserve_ram_bytes(1), "the ceiling still binds");
     }
 
     #[test]
