@@ -226,7 +226,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 
 | Batch | Follow-ups | Status | Notes |
 |---|---|---|---|
-| HYP-01 | F01, F07, F64 | todo | Wave A; hyp number parsing and retry seams; medium |
+| HYP-01 | F01, F07, F64 | in_progress | Wave A; hyp number parsing and retry seams; medium |
 | PATHKEY-01 | F03, F04 | todo | Wave A; path-key folding outside the lock; medium |
 | LEDGER-01 | F08, F101 | todo | Wave A; meter saturation on add and release; medium |
 | RETRY-01 | F62, F81 | todo | Wave A; retry jitter spread and clippy variant names; low |
