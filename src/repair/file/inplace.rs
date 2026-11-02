@@ -396,7 +396,7 @@ fn stage_sources(
         let c = &file.chunks[i];
         let bytes = util::read_range(handle, off, c.uncompressed_size.max(0) as u64)
             .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
-        let h = Md5::from(md5::compute(&bytes));
+        let h = util::md5::md5_digest(&bytes);
         if !h.matches_hex(&c.uncompressed_md5) {
             tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
             continue;

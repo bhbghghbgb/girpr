@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use md5::Digest;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
@@ -92,9 +93,11 @@ impl fmt::Debug for Md5 {
     }
 }
 
-impl From<md5::Digest> for Md5 {
-    fn from(digest: md5::Digest) -> Self {
-        Self(digest.0)
+impl From<md5::digest::Output<md5::Md5>> for Md5 {
+    fn from(digest: md5::digest::Output<md5::Md5>) -> Self {
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
     }
 }
 
@@ -153,7 +156,7 @@ struct RangeState {
     /// canonical. `None` when the expectation is empty (or otherwise not a
     /// hex digest): "unknown", not "matches".
     expect: Option<Md5>,
-    ctx: md5::Context,
+    ctx: md5::Md5,
     /// Bytes of this range actually read. A range that runs past the end of
     /// the file is short, and a short range is never correct.
     seen: u64,
@@ -169,7 +172,7 @@ impl RangeState {
         let Some(expect) = self.expect else {
             return false;
         };
-        self.seen == self.len && Md5::from(self.ctx.clone().compute()) == expect
+        self.seen == self.len && Md5::from(self.ctx.clone().finalize()) == expect
     }
 }
 
@@ -225,7 +228,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     let mut order: Vec<usize> = (0..ranges.len()).collect();
     order.sort_by_key(|&i| (ranges[i].offset, ranges[i].len));
 
-    let mut whole = md5::Context::new();
+    let mut whole = md5::Md5::new();
     let mut buf = vec![0u8; MD5_BUF];
     let mut pos: u64 = 0;
     let mut total: u64 = 0;
@@ -235,7 +238,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
         if n == 0 {
             break;
         }
-        whole.consume(&buf[..n]);
+        whole.update(&buf[..n]);
         let block_end = pos + n as u64;
         // Ranges that ended before this block are done with; the rest are
         // visited in order and take the part of themselves inside the block.
@@ -259,7 +262,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
             if end > start {
                 let a = (start - pos) as usize;
                 let b = (end - pos) as usize;
-                ranges[ri].ctx.consume(&buf[a..b]);
+                ranges[ri].ctx.update(&buf[a..b]);
                 ranges[ri].seen += end - start;
             }
             j += 1;
@@ -269,7 +272,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     }
 
     Ok(Scan {
-        file_md5: Md5::from(whole.compute()).to_hex(),
+        file_md5: Md5::from(whole.finalize()).to_hex(),
         file_len: total,
         dest_ok: dest_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
         source_ok: source_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
@@ -299,7 +302,7 @@ fn intern(
         offset,
         len,
         expect,
-        ctx: md5::Context::new(),
+        ctx: md5::Md5::new(),
         seen: 0,
     });
     index.insert(key, i);
@@ -336,6 +339,11 @@ pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The MD5 of a byte slice, as a digest.
+pub fn md5_digest(data: &[u8]) -> Md5 {
+    Md5::from(md5::Md5::digest(data))
+}
+
 /// Lowercase hex MD5 of a file.
 pub fn md5_file(path: &Path) -> Result<String> {
     Ok(md5_file_digest(path)?.to_hex())
@@ -356,15 +364,15 @@ pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
 pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
     f.seek(SeekFrom::Start(0))?;
     let mut buf = vec![0u8; MD5_BUF];
-    let mut ctx = md5::Context::new();
+    let mut ctx = md5::Md5::new();
     loop {
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
         }
-        ctx.consume(&buf[..n]);
+        ctx.update(&buf[..n]);
     }
-    Ok(Md5::from(ctx.compute()))
+    Ok(Md5::from(ctx.finalize()))
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
@@ -401,7 +409,7 @@ pub(crate) fn md5_reader_slice_digest(
     if buf.len() < MD5_BUF {
         buf.resize(MD5_BUF, 0);
     }
-    let mut ctx = md5::Context::new();
+    let mut ctx = md5::Md5::new();
     let mut remaining = len;
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
@@ -409,10 +417,10 @@ pub(crate) fn md5_reader_slice_digest(
         if n == 0 {
             break;
         }
-        ctx.consume(&buf[..n]);
+        ctx.update(&buf[..n]);
         remaining -= n as u64;
     }
-    Ok(Md5::from(ctx.compute()))
+    Ok(Md5::from(ctx.finalize()))
 }
 
 #[cfg(test)]

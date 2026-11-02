@@ -1,5 +1,6 @@
 use anyhow::Result;
 use futures_util::StreamExt;
+use md5::Digest;
 use prost::Message;
 use std::io::Write;
 
@@ -181,7 +182,7 @@ pub struct ChunkDigest {
 /// crosses the line rather than after the whole thing has been written.
 pub struct HashingWriter<W: Write> {
     inner: W,
-    hasher: md5::Context,
+    hasher: md5::Md5,
     written: u64,
     limit: Option<u64>,
 }
@@ -195,7 +196,7 @@ impl<W: Write> HashingWriter<W> {
     pub fn new(inner: W, limit: Option<u64>) -> Self {
         Self {
             inner,
-            hasher: md5::Context::new(),
+            hasher: md5::Md5::new(),
             written: 0,
             limit,
         }
@@ -208,7 +209,7 @@ impl<W: Write> HashingWriter<W> {
 
     /// The MD5 of the bytes that passed through.
     pub fn md5(&self) -> Md5 {
-        Md5::from(self.hasher.clone().compute())
+        Md5::from(self.hasher.clone().finalize())
     }
 }
 
@@ -227,7 +228,7 @@ impl<W: Write> Write for HashingWriter<W> {
         let n = self.inner.write(buf)?;
         // Only the bytes that were really taken are hashed: a short write is
         // the inner writer's business, and the caller retries with the rest.
-        self.hasher.consume(&buf[..n]);
+        self.hasher.update(&buf[..n]);
         self.written += n as u64;
         Ok(n)
     }
