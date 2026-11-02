@@ -130,6 +130,27 @@ impl Drop for ProgressGuard {
     }
 }
 
+/// The provenance fields of the one-time begin report.
+///
+/// The field order is the report's field order: the caller names every value
+/// once, and the formatter turns the group into the `REPORT` record.
+pub struct ReportProvenance<'a> {
+    /// The on-disk `config.ini` version, or `None` when absent.
+    pub local_version: &'a Option<String>,
+    /// The version the run is moving to.
+    pub latest_version: &'a str,
+    /// The game/business channel.
+    pub biz: &'a str,
+    /// The launcher's game configuration.
+    pub cfg: &'a GameConfig,
+    /// The selected branch package.
+    pub pkg: &'a GameBranchPackage,
+    /// The target build.
+    pub build: &'a ChunkBuild,
+    /// The effective audio language set.
+    pub audio_langs: &'a HashSet<String>,
+}
+
 /// The one-time begin report, written right after the metadata calls. Parsers
 /// get it before any repair starts: `local_version` is the on-disk `config.ini`
 /// value (`none` when absent), `latest_version` is the "will be updated to" tag;
@@ -138,31 +159,25 @@ impl Drop for ProgressGuard {
 ///
 /// Provenance: Starward `GameInstallService.cs:788-849` (the same field set the
 /// launcher shows the user before installing).
-#[allow(clippy::too_many_arguments)] // stable report formatter; params-struct would churn CLI parsing
-pub fn report_record(
-    local_version: &Option<String>,
-    latest_version: &str,
-    biz: &str,
-    cfg: &GameConfig,
-    pkg: &GameBranchPackage,
-    build: &ChunkBuild,
-    audio_langs: &HashSet<String>,
-) -> Record {
-    let mut langs: Vec<&String> = audio_langs.iter().collect();
+pub fn report_record(provenance: &ReportProvenance<'_>) -> Record {
+    let mut langs: Vec<&String> = provenance.audio_langs.iter().collect();
     langs.sort();
     let audio_joined: Vec<&str> = langs.iter().map(|s| s.as_str()).collect();
-    let local = local_version.as_deref().unwrap_or("none");
+    let local = provenance.local_version.as_deref().unwrap_or("none");
     Record::keyed("REPORT")
         .put("local_version", local)
-        .put("latest_version", latest_version)
-        .put("biz", biz)
-        .put("exe", cfg.exe_file_name.as_str())
-        .put("download_mode", cfg.default_download_mode.as_str())
-        .put("branch", pkg.branch.as_str())
-        .put("package_id", pkg.package_id.as_str())
-        .put("build_id", build.build_id.as_str())
+        .put("latest_version", provenance.latest_version)
+        .put("biz", provenance.biz)
+        .put("exe", provenance.cfg.exe_file_name.as_str())
+        .put(
+            "download_mode",
+            provenance.cfg.default_download_mode.as_str(),
+        )
+        .put("branch", provenance.pkg.branch.as_str())
+        .put("package_id", provenance.pkg.package_id.as_str())
+        .put("build_id", provenance.build.build_id.as_str())
         .put("audio_langs", audio_joined.join(","))
-        .put("diff_tags", pkg.diff_tags.join(","))
+        .put("diff_tags", provenance.pkg.diff_tags.join(","))
 }
 
 /// The final `SUMMARY`, ending every run.

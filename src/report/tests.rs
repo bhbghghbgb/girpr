@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 use crate::report::emit::{
-    ProgressGuard, progress_record, report_record, summary_record, write_line,
+    ProgressGuard, ReportProvenance, progress_record, report_record, summary_record, write_line,
 };
 use crate::report::record::{OutputFormat, Record};
 use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
@@ -362,15 +362,15 @@ fn report_record_reports_versions_and_api_fields() {
         manifests: Vec::new(),
     };
     let audio: HashSet<String> = ["ja-jp".into(), "en-us".into()].into_iter().collect();
-    let rec = report_record(
-        &Some("4.0.0".to_string()),
-        "5.1.0",
-        "hk4e_global",
-        &cfg_full(),
-        &pkg,
-        &build,
-        &audio,
-    );
+    let rec = report_record(&ReportProvenance {
+        local_version: &Some("4.0.0".to_string()),
+        latest_version: "5.1.0",
+        biz: "hk4e_global",
+        cfg: &cfg_full(),
+        pkg: &pkg,
+        build: &build,
+        audio_langs: &audio,
+    });
     let line = rec.text();
     assert!(
         line.starts_with("REPORT local_version=4.0.0 latest_version=5.1.0 biz=hk4e_global"),
@@ -398,7 +398,15 @@ fn report_record_says_none_for_an_absent_local_version() {
         manifests: Vec::new(),
     };
     let audio: HashSet<String> = HashSet::new();
-    let rec = report_record(&None, "3.0.0", "hk4e_cn", &cfg, &pkg, &build, &audio);
+    let rec = report_record(&ReportProvenance {
+        local_version: &None,
+        latest_version: "3.0.0",
+        biz: "hk4e_cn",
+        cfg: &cfg,
+        pkg: &pkg,
+        build: &build,
+        audio_langs: &audio,
+    });
     let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
     assert_eq!(v["event"], "report");
     assert_eq!(v["local_version"], "none");

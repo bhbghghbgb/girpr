@@ -31,6 +31,6 @@ pub mod emit;
 pub mod record;
 pub mod summary;
 
-pub use self::emit::{ProgressGuard, emit, report_record, summary_record};
+pub use self::emit::{ProgressGuard, ReportProvenance, emit, report_record, summary_record};
 pub use self::record::{OutputFormat, Record};
 pub use self::summary::Summary;

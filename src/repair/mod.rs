@@ -260,15 +260,15 @@ struct PlanWork {
 async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let meta = metadata::fetch(ctx, game_dir).await?;
     report::emit(
-        &report::report_record(
-            &meta.local_version,
-            &meta.latest,
-            ctx.biz.as_str(),
-            &meta.config,
-            &meta.branch,
-            &meta.latest_build,
-            &meta.audio,
-        ),
+        &report::report_record(&report::ReportProvenance {
+            local_version: &meta.local_version,
+            latest_version: &meta.latest,
+            biz: ctx.biz.as_str(),
+            cfg: &meta.config,
+            pkg: &meta.branch,
+            build: &meta.latest_build,
+            audio_langs: &meta.audio,
+        }),
         ctx.output,
     );
     Ok(meta)
