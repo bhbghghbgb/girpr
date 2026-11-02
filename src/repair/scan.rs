@@ -646,6 +646,96 @@ mod tests {
         );
     }
 
+    /// One remap pins the ownership rule: only chunks with a source have an
+    /// entry in `scan_source_ok`, and a chunk without one stays `false`. A
+    /// verdict list that is shorter than the owner list is a missing answer,
+    /// not a panic.
+    #[test]
+    fn the_source_verdicts_land_on_the_chunk_that_owns_the_range() {
+        assert_eq!(
+            source_ok_by_chunk(3, &[0, 2], &[true, true]),
+            vec![true, false, true],
+            "chunk 1 has no source range, so it has no intact source"
+        );
+        assert_eq!(
+            source_ok_by_chunk(3, &[0, 2], &[true]),
+            vec![true, false, false],
+            "a missing per-range verdict is false, not a panic"
+        );
+    }
+
+    /// A no-source chunk stays `false` even when the scan's source list carries
+    /// an entry the owner list does not claim.
+    #[test]
+    fn a_stray_source_verdict_never_marks_a_no_source_chunk() {
+        assert_eq!(
+            source_ok_by_chunk(3, &[2], &[true, true]),
+            vec![false, false, true],
+            "the extra answer belongs to no chunk, and chunk 1 has no source"
+        );
+    }
+
+    /// The scan's estimate and the in-place writer read the same remapped
+    /// per-chunk verdict: the chunk without a source is the one both name as a
+    /// download.
+    #[test]
+    fn the_scan_and_inplace_estimates_agree_after_the_remap() {
+        let chunks = vec![
+            chunk_at("c0", "m0", 0, 10),
+            chunk_at("c1", "m1", 10, 20),
+            chunk_at("c2", "m2", 30, 30),
+        ];
+        let sources = vec![Some(100u64), None, Some(300)];
+        let (_, _, owner) = scan_ranges(&chunks, &sources);
+        assert_eq!(owner, vec![0, 2]);
+        let source_ok = source_ok_by_chunk(chunks.len(), &owner, &[true, true]);
+        let verdict = Verdict {
+            file_md5: "x".into(),
+            dest_ok: vec![false; 3],
+            source_ok,
+            file_len: 0,
+            modified: None,
+        };
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            20,
+            "only the source-less chunk must be fetched"
+        );
+
+        // The writer builds its patch list from the same verdict; the chunks
+        // it downloads are the same ones the estimate counted.
+        let bad: Vec<usize> = (0..chunks.len()).filter(|&i| !verdict.dest_ok[i]).collect();
+        let srcs: Vec<Option<u64>> = bad
+            .iter()
+            .map(|&i| {
+                if verdict.source_ok[i] {
+                    sources[i]
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let kept: Vec<&SophonChunk> = bad.iter().map(|&i| &chunks[i]).collect();
+        let order = reuse::salvage_order_refs(&kept, &srcs, u64::MAX);
+        let downloaded: u64 = kept
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !order.live[*k])
+            .fold(0u64, |n, (_, c)| {
+                n.saturating_add(c.compressed_size.max(0) as u64)
+            });
+        assert_eq!(
+            downloaded, 20,
+            "the writer's patch list and the estimate must agree"
+        );
+    }
+
     #[test]
     fn the_damaged_chunk_count_is_the_wrong_chunks() {
         let v = Verdict {
