@@ -69,3 +69,38 @@ impl Drop for PhaseTimer {
         self.log();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// The conversion is whole milliseconds from an injected pair of instants,
+    /// so the test never depends on how long the test itself took.
+    #[test]
+    fn elapsed_milliseconds_are_whole_and_saturating() {
+        let start = Instant::now();
+        assert_eq!(millis_between(start, start), 0);
+        assert_eq!(millis_between(start, start + Duration::from_millis(42)), 42);
+        assert_eq!(
+            millis_between(start, start + Duration::from_micros(1_999)),
+            1,
+            "the sub-millisecond part is truncated, not rounded"
+        );
+        assert_eq!(
+            millis_between(start, start.checked_sub(Duration::from_millis(1)).unwrap()),
+            0,
+            "a backwards reading must not wrap"
+        );
+    }
+
+    /// The stable field name is what a reader greps; the value is not asserted.
+    #[test]
+    fn the_timer_logs_phase_and_duration() {
+        let logs = crate::repair::test_support::logs_of(|| {
+            PhaseTimer::start("unit").finish();
+        });
+        assert!(logs.contains("phase=unit"), "{logs}");
+        assert!(logs.contains("duration_ms="), "{logs}");
+    }
+}

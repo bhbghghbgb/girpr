@@ -5307,3 +5307,112 @@ async fn deprecated_files_call_carries_the_per_launcher_channel() {
 
     mock.stop();
 }
+
+/// Every phase that ran reports one `duration_ms` on its completion line, and a
+/// phase that did not run reports none. Only the field's presence is pinned: the
+/// value is whatever the machine took.
+#[tokio::test]
+async fn the_phase_completion_lines_carry_a_duration_field() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("phase_durations");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+
+    let log = dir.join("run.log");
+    let log_arg = log.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--scan",
+            "--log-file",
+            &log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
+    for phase in [
+        "metadata", "manifest", "plan", "scan", "repair", "post", "run",
+    ] {
+        let marker = format!("phase={phase}");
+        let line = body
+            .lines()
+            .find(|line| line.contains(&marker))
+            .unwrap_or_else(|| panic!("no {marker} completion line:\n{body}"));
+        assert!(line.contains("duration_ms="), "{line}");
+    }
+
+    // The per-file total is at debug and names the file.
+    let rel = &fx2.files[0].rel;
+    let line = body
+        .lines()
+        .find(|line| {
+            line.contains("file repair finished")
+                && line.contains(&format!("file={rel}"))
+                && line.contains("duration_ms=")
+        })
+        .unwrap_or_else(|| panic!("no per-file duration for {rel}:\n{body}"));
+    assert!(line.contains("duration_ms="), "{line}");
+
+    // A phase that did not run must not log a duration.
+    assert!(
+        !body.contains("phase=check"),
+        "check-only did not run:\n{body}"
+    );
+
+    // The check-only path reports its own phase and neither later phase.
+    let check_log = dir.join("check.log");
+    let check_log_arg = check_log.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--check-only",
+            "--log-file",
+            &check_log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let body = std::fs::read_to_string(&check_log).expect("the check log file was written");
+    let line = body
+        .lines()
+        .find(|line| line.contains("phase=check"))
+        .unwrap_or_else(|| panic!("no check completion line:\n{body}"));
+    assert!(line.contains("duration_ms="), "{line}");
+    assert!(
+        !body.contains("phase=repair"),
+        "the repair loop did not run:\n{body}"
+    );
+    assert!(
+        !body.contains("phase=post"),
+        "the post-phase did not run:\n{body}"
+    );
+
+    mock.stop();
+}
