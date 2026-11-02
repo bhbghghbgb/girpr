@@ -17,7 +17,7 @@ use super::{
 use crate::config::RepairMode;
 use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
-use crate::repair::scan::{Verdict, scan_ranges};
+use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk};
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
@@ -416,26 +416,6 @@ fn verify_in_place(
         md5: after,
         still_bad,
     })
-}
-
-/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
-///
-/// `scan.source_ok` is indexed by the range list [`scan_ranges`] built, which
-/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
-/// that range `k` belongs to. A chunk with no source has no intact source, by
-/// definition, so it stays `false`. The discard path replaces a real scan with
-/// [`util::Scan::absent`], whose tuple is `(dest ranges, source ranges)`; this
-/// remap is what keeps that per-range shape from being read as per-chunk.
-fn source_ok_by_chunk(
-    chunks_len: usize,
-    source_owner: &[usize],
-    scan_source_ok: &[bool],
-) -> Vec<bool> {
-    let mut source_ok = vec![false; chunks_len];
-    for (k, &i) in source_owner.iter().enumerate() {
-        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
-    }
-    source_ok
 }
 
 /// The plan-phase verdict for this file, when a cheap stat proves the file has

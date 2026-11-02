@@ -330,6 +330,30 @@ pub(crate) fn scan_ranges<'a>(
     (dest_ranges, source_ranges, source_owner)
 }
 
+/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
+///
+/// `scan_source_ok` is indexed by the range list [`scan_ranges`] built, which
+/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
+/// that range `k` belongs to. A chunk with no source has no intact source, by
+/// definition, so it stays `false`. A source verdict that is missing keeps
+/// that same conservative answer rather than panicking.
+///
+/// The discard path replaces a real scan with [`util::Scan::absent`], whose
+/// tuple is `(dest ranges, source ranges)`; this remap is what keeps that
+/// per-range shape from being read as per-chunk. Both the scan's estimate and
+/// the in-place writer use this one definition.
+pub(crate) fn source_ok_by_chunk(
+    chunks_len: usize,
+    source_owner: &[usize],
+    scan_source_ok: &[bool],
+) -> Vec<bool> {
+    let mut source_ok = vec![false; chunks_len];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
+    }
+    source_ok
+}
+
 /// Scan one file: one read, every answer.
 fn scan_one(
     game_dir: &Path,
@@ -380,10 +404,7 @@ fn scan_one(
     });
     // Back to one verdict per chunk, in the plan's order: a chunk with no
     // source has no intact source, by definition.
-    let mut source_ok = vec![false; file.chunks.len()];
-    for (k, &i) in source_owner.iter().enumerate() {
-        source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
-    }
+    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
     Scanned {
         bytes: scan.file_len,
         verdict: Verdict {
