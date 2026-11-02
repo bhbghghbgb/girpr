@@ -76,7 +76,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-10 | T27 | done | | Completed without fixes |
 | RC-11 | T28-T29 | done | | Both completed without fixes |
 | RC-12 | T30-T31 | done | | Both completed without fixes |
-| RC-13 | T32-T33 | pending | | |
+| RC-13 | T32-T33 | in_progress | | |
 | RC-14 | T34 | pending | | |
 | RC-15 | T35-T36 | pending | | |
 | RC-16 | T37-T43 | pending | | |
