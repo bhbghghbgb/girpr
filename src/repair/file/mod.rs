@@ -266,7 +266,16 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
     );
     async move {
         tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
-        match repair_one_file(&ctx, idx).await {
+        let started = std::time::Instant::now();
+        let outcome = repair_one_file(&ctx, idx).await;
+        // One per-file total, at debug: a chunk line per chunk would drown the
+        // log, and the phase's own duration is already on its completion line.
+        tracing::debug!(
+            file = %ctx.plan.files[idx].rel,
+            duration_ms = crate::phase::millis_between(started, std::time::Instant::now()),
+            "file repair finished"
+        );
+        match outcome {
             Ok(Repaired::Skipped) => {
                 ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
             }
