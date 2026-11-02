@@ -38,7 +38,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T24 | P11 - remove purge/scope per-pass allocations | pending_review | debba64, 68242fe, a9d5b20, f7d2165 | RC-09 |
 | T25 | P13 - fast-path unlimited meters | pending_review | af8e5bf, e799311 | RC-09 |
 | T26 | P12 - resolve `PathRoot` leaves safely (decision gate) | skipped | | RC-09 |
-| T27 | D1 - per-file facts live on the file | in_progress | | RC-10 |
+| T27 | D1 - per-file facts live on the file | pending_review | 3576cf4, 07c556d, 52158e8, 1449a7f | RC-10 |
 | T28 | D3 - one atomic-write helper | todo | | RC-11 |
 | T29 | D2 - one retry/backoff scaffold | todo | | RC-11 |
 | T30 | D4 - one rel-path spelling helper | todo | | RC-12 |
