@@ -571,6 +571,9 @@ pub fn join_url(prefix: &str, id: &str) -> String {
 mod tests {
     use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
+    use crate::sleep::NoSleep;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// A frame the differential runs over.
     fn frame(payload: &[u8]) -> Vec<u8> {
@@ -859,5 +862,110 @@ mod tests {
     fn a_success_is_not_confused_with_a_retryable_failure() {
         assert!(!retryable(200));
         assert!(!retryable(204));
+    }
+
+    /// The status classifier answers the verdict the loop acts on: a transient
+    /// status is worth another attempt, a decided one is not.
+    #[test]
+    fn verdict_splits_retryable_statuses_from_decided_ones() {
+        for status in [408, 429, 500, 503] {
+            assert!(
+                matches!(
+                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                    Retry::Retry(_)
+                ),
+                "{status} must be retried"
+            );
+        }
+        for status in [400, 403, 404] {
+            assert!(
+                matches!(
+                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                    Retry::Fatal(_)
+                ),
+                "{status} must stop the fetch"
+            );
+        }
+    }
+
+    /// A throwaway HTTP server that answers every request with `status`, and
+    /// counts the requests it saw.
+    async fn serve_status(status: &'static str) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the test server");
+        let addr = listener.local_addr().expect("the test server address");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&hits);
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                counter.fetch_add(1, Ordering::Relaxed);
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 1024];
+                    let _ = socket.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    fn manifest_meta(base: &str) -> ChunkManifestMeta {
+        ChunkManifestMeta {
+            category_id: String::new(),
+            category_name: String::new(),
+            matching_field: "game".into(),
+            manifest: crate::hyp::ManifestFile {
+                id: "manifest".into(),
+                ..Default::default()
+            },
+            chunk_download: crate::hyp::ManifestUrl::default(),
+            manifest_download: crate::hyp::ManifestUrl {
+                url_prefix: base.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retryable_manifest_status_is_retried_to_the_cap() {
+        let (base, hits) = serve_status("500 Internal Server Error").await;
+        let meta = manifest_meta(&base);
+        let client = reqwest::Client::new();
+        let err = fetch_manifest(&client, &NoSleep, &meta)
+            .await
+            .expect_err("the origin never recovers");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            ATTEMPTS as usize,
+            "a 500 is retried on every allowed attempt"
+        );
+        let chain = format!("{err:#}");
+        assert!(chain.contains("after 5 attempts"), "{chain}");
+    }
+
+    #[tokio::test]
+    async fn a_terminal_manifest_status_is_not_retried() {
+        let (base, hits) = serve_status("404 Not Found").await;
+        let meta = manifest_meta(&base);
+        let client = reqwest::Client::new();
+        let err = fetch_manifest(&client, &NoSleep, &meta)
+            .await
+            .expect_err("the build has no such manifest");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "the origin answered definitively"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            !chain.contains("after "),
+            "a fatal answer must not be dressed up as exhaustion: {chain}"
+        );
     }
 }
