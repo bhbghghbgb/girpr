@@ -45,7 +45,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T31 | D5 - one per-range to per-chunk remap | completed | 9090504, d81083e | RC-12 |
 | T32 | D7 - reconcile documentation with the code | completed | b92f90d, 8e3f127 | RC-13 |
 | T33 | D6 - remove test-only production API | completed | d47cd56, da2b5a2, bad95ca | RC-13 |
-| T34 | D8 - split the functions doing too much | pending_review | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
+| T34 | D8 - split the functions doing too much | completed | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
 | T35 | D9 - replace parameter bags with structs | todo | | RC-15 |
 | T36 | D10 - name every exit code | todo | | RC-15 |
 | T37 | B1 - trim the tokio feature set | todo | | RC-16 |
@@ -77,7 +77,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-11 | T28-T29 | done | | Both completed without fixes |
 | RC-12 | T30-T31 | done | | Both completed without fixes |
 | RC-13 | T32-T33 | done | 8e3f127 | T32 fixed: legacy-vs-active lock in settings docs |
-| RC-14 | T34 | in_progress | | |
+| RC-14 | T34 | done | | Completed without fixes |
 | RC-15 | T35-T36 | pending | | |
 | RC-16 | T37-T43 | pending | | |
 | RC-17 | T44-T45 | pending | | |
@@ -175,6 +175,11 @@ until the main tasks and rework are done.
 | F74 | RC-13 review | `src/report/emit.rs` | Public docs link to the private `write_line`, leaving a rustdoc warning. | todo |
 | F75 | T33 implementer | `tools/sync` | The sibling crate has its own unrelated `Record::event` implementation. | todo |
 | F76 | T33 implementer | `src/util/ini.rs` | No pure `render_config_ini` helper; future tests observing rendering without writing would need one. | todo |
+| F77 | RC-14 review | `src/repair/mod.rs` | `publish_plan`'s doc describes a disk-figures computation that moved into `build_and_assert_plan`. | todo |
+| F78 | RC-14 review | `src/repair/mod.rs`, `src/repair/file/inplace.rs` | Four new `too_many_arguments` allows are parameter bags for T35 to absorb. | todo |
+| F79 | RC-14 review | `src/repair/file/inplace.rs`, `src/repair/mod.rs` | Trim/tier decisions and plan-step guards have only end-to-end coverage. | todo |
+| F80 | T34 implementer | `src/repair/mod.rs` | `build_and_assert_plan` is still ~150 lines and could split further. | todo |
+| F81 | T34 implementer | `src/retry.rs` | Clippy `enum_variant_names` warning predates the work and is still present. | todo |
 
 ## Follow-up batches
 
