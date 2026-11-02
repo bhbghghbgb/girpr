@@ -126,15 +126,30 @@ impl PurgeKeys {
 /// Pure with respect to the walk's contents: it reads the filesystem and
 /// decides, but deletes nothing.
 pub fn plan_purge(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> PurgePlan {
-    // The keep inputs were folded once per run; this pass only walks and keys
-    // the paths it meets.
+    finish_plan(game_dir, walk_and_classify(game_dir, keys, scope))
+}
+
+/// What one `WalkDir` pass collected, before it is sorted into a [`PurgePlan`].
+struct WalkResult {
+    files: Vec<PurgeCandidate>,
+    all_dirs: Vec<PathBuf>,
+    /// Ancestors of every `Keep`-classified file: anything else is left empty
+    /// by the purge and eligible for the emptied-dir sweep.
+    kept_dirs: HashSet<PathBuf>,
+    hidden: u64,
+    errors: u64,
+}
+
+/// The walk half of [`plan_purge`]: read the tree and classify each entry.
+///
+/// The keep inputs were folded once per run; this pass only walks and keys the
+/// paths it meets.
+fn walk_and_classify(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> WalkResult {
     let expected = &keys.expected;
     let server_keep = &keys.server_keep;
     let blacklist = &keys.blacklist;
     let mut files: Vec<PurgeCandidate> = Vec::new();
     let mut all_dirs: Vec<PathBuf> = Vec::new();
-    // Ancestors of every `Keep`-classified file: anything else is left empty by
-    // the purge and eligible for the emptied-dir sweep.
     let mut kept_dirs: HashSet<PathBuf> = HashSet::new();
     let mut hidden = 0u64;
     let mut errors = 0u64;
@@ -224,6 +239,26 @@ pub fn plan_purge(game_dir: &Path, keys: &PurgeKeys, scope: &PathScope) -> Purge
             hidden += 1;
         }
     }
+
+    WalkResult {
+        files,
+        all_dirs,
+        kept_dirs,
+        hidden,
+        errors,
+    }
+}
+
+/// The finish half of [`plan_purge`]: sort, total, sweep the emptied dirs, and
+/// report what the walk found.
+fn finish_plan(game_dir: &Path, walk: WalkResult) -> PurgePlan {
+    let WalkResult {
+        mut files,
+        all_dirs,
+        kept_dirs,
+        hidden,
+        errors,
+    } = walk;
 
     // Deterministic delete order, so a rerun's log is comparable.
     files.sort_by(|a, b| a.path.cmp(&b.path));
