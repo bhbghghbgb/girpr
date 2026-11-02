@@ -452,8 +452,8 @@ async fn non_chunk_download_mode_is_a_usage_error() {
 async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     // The first wave issues both calls. A branch endpoint that fails must not
     // turn the authoritative mode refusal into a metadata error: the mode
-    // check runs after both futures have settled but before the branch result
-    // is used, so exit 1 wins over exit 2.
+    // check runs after the config answer but before the branch result is used,
+    // and a still-pending branch call is dropped, so exit 1 wins over exit 2.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
