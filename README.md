@@ -281,6 +281,21 @@ the completed `*_tmp` prefix and continuing it.
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
 
+`cargo build` and `cargo test` at the workspace root build the product
+(`girpr`). The two dev tools (`gircap`, `girsync`) are workspace members but
+not default members, so a root command does not compile them; check them
+explicitly when working on them. `--workspace` is the everything command.
+
+**Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
+bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
+copy. Both are development-only and are not part of the shipped product. They
+share the workspace lockfile but are built on request:
+
+```powershell
+cargo check -p girsync -p gircap
+cargo build --workspace
+```
+
 ```powershell
 cargo build --release
 # Preview (writes nothing)
@@ -373,6 +388,7 @@ the prebuilt release for the platform. Every crate in the workspace (`girpr`,
 ```powershell
 cargo nextest run             # 362 tests in this package, all offline (7 #[ignore]d)
 cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
+cargo check -p girsync -p gircap # the dev tools, which a root command does not build
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
 cargo clippy --all-targets
