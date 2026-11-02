@@ -48,13 +48,13 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T34 | D8 - split the functions doing too much | completed | 005fa5f, 4fb3095, ab3e2c8, c4c6abb, 9999749, 3a1eb18 | RC-14 |
 | T35 | D9 - replace parameter bags with structs | completed | 09c40dc, 4660afd, 6fd9670, 63961bc | RC-15 |
 | T36 | D10 - name every exit code | completed | 66b37a6, 487b7ad, bc12be9 | RC-15 |
-| T37 | B1 - trim the tokio feature set | pending_review | 075f6d2 | RC-16 |
-| T38 | B2 - remove the `regex` dependency | pending_review | 4567a8f, a244131 | RC-16 |
-| T39 | B3 - use `futures-util` directly | pending_review | 4c64d0e | RC-16 |
-| T40 | B4 - build the product by default | pending_review | b4ee7e9, 73370de | RC-16 |
-| T41 | B5 - tune the release profile | pending_review | 53cd8ef | RC-16 |
-| T42 | B6 - add a workspace lint policy | pending_review | 21e49a7, 50faff7 | RC-16 |
-| T43 | B7 - evaluate the md-5 upgrade (conditional) | pending_review | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
+| T37 | B1 - trim the tokio feature set | completed | 075f6d2 | RC-16 |
+| T38 | B2 - remove the `regex` dependency | completed | 4567a8f, a244131 | RC-16 |
+| T39 | B3 - use `futures-util` directly | completed | 4c64d0e | RC-16 |
+| T40 | B4 - build the product by default | completed | b4ee7e9, 73370de | RC-16 |
+| T41 | B5 - tune the release profile | completed | 53cd8ef | RC-16 |
+| T42 | B6 - add a workspace lint policy | completed | 21e49a7, 50faff7 | RC-16 |
+| T43 | B7 - evaluate the md-5 upgrade (conditional) | completed | 8078f2b, 07c6ab2, a2b2d04 | RC-16 |
 | T44 | T1 - regression tests for the fixed failure paths | todo | | RC-17 |
 | T45 | T2 - log phase and per-file durations | todo | | RC-17 |
 | T46 | T4 - pin the output-contract ordering | todo | | RC-18 |
@@ -79,7 +79,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-13 | T32-T33 | done | 8e3f127 | T32 fixed: legacy-vs-active lock in settings docs |
 | RC-14 | T34 | done | | Completed without fixes |
 | RC-15 | T35-T36 | done | | Both completed without fixes |
-| RC-16 | T37-T43 | in_progress | | |
+| RC-16 | T37-T43 | done | | All completed without fixes; T43 gate passed (+26%) |
 | RC-17 | T44-T45 | pending | | |
 | RC-18 | T46-T47 | pending | | |
 
@@ -193,7 +193,7 @@ until the main tasks and rework are done.
 | F92 | T39 implementer | `Cargo.toml` | `futures-util` defaults pull `futures-macro` and `slab`; a `std`-only feature set could shrink the graph. | todo |
 | F93 | T39 implementer | `src/sophon/stream.rs` | The `Stream` bound names `futures-core` directly; `futures_util::stream::Stream` would be the same trait. | todo |
 | F94 | T40 implementer | repo | No CI exists; a future CI job must run `cargo check -p girsync -p gircap` or a workspace job. | todo |
-| F95 | T40 implementer | `README.md` | The nextest note hard-codes a test count that drifts. | todo |
+| F95 | T40 implementer | `README.md` | The nextest note hard-codes a test count ("362 tests") that is now 470 and drifts; de-number it. | todo |
 | F96 | T41 implementer | `Cargo.toml` | Release builds strip symbols; crash triage may want `strip = "debuginfo"` or a separate profile. | todo |
 | F97 | T42 implementer | `clippy.toml` | Revisit `allow-unwrap-in-tests`/`allow-expect-in-tests` to replace the code-level test allows. | todo |
 | F98 | T43 implementer | `Cargo.toml` | `md-5`'s optional `asm`/`md5-asm` backend may beat the portable path on x86; measure separately. | todo |
@@ -204,6 +204,10 @@ until the main tasks and rework are done.
 | F103 | RC-09 review | `src/repair/purge.rs` | `mark_kept_ancestors` allocates one `PathBuf` per newly marked ancestor. | todo |
 | F104 | RC-09 review | `src/util/path.rs` | The T26 skip rests on a one-off measurement with no retained harness to re-check on other installs. | todo |
 | F105 | RC-09 review | `src/logging.rs`, docs | Buffering delays external `tail -f` by up to 64 KiB; worth stating if log streaming is supported. | todo |
+| F106 | RC-16 review | `Cargo.toml` | The tokio comment promises a saving `reqwest` already spends; reword to the real one (dropping `process`/`signal`, dev-only `test-util`). | todo |
+| F107 | RC-16 review | tests/benchmarks | The MD5 throughput claim has no committed reproduction; add a small `#[ignore]`d benchmark or script. | todo |
+| F108 | RC-16 review | `tests/common/mod.rs`, `tests/artifact_bridge/server.rs`, `tests/peak_heap.rs` | The same `md5_hex` loop is duplicated three times; one shared helper would do. | todo |
+| F109 | RC-16 review | `tools/sync`, `tools/capture` | The dev tools stay outside the lint policy; consider a tools-only lint check when next touched. | todo |
 
 ## Follow-up batches
 
