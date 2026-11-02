@@ -4,6 +4,7 @@ use prost::Message;
 use std::io::Write;
 
 use crate::hyp::ChunkManifestMeta;
+use crate::retry::{Retry, RetryState, retry_state};
 use crate::sleep::Sleep;
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
 use crate::util::Md5;
@@ -31,27 +32,31 @@ pub async fn fetch_manifest(
     // it is not trusted enough to allocate on. A blob bigger than the clamp
     // grows the buffer; a bogus number cannot ask for an impossible allocation.
     let hint = manifest_size_hint(meta.manifest.uncompressed_size);
-    let mut decoded: Vec<u8> = Vec::with_capacity(hint);
-    let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=ATTEMPTS {
-        match try_fetch_manifest(client, &url, meta, attempt, &mut decoded).await {
-            Attempt::Ok(v) => return Ok(v),
-            Attempt::Fatal(e) => {
-                tracing::debug!(
-                    manifest = %meta.manifest.id,
-                    attempt,
-                    "manifest fetch failed, not retryable: {e:#}"
-                );
-                return Err(e);
+    let decoded: Vec<u8> = Vec::with_capacity(hint);
+    let url = url.as_str();
+    retry_state(
+        ATTEMPTS,
+        sleep,
+        decoded,
+        |mut decoded, attempt| async move {
+            match try_fetch_manifest(client, url, meta, attempt, &mut decoded).await {
+                Retry::Done(v) => RetryState::Done(v),
+                Retry::Fatal(e) => {
+                    tracing::debug!(
+                        manifest = %meta.manifest.id,
+                        attempt,
+                        "manifest fetch failed, not retryable: {e:#}"
+                    );
+                    RetryState::Fatal(e)
+                }
+                Retry::Retry(e) => {
+                    tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
+                    RetryState::Retry(decoded, e)
+                }
             }
-            Attempt::Retry(e) => {
-                tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
-                last_err = e;
-            }
-        }
-        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
-    }
-    Err(last_err)
+        },
+    )
+    .await
 }
 
 /// The largest allocation the manifest's reported size is allowed to ask for.
@@ -79,14 +84,14 @@ async fn try_fetch_manifest(
     client: &reqwest::Client,
     url: &str,
     meta: &ChunkManifestMeta,
-    attempt: u64,
+    attempt: u32,
     decoded: &mut Vec<u8>,
-) -> Attempt<Vec<SophonChunkFile>> {
+) -> Retry<Vec<SophonChunkFile>> {
     tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
     let resp = match client.get(url).send().await {
         Ok(r) => r,
         Err(e) => {
-            return Attempt::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
+            return Retry::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
         }
     };
     let status = resp.status();
@@ -96,7 +101,7 @@ async fn try_fetch_manifest(
     // A retry starts the manifest over: the decoded bytes of the failed
     // attempt are in the buffer, and they are about to be replaced.
     if let Err(e) = decoded.restart() {
-        return Attempt::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
+        return Retry::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
     }
     // The whole blob is zstd-compressed; the checksum is the MD5 of the
     // DECOMPRESSED bytes. There is no ceiling on the decode and none on the
@@ -106,7 +111,7 @@ async fn try_fetch_manifest(
         Ok(v) => v,
         Err(f) => {
             return match f.error {
-                StreamError::Transport(e) | StreamError::Content(e) => Attempt::Retry(e),
+                StreamError::Transport(e) | StreamError::Content(e) => Retry::Retry(e),
             };
         }
     };
@@ -115,7 +120,7 @@ async fn try_fetch_manifest(
     // A checksum mismatch is worth another try: the origin may have served a
     // torn body, and the next attempt is a fresh one.
     if !digest.md5.matches_hex(&meta.manifest.checksum) {
-        return Attempt::Retry(anyhow::anyhow!(
+        return Retry::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             meta.manifest.id,
             meta.manifest.checksum,
@@ -129,9 +134,9 @@ async fn try_fetch_manifest(
                 m.chuncks.iter().map(|f| f.chunks.len()).sum(),
             );
             tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, attempt, "manifest parsed");
-            Attempt::Ok(m.chuncks)
+            Retry::Done(m.chuncks)
         }
-        Err(e) => Attempt::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
+        Err(e) => Retry::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
     }
 }
 
@@ -261,12 +266,12 @@ impl<T: ChunkSink + ?Sized> ChunkSink for &mut T {
 /// not what it should be — but the two callers read them differently, and the
 /// difference is deliberate:
 ///
-/// - **a chunk** treats it as [`Attempt::Fatal`]: the origin answered
+/// - **a chunk** treats it as [`Retry::Fatal`]: the origin answered
 ///   definitively with a body that does not decode, and the file-level retry
 ///   is what asks for it again. That is what the buffered path did — a bad
 ///   frame failed the *file* attempt, not the chunk fetch — so the request
 ///   counts do not change;
-/// - **a manifest** treats it as [`Attempt::Retry`]: a torn body is worth
+/// - **a manifest** treats it as [`Retry::Retry`]: a torn body is worth
 ///   another try of the whole fetch, which is what the manifest path has
 ///   always done with a decode failure.
 #[derive(Debug)]
@@ -314,33 +319,37 @@ pub async fn stream_chunk_to(
     sink: &mut impl ChunkSink,
 ) -> Result<ChunkDigest> {
     let url = join_url(url_prefix, id);
-    let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=ATTEMPTS {
-        match try_stream_chunk(
-            client,
-            &url,
-            id,
-            attempt,
-            expected,
-            max_compressed,
-            consumed,
-            sink,
-        )
-        .await
-        {
-            Attempt::Ok(d) => return Ok(d),
-            Attempt::Fatal(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
-                return Err(e);
+    let url = url.as_str();
+    retry_state(
+        ATTEMPTS,
+        sleep,
+        (consumed, sink),
+        |(consumed, sink), attempt| async move {
+            match try_stream_chunk(
+                client,
+                url,
+                id,
+                attempt,
+                expected,
+                max_compressed,
+                &mut *consumed,
+                &mut *sink,
+            )
+            .await
+            {
+                Retry::Done(d) => RetryState::Done(d),
+                Retry::Fatal(e) => {
+                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
+                    RetryState::Fatal(e)
+                }
+                Retry::Retry(e) => {
+                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
+                    RetryState::Retry((consumed, sink), e)
+                }
             }
-            Attempt::Retry(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
-                last_err = e;
-            }
-        }
-        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
-    }
-    Err(last_err)
+        },
+    )
+    .await
 }
 
 /// One attempt at a streamed chunk fetch.
@@ -358,15 +367,15 @@ async fn try_stream_chunk(
     client: &reqwest::Client,
     url: &str,
     id: &str,
-    attempt: u64,
+    attempt: u32,
     expected: u64,
     max_compressed: u64,
     consumed: &mut u64,
     sink: &mut impl ChunkSink,
-) -> Attempt<ChunkDigest> {
+) -> Retry<ChunkDigest> {
     let resp = match client.get(url).send().await {
         Ok(r) => r,
-        Err(e) => return Attempt::Retry(anyhow::anyhow!("GET chunk: {}", e)),
+        Err(e) => return Retry::Retry(anyhow::anyhow!("GET chunk: {}", e)),
     };
     let status = resp.status();
     if let Some(e) = status_failure(status, url) {
@@ -384,7 +393,7 @@ async fn try_stream_chunk(
     // A retry starts the chunk over: the decoded bytes are written as they are
     // produced, so a failed attempt may have left half a chunk behind.
     if let Err(e) = sink.restart() {
-        return Attempt::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
+        return Retry::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
     }
     let digest = match stream_body(
         resp.bytes_stream(),
@@ -401,12 +410,12 @@ async fn try_stream_chunk(
         Err(f) => {
             *consumed = consumed.saturating_add(f.compressed_bytes);
             return match f.error {
-                StreamError::Transport(e) => Attempt::Retry(e),
-                StreamError::Content(e) => Attempt::Fatal(e),
+                StreamError::Transport(e) => Retry::Retry(e),
+                StreamError::Content(e) => Retry::Fatal(e),
             };
         }
     };
-    Attempt::Ok(digest)
+    Retry::Done(digest)
 }
 
 /// Why a streamed body failed, and how much of it had already arrived.
@@ -508,28 +517,17 @@ where
 }
 
 /// Attempts per blob fetch, and the backoff is `attempt` seconds: 1+2+3+4 s.
-const ATTEMPTS: u64 = 5;
+const ATTEMPTS: u32 = 5;
 
-/// One attempt at a blob fetch, classified by whether an identical retry could
-/// come back different.
+/// Split an error by whether the status says it can change.
 ///
 /// The three-way split is the retry policy. Collapsing `Fatal` into `Retry` is
 /// what makes a run spend ~15 s of sleep to learn something it already knew.
-enum Attempt<T> {
-    Ok(T),
-    /// Transient, or a failure we cannot classify. Worth another try.
-    Retry(anyhow::Error),
-    /// The origin has answered definitively. A second identical request will
-    /// answer identically.
-    Fatal(anyhow::Error),
-}
-
-/// Split an error by whether the status says it can change.
-fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Attempt<T> {
+fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Retry<T> {
     if retryable_status {
-        Attempt::Retry(e)
+        Retry::Retry(e)
     } else {
-        Attempt::Fatal(e)
+        Retry::Fatal(e)
     }
 }
 
