@@ -24,7 +24,7 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
     };
-    Ok(text.lines().filter_map(game_version_line).last())
+    Ok(text.lines().filter_map(game_version_line).next_back())
 }
 
 /// The value of one `game_version` line, if it has the documented shape.

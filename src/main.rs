@@ -1,6 +1,9 @@
 //! Thin entry point: parse, install tracing, run the pipeline, print `SUMMARY`,
 //! flush the log, return the exit code. All behavior lives in the library.
 
+// Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 use std::process::ExitCode;
 
 use clap::Parser;

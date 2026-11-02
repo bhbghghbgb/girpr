@@ -70,6 +70,9 @@
 //! is what turns a cleanup flag into a way to destroy the evidence, and the
 //! bundle has to still pass `gircap verify` afterwards.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
 #[path = "artifact_bridge/server.rs"]

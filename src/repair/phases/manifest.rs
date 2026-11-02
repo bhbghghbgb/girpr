@@ -77,6 +77,7 @@ fn in_selection_order<T, E>(
 /// manifest in selection order that failed, not the first to finish: the
 /// message is about what is wrong with the build, and completion order is an
 /// accident of the network.
+#[allow(clippy::expect_used)] // every selected manifest has a slot; a missing one is an internal bug
 pub async fn fetch_latest(
     http: &Client,
     sleep: &dyn Sleep,
@@ -120,6 +121,7 @@ pub async fn fetch_latest(
 /// and the assembled `wanted` list is in selection order: when two manifests
 /// describe the same path, the earlier one wins the first-occurrence rules in
 /// [`sophon::build_local_chunk_map`].
+#[allow(clippy::expect_used)] // every selected manifest has a slot; a missing one is an internal bug
 pub async fn local_reuse_map(
     http: &Client,
     sleep: &dyn Sleep,

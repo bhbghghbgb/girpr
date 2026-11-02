@@ -544,6 +544,7 @@ async fn build_and_assert_plan(
 /// document is written for a run that does the work as well as for
 /// `--print-plan`.
 #[allow(clippy::too_many_arguments)] // the published plan is one document over several borrowed parts
+#[allow(clippy::expect_used)] // each `disk` use is inside the branch that computed it
 async fn publish_plan(
     ctx: &RunCtx,
     game_dir: &Path,

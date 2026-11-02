@@ -41,6 +41,9 @@
 //! the scope contains the run, and the trace log's download records agree
 //! with the server's request log.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "common/mod.rs"]
 mod common;
 

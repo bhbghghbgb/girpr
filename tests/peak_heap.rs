@@ -49,6 +49,13 @@
 //! wrong thing — the compressed body would be small and the buffered path's
 //! peak would be the decoded buffer alone.
 
+// A counting global allocator is necessarily `unsafe`: it is the instrument
+// this file exists to be, and it implements the standard trait exactly as the
+// trait requires. The production code has no `unsafe`.
+#![allow(unsafe_code)]
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io::Write;

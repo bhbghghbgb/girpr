@@ -17,6 +17,9 @@
 //! fetched, so they live in `tests/repair_offline.rs` rather than here — this
 //! file never has a server.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use clap::Parser;
 use girpr::Args;
 use girpr_tempdir::TempDir;

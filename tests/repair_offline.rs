@@ -36,6 +36,9 @@
 //! - **endpoint override** — the real binary over `--hyp-base` / `--sophon-base`,
 //!   and the explicit-beats-env precedence
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "common/mod.rs"]
 mod common;
 
