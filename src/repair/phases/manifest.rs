@@ -276,6 +276,7 @@ mod tests {
     use prost::Message;
     use std::collections::HashSet;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -350,9 +351,12 @@ mod tests {
     enum Reply {
         Body(Vec<u8>),
         Status(&'static str),
-        /// Read the request and keep the socket open without answering, so an
-        /// uncancelled fetch would wait forever.
-        Never,
+        /// Count the request, then keep the socket open without answering, so
+        /// an uncancelled fetch would wait forever.
+        NeverAfterHit(Arc<AtomicUsize>),
+        /// Answer `status` only once another route has been hit, so the
+        /// failure settles with that fetch demonstrably in flight.
+        StatusAfterHit(&'static str, Arc<AtomicUsize>),
     }
 
     /// Serve `id -> reply` on an ephemeral loopback port.
@@ -391,9 +395,16 @@ mod tests {
                     let (status, body) = match routes.iter().find(|(rid, _)| *rid == id) {
                         Some((_, Reply::Body(body))) => ("200 OK", body.clone()),
                         Some((_, Reply::Status(status))) => (*status, Vec::new()),
-                        Some((_, Reply::Never)) => {
+                        Some((_, Reply::NeverAfterHit(hits))) => {
+                            hits.fetch_add(1, Ordering::SeqCst);
                             std::future::pending::<()>().await;
                             unreachable!("a never-answering route holds the socket open")
+                        }
+                        Some((_, Reply::StatusAfterHit(status, hits))) => {
+                            while hits.load(Ordering::SeqCst) == 0 {
+                                tokio::task::yield_now().await;
+                            }
+                            (*status, Vec::new())
                         }
                         None => ("404 Not Found", Vec::new()),
                     };
@@ -457,9 +468,16 @@ mod tests {
     /// timeout is a guard against the test hanging, not a performance bound.
     #[tokio::test]
     async fn fetch_latest_cancels_fetches_after_the_first_failure_settles() {
+        // `down` answers only after `hang` has been requested, so the failure
+        // settles while the hanging fetch is provably in flight: a fan-out
+        // that waited for it would never return.
+        let hang_hits = Arc::new(AtomicUsize::new(0));
         let base = serve(vec![
-            ("down", Reply::Status("404 Not Found")),
-            ("hang", Reply::Never),
+            (
+                "down",
+                Reply::StatusAfterHit("404 Not Found", hang_hits.clone()),
+            ),
+            ("hang", Reply::NeverAfterHit(hang_hits.clone())),
         ])
         .await;
         let build = build(
@@ -481,6 +499,11 @@ mod tests {
         .await
         .expect("the error does not wait for the hanging manifest")
         .expect_err("the game manifest is down");
+        assert_eq!(
+            hang_hits.load(Ordering::SeqCst),
+            1,
+            "the hanging fetch was requested and then dropped by the cancelled fan-out"
+        );
         let message = failure.to_string();
         assert!(message.contains("manifest game"), "{message}");
         assert!(!message.contains("manifest extra"), "{message}");
