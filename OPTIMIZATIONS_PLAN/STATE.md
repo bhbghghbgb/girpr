@@ -233,7 +233,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 |---|---|---|---|
 | HYP-01 | F01, F07, F64 | done | Wave A; hyp number parsing and retry seams; medium; 87db654, 3337ea1, eaf0b2c |
 | PATHKEY-01 | F03, F04 | done | Wave A; path-key folding outside the lock; medium; 2956bec, 0708ab5 |
-| LEDGER-01 | F08, F101 | todo | Wave A; meter saturation on add and release; medium |
+| LEDGER-01 | F08, F101 | in_progress | Wave A; meter saturation on add and release; medium |
 | RETRY-01 | F62, F81 | todo | Wave A; retry jitter spread and clippy variant names; low |
 | METADATA-01 | F13, F14, F17 | todo | Wave A; metadata join cancellation and error mapping; medium |
 | MANIFEST-01 | F15, F16 | todo | Wave A; manifest fetch reindex dedup and cancellation; medium |
