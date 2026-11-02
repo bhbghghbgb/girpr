@@ -266,55 +266,6 @@ pub fn write_config_ini(
     biz: &str,
     channel: (&str, &str, &str),
 ) -> Result<()> {
-    struct Section {
-        /// First-seen spelling (e.g. `General`); `General` when created.
-        name: String,
-        lower: String,
-        /// (first-seen spelling, lowercase key, value).
-        keys: Vec<(String, String, String)>,
-    }
-    impl Section {
-        fn find_key(&self, lower: &str) -> Option<usize> {
-            self.keys.iter().position(|(_, l, _)| l == lower)
-        }
-        /// Last-wins insert: update value, keep first-seen spelling.
-        fn insert(&mut self, key: &str, value: &str) {
-            let lower = key.to_ascii_lowercase();
-            match self.find_key(&lower) {
-                Some(i) => self.keys[i].2 = value.to_string(),
-                None => self.keys.push((key.to_string(), lower, value.to_string())),
-            }
-        }
-        /// Forced-key upsert in `[General]`: overwrite value, keep first-seen
-        /// spelling when the key already exists (matches Collapse's
-        /// case-insensitive indexer); create with canonical spelling otherwise.
-        fn force(&mut self, key: &str, value: &str) {
-            self.insert(key, value);
-            // `insert` keeps the existing spelling on overwrite and uses the
-            // canonical spelling on create — exactly the two cases needed.
-        }
-    }
-
-    let mut sections: Vec<Section> = Vec::new();
-    let find_section = |sections: &[Section], lower: &str| -> Option<usize> {
-        sections.iter().position(|s| s.lower == lower)
-    };
-    // Header-less keys land in `[General]` (see doc comment).
-    let mut current: Option<usize> = None;
-    let ensure_general = |sections: &mut Vec<Section>| -> usize {
-        match find_section(sections, "general") {
-            Some(i) => i,
-            None => {
-                sections.push(Section {
-                    name: "General".to_string(),
-                    lower: "general".to_string(),
-                    keys: Vec::new(),
-                });
-                sections.len() - 1
-            }
-        }
-    };
-
     let path = game_dir.join("config.ini");
     // One read: `exists()` then `read_to_string` would stat twice and leave a
     // TOCTOU window. Absent is the documented fresh-install input; any other
@@ -324,6 +275,73 @@ pub fn write_config_ini(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.into()),
     };
+    let mut sections = parse_ini(&text);
+    merge_ini(&mut sections, latest, biz, channel);
+    let out = render_ini(&mut sections);
+    publish_ini(&path, out.as_bytes())
+}
+
+/// One `[section]` of a `config.ini`, in first-seen order.
+struct Section {
+    /// First-seen spelling (e.g. `General`); `General` when created.
+    name: String,
+    lower: String,
+    /// (first-seen spelling, lowercase key, value).
+    keys: Vec<(String, String, String)>,
+}
+
+impl Section {
+    fn find_key(&self, lower: &str) -> Option<usize> {
+        self.keys.iter().position(|(_, l, _)| l == lower)
+    }
+    /// Last-wins insert: update value, keep first-seen spelling.
+    fn insert(&mut self, key: &str, value: &str) {
+        let lower = key.to_ascii_lowercase();
+        match self.find_key(&lower) {
+            Some(i) => self.keys[i].2 = value.to_string(),
+            None => self.keys.push((key.to_string(), lower, value.to_string())),
+        }
+    }
+    /// Forced-key upsert in `[General]`: overwrite value, keep first-seen
+    /// spelling when the key already exists (matches Collapse's
+    /// case-insensitive indexer); create with canonical spelling otherwise.
+    fn force(&mut self, key: &str, value: &str) {
+        self.insert(key, value);
+        // `insert` keeps the existing spelling on overwrite and uses the
+        // canonical spelling on create — exactly the two cases needed.
+    }
+}
+
+/// The index of the first section with this lowercase name.
+fn find_section(sections: &[Section], lower: &str) -> Option<usize> {
+    sections.iter().position(|s| s.lower == lower)
+}
+
+/// The `[General]` index, created when it is not there yet.
+fn ensure_general(sections: &mut Vec<Section>) -> usize {
+    match find_section(sections, "general") {
+        Some(i) => i,
+        None => {
+            sections.push(Section {
+                name: "General".to_string(),
+                lower: "general".to_string(),
+                keys: Vec::new(),
+            });
+            sections.len() - 1
+        }
+    }
+}
+
+/// Load the existing text into sections, preserving every `[section]` and
+/// merging duplicates by their case-insensitive name.
+///
+/// Comment (`;` / `#`, no-`=` lines) and blank lines are dropped on load;
+/// header-less keys land in `[General]` (a deliberate deviation from
+/// Collapse's generic `[default]` bucket, since game-dir files are
+/// `[General]`-scoped).
+fn parse_ini(text: &str) -> Vec<Section> {
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current: Option<usize> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -370,8 +388,20 @@ pub fn write_config_ini(
         };
         sections[target].insert(key, value);
     }
+    sections
+}
 
-    let g = ensure_general(&mut sections);
+/// Force the version and channel keys in `[General]`.
+///
+/// Forced: `game_version=<latest>`, `channel` / `sub_channel` / `cps` per biz
+/// and `game_biz` — a deliberate Starward carryover (`SetGameConfigIniAsync`
+/// writes it, Collapse never does; game/launcher interop expects it, so it
+/// stays forced). `sdk_version`: Collapse parity — preserved when present,
+/// created empty when missing (Collapse only ever holds the empty
+/// `DefaultIniVersion` default; the real SDK version lives in
+/// `plugin_sdk_version`, which girpr never touches).
+fn merge_ini(sections: &mut Vec<Section>, latest: &str, biz: &str, channel: (&str, &str, &str)) {
+    let g = ensure_general(sections);
     sections[g].force("game_version", latest);
     sections[g].force("channel", channel.0);
     sections[g].force("sub_channel", channel.1);
@@ -384,25 +414,34 @@ pub fn write_config_ini(
             String::new(),
         ));
     }
+}
 
-    // Collapse `SaveInner`: sections in first-seen order, keys sorted
-    // alphabetically (case-insensitive), blank line after each section.
+/// Render the loaded and merged sections in Collapse `SaveInner`'s save shape:
+/// sections in first-seen order, keys sorted alphabetically
+/// (case-insensitive), and a blank line after each section.
+fn render_ini(sections: &mut [Section]) -> String {
     let mut out = String::new();
-    for s in &mut sections {
+    for s in sections.iter_mut() {
         s.keys.sort_by(|a, b| a.1.cmp(&b.1));
     }
     // Writing to a `String` is infallible, so the `fmt::Result` is ignored;
     // the blank line after each section is still pushed by hand.
-    for s in &sections {
+    for s in sections.iter() {
         let _ = writeln!(out, "[{}]", s.name);
         for (k, _, v) in &s.keys {
             let _ = writeln!(out, "{k}={v}");
         }
         out.push('\n');
     }
-    // The version bump must survive a power loss, so the temp is synced before
-    // the rename; the test hook skips only that sync, never the write or rename.
-    write_atomic(&path, out.as_bytes(), !test_no_fsync())
+    out
+}
+
+/// Write the rendered INI through the shared atomic writer.
+///
+/// The version bump must survive a power loss, so the temp is synced before
+/// the rename; the test hook skips only that sync, never the write or rename.
+fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, !test_no_fsync())
 }
 
 #[cfg(test)]
