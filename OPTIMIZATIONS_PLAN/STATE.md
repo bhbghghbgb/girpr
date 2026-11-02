@@ -41,8 +41,8 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | T27 | D1 - per-file facts live on the file | completed | 3576cf4, 07c556d, 52158e8, 1449a7f | RC-10 |
 | T28 | D3 - one atomic-write helper | completed | 0ba2419, 29396b3, 1f2707b | RC-11 |
 | T29 | D2 - one retry/backoff scaffold | completed | fea2efe, c665a40, 526f78c, 01776f9, a41eda4 | RC-11 |
-| T30 | D4 - one rel-path spelling helper | pending_review | 4ee251b, 48d4499, fb85754 | RC-12 |
-| T31 | D5 - one per-range to per-chunk remap | pending_review | 9090504, d81083e | RC-12 |
+| T30 | D4 - one rel-path spelling helper | completed | 4ee251b, 48d4499, fb85754 | RC-12 |
+| T31 | D5 - one per-range to per-chunk remap | completed | 9090504, d81083e | RC-12 |
 | T32 | D7 - reconcile documentation with the code | todo | | RC-13 |
 | T33 | D6 - remove test-only production API | todo | | RC-13 |
 | T34 | D8 - split the functions doing too much | todo | | RC-14 |
@@ -75,7 +75,7 @@ Status vocabulary for tasks: `todo`, `in_progress`, `pending_review`,
 | RC-09 | T23-T26 | pending | | |
 | RC-10 | T27 | done | | Completed without fixes |
 | RC-11 | T28-T29 | done | | Both completed without fixes |
-| RC-12 | T30-T31 | in_progress | | |
+| RC-12 | T30-T31 | done | | Both completed without fixes |
 | RC-13 | T32-T33 | pending | | |
 | RC-14 | T34 | pending | | |
 | RC-15 | T35-T36 | pending | | |
@@ -165,6 +165,12 @@ until the main tasks and rework are done.
 | F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | todo |
 | F65 | T28 implementer | `src/util/ini.rs` tests | No config-specific "no temp left" assertion after the helper extraction. | todo |
 | F66 | T28 implementer | `src/util/atomic.rs` | Error context is artifact-neutral; artifact-specific labels would need a parameter. | todo |
+| F67 | RC-12 review | `src/repair/phases/post.rs` | `move_audio_cache` still strips the cache prefix manually; it could use `rel_from_base`. | todo |
+| F68 | RC-12 review | `src/util/path.rs` | `rel_from_base` and `join_rel` each inline the lossy `/` conversion; one private helper would be literal. | todo |
+| F69 | RC-12 review | `src/repair/scan.rs` | The helper tolerates length mismatch; a `debug_assert` at the two call sites would still be useful. | todo |
+| F70 | RC-12 review | `src/repair/file/inplace.rs` | `source_ok_by_range` is the inverse mapping; cross-reference or pin it near the shared remap. | todo |
+| F71 | T30 implementer | `src/util/path.rs` | `join_rel` assumes an already-clean `dir_rel` with no trailing separator. | todo |
+| F72 | T30 implementer | `src/util/mod.rs` | The `path` module summary does not mention the two new rel helpers. | todo |
 
 ## Follow-up batches
 
