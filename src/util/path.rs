@@ -221,6 +221,14 @@ pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
 /// every host. Keep them in sync: a change to the Windows fold must be
 /// reflected in the Unix branch, or the platforms stop answering the same
 /// question.
+///
+/// This is **not** the folding `--include` / `--exclude` matching uses. That
+/// match is case-insensitive through the `glob` crate's own per-character
+/// folding (see [`crate::repair::scope::filter`]); the two rules differ
+/// deliberately. A glob is a containment predicate over a user-written pattern,
+/// where matching broadly is the point. This function is a map key for path
+/// *identity*, where over-merging silently drops or keeps the wrong file, so it
+/// stays ASCII-only.
 pub(crate) fn path_key(rel: &str) -> String {
     if cfg!(windows) {
         rel.to_ascii_lowercase()
