@@ -61,30 +61,74 @@ impl std::fmt::Display for RepairMode {
     }
 }
 
+/// The documented process exit codes.
+///
+/// The numbers are the automation contract: a run's final `SUMMARY` carries
+/// one, and a fatal failure carries one through [`RunFailure`]. Named variants
+/// keep the choice at each return site explicit; the single conversion to an
+/// integer happens at the process boundary in `main`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunExit {
+    /// The run did everything it was asked to do.
+    Success = 0,
+    /// The request or the configuration is wrong.
+    Usage = 1,
+    /// Metadata, manifest, or network failure.
+    Metadata = 2,
+    /// A write or verification failure.
+    Write = 3,
+    /// `--check-only` found damage.
+    CheckFailed = 4,
+    /// A requested ceiling bound the run.
+    Limit = 5,
+}
+
+impl RunExit {
+    /// The numeric status the process returns.
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+}
+
+impl From<RunFailure> for RunExit {
+    fn from(failure: RunFailure) -> Self {
+        failure.exit_code
+    }
+}
+
+/// Compare against the documented numeric status.
+///
+/// Tests and external automation pin the numbers, so this keeps an assertion
+/// readable as `code == 4` while the pipeline itself only names variants.
+impl PartialEq<i32> for RunExit {
+    fn eq(&self, other: &i32) -> bool {
+        self.code() == *other
+    }
+}
+
 /// Typed failure carrying the process exit code.
-/// `1` usage/config, `2` metadata/network, `3` write/verify.
 #[derive(Debug)]
 pub struct RunFailure {
-    pub exit_code: i32,
+    pub exit_code: RunExit,
     pub source: anyhow::Error,
 }
 
 impl RunFailure {
     pub fn usage(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 1,
+            exit_code: RunExit::Usage,
             source: e.into(),
         }
     }
     pub fn metadata(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 2,
+            exit_code: RunExit::Metadata,
             source: e.into(),
         }
     }
     pub fn write(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 3,
+            exit_code: RunExit::Write,
             source: e.into(),
         }
     }

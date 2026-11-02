@@ -63,7 +63,7 @@ pub use girpr_log;
 
 pub use biz::Biz;
 pub use cli::{Args, is_audio_none, normalize_audio_lang, parse_audio_selection};
-pub use config::{RunCtx, RunFailure};
+pub use config::{RunCtx, RunExit, RunFailure};
 pub use girpr_log::Level;
 pub use logging::{flush_log, init_tracing};
 pub use repair::run;

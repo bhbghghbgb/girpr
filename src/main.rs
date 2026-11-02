@@ -124,9 +124,9 @@ async fn run(ctx: RunCtx) -> i32 {
             code
         }
         Err(f) => {
-            tracing::error!("fatal(exit={}): {:#}", f.exit_code, f.source);
+            tracing::error!("fatal(exit={}): {:#}", f.exit_code.code(), f.source);
             eprintln!("FATAL {:#}", f.source);
-            f.exit_code
+            f.exit_code.code()
         }
     }
 }
