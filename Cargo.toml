@@ -18,7 +18,10 @@ chrono = "0.4"
 # `--log-file`, the env vars and the default levels mean the same thing in
 # all three.
 girpr-log = { path = "crates/log" }
-tokio = { version = "1", features = ["full"] }
+# The runtime, its macros (`join!`) and the timers the pipeline awaits. The
+# network and I/O surfaces used by the tests are requested as dev-only features
+# below, so a normal build does not compile them.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -38,6 +41,11 @@ futures = "0.3"
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
-# Paused-time tests: the progress guard's cadence and its stop-on-drop are
-# checked against a controlled clock rather than by sleeping in CI.
-tokio = { version = "1", features = ["test-util"] }
+# Test-only additions to the runtime above; Cargo unions these with the normal
+# features for a test build, so `cargo build` still compiles just the runtime.
+# `test-util`: paused-time tests check the progress guard's cadence and its
+# stop-on-drop against a controlled clock rather than by sleeping in CI.
+# `process`: the CLI tests run the built binary.
+# `net` and `io-util`: the fake artifact servers accept connections and read
+# requests.
+tokio = { version = "1", features = ["test-util", "process", "net", "io-util"] }
