@@ -1,29 +1,40 @@
-//! Binary-level contract test for argument handling and exit codes.
+//! Binary-level contract tests: argument handling, exit codes, and the stdout
+//! data plane.
 //!
 //! These run the real binary (`CARGO_BIN_EXE_girpr`) because the contract being
 //! checked is process-level: which exit code a given kind of bad input
 //! produces, and that clap's own `2` never leaks into the "2 = metadata/network"
 //! slot (docs/02 §1).
 //!
-//! Every case here fails *during* argument handling, so no game directory is
+//! The argument cases fail *during* argument handling, so no game directory is
 //! ever touched. The post-parse cases (`--io-threads 0`, bad `--audio`, a bad
 //! `--include` glob) do reach `logging::init_tracing`, so they leave a
 //! `logs/girpr_<ts>.log` beside the built binary — inside the gitignored
 //! `target/` tree. The two `--log-file` cases are the exception: they name
 //! their own destination (in a scratch dir) instead, which is what they are for.
 //!
+//! The data-plane goldens at the end are the other kind of case: they need the
+//! mock HoYoPlay/Sophon server in `tests/common`, because `REPORT`/`PLAN` are
+//! only emitted once the metadata has been fetched. They pin the *sequence* of
+//! records and each record's field keys, never a value, so a wording change
+//! that keeps the contract passes and a reordered or duplicated record fails.
+//!
 //! NOTE: `--include` matching zero *planned* files is also exit `1`, and a
-//! tripped ceiling is exit `5`, but both can only be observed after the API is
-//! fetched, so they live in `tests/repair_offline.rs` rather than here — this
-//! file never has a server.
+//! tripped ceiling is exit `5`, but both are exercised in
+//! `tests/repair_offline.rs`; this file's argument cases never have a server.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+#[path = "common/mod.rs"]
+mod common;
 
 use clap::Parser;
 use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
+
+use common::{MockOpts, MockServer, build_fixture, temp_dir, write_game_file};
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -738,4 +749,286 @@ fn a_zero_ram_budget_is_a_budget_not_a_usage_error() {
     let ctx = args.into_ctx().expect("0 is a budget, not a usage error");
     assert_eq!(ctx.ram_budget(), Some(0));
     assert!(ctx.limits.is_active());
+}
+
+// ---------------------------------------------------------------------------
+// the stdout data plane: event order, field keys, one record per event
+// ---------------------------------------------------------------------------
+//
+// `--output json` is the plane a script parses: one object per line, each with
+// an `event` name. The contract is the *sequence* of events and the *keys* of
+// each object — a parser reads fields by name, and the fixture owns the values.
+//
+// The goldens are deliberately compact: an event name and its field keys, in
+// report order. They cannot fail on a value or a human wording change, and they
+// do fail when a record moves, repeats, or loses/renames a key.
+
+/// The keys `REPORT` carries, in order.
+///
+/// The shape does not depend on whether the install has a version: an absent
+/// one is reported as `local_version=none`, not by omitting the key.
+const REPORT_KEYS: &[&str] = &[
+    "local_version",
+    "latest_version",
+    "biz",
+    "exe",
+    "download_mode",
+    "branch",
+    "package_id",
+    "build_id",
+    "audio_langs",
+    "diff_tags",
+];
+
+/// The keys `PROGRESS` carries, in order. A short run may emit none.
+const PROGRESS_KEYS: &[&str] = &[
+    "done",
+    "total",
+    "skipped",
+    "repaired",
+    "failed",
+    "download_bytes",
+];
+
+/// The keys an unflagged `SUMMARY` carries, in order. A scoped or limited run
+/// appends its conditional keys after these.
+const SUMMARY_KEYS: &[&str] = &[
+    "total",
+    "skipped",
+    "repaired",
+    "failed",
+    "download_bytes",
+    "deleted_extra_bytes",
+    "exit",
+];
+
+/// One run's data plane, already reduced to what the contract is about.
+struct DataPlaneRun {
+    code: i32,
+    /// `(event, field keys in report order)`, one entry per stdout line.
+    records: Vec<(String, Vec<String>)>,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run the binary in JSON mode against the mock server, and index its records.
+async fn run_data_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str]) -> DataPlaneRun {
+    let mut args: Vec<String> = vec![
+        "--game-path".into(),
+        game.display().to_string(),
+        "--biz".into(),
+        "hk4e_global".into(),
+        "--hyp-base".into(),
+        mock.hyp_base.clone(),
+        "--sophon-base".into(),
+        mock.sophon_base.clone(),
+        "--jobs".into(),
+        "1".into(),
+        "--output".into(),
+        "json".into(),
+        // Keep the trace log out of the build tree; the log is not the plane
+        // under test.
+        "--no-log-file".into(),
+    ];
+    args.extend(extra.iter().map(|arg| (*arg).to_string()));
+
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
+        .args(&args)
+        .output()
+        .await
+        .expect("run girpr");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let records = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let value: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("data-plane line is not JSON ({e}): {line}"));
+            let event = value["event"]
+                .as_str()
+                .unwrap_or_else(|| panic!("no event name in: {line}"))
+                .to_string();
+            let mut keys = json_object_keys(line);
+            assert_eq!(keys.first().map(String::as_str), Some("event"), "{line}");
+            keys.remove(0);
+            (event, keys)
+        })
+        .collect();
+    DataPlaneRun {
+        code: out.status.code().expect("process must exit normally"),
+        records,
+        stdout,
+        stderr,
+    }
+}
+
+/// Check a run against a golden sequence of `(event, field keys)`.
+///
+/// `PROGRESS` is the only repeatable record. It may appear zero or more times,
+/// but only *between* the fixed records; every fixed event appears once, in the
+/// golden's order, with the golden's key order. A second `PLAN`, a second
+/// `SUMMARY`, or a `SUMMARY` before `PLAN` is therefore a failure.
+fn check_golden(run: &DataPlaneRun, golden: &[(&str, &[&str])]) -> Result<(), String> {
+    let mut at = 0usize;
+    for (event, keys) in &run.records {
+        let keys = key_list(keys);
+        if event == "progress" {
+            if at == 0 {
+                return Err(format!(
+                    "PROGRESS before the first fixed record:\n{}",
+                    run.stdout
+                ));
+            }
+            if at == golden.len() {
+                return Err(format!("PROGRESS after the final record:\n{}", run.stdout));
+            }
+            if keys != PROGRESS_KEYS {
+                return Err(format!("PROGRESS field keys changed:\n{}", run.stdout));
+            }
+            continue;
+        }
+        if at == golden.len() {
+            return Err(format!(
+                "more than one {event} record, or a record after the final one:\n{}",
+                run.stdout
+            ));
+        }
+        let (want_event, want_keys) = golden[at];
+        if event != want_event {
+            return Err(format!(
+                "event order: expected {want_event} at position {at}, got {event}:\n{}",
+                run.stdout
+            ));
+        }
+        if keys != want_keys {
+            return Err(format!(
+                "{event} field keys or their order changed:\n{}",
+                run.stdout
+            ));
+        }
+        at += 1;
+    }
+    if at != golden.len() {
+        return Err(format!(
+            "missing records: the run ended after {at} of {}:\n{}",
+            golden.len(),
+            run.stdout
+        ));
+    }
+    Ok(())
+}
+
+fn assert_golden(run: &DataPlaneRun, golden: &[(&str, &[&str])]) {
+    if let Err(message) = check_golden(run, golden) {
+        panic!("{message}");
+    }
+}
+
+fn key_list(keys: &[String]) -> Vec<&str> {
+    keys.iter().map(String::as_str).collect()
+}
+
+/// The top-level keys of a flat JSON object, in the line's own order.
+///
+/// `serde_json::Map` is a `BTreeMap` unless the workspace opts into
+/// `preserve_order`, and a parsed `Value` therefore cannot answer "in what
+/// order were these keys written". The records are flat objects of primitives
+/// (`Record` has no nested field), so a small scanner is enough — and the line
+/// has already been validated as JSON by the caller.
+fn json_object_keys(line: &str) -> Vec<String> {
+    let bytes = line.as_bytes();
+    let mut i = skip_whitespace(bytes, 0);
+    assert_eq!(bytes.get(i), Some(&b'{'), "not a JSON object: {line}");
+    i += 1;
+    let mut keys = Vec::new();
+    loop {
+        i = skip_whitespace(bytes, i);
+        match bytes.get(i) {
+            Some(b'}') => break,
+            Some(b',') => i += 1,
+            Some(b'"') => {
+                let (key, next) = json_string(bytes, i);
+                keys.push(key);
+                i = skip_whitespace(bytes, next);
+                assert_eq!(bytes.get(i), Some(&b':'), "a key without a value: {line}");
+                i = skip_json_value(bytes, i + 1);
+            }
+            _ => panic!("expected a key or the object's end in: {line}"),
+        }
+    }
+    keys
+}
+
+/// Read one JSON string starting at its opening quote, returning it and the
+/// index just past its closing quote. Keys and language tags are static ASCII,
+/// so no `\u` escape can arise here; the two that can are handled.
+fn json_string(bytes: &[u8], start: usize) -> (String, usize) {
+    let mut out = Vec::new();
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => return (String::from_utf8(out).expect("a UTF-8 key"), i + 1),
+            b'\\' => {
+                i += 1;
+                if let Some(escaped) = bytes.get(i) {
+                    out.push(*escaped);
+                }
+            }
+            byte => out.push(byte),
+        }
+        i += 1;
+    }
+    panic!("unterminated JSON string")
+}
+
+/// Skip one JSON value and return the index of the comma or closing brace that
+/// follows it. Values are primitives; nested containers are skipped for safety.
+fn skip_json_value(bytes: &[u8], start: usize) -> usize {
+    let mut i = skip_whitespace(bytes, start);
+    let mut depth = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i = json_string(bytes, i).1;
+                continue;
+            }
+            b'{' | b'[' => depth += 1,
+            b'}' | b']' if depth > 0 => depth -= 1,
+            b'}' | b']' | b',' if depth == 0 => return i,
+            _ => {}
+        }
+        i += 1;
+    }
+    i
+}
+
+fn skip_whitespace(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// A tiny repair pins the order and the one-record-per-event rule: `REPORT`
+/// once, then (if the run is long enough) any `PROGRESS` ticks, then exactly
+/// one `SUMMARY` last.
+#[tokio::test]
+async fn a_tiny_repair_emits_report_then_exactly_one_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("golden_repair");
+    let fx = build_fixture();
+    // One clean file and one damaged file: the repair skips one and rebuilds
+    // the other, so the run is short and its `SUMMARY` is the base shape.
+    write_game_file(&dir, &fx.files[1].rel, &fx.files[1].data);
+    let mut damaged = fx.files[0].data.clone();
+    for byte in damaged.iter_mut().skip(64) {
+        *byte ^= 0xFF;
+    }
+    write_game_file(&dir, &fx.files[0].rel, &damaged);
+
+    let run = run_data_plane(&dir, &mock, &[]).await;
+    assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+    mock.stop();
 }
