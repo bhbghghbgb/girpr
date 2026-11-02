@@ -61,6 +61,7 @@ use anyhow::Context;
 
 use crate::config::{RunCtx, RunExit, RunFailure};
 use crate::hyp::HypClient;
+use crate::phase::PhaseTimer;
 use crate::report::{self, Summary};
 use crate::sophon::SophonChunkFile;
 use crate::util;
@@ -77,6 +78,9 @@ use scan::ScanReport;
 /// touches nothing, then `execute_phase` carries it out. This function is
 /// only the phase order.
 pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
+    // The whole run's duration is not a substitute for the phase durations: it
+    // is the context that makes them add up.
+    let _run = PhaseTimer::start("run");
     // The counters accumulate across both halves and an early plan return still
     // has to hand them back, so `run` owns the `Summary` and lends it out.
     let mut summary = Summary::default();
@@ -255,7 +259,9 @@ struct PlanWork {
 /// begin report to stdout (mirrored to log), so a stdout parser sees what is on
 /// disk and what it will become before any repair starts.
 async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
+    let timer = PhaseTimer::start("metadata");
     let meta = metadata::fetch(ctx, game_dir).await?;
+    timer.finish();
     report::emit(
         &report::report_record(&report::ReportProvenance {
             local_version: &meta.local_version,
@@ -285,6 +291,7 @@ async fn load_manifests_and_reuse(
     ),
     RunFailure,
 > {
+    let timer = PhaseTimer::start("manifest");
     let sleep = ctx.sleep.as_ref();
     let per_manifest = manifest::fetch_latest(
         http,
@@ -306,6 +313,7 @@ async fn load_manifests_and_reuse(
         )
         .await,
     );
+    timer.finish();
     // The local manifest loading is the one degradation that changes the
     // reported numbers while leaving the exit code at `0`: with no local build
     // the reuse map is empty, so every chunk downloads and both
@@ -342,6 +350,7 @@ async fn build_and_assert_plan(
     readonly: bool,
 ) -> Result<Option<PlanWork>, RunFailure> {
     let scope = &ctx.path_scope;
+    let timer = PhaseTimer::start("plan");
     let plan = Arc::new(
         phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
             .map_err(RunFailure::metadata)?,
@@ -404,6 +413,9 @@ async fn build_and_assert_plan(
         None
     };
 
+    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
+    timer.finish();
+
     // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
     // that costs 130 GB to discover is the failure mode this whole feature
     // exists to remove. Exit `1` — a property of the request — rather than `5`,
@@ -417,7 +429,6 @@ async fn build_and_assert_plan(
     // it. (This also means a new `--include` on a `--print-plan` run reports
     // `files=0 purge_files=1` instead of erroring, which is what "print the
     // plan" should do.)
-    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
     if scope.has_includes() && plan.files.is_empty() && purge_candidates == 0 {
         // Say which of the two plans came back empty: the diagnosis differs, and
         // so does the fix the user needs.
@@ -846,7 +857,8 @@ async fn run_repair(
         ram_budget = ?ctx.ram_budget(),
         "repair mode"
     );
-    file::repair_all(
+    let timer = PhaseTimer::start("repair");
+    let summary = file::repair_all(
         http,
         game_dir.to_path_buf(),
         root,
@@ -860,7 +872,9 @@ async fn run_repair(
         ctx.repair_mode,
         ctx.sleep.clone(),
     )
-    .await
+    .await;
+    timer.finish();
+    summary
 }
 
 /// Step 7: the post phase.

@@ -230,6 +230,7 @@ pub async fn scan_plan(
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
 ) -> ScanReport {
+    let timer = crate::phase::PhaseTimer::start("scan");
     // NOTE: the plan is shared by `Arc` and each task is handed an index, not a
     // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
     // per task would deep-clone the whole plan — the same reason
@@ -278,11 +279,14 @@ pub async fn scan_plan(
         out.files[idx] = Some(scanned.verdict);
     }
     tracing::info!(
+        phase = % "scan",
+        duration_ms = timer.elapsed_ms(),
         files = out.files.iter().filter(|verdict| verdict.is_some()).count(),
         bytes = out.bytes,
         damaged_chunks = out.damaged_chunks,
         "scan"
     );
+    timer.disarm();
     out
 }
 

@@ -36,7 +36,7 @@
 //! filter, local chunk-reuse map), `biz` (biz → launcher id / game id /
 //! channel tuple), `report` (run counters, the record data plane and every
 //! stdout line), `retry` (the shared attempt/backoff loop), `sleep` (the
-//! injectable wait) and `util` (MD5, `config.ini`,
+//! injectable wait), `phase` (the monotonic phase timer) and `util` (MD5, `config.ini`,
 //! ignore/blacklist files, server-path containment).
 //!
 //! The binary (`main`, a thin shim) is: parse → install tracing → build the
@@ -51,6 +51,7 @@ mod cli;
 mod config;
 mod hyp;
 mod logging;
+mod phase;
 mod repair;
 mod report;
 mod retry;

@@ -42,6 +42,7 @@ pub async fn verify_plan(
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
 ) -> u64 {
+    let timer = crate::phase::PhaseTimer::start("check");
     // One progress owner for the phase: the ticker reads the counters below as
     // they are folded. Dropping the guard on return stops it, so the check-only
     // path never leaves a ticker behind.
@@ -158,11 +159,14 @@ pub async fn verify_plan(
         summary.files_failed.store(bad, Ordering::Relaxed);
     }
     tracing::info!(
+        phase = % "check",
+        duration_ms = timer.elapsed_ms(),
         "check-only: total={} bad={} damaged_chunks={}",
         plan.files.len(),
         bad,
         damaged_chunks
     );
+    timer.disarm();
     bad
 }
 

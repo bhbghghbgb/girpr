@@ -57,6 +57,7 @@ pub async fn run(
     deprecated: &[String],
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
+    let _phase = crate::phase::PhaseTimer::start("post");
     delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
     // The audio move walks the cache and renames/copies its files. It is
     // best-effort, so a panicked task is logged and the phase carries on; it
