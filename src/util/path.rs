@@ -1,3 +1,11 @@
+//! Rel-path spelling for on-disk walks and server input.
+//!
+//! One rule: an on-disk rel is the walk path stripped of its base, converted
+//! lossily to a string and spelled with `/` ([`rel_from_base`]); a server rel is
+//! validated and normalised by [`clean_rel`]; and a rel directory joined to a
+//! name uses [`join_rel`]. The two spellings meet at the scope, which matches
+//! the `/` form both produce.
+
 use anyhow::{Context, Result};
 use std::path::{Component, Path, PathBuf};
 
@@ -145,6 +153,48 @@ pub fn clean_rel(rel: &str) -> Result<String> {
         clean.push_str(part);
     })?;
     Ok(clean)
+}
+
+/// The `/`-separated rel spelling of an on-disk path under `base`.
+///
+/// This is the on-disk counterpart of [`clean_rel`]: `base` is the walk root
+/// the path came from, and the result is what remains after stripping it, with
+/// `\` reported as `/`. The purge and the post-phase walk the same tree, so
+/// they must spell it the same way.
+///
+/// The string conversion is **lossy on purpose**. An install can hold a name
+/// that is not UTF-8, while the data plane and the log need a string; the path
+/// on disk stays the authority for the operation, and this is only how the rel
+/// is spelled in a plan, a log line or a scope match. `to_str().unwrap()` would
+/// refuse the whole walk instead of reporting it.
+///
+/// Returns `None` when `path` is not under `base`, so a caller can skip a path
+/// it cannot spell. A path equal to `base` yields `Some(String::new())`: it is
+/// under the base, but the empty rel names no file, and the walks skip the
+/// base itself.
+pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
+    Some(
+        path.strip_prefix(base)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/"),
+    )
+}
+
+/// Join a rel directory and a name into the `/`-separated form the scope
+/// matches on.
+///
+/// `dir_rel` is already in the clean `/` form ([`clean_rel`]); `name` is a path
+/// fragment from a walk and is converted lossily, with `\` reported as `/`. An
+/// empty `dir_rel` yields `name` alone, so the result never starts with `/`;
+/// a non-empty one adds exactly one separator, never `//`.
+pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
+    let name = name.to_string_lossy().replace('\\', "/");
+    if dir_rel.is_empty() {
+        name
+    } else {
+        format!("{dir_rel}/{name}")
+    }
 }
 
 /// The key a path comparison uses when two spellings may name one file.
