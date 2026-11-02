@@ -912,4 +912,51 @@ mod tests {
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
     }
+
+    /// The extracted parse / merge / render steps keep the documented section
+    /// and key rules: header-less keys go to `[General]`, duplicate sections
+    /// merge case-insensitively into the first spelling, comments and blank
+    /// lines drop, forced keys are created with their canonical spelling,
+    /// `sdk_version` is created empty, and keys sort per section.
+    #[test]
+    fn parse_merge_and_render_pin_the_section_rules() {
+        let mut sections = parse_ini(
+            "; leading comment\n\
+             fps=60\n\
+             [Launcher]\n\
+             log_level=3\n\
+             [launcher]\n\
+             game_install_path=C:/g\n\
+             [General]\n\
+             FPS=120\n\
+             channel=5\n",
+        );
+        merge_ini(
+            &mut sections,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+        );
+        let text = render_ini(&mut sections);
+        assert_eq!(
+            text,
+            "[General]\n\
+             channel=1\n\
+             cps=hyp_hoyoverse\n\
+             fps=120\n\
+             game_biz=hk4e_global\n\
+             game_version=5.1.0\n\
+             sdk_version=\n\
+             sub_channel=0\n\
+             \n\
+             [Launcher]\n\
+             game_install_path=C:/g\n\
+             log_level=3\n\
+             \n"
+        );
+        assert!(
+            !text.contains("[launcher]"),
+            "the duplicate section merges into the first-seen spelling: {text}"
+        );
+    }
 }

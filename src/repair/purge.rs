@@ -1219,4 +1219,42 @@ mod tests {
             "the directory and the reason are logged: {logs}"
         );
     }
+
+    /// The finish step sorts the delete list by path, keeps only directories
+    /// no kept file reaches, totals the bytes, and carries the walk's hidden and
+    /// error counts through unchanged.
+    #[test]
+    fn the_finish_step_sorts_and_totals_the_walk() {
+        let dir = TempDir::new("girpr_test_purge", "finish");
+        let a = dir.join("a.dat");
+        let b = dir.join("b.dat");
+        let nested = dir.join("nested");
+        let kept = dir.join("kept");
+        let walk = WalkResult {
+            files: vec![
+                PurgeCandidate {
+                    rel: "b.dat".into(),
+                    path: b,
+                    bytes: 3,
+                },
+                PurgeCandidate {
+                    rel: "a.dat".into(),
+                    path: a,
+                    bytes: 5,
+                },
+            ],
+            all_dirs: vec![nested.clone(), kept.clone()],
+            kept_dirs: [kept].into_iter().collect(),
+            hidden: 2,
+            errors: 1,
+        };
+
+        let pp = finish_plan(&dir, walk);
+        let rels: Vec<&str> = pp.files.iter().map(|c| c.rel.as_str()).collect();
+        assert_eq!(rels, vec!["a.dat", "b.dat"], "sorted by path");
+        assert_eq!(pp.total_bytes, 8);
+        assert_eq!(pp.dirs, vec![nested], "a kept file protects its dir");
+        assert_eq!(pp.hidden, 2);
+        assert_eq!(pp.errors, 1);
+    }
 }
