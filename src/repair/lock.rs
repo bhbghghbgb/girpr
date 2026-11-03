@@ -120,8 +120,8 @@ fn lock_path(game_dir: &Path) -> PathBuf {
 /// which matters because the key names a lock file that may already exist.
 /// `to_string_lossy` replaces invalid bytes and unpaired surrogates, though, so
 /// distinct non-Unicode paths can share a spelling. For those paths only, the
-/// raw encoding is mixed in after a separator: it is injective, so the keys
-/// differ, while valid UTF-8 paths keep their old key.
+/// raw encoding is mixed in after a separator: apart from ASCII case it is
+/// injective, so the keys differ, while valid UTF-8 paths keep their old key.
 fn key_for(path: &Path) -> u64 {
     let mut key = FNV_OFFSET;
     for byte in path.as_os_str().to_string_lossy().bytes() {
@@ -133,15 +133,23 @@ fn key_for(path: &Path) -> u64 {
         {
             use std::os::unix::ffi::OsStrExt;
             for &byte in path.as_os_str().as_bytes() {
-                key = fnv_step(key, byte);
+                key = fnv_mix(key, byte);
             }
         }
         #[cfg(windows)]
         {
             use std::os::windows::ffi::OsStrExt;
             for unit in path.as_os_str().encode_wide() {
-                key = fnv_step(key, (unit & 0xff) as u8);
-                key = fnv_step(key, (unit >> 8) as u8);
+                // Fold a whole ASCII code unit, not each byte of the UTF-16
+                // encoding: folding bytes would merge non-ASCII units whose
+                // low or high byte happens to spell an ASCII letter.
+                let unit = if (u16::from(b'A')..=u16::from(b'Z')).contains(&unit) {
+                    unit + (b'a' - b'A') as u16
+                } else {
+                    unit
+                };
+                key = fnv_mix(key, (unit & 0xff) as u8);
+                key = fnv_mix(key, (unit >> 8) as u8);
             }
         }
     }
@@ -153,6 +161,11 @@ fn key_for(path: &Path) -> u64 {
 fn fnv_step(key: u64, byte: u8) -> u64 {
     #[cfg(windows)]
     let byte = byte.to_ascii_lowercase();
+    fnv_mix(key, byte)
+}
+
+/// One FNV-1a step with no folding, for input that has already been folded.
+fn fnv_mix(key: u64, byte: u8) -> u64 {
     (key ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
 }
 
@@ -478,14 +491,26 @@ mod tests {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
 
-        let weird = |unit: u16| {
-            let mut wide: Vec<u16> = r"C:\game".encode_utf16().collect();
+        let spelled = |base: &str, unit: u16| {
+            let mut wide: Vec<u16> = base.encode_utf16().collect();
             wide.push(unit);
             PathBuf::from(OsString::from_wide(&wide))
         };
-        let one = weird(0xd800);
-        let two = weird(0xd801);
+        let one = spelled(r"C:\game", 0xd800);
+        let two = spelled(r"C:\game", 0xd801);
         assert_eq!(one.to_string_lossy(), two.to_string_lossy());
         assert_ne!(key_for(&one), key_for(&two));
+        // Surrogate units whose low byte is an ASCII letter must not be folded
+        // together: only a whole ASCII code unit is case-insensitive.
+        let three = spelled(r"C:\game", 0xd841);
+        let four = spelled(r"C:\game", 0xd861);
+        assert_eq!(three.to_string_lossy(), four.to_string_lossy());
+        assert_ne!(key_for(&three), key_for(&four));
+        // A non-Unicode path still folds the ASCII spelling of its valid part,
+        // so one install reached by two case spellings keeps one key.
+        assert_eq!(
+            key_for(&spelled(r"C:\GAME", 0xd800)),
+            key_for(&spelled(r"c:\game", 0xd800))
+        );
     }
 }

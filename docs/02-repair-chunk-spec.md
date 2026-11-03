@@ -437,7 +437,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |
 | The volume fills while a file grows | the file fails, is counted, retried and reported; `--repair-mode temp` is the mode for a volume with no room for the growth |
 | A read-only attribute on a game file | cleared before the write, the way the launcher does it |
-| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 1) by name and by pid |
+| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 1) by name, and by pid when the body is readable (an exclusive lock can hide it on Windows) |
 
 ## 5. What was deliberately excluded (and when to add)
 

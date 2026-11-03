@@ -252,11 +252,12 @@ flowchart TD
   is no wall-clock staleness rule. A live holder refuses the second run with
   **exit `1`**, naming the lock file and the holder from the body when it can
   be read (an exclusive lock can hide the body on Windows, and the refusal says
-  so). The file is removed on exit best-effort; an unlocked leftover does not
-  block the next run. A read-only run (`--check-only`, `--dry-run`,
-  `--print-plan`) never takes it. Older runs wrote `{game_dir}/girpr.lock`; it
-  is never created now, and a leftover is left alone by the run and the
-  cleanup.
+  so). The file is left in place on exit, so a run that opens it while the lock
+  is being released cannot end up holding a file that is no longer at the path;
+  an unlocked leftover does not block the next run. A read-only run
+  (`--check-only`, `--dry-run`, `--print-plan`) never takes it. Older runs wrote
+  `{game_dir}/girpr.lock`; it is never created now, and a leftover is left
+  alone by the run and the cleanup.
 - audio: omitted flag = keep scan file (default `en-us` only when the file is **absent**; an unreadable scan file fails the run rather than silently replacing the selection). An empty scan file is the game-only choice, not absence. A non-empty scan file that names no known language is a config error (exit `1`, naming the file and the offending line) rather than an empty selection `--purge-after` would act on. Explicit list/`none` overwrites the scan file atomically, in the execution phase after every plan-half refusal. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
