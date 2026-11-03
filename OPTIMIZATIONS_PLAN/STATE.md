@@ -270,7 +270,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-01 | F35, F36, F37, F45 | done | Wave A; lock safety, key hashing, holder diagnostics; high; 6cc5d97, 8083753, 2c02ef5, 9642547, a653c9c, a093aa4, 12d4201 |
 | INI-01 | F61, F91 | done | Wave A; config-ini write contract and first-`=` helper; medium; 66e0f30, 0916dc2 |
 | BUILD-01 | F39, F92, F93, F106, F107 | done | Wave A; dependency truth, toolchain pin, MD5 benchmark; low; 279c241, 7465081, c97827f, 8d38c6b, bf504df, f2bd9a6 |
-| BUILD-TOOLS-01 | F88, F99 | in_progress | Wave A; dev-tool dependency narrowing; medium |
+| BUILD-TOOLS-01 | F88, F99 | pending_review | Wave A; dev-tool dependency narrowing; medium; 737c91e, 27726ef |
 | TEST-HELPERS-01 | F108 | todo | Wave A; one shared `md5_hex` test helper; low |
 | LINT-01 | F97, F109 | todo | Wave A, after BUILD-TOOLS-01; central test-lint policy; low |
 | TEMP-WRITER-01 | F25, F26, F27, F28, F30 | todo | Wave B; temp writer rollback, refunds, docs, seek; medium |
