@@ -80,15 +80,26 @@ use scan::ScanReport;
 pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
     // The whole run's duration is not a substitute for the phase durations: it
     // is the context that makes them add up.
-    let _run = PhaseTimer::start("run");
+    let run_timer = PhaseTimer::start("run");
     // The counters accumulate across both halves and an early plan return still
     // has to hand them back, so `run` owns the `Summary` and lends it out.
     let mut summary = Summary::default();
     let phase = match plan_phase(&ctx, &mut summary).await? {
-        PlanOutcome::Finished(code) => return Ok((summary, code)),
+        PlanOutcome::Finished(code) => {
+            run_timer.finish();
+            return Ok((summary, code));
+        }
         PlanOutcome::Ready(phase) => *phase,
     };
-    execute_phase(&ctx, phase, summary).await
+    match execute_phase(&ctx, phase, summary).await {
+        Ok(result) => {
+            run_timer.finish();
+            Ok(result)
+        }
+        // The error path leaves the timer to its drop, which reports the run as
+        // incomplete rather than a completed run.
+        Err(e) => Err(e),
+    }
 }
 
 /// Everything the plan half decided, handed to the execute half unchanged.

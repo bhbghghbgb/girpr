@@ -1,8 +1,23 @@
 //! Phase timing for the log.
 //!
-//! Every phase reports one `duration_ms` field on its completion line, so an
-//! operator can see where a run spent its time. Durations come from a monotonic
-//! clock and are whole milliseconds; a phase that never started never logs one.
+//! Every phase that runs to completion reports one `duration_ms` field on its
+//! completion line, so an operator can see where a run spent its time.
+//! Durations come from a monotonic clock and are whole milliseconds; a phase
+//! that never started never logs one.
+//!
+//! The steps are non-overlapping, so no line double-counts another:
+//!
+//! - the plan half is attributed to `metadata` + `manifest` + `plan` + `scan` +
+//!   `publish`; `publish` appears only when `--print-plan` or `--plan-out`
+//!   asked it to produce something. The ceiling checks and estimate folding
+//!   between those steps are not separately timed;
+//! - the execute half is `purge-before` + `check` or `repair` + `post`, where
+//!   `post` includes its own files-cleanup pass;
+//! - `run` is the whole-run total. It covers those steps plus the untimed gaps,
+//!   so it is the figure to compare against the wall clock.
+//!
+//! A timer dropped before it finishes does not claim a completion: it logs
+//! `outcome=incomplete` and `elapsed_ms`, never `duration_ms`.
 
 use std::time::Instant;
 
@@ -16,8 +31,10 @@ pub(crate) fn millis_between(start: Instant, end: Instant) -> u64 {
 
 /// The start of one phase, so its completion line can carry `duration_ms`.
 ///
-/// The timer logs on drop, which covers every early return and error path. A
-/// phase whose existing completion line already carries the duration calls
+/// A phase that finishes calls [`finish`](Self::finish). The timer also logs on
+/// drop, which covers every early return and error path, but that line is
+/// explicitly an **incomplete** phase rather than a completion. A phase whose
+/// existing completion line already carries the duration calls
 /// [`disarm`](Self::disarm) instead, so the value is not logged twice.
 pub(crate) struct PhaseTimer {
     phase: &'static str,
@@ -42,7 +59,7 @@ impl PhaseTimer {
 
     /// Emit this phase's own completion line and stop the timer.
     pub(crate) fn finish(mut self) {
-        self.log();
+        self.log_completion();
     }
 
     /// Keep the duration out of a separate line: the phase's existing
@@ -51,7 +68,7 @@ impl PhaseTimer {
         self.logged = true;
     }
 
-    fn log(&mut self) {
+    fn log_completion(&mut self) {
         if self.logged {
             return;
         }
@@ -66,7 +83,19 @@ impl PhaseTimer {
 
 impl Drop for PhaseTimer {
     fn drop(&mut self) {
-        self.log();
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        // A dropped timer means the phase was abandoned by an early return or
+        // an error. The distinct message and field keep that path from reading
+        // like a completion: a reader greps `duration_ms` for real completions.
+        tracing::info!(
+            phase = % self.phase,
+            elapsed_ms = self.elapsed_ms(),
+            outcome = "incomplete",
+            "phase did not finish"
+        );
     }
 }
 
@@ -102,5 +131,20 @@ mod tests {
         });
         assert!(logs.contains("phase=unit"), "{logs}");
         assert!(logs.contains("duration_ms="), "{logs}");
+        assert!(!logs.contains("incomplete"), "{logs}");
+    }
+
+    /// A timer dropped before `finish` must not look like a completed phase:
+    /// it keeps the phase name and a duration, but under the incomplete shape.
+    #[test]
+    fn a_dropped_timer_does_not_claim_completion() {
+        let logs = crate::repair::test_support::logs_of(|| {
+            let _timer = PhaseTimer::start("unit");
+        });
+        assert!(logs.contains("phase=unit"), "{logs}");
+        assert!(logs.contains("outcome=\"incomplete\""), "{logs}");
+        assert!(logs.contains("elapsed_ms="), "{logs}");
+        assert!(!logs.contains("duration_ms="), "{logs}");
+        assert!(!logs.contains("phase ended"), "{logs}");
     }
 }

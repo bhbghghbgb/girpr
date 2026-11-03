@@ -56,8 +56,28 @@ pub async fn run(
     summary: &Summary,
     deprecated: &[String],
 ) -> Result<PostOutcome, RunFailure> {
+    let timer = crate::phase::PhaseTimer::start("post");
+    match run_inner(ctx, game_dir, purge_keys, meta, summary, deprecated).await {
+        Ok(outcome) => {
+            timer.finish();
+            Ok(outcome)
+        }
+        // The error path leaves the timer to its drop, which reports the phase
+        // as incomplete rather than completed.
+        Err(e) => Err(e),
+    }
+}
+
+/// The body of [`run`], wrapped so the timer only claims a completion on `Ok`.
+async fn run_inner(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    meta: &Meta,
+    summary: &Summary,
+    deprecated: &[String],
+) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
-    let _phase = crate::phase::PhaseTimer::start("post");
     delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
     // The audio move walks the cache and renames/copies its files. It is
     // best-effort, so a panicked task is logged and the phase carries on; it
