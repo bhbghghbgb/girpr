@@ -627,13 +627,25 @@ fn verify_in_place(
 /// same timestamp tick as the scan. The recorded and current mtimes are then
 /// equal and the guard accepts a verdict that describes the previous bytes.
 ///
-/// That cannot produce a wrong final file, which is why the guard does not pay
-/// for a second read or a digest here: the verdict only chooses which chunks
-/// are skipped and which sources are trusted, while [`verify_in_place`] always
-/// digests the finished file. A stale verdict makes that digest fail, its range
-/// scan names the chunks that are still wrong, and [`verify_and_retry`]
-/// downloads them. The cost is one extra verify pass and a redo, never a
-/// silently wrong byte.
+/// What a stale verdict costs depends on what the plan scan found:
+///
+/// - A verdict that found the file **damaged** cannot make the writer skip,
+///   because its digest is not the manifest's. The patch runs with the stale
+///   per-chunk answers, and [`verify_in_place`] always digests the finished
+///   file; when the answers were wrong that digest fails, its range scan names
+///   the chunks that are still wrong, and [`verify_and_retry`] downloads them.
+///   The cost is one extra verify pass and a redo, never a wrong byte left in
+///   the file.
+/// - A verdict that found the file **intact** is also the skip check: its
+///   digest matches the manifest's, so the writer reports the file skipped
+///   without reading or writing it. If the rewrite keeps the length and the
+///   recorded mtime - the same tick, or a store that drops a `set_modified` -
+///   that report is wrong and the changed file is left in place until a later
+///   scan sees it. Nothing is ever written from a stale verdict, so this run
+///   cannot corrupt the file; it can only fail to repair it.
+///
+/// Not paying for a second read here is the trade that makes scanning worth it;
+/// the limit is the coarse filesystem's, not the guard's.
 fn reusable_verdict<'a>(
     ctx: &'a FileCtx,
     id: FileId,
@@ -1151,8 +1163,14 @@ mod tests {
 
     /// A filesystem with coarse timestamps can give two same-length writes the
     /// same mtime, so the length+mtime guard accepts a verdict that describes
-    /// the previous bytes. That is safe because the whole-file digest is the
-    /// real gate: it fails, and the extra range scan names the chunks to redo.
+    /// the previous bytes. When the plan scan had found the file **damaged**,
+    /// that still cannot make the writer skip: the reused digest is not the
+    /// manifest's, so the patch runs and the whole-file digest stays the gate.
+    /// It fails, and the extra range scan names the chunks to redo.
+    ///
+    /// The other half - a verdict that found the file intact - is the one the
+    /// skip check reads; a stale one there is the limit documented on
+    /// [`reusable_verdict`] and can leave the file unrepaired for this run.
     #[test]
     fn a_coarse_mtime_rewrite_evades_the_guard_but_not_the_verify() {
         use std::time::{Duration, SystemTime};
@@ -1160,7 +1178,13 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "coarse_mtime");
         let path = dir.join("f.dat");
         let good: Vec<u8> = (0..8u8).map(|b| b'a' + b).collect();
-        std::fs::write(&path, &good).unwrap();
+        let md5_0 = util::md5::md5_digest(&good[..4]).to_hex();
+        let md5_1 = util::md5::md5_digest(&good[4..]).to_hex();
+
+        // What the plan scan saw: chunk 1 already wrong, and the file's mtime.
+        let mut damaged = good.clone();
+        damaged[5] ^= 0xff;
+        std::fs::write(&path, &damaged).unwrap();
         let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         std::fs::OpenOptions::new()
             .write(true)
@@ -1170,8 +1194,6 @@ mod tests {
             .unwrap();
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
 
-        let md5_0 = util::md5::md5_digest(&good[..4]).to_hex();
-        let md5_1 = util::md5::md5_digest(&good[4..]).to_hex();
         let file = PlannedFile {
             rel: "f.dat".into(),
             size: good.len() as i64,
@@ -1180,18 +1202,19 @@ mod tests {
             chunks: vec![chunk_at("c0", &md5_0, 0, 4), chunk_at("c1", &md5_1, 4, 4)],
         };
         let verdict = Verdict {
-            file_md5: file.md5.clone(),
-            dest_ok: vec![true, true],
+            file_md5: util::md5::md5_digest(&damaged).to_hex(),
+            dest_ok: vec![true, false],
             source_ok: vec![true, true],
             file_len: good.len() as u64,
             modified: Some(recorded),
         };
-        let ctx = test_ctx(Some(Arc::new(ScanReport {
+        let mut ctx = test_ctx(Some(Arc::new(ScanReport {
             files: vec![Some(verdict)],
             bytes: good.len() as u64,
-            damaged_chunks: 0,
+            damaged_chunks: 1,
             scanned_at: None,
         })));
+        ctx.dry_run = false;
 
         // Both chunks change, the length stays the same, and the mtime is
         // restored: exactly what a coarse-granularity store can hide.
@@ -1205,15 +1228,19 @@ mod tests {
             .unwrap()
             .set_modified(recorded)
             .unwrap();
-        let mut handle = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&path)
-            .unwrap();
+
+        let sources = [None, None];
+        let (dest, src, owner) = scan_ranges(&file.chunks, &sources);
+        let OpenScan::Ready { mut handle, scan } =
+            open_and_scan(&ctx, FileId::new(0), &file, &path, &dest, &src, &owner).unwrap()
+        else {
+            panic!("a stale damaged verdict must not make the writer skip");
+        };
         assert!(
-            reusable_verdict(&ctx, FileId::new(0), &file, &path, &handle).is_some(),
-            "the guard really cannot see a same-length rewrite inside one tick"
+            !Md5::parse_hex(&scan.file_md5).is_ok_and(|reused| reused.matches_hex(&file.md5)),
+            "the guard reused a verdict whose digest is not the manifest's"
         );
+        assert_ne!(std::fs::read(&path).unwrap(), good);
 
         let dest: Vec<util::ScanRange<'_>> = vec![(0, 4, &md5_0), (4, 4, &md5_1)];
         match verify_in_place(&mut handle, &dest, 2, &file.md5).unwrap() {
