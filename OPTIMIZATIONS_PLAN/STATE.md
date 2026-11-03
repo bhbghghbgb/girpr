@@ -300,7 +300,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-01 | F05, F06, F09, F12 | done | Wave B; temp-sibling publish of audio and plan files; medium; 8485d11, 3f232f3, 1a6e4e6, 2fb2e21 |
 | INPLACE-01 | F29, F33, F34, F70, F79 | done | Wave B; in-place reuse accuracy and guards; medium; e7b963d, 7dd2316, 4f49e07, 0c3cea4, 13d5335 |
 | CHECK-01 | F19, F21, F23, F52 | done | Wave B; check-phase progress, totals, panic verdict; high; 3468022, d919207 |
-| REPORT-API-01 | F42, F43, F48, F83 | in_progress | Wave B; report type visibility and construction; medium |
+| REPORT-API-01 | F42, F43, F48, F83 | pending_review | Wave B; report type visibility and construction; medium; 1cd5039, 3080e19, e23a64f |
 | PHASE-01 | F114, F115 | todo | Wave B; phase-timer coverage and error-path logging; low |
 | TEST-MANIFEST-01 | F18, F110 | todo | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium |
 | ATOMIC-01 | F11, F60, F65, F66 | todo | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low |
