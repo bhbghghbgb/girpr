@@ -356,6 +356,27 @@ fn move_audio_cache(
     scope: &PathScope,
     dry_run: bool,
 ) {
+    move_audio_cache_with(
+        game_dir,
+        config,
+        scope,
+        dry_run,
+        |from, to| std::fs::rename(from, to),
+        |from, to| std::fs::copy(from, to),
+    );
+}
+
+/// The body of [`move_audio_cache`], with the two filesystem operations a
+/// caller can inject so the rename-then-copy fallback is exercised without
+/// relying on a host-specific rename failure.
+fn move_audio_cache_with(
+    game_dir: &Path,
+    config: &crate::hyp::GameConfig,
+    scope: &PathScope,
+    dry_run: bool,
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) {
     let (cache_dir, res_dir) = (&config.audio_pkg_cache_dir, &config.audio_pkg_res_dir);
     if cache_dir.is_empty() || res_dir.is_empty() || cache_dir == res_dir {
         return;
@@ -440,12 +461,12 @@ fn move_audio_cache(
             kept += 1;
             continue;
         }
-        match std::fs::rename(&src, &target) {
+        match rename(&src, &target) {
             Ok(()) => moved += 1,
             Err(rename_err) => {
                 // The copy fallback publishes through a temp sibling, so a
                 // truncated copy can never be mistaken for a complete one.
-                match copy_publish_with(&src, &target, |from, to| std::fs::copy(from, to)) {
+                match copy_publish_with(&src, &target, &copy) {
                     Ok(()) => {
                         // Only now is there a complete destination: the source
                         // is removed **after** it, never before. Removing it
@@ -656,6 +677,51 @@ mod tests {
                 && logs.contains("moved=1")
                 && logs.contains("kept=0"),
             "the summary names what happened: {logs}"
+        );
+    }
+
+    /// A rename the caller refuses still publishes the file through the copy
+    /// fallback: the destination gets the whole file, no temp survives, and the
+    /// source is removed only after the publish. The first rename is injected
+    /// because a same-volume rename does not fail portably while the copy of
+    /// the same pair succeeds.
+    #[test]
+    fn a_refused_rename_falls_back_to_a_complete_copy() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "rename_fallback");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        let target = base.join("Audio/res/a.pck");
+        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache_with(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+                |_, _| Err(std::io::Error::other("injected rename refusal")),
+                |from, to| std::fs::copy(from, to),
+            )
+        });
+
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"cache bytes",
+            "the fallback publishes the complete file"
+        );
+        assert!(!tmp.exists(), "the fallback leaves no temp sibling");
+        assert!(
+            !src.exists(),
+            "the source is removed only after the copy is published"
+        );
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=1")
+                && logs.contains("kept=0"),
+            "the fallback move is reported as moved: {logs}"
         );
     }
 
