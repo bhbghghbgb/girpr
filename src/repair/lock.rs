@@ -13,8 +13,10 @@
 //!
 //! The open handle holds the lock: the OS releases it when the process dies,
 //! so a killed run never leaves a wall-clock wait behind. The file body names
-//! the pid and the time it was taken, so a refusal can name the run to look
-//! at. A leftover file with no holder is harmless: the next `try_lock`
+//! the pid and the time it was taken, so a refusal can usually name the run to
+//! look at. An exclusive lock can hide that body on some platforms; the
+//! refusal then says the body is unreadable instead of inventing a pid. A
+//! leftover file with no holder is harmless: the next `try_lock`
 //! succeeds and overwrites its body. `Drop` only releases the handle; it never
 //! removes the file, because deleting it after unlocking would let a second and
 //! a third run hold two different files for the same key at once.
@@ -250,7 +252,8 @@ fn held(path: &Path) -> anyhow::Error {
             }
         }
         Err(_) => anyhow::anyhow!(
-            "another girpr run holds {} (its body is unreadable); refusing to run",
+            "another girpr run holds {} (its body is unreadable, possibly because \
+             an exclusive lock hides it); refusing to run",
             path.display()
         ),
     }
@@ -323,7 +326,12 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "unreadable");
         let path = lock_path(&dir);
         let msg = format!("{:#}", held(&path));
+        // The body may be hidden while the holder owns the file; the refusal
+        // must say that rather than claim a pid it cannot read.
         assert!(msg.contains("body is unreadable"), "{msg}");
+        assert!(msg.contains("an exclusive lock hides it"), "{msg}");
+        assert!(msg.contains("refusing to run"), "{msg}");
+        assert!(msg.contains(path.to_string_lossy().as_ref()), "{msg}");
     }
 
     #[test]
