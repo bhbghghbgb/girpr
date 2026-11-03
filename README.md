@@ -276,8 +276,9 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- Rust 1.85+ (the crate is `edition = "2024"`); network to HoYoPlay + Sophon
-  CDNs (production runs only).
+- Rust 1.89+ (the crate is `edition = "2024"`, and the single-writer lock uses
+  `File::try_lock`/`File::unlock`, which stabilised in 1.89); network to
+  HoYoPlay + Sophon CDNs (production runs only).
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
