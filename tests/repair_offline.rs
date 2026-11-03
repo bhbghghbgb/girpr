@@ -334,9 +334,10 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let err = run(ctx).await.expect_err("a scoped run is refused too");
     assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
 
-    // The lock is released when the run that holds it ends.
+    // The lock is released when the run that holds it ends; the file is left
+    // for the next run to reuse rather than unlinked under a racing opener.
     drop(_lock);
-    assert!(!lock_path.exists());
+    assert!(lock_path.exists(), "the unlocked file stays in place");
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the next run is not refused");
