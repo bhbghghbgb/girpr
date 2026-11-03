@@ -3,8 +3,8 @@
 //! A writer creates a temp sibling in the target's directory, writes the whole
 //! artifact there, and renames it over the target. A crash or a full disk can
 //! therefore leave the temp or the old target, never a truncated artifact.
-//! [`temp_sibling`](super::path::temp_sibling) owns the temp name, so every
-//! writer and any leftover sweep share one rule.
+//! `temp_sibling` owns the temp name, so every writer and any leftover sweep
+//! share one rule.
 //!
 //! The helper takes bytes or a caller-supplied writer; serialization stays at
 //! the call site, because each artifact has its own format and error context.
