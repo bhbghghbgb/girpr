@@ -103,14 +103,14 @@ until the main tasks and rework are done.
 | F02 | RC-01 review | `src/report/emit.rs` | Non-`BrokenPipe` stdout errors warn per call with no latch; revisit only if log flooding is observed. | dropped (no observed flooding; latch is speculative) |
 | F03 | RC-01 review | `tools/sync` | Sibling crate still folds path keys with `str::to_lowercase` (same Unicode-fold class of issue). | completed |
 | F04 | RC-01 review | `src/repair/scope/filter.rs` | Glob case-insensitive matching differs from `path_key`; cross-reference the two docs. | completed |
-| F05 | RC-02 review | `src/repair/phases/post.rs` | `copy_publish_with` keeps its own `PUBLISH_TMP_SUFFIX` append; adopt `util::path::temp_sibling`. | todo |
-| F06 | RC-02 review | `src/repair/scope/report.rs` | Temp-then-rename replaces a symlink at the target and resets the target's mode; document the trade. | todo |
+| F05 | RC-02 review | `src/repair/phases/post.rs` | `copy_publish_with` keeps its own `PUBLISH_TMP_SUFFIX` append; adopt `util::path::temp_sibling`. | completed |
+| F06 | RC-02 review | `src/repair/scope/report.rs` | Temp-then-rename replaces a symlink at the target and resets the target's mode; document the trade. | completed |
 | F07 | T02 implementer | `src/hyp.rs` | Negative sizes are still accepted and clamped to zero; decide whether to reject them explicitly. | completed |
 | F08 | T03 implementer | `src/repair/scope/ledger.rs` | `Summary::release_ram_bytes` still uses unchecked `fetch_sub`; consider the same saturation guard. | completed |
-| F09 | T05 implementer | `src/repair/phases/post.rs` | The copy-fallback caller path is only unit-tested through the injected helper, not a real failed rename. | todo |
+| F09 | T05 implementer | `src/repair/phases/post.rs` | The copy-fallback caller path is only unit-tested through the injected helper, not a real failed rename. | completed |
 | F10 | T05 implementer | `src/repair/phases/post.rs` | The fixed temp sibling name would collide if two moves target the same path concurrently. | dropped (one run at a time under the lock makes the collision unreachable) |
 | F11 | T06 implementer | `src/repair/scope/report.rs` | Untested `file_name() == None` fallback; cleanup warns when a directory occupies the temp path. | todo |
-| F12 | T07 implementer | `src/repair/purge.rs` | A purge test hard-codes the `.girpr_tmp` spelling instead of using the shared name helper. | todo |
+| F12 | T07 implementer | `src/repair/purge.rs` | A purge test hard-codes the `.girpr_tmp` spelling instead of using the shared name helper. | completed |
 | F13 | RC-03 review | `src/repair/phases/metadata.rs` | `join!` waits out a sibling's retry schedule after an authoritative failure; cancel it once its error is settled. | completed |
 | F14 | RC-03 review | `src/repair/phases/metadata.rs` | Spawn-join failures are mapped ad hoc (ignore/blacklist vs audio/version exit classes). | completed |
 | F15 | RC-03 review | `src/repair/phases/manifest.rs` | Bounded-fetch reindex plumbing and the concurrency log line are duplicated for latest and local. | completed |
@@ -263,6 +263,10 @@ until the main tasks and rework are done.
 | F162 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | The seek-refund test drives the helper; no end-to-end `write_downloaded_chunk` case with an unseekable sink. | todo |
 | F163 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | A copy-path seek failure drops the cached source handle instead of restoring it, unlike the other fallbacks. | todo |
 | F164 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | The `drop(src_handle)` Windows share-mode rationale is defensive rather than required for std's default share mode. | todo |
+| F165 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | Five tests still spell `.girpr_tmp` literally instead of deriving it from `temp_sibling`. | todo |
+| F166 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | The fallback test could assert source-present/target-absent inside the injected copy, not only after. | todo |
+| F167 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | `copy_publish_with`'s no-file-name refusal has no direct test. | todo |
+| F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | todo |
 
 ## Follow-up batches
 
@@ -285,7 +289,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-01 | F108 | done | Wave A; one shared `md5_hex` test helper; low; dd373fd |
 | LINT-01 | F97, F109 | done | Wave A, after BUILD-TOOLS-01; central test-lint policy; low; 594f37a, a7ea85f, cedb038, c36bf08 |
 | TEMP-WRITER-01 | F25, F26, F27, F28, F30 | done | Wave B; temp writer rollback, refunds, docs, seek; medium; a98d906, 5e55c8f, 470cad9, beaf64d, 6fc928a |
-| TEMP-PUBLISH-01 | F05, F06, F09, F12 | pending_review | Wave B; temp-sibling publish of audio and plan files; medium; 8485d11, 3f232f3, 1a6e4e6, 2fb2e21 |
+| TEMP-PUBLISH-01 | F05, F06, F09, F12 | done | Wave B; temp-sibling publish of audio and plan files; medium; 8485d11, 3f232f3, 1a6e4e6, 2fb2e21 |
 | INPLACE-01 | F29, F33, F34, F70, F79 | todo | Wave B; in-place reuse accuracy and guards; medium |
 | CHECK-01 | F19, F21, F23, F52 | todo | Wave B; check-phase progress, totals, panic verdict; high |
 | REPORT-API-01 | F42, F43, F48, F83 | todo | Wave B; report type visibility and construction; medium |
@@ -315,6 +319,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
+| TEMP-PUBLISH-02 | F165, F166, F167, F168 | todo | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
