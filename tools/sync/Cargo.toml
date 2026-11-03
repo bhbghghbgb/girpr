@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2024"
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with redb hash cache"
 
+# A tools-only subset of the shared policy. The dev tools do not inherit the
+# workspace table because `unwrap_used`/`expect_used` are deliberate there for
+# the repair path and would be noise here: a panic in a dev tool is a failed
+# developer run, not a failed repair of a user's install. What is checked is
+# `clippy::all` plus denied `unsafe_code`, the same as the product otherwise.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
 [lib]
 name = "girsync"
 path = "src/lib.rs"

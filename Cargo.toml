@@ -20,6 +20,7 @@ default-members = ["."]
 # The shared policy for packages that opt in with `[lints] workspace = true`.
 # Deliberately small: a lint joins this table only when a real class of bug
 # motivates it. Warnings stay warnings; CI decides whether to deny them.
+# The two dev tools set a smaller subset of their own; see their manifests.
 [workspace.lints.rust]
 # The product has no `unsafe`; the allocator instrument in `tests/peak_heap.rs`
 # is the one deliberate exception and says so itself.

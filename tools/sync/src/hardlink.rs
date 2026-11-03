@@ -83,6 +83,7 @@ pub fn info(path: &Path) -> io::Result<LinkInfo> {
 /// another process keep it open. The handle is closed on every path after the
 /// information call, including failure.
 #[cfg(windows)]
+#[allow(unsafe_code)] // the one FFI surface in the tools; each block below has its SAFETY note
 pub fn info(path: &Path) -> io::Result<LinkInfo> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
