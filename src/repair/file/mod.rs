@@ -867,6 +867,13 @@ mod tests {
         assert!(trim_is_free(&file, &chunks, &[Some(0), Some(10)]));
         // The second one reaches past it: the tail is not dead weight.
         assert!(!trim_is_free(&file, &chunks, &[Some(0), Some(15)]));
+        // A source at the far end of the representable offsets is outside the
+        // target, so the trim is deferred rather than truncating it.
+        assert!(!trim_is_free(
+            &file,
+            &chunks,
+            &[Some(i64::MAX as u64), None]
+        ));
         // A chunk with no candidate at all: nothing to lose.
         assert!(trim_is_free(&file, &chunks, &[None, Some(10)]));
         // The test is against the **target's** end, so a bigger target frees it.

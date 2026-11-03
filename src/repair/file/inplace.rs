@@ -950,6 +950,83 @@ mod tests {
         assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
     }
 
+    /// The tier decision, as a table: the RAM limit and the payload together
+    /// pick the tier, and "stage nothing" is a mode (`Some(0)`), not a
+    /// shortage.
+    ///
+    /// The payload here is 10 for `bad = [0, 1]` (only chunk 0 has an intact
+    /// source) and 0 for `bad = [1]` (chunk 1 has no source at all).
+    #[test]
+    fn the_tier_decision_table_is_pinned() {
+        fn tier_for(limit: Option<u64>, bad: &[usize]) -> (Tier, u64, bool) {
+            let mut ctx = test_ctx(None);
+            Arc::get_mut(&mut ctx.summary)
+                .expect("the test context owns its summary")
+                .set_ram_limit(limit);
+            let chunks = vec![chunk("a", 10), chunk("b", 20)];
+            let sources = vec![Some(0), None];
+            let source_ok = vec![true, true];
+            let file = PlannedFile {
+                rel: "f.dat".into(),
+                size: 30,
+                md5: "m".into(),
+                url_prefix: Arc::from(""),
+                chunks,
+            };
+            let (tier, payload, reservation) = choose_tier(&ctx, &file, &sources, &source_ok, bad);
+            let reserved = reservation.is_some();
+            drop(reservation);
+            (tier, payload, reserved)
+        }
+
+        // Nothing to stage: the tier is staged, but there is nothing to reserve.
+        assert_eq!(tier_for(None, &[1]), (Tier::Staged, 0, false));
+        // `--max-ram-bytes 0` is a mode: ordered even when there is nothing to
+        // stage, and regardless of the payload.
+        assert_eq!(tier_for(Some(0), &[1]), (Tier::Ordered, 0, false));
+        assert_eq!(tier_for(Some(0), &[0, 1]), (Tier::Ordered, 10, false));
+        // Exactly at the limit reserves; one byte short falls back.
+        assert_eq!(tier_for(Some(10), &[0, 1]), (Tier::Staged, 10, true));
+        assert_eq!(tier_for(Some(9), &[0, 1]), (Tier::Ordered, 10, false));
+        // Without a limit the reservation always succeeds.
+        assert_eq!(tier_for(None, &[0, 1]), (Tier::Staged, 10, true));
+    }
+
+    /// The bad-chunk plan, as a table: the list is the chunks that are not
+    /// correct where they belong, the kept count is the complement, and the
+    /// per-range source verdicts are folded back onto chunks (chunk 1 has no
+    /// source range, so it can never be reused).
+    #[test]
+    fn the_bad_chunk_plan_is_the_wrong_chunks_with_the_kept_count() {
+        let chunks = vec![chunk("a", 10), chunk("b", 20), chunk("c", 30)];
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 60,
+            md5: "m".into(),
+            url_prefix: Arc::from(""),
+            chunks,
+        };
+        let mut stats = ChunkStats {
+            chunks_total: 3,
+            ..Default::default()
+        };
+        let mut scan = util::Scan {
+            file_md5: "x".into(),
+            file_len: 60,
+            dest_ok: vec![true, false, true],
+            source_ok: vec![true, false],
+        };
+        let bad = plan_bad_chunks(&file, &mut scan, &[0, 2], &mut stats);
+        assert_eq!(bad, vec![1], "only the wrong chunk is patched");
+        assert_eq!(stats.chunks_kept, 2, "the correct chunks are kept");
+        assert_eq!(
+            scan.source_ok,
+            vec![true, false, false],
+            "range 0 belongs to chunk 0; chunk 2's range was not intact and \
+             chunk 1 has no range"
+        );
+    }
+
     /// B3: the in-place scan must not invent a source at offset 0 for a chunk
     /// that has none. The same content sits at the head of the file under a
     /// different layout, so a coerced source range would verify there and the
@@ -1147,6 +1224,75 @@ mod tests {
             ),
             Verified::Matches(md5) => panic!("a rewritten file must not match, got {md5}"),
         }
+    }
+
+    /// A verdict that does not describe this file's chunk layout is not
+    /// reusable, even when length and mtime still match: the per-chunk lists
+    /// are positional, so a differently shaped verdict would be indexed with
+    /// the wrong meaning. A verdict with no recorded mtime is not reusable
+    /// either.
+    #[test]
+    fn the_guard_rejects_a_verdict_that_does_not_describe_the_file() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "guard_shape");
+        let path = dir.join("a.dat");
+        let bytes = b"abcdef";
+        std::fs::write(&path, bytes).unwrap();
+        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "a.dat".into(),
+            size: bytes.len() as i64,
+            md5: util::md5::md5_digest(bytes).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("c0", "m0", 0, bytes.len() as i64)],
+        };
+        let id = FileId::new(0);
+        let handle = std::fs::File::open(&path).unwrap();
+
+        let wrong_shape = Verdict {
+            file_md5: file.md5.clone(),
+            dest_ok: vec![true, true],
+            source_ok: vec![true, true],
+            file_len: bytes.len() as u64,
+            modified: Some(recorded),
+        };
+        let ctx = test_ctx(Some(Arc::new(ScanReport {
+            files: vec![Some(wrong_shape)],
+            bytes: bytes.len() as u64,
+            damaged_chunks: 0,
+            scanned_at: None,
+        })));
+        assert!(
+            reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
+            "a verdict for another chunk layout is not this file's verdict"
+        );
+
+        let no_time = Verdict {
+            file_md5: file.md5.clone(),
+            dest_ok: vec![true],
+            source_ok: vec![true],
+            file_len: bytes.len() as u64,
+            modified: None,
+        };
+        let ctx = test_ctx(Some(Arc::new(ScanReport {
+            files: vec![Some(no_time)],
+            bytes: bytes.len() as u64,
+            damaged_chunks: 0,
+            scanned_at: None,
+        })));
+        assert!(
+            reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
+            "without a recorded mtime the guard cannot prove the file unchanged"
+        );
     }
 
     fn test_ctx(scan: Option<Arc<ScanReport>>) -> FileCtx {
