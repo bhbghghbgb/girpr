@@ -179,6 +179,12 @@ async fn repair_attempt_inner(
     }
     f.flush()?;
     drop(f);
+    // The reuse source is the same file the promote renames over. Release the
+    // handle first: on Windows a rename over a target needs delete access to
+    // it, and while `std` opens with a share mode that allows the rename, a
+    // non-default share mode (another process, a network share) need not. Do
+    // not depend on the platform's sharing behaviour when dropping is free.
+    drop(src_handle);
     promote_tmp(file, tmp_path, final_path, stats, writes)
 }
 
