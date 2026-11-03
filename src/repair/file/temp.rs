@@ -530,10 +530,7 @@ pub(super) async fn write_downloaded_chunk(chunk: DownloadedChunk<'_>) -> Result
     // the rest of the run.
     let mut sink = match ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64) {
         Ok(sink) => sink,
-        Err(e) => {
-            settle_reservation(ctx, reserved, 0);
-            return Err(e).with_context(|| format!("seek to chunk {} offset", c.id));
-        }
+        Err(e) => return Err(settle_seek_failure(ctx, reserved, &c.id, e)),
     };
     // What the fetch really spent, across every attempt: the checks below run
     // after the stream ends, so on failure the bytes of the attempt that died
@@ -590,6 +587,23 @@ pub(super) async fn write_downloaded_chunk(chunk: DownloadedChunk<'_>) -> Result
     note_write(ctx, writes, sink.written())?;
     stats.chunks_downloaded += 1;
     Ok(())
+}
+
+/// Settle a chunk whose sink could not be positioned, then report the seek
+/// failure.
+///
+/// The reservation is taken before the seek, so this is the one failure that
+/// must give it back whole: no byte crossed the wire. Keeping the refund and
+/// the error together gives the test a seam to drive the path with a
+/// synthetic seek error; production still returns the same context chain.
+fn settle_seek_failure(
+    ctx: &FileCtx,
+    reserved: u64,
+    chunk: &str,
+    error: std::io::Error,
+) -> anyhow::Error {
+    settle_reservation(ctx, reserved, 0);
+    anyhow::Error::new(error).context(format!("seek to chunk {chunk} offset"))
 }
 
 /// Fold the bytes a fetch really spent into the live download meter.
@@ -966,6 +980,38 @@ mod tests {
             "the rolled-back chunk must not be resumed"
         );
         assert_eq!(std::fs::metadata(&tmp).unwrap().len(), 4);
+    }
+
+    /// The seek is the only failure between the download reservation and the
+    /// fetch, so it must give the whole reservation back: no byte crossed the
+    /// wire. The seam is the production helper, driven with a synthetic seek
+    /// error instead of a file whose cursor cannot move.
+    #[test]
+    fn a_sink_that_cannot_be_positioned_refunds_its_reservation() {
+        let mut summary = Summary::new();
+        summary.set_download_limit(Some(1_000));
+        let mut ctx = test_ctx();
+        ctx.summary = Arc::new(summary);
+        assert!(ctx.summary.reserve_download_bytes(400));
+        assert_eq!(ctx.summary.download.live(), 400);
+
+        let err = settle_seek_failure(
+            &ctx,
+            400,
+            "c7",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "seek refused"),
+        );
+
+        assert_eq!(
+            ctx.summary.download.live(),
+            0,
+            "no byte crossed the wire, so the whole reservation comes back"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("seek to chunk c7 offset") && chain.contains("seek refused"),
+            "the seek failure is still named with its chunk: {chain}"
+        );
     }
 
     /// The sink positions the file once and then writes sequentially: two
