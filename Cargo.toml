@@ -57,21 +57,25 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 anyhow = "1"
 walkdir = "2"
 glob = "0.3"
-futures-core = "0.3"
-futures-util = "0.3"
+# Only the `Stream`/`StreamExt` traits and `stream::iter` are used, never the
+# `join!`/`select!`-style macros, so the default `async-await-macro` feature
+# (and its `futures-macro` proc-macro) is not compiled. `std` is still needed:
+# it carries the `StreamExt` combinators, and it pulls `slab` along with it.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # The scratch-directory helper, shared with the two dev tools: one name, one
 # construction and one cleanup for every test in the workspace. A
 # dev-dependency, because nothing that ships creates a scratch directory.
 girpr-tempdir = { path = "crates/tempdir" }
-# Test-only additions to the runtime above; Cargo unions these with the normal
-# features for a test build, so `cargo build` still compiles just the runtime.
+# Test-only features; Cargo unions these with the normal features for a test
+# build, so `cargo build` still compiles just the runtime.
 # `test-util`: paused-time tests check the progress guard's cadence and its
 # stop-on-drop against a controlled clock rather than by sleeping in CI.
 # `process`: the CLI tests run the built binary.
 # `net` and `io-util`: the fake artifact servers accept connections and read
-# requests.
+# requests. (`reqwest` already enables `net` in a normal build; naming it here
+# keeps the tests' own requirement explicit.)
 tokio = { version = "1", features = ["test-util", "process", "net", "io-util"] }
 
 # The shipped artifact is a single CLI binary, so trade build time for a

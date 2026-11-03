@@ -567,7 +567,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "futures-core",
  "futures-util",
  "girpr-log",
  "girpr-tempdir",
