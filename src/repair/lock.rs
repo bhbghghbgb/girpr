@@ -448,11 +448,16 @@ mod tests {
     }
 
     /// The hash of the lossy spelling alone: the key every valid UTF-8 path
-    /// had before raw bytes were mixed in for non-Unicode paths.
+    /// had before raw bytes were mixed in for non-Unicode paths. Written out
+    /// rather than reusing `fnv_step`, so a change to the helper cannot silently
+    /// change both the key and its reference.
     fn lossy_key(path: &Path) -> u64 {
         let mut key = FNV_OFFSET;
         for byte in path.as_os_str().to_string_lossy().bytes() {
-            key = fnv_step(key, byte);
+            #[cfg(windows)]
+            let byte = byte.to_ascii_lowercase();
+            key ^= u64::from(byte);
+            key = key.wrapping_mul(FNV_PRIME);
         }
         key
     }
