@@ -66,6 +66,8 @@ pub struct GameConfig {
     pub blacklist_dir: String,
     #[serde(default)]
     pub enable_resource_blacklist: bool,
+    // Deserialized for completeness; no phase reads the game-id wrapper.
+    #[allow(dead_code)]
     #[serde(default)]
     pub game: Option<GameIdRef>,
 }
@@ -98,6 +100,8 @@ pub struct GameBranchPackage {
 pub struct ChunkBuild {
     #[serde(default)]
     pub build_id: String,
+    // Deserialized for completeness; the run compares the build id, not its tag.
+    #[allow(dead_code)]
     #[serde(default)]
     pub tag: String,
     #[serde(default)]
@@ -108,6 +112,8 @@ pub struct ChunkBuild {
 pub struct ChunkManifestMeta {
     #[serde(default)]
     pub category_id: String,
+    // Deserialized for completeness; the manifest is selected by category id.
+    #[allow(dead_code)]
     #[serde(default)]
     pub category_name: String,
     #[serde(default)]
@@ -172,6 +178,8 @@ pub struct ManifestFile {
     pub id: String,
     #[serde(default)]
     pub checksum: String,
+    // Deserialized for completeness; the manifest fetch uses `uncompressed_size`.
+    #[allow(dead_code)]
     #[serde(default, deserialize_with = "num_from_string")]
     pub compressed_size: i64,
     #[serde(default, deserialize_with = "num_from_string")]
@@ -182,6 +190,8 @@ pub struct ManifestFile {
 pub struct ManifestUrl {
     #[serde(default)]
     pub url_prefix: String,
+    // Deserialized for completeness; only the prefix is joined with the id.
+    #[allow(dead_code)]
     #[serde(default)]
     pub url_suffix: String,
 }

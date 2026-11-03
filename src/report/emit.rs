@@ -133,22 +133,24 @@ impl Drop for ProgressGuard {
 /// The provenance fields of the one-time begin report.
 ///
 /// The field order is the report's field order: the caller names every value
-/// once, and the formatter turns the group into the `REPORT` record.
+/// once, and the formatter turns the group into the `REPORT` record. The fields
+/// are crate-visible rather than public: the pipeline is the only constructor,
+/// and [`report_record`] is the only reader.
 pub struct ReportProvenance<'a> {
     /// The on-disk `config.ini` version, or `None` when absent.
-    pub local_version: &'a Option<String>,
+    pub(crate) local_version: &'a Option<String>,
     /// The version the run is moving to.
-    pub latest_version: &'a str,
+    pub(crate) latest_version: &'a str,
     /// The game/business channel.
-    pub biz: &'a str,
+    pub(crate) biz: &'a str,
     /// The launcher's game configuration.
-    pub cfg: &'a GameConfig,
+    pub(crate) cfg: &'a GameConfig,
     /// The selected branch package.
-    pub pkg: &'a GameBranchPackage,
+    pub(crate) pkg: &'a GameBranchPackage,
     /// The target build.
-    pub build: &'a ChunkBuild,
+    pub(crate) build: &'a ChunkBuild,
     /// The effective audio language set.
-    pub audio_langs: &'a HashSet<String>,
+    pub(crate) audio_langs: &'a HashSet<String>,
 }
 
 /// The one-time begin report, written right after the metadata calls. Parsers
