@@ -140,13 +140,13 @@ until the main tasks and rework are done.
 | F39 | RC-07 review | `README.md`, `Cargo.toml` | README claims Rust 1.85+, but `File::try_lock` needs 1.89; no `rust-version` pin. | completed |
 | F40 | RC-07 review | `src/cli.rs` | `excessive_jobs_warning` says workers can fall below file tasks, but the runtime is sized to `max(parallelism, jobs+1)`. | completed |
 | F41 | RC-07 review | `src/main.rs`, `src/repair/**`, `tools/sync`, `docs/02-06` | Stale `--io-threads` prose remains after the `--jobs` rename. | todo |
-| F42 | RC-07 review | `src/lib.rs` | `test_support` re-exports `stream_chunk_to` beyond the task's list and duplicates root items; document the seam. | todo |
-| F43 | T18 implementer | `src/report/mod.rs` | `Summary` public fields have types (`Meter`, `SummaryFlags`, `Ceiling`) no longer nameable outside the crate. | todo |
+| F42 | RC-07 review | `src/lib.rs` | `test_support` re-exports `stream_chunk_to` beyond the task's list and duplicates root items; document the seam. | completed |
+| F43 | T18 implementer | `src/report/mod.rs` | `Summary` public fields have types (`Meter`, `SummaryFlags`, `Ceiling`) no longer nameable outside the crate. | completed |
 | F44 | T19 implementer | `src/cli.rs` | On hosts with parallelism below 4, the default `--jobs 4` warns on every run. | completed |
 | F45 | T17 implementer | `src/repair/lock.rs` | On Windows the exclusive lock hides the body, so refusals usually cannot name the holder pid. | completed |
 | F46 | RC-08 review | `src/repair/purge.rs`, `src/repair/phases/post.rs` | `--purge-before --purge-after --dry-run` lists the same cleanup candidates twice. | todo |
 | F47 | RC-08 review | `src/repair/phases/post.rs` | A dry run that trips the post-repair ceiling logs error-level `limit exceeded` yet exits 0. | todo |
-| F48 | RC-08 review | `src/report/mod.rs` | `emit_progress`/`PROGRESS_INTERVAL_SECS` are no longer re-exported; restore if that is API. | todo |
+| F48 | RC-08 review | `src/report/mod.rs` | `emit_progress`/`PROGRESS_INTERVAL_SECS` are no longer re-exported; restore if that is API. | completed |
 | F49 | RC-08 review | `src/logging.rs` tests | A flush test asserts it is the only setter of the global sink; fragile if another test installs tracing. | completed |
 | F50 | T20 implementer | `src/repair/phases/post.rs` | A dry run now does a second purge walk plus the audio walk, adding I/O and network work. | dropped (the extra walks are the intended cost of exercising the post-phase) |
 | F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | todo |
@@ -181,7 +181,7 @@ until the main tasks and rework are done.
 | F80 | T34 implementer | `src/repair/mod.rs` | `build_and_assert_plan` is still ~150 lines and could split further. | todo |
 | F81 | T34 implementer | `src/retry.rs` | Clippy `enum_variant_names` warning predates the work and is still present. | completed |
 | F82 | RC-15 review | `src/repair/mod.rs`, `src/repair/file/mod.rs`, `src/repair/file/inplace.rs` | Five `too_many_arguments` allows remain outside T35's four sites. | todo |
-| F83 | RC-15 review | `src/report/emit.rs` | `ReportProvenance` exposes every field publicly; a constructor or narrower visibility would harden it. | todo |
+| F83 | RC-15 review | `src/report/emit.rs` | `ReportProvenance` exposes every field publicly; a constructor or narrower visibility would harden it. | completed |
 | F84 | T35 implementer | `src/sophon/stream.rs` | The streaming path joins the URL per attempt; carrying the joined URL would avoid the allocation. | dropped (negligible allocation on a network-bound path) |
 | F85 | RC-15 review | `src/config.rs`, `tests/repair_offline.rs` | `PartialEq<i32> for RunExit` is a numeric escape hatch; convert test assertions to variants and drop it. | todo |
 | F86 | RC-15 review | `src/repair/phases/check.rs`, `src/main.rs` | Prose still describes exit codes as bare numbers. | todo |
@@ -275,6 +275,9 @@ until the main tasks and rework are done.
 | F174 | CHECK-01 review | `src/report/summary.rs` | `check_damaged_chunks` is 0 both for "no damage" and "never measured"; an `Option` accessor would disambiguate. | todo |
 | F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | todo |
 | F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | todo |
+| F177 | REPORT-API-01 review | `src/hyp.rs`, `src/repair/phases/metadata.rs` | `GameConfig::game`/`ChunkBuild::tag` are unread; validate them against the requested biz/tag in a hardening batch. | todo |
+| F178 | REPORT-API-01 review | `src/hyp.rs` | `ChunkBuild::tag`'s comment says the run compares the build id, but it only reports it; the `ManifestFile` size doc also overstates. | todo |
+| F179 | REPORT-API-01 review | `README.md` | The module map still names `src/report.rs`, `emit_progress` and `spawn_progress_reporter`. | todo |
 
 ## Follow-up batches
 
@@ -300,7 +303,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-01 | F05, F06, F09, F12 | done | Wave B; temp-sibling publish of audio and plan files; medium; 8485d11, 3f232f3, 1a6e4e6, 2fb2e21 |
 | INPLACE-01 | F29, F33, F34, F70, F79 | done | Wave B; in-place reuse accuracy and guards; medium; e7b963d, 7dd2316, 4f49e07, 0c3cea4, 13d5335 |
 | CHECK-01 | F19, F21, F23, F52 | done | Wave B; check-phase progress, totals, panic verdict; high; 3468022, d919207 |
-| REPORT-API-01 | F42, F43, F48, F83 | pending_review | Wave B; report type visibility and construction; medium; 1cd5039, 3080e19, e23a64f |
+| REPORT-API-01 | F42, F43, F48, F83 | done | Wave B; report type visibility and construction; medium; 1cd5039, 3080e19, e23a64f |
 | PHASE-01 | F114, F115 | todo | Wave B; phase-timer coverage and error-path logging; low |
 | TEST-MANIFEST-01 | F18, F110 | todo | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium |
 | ATOMIC-01 | F11, F60, F65, F66 | todo | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low |
@@ -314,7 +317,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low |
 | TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
-| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
+| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
+| HYP-02 | F177 | todo | Wave D; validate the hyp response identity against the request; medium |
 | SYNC-01 | F123, F125 | todo | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | todo | Wave D; metadata classification tests, label constants and doc precision; low |
 | MANIFEST-02 | F136, F137 | todo | Wave D; manifest mock shutdown and out-of-order stream coverage; low |
