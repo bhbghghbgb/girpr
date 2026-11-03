@@ -1,5 +1,5 @@
 //! Argument surface: the raw clap `Args` plus the input normalization that runs
-//! before anything else (audio codes, `jobs >= 1`).
+//! before anything else (audio codes, `1 <= jobs <= MAX_JOBS`).
 //!
 //! [`Args`] is deliberately dumb: it describes the flags and nothing more. The
 //! checked form is [`crate::config::RunCtx`], built in [`Args::into_ctx`] so the
@@ -19,6 +19,14 @@ use crate::config::{RepairMode, RunCtx};
 use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 use crate::sleep::RealSleep;
+
+/// Largest accepted `--jobs` value.
+///
+/// The runtime keeps one worker beyond the file window, so a larger value only
+/// asks for more OS threads than any machine can usefully run — a value this
+/// size is a typo, not a tuning choice. Refusing it here names the flag instead
+/// of leaving the user with a runtime-construction failure that does not.
+pub const MAX_JOBS: usize = 1024;
 
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
@@ -40,7 +48,8 @@ pub struct Args {
 
     /// Max concurrent FILES (chunks inside a file are sequential -> HDD friendly).
     /// SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker
-    /// threads; `--io-threads` is a deprecated alias.
+    /// threads; `--io-threads` is a deprecated alias. Values above 1024 are a
+    /// usage error.
     #[arg(long = "jobs", visible_alias = "io-threads", default_value_t = 4)]
     pub jobs: usize,
 
@@ -257,6 +266,9 @@ impl Args {
         if self.jobs == 0 {
             bail!("--jobs must be >= 1");
         }
+        if self.jobs > MAX_JOBS {
+            bail!("--jobs must be <= {MAX_JOBS}");
+        }
         let available = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
@@ -437,6 +449,32 @@ mod tests {
         ]);
         let err = args.into_ctx().unwrap_err().to_string();
         assert!(err.contains("--jobs must be >= 1"), "{err}");
+    }
+
+    #[test]
+    fn an_out_of_range_jobs_is_a_usage_error_naming_the_flag() {
+        let parse = |jobs: usize| {
+            Args::parse_from([
+                "girpr",
+                "--game-path",
+                ".",
+                "--biz",
+                "hk4e_global",
+                "--jobs",
+                &jobs.to_string(),
+            ])
+        };
+
+        // The largest accepted value still reaches the file window unchanged.
+        assert_eq!(parse(MAX_JOBS).into_ctx().unwrap().jobs, MAX_JOBS);
+
+        for jobs in [MAX_JOBS + 1, usize::MAX] {
+            let err = parse(jobs).into_ctx().unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("--jobs must be <= {MAX_JOBS}")),
+                "{jobs}: {err}"
+            );
+        }
     }
 
     #[test]

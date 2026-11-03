@@ -283,6 +283,31 @@ fn zero_jobs_is_exit_one_and_the_message_names_the_flag() {
 }
 
 #[test]
+fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
+    // A value this large would ask the runtime for that many threads. It must
+    // be refused while the flag is being checked — named as a usage error, not
+    // surfaced later as "failed to start runtime" (exit 1 either way, but the
+    // latter reads like an environment problem and does not name the flag).
+    let (code, _, stderr) = run(&[
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--jobs",
+        "1000000",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("usage error: --jobs must be <= 1024"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("failed to start runtime"),
+        "the flag must be refused before the runtime is built:\n{stderr}"
+    );
+}
+
+#[test]
 fn plan_out_help_documents_every_serialized_field() {
     // R-9: `RepairEntry` serializes `mode` and `extra_bytes` too. The help is
     // the operator-facing description of the document, so it must name the
