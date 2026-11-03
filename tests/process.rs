@@ -568,3 +568,93 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
 
     mock.stop();
 }
+
+/// The plan half's `publish` step and the execute half's `purge-before` step
+/// each get their own completion line, so neither is hidden inside `plan` or
+/// left untimed.
+#[tokio::test]
+async fn the_publish_and_pre_purge_steps_are_timed() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("phase_extra_steps");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    // The log lives outside the install: `--purge-before` treats the game tree
+    // as its candidate set.
+    let log_dir = temp_dir("phase_extra_steps_log");
+
+    // Publishing only does work for `--print-plan` / `--plan-out`, so time it
+    // there; the run stops before the execute half.
+    let publish_log = log_dir.join("publish.log");
+    let publish_log_arg = publish_log.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--print-plan",
+            "--log-file",
+            &publish_log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let body = std::fs::read_to_string(&publish_log).expect("the publish log was written");
+    let line = body
+        .lines()
+        .find(|line| line.contains("phase=publish"))
+        .unwrap_or_else(|| panic!("no publish completion line:\n{body}"));
+    assert!(line.contains("duration_ms="), "{line}");
+    assert!(
+        !body.contains("phase=repair"),
+        "print-plan stops before the repair loop:\n{body}"
+    );
+
+    // The up-front cleanup is its own timed step in the execute half.
+    let purge_log = log_dir.join("purge.log");
+    let purge_log_arg = purge_log.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--purge-before",
+            "--log-file",
+            &purge_log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let body = std::fs::read_to_string(&purge_log).expect("the purge log was written");
+    let line = body
+        .lines()
+        .find(|line| line.contains("phase=purge-before"))
+        .unwrap_or_else(|| panic!("no purge-before completion line:\n{body}"));
+    assert!(line.contains("duration_ms="), "{line}");
+    // The scan and publish steps did not run in this invocation.
+    assert!(!body.contains("phase=scan"), "no --scan:\n{body}");
+    assert!(!body.contains("phase=publish"), "no --print-plan:\n{body}");
+
+    mock.stop();
+}

@@ -577,6 +577,9 @@ async fn publish_plan(
     est_download_by_file: &[u64],
     est_download_bytes: u64,
 ) -> Result<(), RunFailure> {
+    // Publishing only costs anything when it produces a plan; an ordinary run's
+    // call is a no-op and must not add a zero-duration line.
+    let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
     let disk = if ctx.print_plan || ctx.plan_out.is_some() {
         let disk_game_dir = game_dir.to_path_buf();
         let disk_root = root.cloned();
@@ -630,6 +633,9 @@ async fn publish_plan(
         );
         doc.write_to(Path::new(out))
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
+    }
+    if let Some(timer) = timer {
+        timer.finish();
     }
     Ok(())
 }
@@ -780,10 +786,12 @@ fn run_purge_before(
         && !ctx.check_only
         && let Some(pp) = purge_plan
     {
+        let timer = PhaseTimer::start("purge-before");
         let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
+        timer.finish();
     }
     Ok(())
 }
