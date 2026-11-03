@@ -258,7 +258,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-01 | F15, F16 | done | Wave A; manifest fetch reindex dedup and cancellation; medium; 68402c6, 9ca2194, 309ff77 |
 | JOBS-01 | F22, F40, F44 | done | Wave A; `--jobs`/`--io-threads` validation and warnings; medium; 7c5dd1c, b989167, e7842a2, a759a51, 80120f7 |
 | LOGGING-01 | F49, F54, F55 | done | Wave A; log flush lifecycle and tests; low; c42e863, 3e426bc |
-| LOCK-01 | F35, F36, F37, F45 | in_progress | Wave A; lock safety, key hashing, holder diagnostics; high |
+| LOCK-01 | F35, F36, F37, F45 | pending_review | Wave A; lock safety, key hashing, holder diagnostics; high; 6cc5d97, 8083753, 2c02ef5, 9642547, a653c9c |
 | INI-01 | F61, F91 | todo | Wave A; config-ini write contract and first-`=` helper; medium |
 | BUILD-01 | F39, F92, F93, F106, F107 | todo | Wave A; dependency truth, toolchain pin, MD5 benchmark; low |
 | BUILD-TOOLS-01 | F88, F99 | todo | Wave A; dev-tool dependency narrowing; medium |
