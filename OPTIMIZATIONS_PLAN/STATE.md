@@ -250,7 +250,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | RETRY-01 | F62, F81 | done | Wave A; retry jitter spread and clippy variant names; low; 24c2a99, f4589fb, ef9daf3 |
 | METADATA-01 | F13, F14, F17 | done | Wave A; metadata join cancellation and error mapping; medium; b29da6c, 7714bea, bbaeda1, dc93735 |
 | MANIFEST-01 | F15, F16 | done | Wave A; manifest fetch reindex dedup and cancellation; medium; 68402c6, 9ca2194, 309ff77 |
-| JOBS-01 | F22, F40, F44 | in_progress | Wave A; `--jobs`/`--io-threads` validation and warnings; medium |
+| JOBS-01 | F22, F40, F44 | pending_review | Wave A; `--jobs`/`--io-threads` validation and warnings; medium; 7c5dd1c, b989167, e7842a2, a759a51 |
 | LOGGING-01 | F49, F54, F55 | todo | Wave A; log flush lifecycle and tests; low |
 | LOCK-01 | F35, F36, F37, F45 | todo | Wave A; lock safety, key hashing, holder diagnostics; high |
 | INI-01 | F61, F91 | todo | Wave A; config-ini write contract and first-`=` helper; medium |
