@@ -7,6 +7,7 @@ mod common;
 
 use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
+use md5::Md5;
 use sha2::Digest;
 use std::collections::HashMap;
 
@@ -49,7 +50,7 @@ fn build_sled_db(dir: &std::path::Path) {
             "file",
             5,
             [
-                ("md5".to_string(), format!("{:x}", md5::compute(b"hello"))),
+                ("md5".to_string(), format!("{:x}", Md5::digest(b"hello"))),
                 (
                     "sha256".to_string(),
                     format!("{:x}", sha2::Sha256::digest(b"hello")),
@@ -68,7 +69,7 @@ fn build_sled_db(dir: &std::path::Path) {
             "file",
             0,
             [
-                ("md5".to_string(), format!("{:x}", md5::compute(b""))),
+                ("md5".to_string(), format!("{:x}", Md5::digest(b""))),
                 (
                     "sha256".to_string(),
                     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
@@ -115,7 +116,7 @@ fn convert_sled_dir_to_redb_file() {
     assert_eq!(a.size, 5);
     assert_eq!(
         a.hashes.get_named("md5"),
-        Some(&md5::compute(b"hello").0[..]),
+        Some(&Md5::digest(b"hello")[..]),
         "hex digests were decoded to raw bytes"
     );
 

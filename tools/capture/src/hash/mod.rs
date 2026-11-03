@@ -25,9 +25,11 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use md5::{Digest as _, Md5};
+
 /// Hex MD5 of `bytes`, lowercase.
 pub fn md5_hex(bytes: &[u8]) -> String {
-    hex_bytes(&md5::compute(bytes).0)
+    hex_bytes(&Md5::digest(bytes))
 }
 
 /// Hex SHA-256 of `bytes`, lowercase.
@@ -65,10 +67,10 @@ pub struct Digests {
 /// bytes, so the one-shot and the streaming forms have to agree — and a type that
 /// both are derived from is what makes that structural rather than a convention.
 ///
-/// Not [`Debug`]: `md5::Context` does not implement it, and a partial dump of a
-/// half-fed hash state is worse than none. [`Digests`] is the thing to print.
+/// Not [`Debug`]: a partial dump of a half-fed hash state is worse than none.
+/// [`Digests`] is the thing to print.
 pub struct DualDigest {
-    md5: md5::Context,
+    md5: Md5,
     sha: sha2::Sha256,
     len: u64,
 }
@@ -77,7 +79,7 @@ impl DualDigest {
     /// An empty pair, ready to be fed.
     pub fn new() -> Self {
         DualDigest {
-            md5: md5::Context::new(),
+            md5: Md5::new(),
             sha: <sha2::Sha256 as sha2::Digest>::new(),
             len: 0,
         }
@@ -97,7 +99,7 @@ impl DualDigest {
     pub fn finish(self) -> Digests {
         Digests {
             bytes: self.len,
-            md5: hex_bytes(&self.md5.compute().0),
+            md5: hex_bytes(&self.md5.finalize()),
             sha256: hex_bytes(&sha2::Digest::finalize(self.sha)),
         }
     }
@@ -111,7 +113,7 @@ impl Default for DualDigest {
 
 impl std::io::Write for DualDigest {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.md5.consume(buf);
+        self.md5.update(buf);
         sha2::Digest::update(&mut self.sha, buf);
         self.len += buf.len() as u64;
         Ok(buf.len())
@@ -489,7 +491,7 @@ pub fn zstd_measure(bytes: &[u8], what: &str, ceiling: u64) -> Result<Measure, S
     use std::io::Read as _;
     let mut dec =
         zstd::stream::read::Decoder::new(bytes).map_err(|e| zstd_error(bytes, what, e))?;
-    let mut hasher = md5::Context::new();
+    let mut hasher = Md5::new();
     let mut len = 0_u64;
     let mut buf = [0_u8; 16 * 1024];
     loop {
@@ -505,11 +507,11 @@ pub fn zstd_measure(bytes: &[u8], what: &str, ceiling: u64) -> Result<Measure, S
                 format!("the decoded output exceeds the {ceiling} B decode limit"),
             ));
         }
-        hasher.consume(&buf[..n]);
+        hasher.update(&buf[..n]);
     }
     Ok(Measure {
         len,
-        md5: hex_bytes(&hasher.compute().0),
+        md5: hex_bytes(&hasher.finalize()),
     })
 }
 
@@ -558,7 +560,7 @@ pub fn zstd_measure_from<R: std::io::Read>(
 
     let mut dec = zstd::stream::read::Decoder::new(std::io::Cursor::new(head).chain(reader))
         .map_err(|e| zstd_error_streamed(head, what, e))?;
-    let mut hasher = md5::Context::new();
+    let mut hasher = Md5::new();
     let mut len = 0_u64;
     let mut buf = [0_u8; 16 * 1024];
     loop {
@@ -576,11 +578,11 @@ pub fn zstd_measure_from<R: std::io::Read>(
                 format!("the decoded output exceeds the {ceiling} B decode limit"),
             ));
         }
-        hasher.consume(&buf[..n]);
+        hasher.update(&buf[..n]);
     }
     Ok(Measure {
         len,
-        md5: hex_bytes(&hasher.compute().0),
+        md5: hex_bytes(&hasher.finalize()),
     })
 }
 

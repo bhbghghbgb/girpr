@@ -1,6 +1,7 @@
 //! [`Digests`] and [`hash_file`]: streaming file digests in a single pass.
 
 use anyhow::{Context, Result};
+use md5::Md5;
 use sha2::Digest;
 use std::io::Read;
 use std::path::Path;
@@ -24,7 +25,7 @@ pub const CHUNK: usize = 512 * 1024;
 /// one of them, and a drift here is not a wrong number in a log — it is a
 /// spurious `verify hash mismatch`, or a silently weakened one.
 pub struct Digests {
-    md5ctx: Option<md5::Context>,
+    md5ctx: Option<Md5>,
     sha2ctx: Option<sha2::Sha256>,
 }
 
@@ -38,7 +39,7 @@ impl Digests {
     /// would be the whole of what this function does.
     pub fn new(algos: &AlgoSet) -> Self {
         Self {
-            md5ctx: algos.contains(HashAlg::Md5).then(md5::Context::new),
+            md5ctx: algos.contains(HashAlg::Md5).then(Md5::new),
             sha2ctx: algos.contains(HashAlg::Sha256).then(sha2::Sha256::new),
         }
     }
@@ -47,7 +48,7 @@ impl Digests {
     /// the caller's business, and [`hash_file`]'s is its read loop's.
     pub fn update(&mut self, chunk: &[u8]) {
         if let Some(c) = self.md5ctx.as_mut() {
-            c.consume(chunk);
+            c.update(chunk);
         }
         if let Some(c) = self.sha2ctx.as_mut() {
             c.update(chunk);
@@ -63,7 +64,7 @@ impl Digests {
     pub fn finish(self) -> DigestSet {
         let mut out = DigestSet::default();
         if let Some(c) = self.md5ctx {
-            out.md5 = Some(c.compute().0);
+            out.md5 = Some(c.finalize().into());
         }
         if let Some(c) = self.sha2ctx {
             let d = c.finalize();

@@ -13,6 +13,7 @@ use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, ScanStats};
+use md5::{Digest as _, Md5};
 
 /// A folder-side run's counters, kept **per phase** rather than merged.
 ///
@@ -165,7 +166,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db = open_db(&db_path, false, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
-    let want = md5::compute(b"hello").0.to_vec();
+    let want = Md5::digest(b"hello").to_vec();
     assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
     assert!(
