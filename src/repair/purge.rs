@@ -740,9 +740,13 @@ mod tests {
         let open = PathScope::default();
         // Single files-cleanup: temps are not skipped, they purge into the
         // same counter. --purge-before and --purge-after delete the same set.
+        // The temp spelling comes from the shared name helper, so this test
+        // cannot keep passing against a suffix no writer produces.
+        let config_temp = crate::util::path::temp_sibling(std::path::Path::new("config.ini"));
+        let config_temp = config_temp.to_str().unwrap();
         for rel in [
             "a.dat_tmp",
-            "config.ini.girpr_tmp",
+            config_temp,
             "x.hdiff",
             "chunk/abc123",
             "ldiff/p1",
