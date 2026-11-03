@@ -40,7 +40,7 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use girpr_log::{Level, LogOptions, LogPlan};
 use tracing_subscriber::fmt::MakeWriter;
@@ -64,11 +64,15 @@ const FILE_BUFFER_CAPACITY: usize = 64 * 1024;
 /// because buffering nothing buys nothing.
 type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
 
-/// The sink [`flush_log`] reaches, set once by [`init_tracing`].
+/// The sinks [`flush_log`] reaches, in install order, appended by
+/// [`init_tracing`].
 ///
-/// `None` until logging is installed, which is what makes [`flush_log`] safe on
-/// a path that never got that far.
-static FILE_SINK: OnceLock<FileSink> = OnceLock::new();
+/// Empty until logging is installed, which is what makes [`flush_log`] safe on
+/// a path that never got that far. Every install is kept rather than only the
+/// first: the global subscriber can be installed once, but a later call still
+/// opened a file the caller asked for, and an unflushable handle would silently
+/// drop that file's tail.
+static FILE_SINKS: Mutex<Vec<FileSink>> = Mutex::new(Vec::new());
 
 /// A `MakeWriter` that hands `tracing` the shared file sink.
 struct SharedWriter(FileSink);
@@ -164,7 +168,7 @@ pub fn init_tracing(
     }));
     // The subscriber owns one handle; `flush_log` owns the other, so the tail
     // can still be written after the subscriber has no more events to render.
-    let _ = FILE_SINK.set(Arc::clone(&file_writer));
+    install_sink(Arc::clone(&file_writer));
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(SharedWriter(file_writer))
         .with_ansi(false)
@@ -190,27 +194,48 @@ pub fn init_tracing(
     plan
 }
 
+/// Register a sink so [`flush_log`] reaches it.
+fn install_sink(sink: FileSink) {
+    FILE_SINKS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(sink);
+}
+
 /// Flush the log file on the way out.
 ///
 /// The file is the record of the run, so the caller flushes it explicitly on
 /// every path after [`init_tracing`] rather than trusting a `Drop` that an
 /// abrupt exit would skip. For a buffered file this is what pushes the last
-/// records out of the buffer; for the sink it is a no-op. It is safe when no
-/// file was opened and when logging was never installed, in which case there is
-/// nothing to flush.
+/// records out of the buffer; for the sink it is a no-op. Every sink an install
+/// registered is flushed, not only the first. It is safe when no file was
+/// opened and when logging was never installed, in which case there is nothing
+/// to flush.
 ///
 /// A flush failure is reported once on stderr and never changes the exit code:
 /// the run already earned its code before the log was written down.
 pub fn flush_log() {
-    let Some(sink) = FILE_SINK.get() else {
-        return;
-    };
-    if let Err(e) = flush_sink(sink) {
+    let sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(e) = flush_sinks(&sinks) {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             eprintln!("WARN cannot flush the log file: {e}");
         }
     }
+}
+
+/// Flush every sink, returning the first failure.
+///
+/// Every sink is visited even after one fails: one broken file does not excuse
+/// another from being written out.
+fn flush_sinks(sinks: &[FileSink]) -> Option<std::io::Error> {
+    let mut first = None;
+    for sink in sinks {
+        if let Err(e) = flush_sink(sink) {
+            first.get_or_insert(e);
+        }
+    }
+    first
 }
 
 fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
@@ -257,6 +282,25 @@ mod tests {
         }
     }
 
+    /// A writer whose flush always fails.
+    struct FailingFlush;
+
+    impl Write for FailingFlush {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("disk full"))
+        }
+    }
+
+    fn recording_sink(flushes: &Arc<AtomicUsize>) -> FileSink {
+        Arc::new(Mutex::new(Box::new(FlushRecorder {
+            flushes: Arc::clone(flushes),
+        }) as Box<dyn Write + Send + Sync>))
+    }
+
     #[test]
     fn the_default_file_is_named_for_the_project() {
         let path = default_log_path();
@@ -301,18 +345,30 @@ mod tests {
     }
 
     #[test]
-    fn flush_log_reaches_the_installed_writer_exactly_once() {
+    fn the_flush_reaches_every_sink_exactly_once() {
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let sinks = vec![recording_sink(&first), recording_sink(&second)];
+
+        assert!(flush_sinks(&sinks).is_none());
+
+        assert_eq!(first.load(Ordering::Relaxed), 1);
+        assert_eq!(second.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_failed_flush_does_not_skip_the_remaining_sinks() {
         let flushes = Arc::new(AtomicUsize::new(0));
-        let sink: FileSink = Arc::new(Mutex::new(Box::new(FlushRecorder {
-            flushes: Arc::clone(&flushes),
-        })));
-        assert!(
-            FILE_SINK.set(sink).is_ok(),
-            "no other test installs the log sink"
-        );
+        let sinks = vec![
+            Arc::new(Mutex::new(
+                Box::new(FailingFlush) as Box<dyn Write + Send + Sync>
+            )),
+            recording_sink(&flushes),
+        ];
 
-        flush_log();
+        let error = flush_sinks(&sinks).expect("the first sink fails");
 
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
         assert_eq!(flushes.load(Ordering::Relaxed), 1);
     }
 }
