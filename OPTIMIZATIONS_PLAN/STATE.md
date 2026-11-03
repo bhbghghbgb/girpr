@@ -307,7 +307,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-01 | F19, F21, F23, F52 | done | Wave B; check-phase progress, totals, panic verdict; high; 3468022, d919207 |
 | REPORT-API-01 | F42, F43, F48, F83 | done | Wave B; report type visibility and construction; medium; 1cd5039, 3080e19, e23a64f |
 | PHASE-01 | F114, F115 | done | Wave B; phase-timer coverage and error-path logging; low; fa568fd, 3539316 |
-| TEST-MANIFEST-01 | F18, F110 | in_progress | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium |
+| TEST-MANIFEST-01 | F18, F110 | pending_review | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium; a45f32b, 25b95b2 |
 | ATOMIC-01 | F11, F60, F65, F66 | todo | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low |
 | PLANID-01 | F56, F57, F58, F59 | todo | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high |
 | EXIT-01 | F85, F86, F87 | todo | Wave C, after CHECK-01; named exit-code API and prose; medium |
