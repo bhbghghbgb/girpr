@@ -137,7 +137,7 @@ until the main tasks and rework are done.
 | F36 | RC-07 review | `src/repair/lock.rs` | The temp lock is opened by name and truncated; a pre-created symlink could truncate a user file. | completed |
 | F37 | RC-07 review | `src/repair/lock.rs` | `key_for` hashes `to_string_lossy()`; distinct non-UTF-8 paths can collide. | completed |
 | F38 | RC-07 review | `src/repair/purge.rs`, `docs/01-03` | Comments and docs still describe the in-install `girpr.lock` and keep-set wording. | todo |
-| F39 | RC-07 review | `README.md`, `Cargo.toml` | README claims Rust 1.85+, but `File::try_lock` needs 1.89; no `rust-version` pin. | todo |
+| F39 | RC-07 review | `README.md`, `Cargo.toml` | README claims Rust 1.85+, but `File::try_lock` needs 1.89; no `rust-version` pin. | completed |
 | F40 | RC-07 review | `src/cli.rs` | `excessive_jobs_warning` says workers can fall below file tasks, but the runtime is sized to `max(parallelism, jobs+1)`. | completed |
 | F41 | RC-07 review | `src/main.rs`, `src/repair/**`, `tools/sync`, `docs/02-06` | Stale `--io-threads` prose remains after the `--jobs` rename. | todo |
 | F42 | RC-07 review | `src/lib.rs` | `test_support` re-exports `stream_chunk_to` beyond the task's list and duplicates root items; document the seam. | todo |
@@ -190,8 +190,8 @@ until the main tasks and rework are done.
 | F89 | T37 implementer | `Cargo.toml` | `reqwest` unifies tokio's `net`/`fs`/`io-util`/`sync` into any build; reqwest's own surface, not removable here. | dropped (superseded by F106) |
 | F90 | T38 implementer | `src/util/ini.rs` | The old pattern's `\s*` could match a newline; the hand-written line scan intentionally does not, and nothing depends on it. | dropped (intentional difference; nothing depends on the old behavior) |
 | F91 | T38 implementer | `src/util/ini.rs` | `read_game_version` and `parse_ini` share the "first `=`" rule without a common helper. | completed |
-| F92 | T39 implementer | `Cargo.toml` | `futures-util` defaults pull `futures-macro` and `slab`; a `std`-only feature set could shrink the graph. | todo |
-| F93 | T39 implementer | `src/sophon/stream.rs` | The `Stream` bound names `futures-core` directly; `futures_util::stream::Stream` would be the same trait. | todo |
+| F92 | T39 implementer | `Cargo.toml` | `futures-util` defaults pull `futures-macro` and `slab`; a `std`-only feature set could shrink the graph. | completed |
+| F93 | T39 implementer | `src/sophon/stream.rs` | The `Stream` bound names `futures-core` directly; `futures_util::stream::Stream` would be the same trait. | completed |
 | F94 | T40 implementer | repo | No CI exists; a future CI job must run `cargo check -p girsync -p gircap` or a workspace job. | dropped (repository has no CI system) |
 | F95 | T40 implementer | `README.md` | The nextest note hard-codes a test count ("362 tests") that is now 470 and drifts; de-number it. | todo |
 | F96 | T41 implementer | `Cargo.toml` | Release builds strip symbols; crash triage may want `strip = "debuginfo"` or a separate profile. | dropped (crash-triage symbol needs are hypothetical) |
@@ -204,8 +204,8 @@ until the main tasks and rework are done.
 | F103 | RC-09 review | `src/repair/purge.rs` | `mark_kept_ancestors` allocates one `PathBuf` per newly marked ancestor. | todo |
 | F104 | RC-09 review | `src/util/path.rs` | The T26 skip rests on a one-off measurement with no retained harness to re-check on other installs. | dropped (the decision is recorded; a retained harness for a skipped change is not warranted) |
 | F105 | RC-09 review | `src/logging.rs`, docs | Buffering delays external `tail -f` by up to 64 KiB; worth stating if log streaming is supported. | todo |
-| F106 | RC-16 review | `Cargo.toml` | The tokio comment promises a saving `reqwest` already spends; reword to the real one (dropping `process`/`signal`, dev-only `test-util`). | todo |
-| F107 | RC-16 review | tests/benchmarks | The MD5 throughput claim has no committed reproduction; add a small `#[ignore]`d benchmark or script. | todo |
+| F106 | RC-16 review | `Cargo.toml` | The tokio comment promises a saving `reqwest` already spends; reword to the real one (dropping `process`/`signal`, dev-only `test-util`). | completed |
+| F107 | RC-16 review | tests/benchmarks | The MD5 throughput claim has no committed reproduction; add a small `#[ignore]`d benchmark or script. | completed |
 | F108 | RC-16 review | `tests/common/mod.rs`, `tests/artifact_bridge/server.rs`, `tests/peak_heap.rs` | The same `md5_hex` loop is duplicated three times; one shared helper would do. | todo |
 | F109 | RC-16 review | `tools/sync`, `tools/capture` | The dev tools stay outside the lint policy; consider a tools-only lint check when next touched. | todo |
 | F110 | T44 implementer | `tests/repair_offline.rs`, `tests/common/mod.rs` | Manifest ordering is pinned only at module level; a binary-level case needs a fixture that fails one selected manifest. | todo |
@@ -249,6 +249,9 @@ until the main tasks and rework are done.
 | F148 | INI-01 review | `src/util/ini.rs` | The refusal says "does not exist" even when the path exists as a non-directory. | todo |
 | F149 | INI-01 review | `tests/` | No CLI-level case for the game dir vanishing between `prepare_install` and the post-phase bump. | todo |
 | F150 | INI-01 review | `src/util/ini.rs` | `split_first_eq` is a thin wrapper over `split_once`; keep it only while the shared rule earns its name. | todo |
+| F151 | BUILD-01 review | `Cargo.toml` (members) | Only `girpr` carries `rust-version`; `tools/*` and `crates/*` have none, so the workspace MSRV error names redb. | todo |
+| F152 | BUILD-01 review | `src/repair/scan.rs` | The MD5 benchmark covers whole-file hashing but not the dominant `scan_file`/`scan_reader` read path. | todo |
+| F153 | BUILD-01 review | `src/sophon/stream.rs` | Two adjacent `use futures_util::...` lines could be one brace import. | todo |
 
 ## Follow-up batches
 
@@ -266,7 +269,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-01 | F49, F54, F55 | done | Wave A; log flush lifecycle and tests; low; c42e863, 3e426bc |
 | LOCK-01 | F35, F36, F37, F45 | done | Wave A; lock safety, key hashing, holder diagnostics; high; 6cc5d97, 8083753, 2c02ef5, 9642547, a653c9c, a093aa4, 12d4201 |
 | INI-01 | F61, F91 | done | Wave A; config-ini write contract and first-`=` helper; medium; 66e0f30, 0916dc2 |
-| BUILD-01 | F39, F92, F93, F106, F107 | pending_review | Wave A; dependency truth, toolchain pin, MD5 benchmark; low; 279c241, 7465081, c97827f, 8d38c6b, bf504df, f2bd9a6 |
+| BUILD-01 | F39, F92, F93, F106, F107 | done | Wave A; dependency truth, toolchain pin, MD5 benchmark; low; 279c241, 7465081, c97827f, 8d38c6b, bf504df, f2bd9a6 |
 | BUILD-TOOLS-01 | F88, F99 | todo | Wave A; dev-tool dependency narrowing; medium |
 | TEST-HELPERS-01 | F108 | todo | Wave A; one shared `md5_hex` test helper; low |
 | LINT-01 | F97, F109 | todo | Wave A, after BUILD-TOOLS-01; central test-lint policy; low |
@@ -296,6 +299,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-02 | F142, F143, F144 | todo | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low |
 | LOCK-02 | F145, F146, F147 | todo | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium |
 | INI-02 | F148, F149, F150 | todo | Wave D; ini refusal wording, external-race coverage and helper scope; low |
+| BUILD-02 | F151, F152, F153 | todo | Wave D; per-member MSRV, scan-path benchmark and import tidy; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
