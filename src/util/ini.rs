@@ -473,6 +473,7 @@ fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::path::temp_sibling;
     use std::collections::HashSet;
 
     #[test]
@@ -978,6 +979,38 @@ mod tests {
             "the refusal names the missing game dir: {err:#}"
         );
         assert!(!missing.exists(), "the writer must not create the game dir");
+    }
+
+    /// An accepted config write and a failed one both leave no temp sibling:
+    /// the shared temp name is the only place this writer creates one, and
+    /// publishing always renames it away or removes it.
+    #[test]
+    fn config_writes_leave_no_temp_sibling() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "no_temp_sibling");
+        let path = dir.join("config.ini");
+        let tmp = temp_sibling(&path);
+
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
+        assert!(path.is_file(), "the accepted write publishes config.ini");
+        assert!(
+            !tmp.exists(),
+            "an accepted write renames the temp away instead of leaving it"
+        );
+
+        // A directory at the target makes the publish rename fail after the
+        // temp was written; the failure cleanup removes it.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = publish_ini(&path, b"[General]\n").unwrap_err();
+        assert!(format!("{err:#}").contains("publish"), "{err:#}");
+        assert!(
+            path.is_dir(),
+            "the failed publish leaves the target untouched"
+        );
+        assert!(
+            !tmp.exists(),
+            "a failed write removes the temp instead of leaving it"
+        );
     }
 
     /// Both readers take the first `=`. `parse_ini` keeps its raw key/value
