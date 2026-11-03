@@ -295,16 +295,14 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
     classify_deprecated(std::fs::metadata(path))
 }
 
-/// Suffix appended to the destination file name to form the copy's temp
-/// sibling. The whole name is kept, so the real extension survives.
-const PUBLISH_TMP_SUFFIX: &str = ".girpr_tmp";
-
 /// Copy `src` to `target` without ever publishing a partial file.
 ///
 /// The bytes go to a temp sibling in the destination directory (same volume, so
 /// the publish is a rename, not another copy), and only a complete temp file is
-/// renamed over `target`. On any failure the temp sibling is removed, `target`
-/// is left exactly as it was, and the caller keeps `src`.
+/// renamed over `target`. [`util::path::temp_sibling`] names that sibling, so
+/// this writer and the other atomic publishes agree on the whole-name rule. On
+/// any failure the temp sibling is removed, `target` is left exactly as it was,
+/// and the caller keeps `src`.
 ///
 /// The caller creates the destination directory and removes `src` only after
 /// this returns `Ok`.
@@ -313,15 +311,16 @@ fn copy_publish_with(
     target: &Path,
     copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
 ) -> std::io::Result<()> {
-    let Some(name) = target.file_name() else {
+    // `temp_sibling` would name a sibling even for a path that has no file
+    // name, so keep the explicit refusal rather than publishing under a
+    // different name.
+    if target.file_name().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "audio cache destination has no file name",
         ));
-    };
-    let mut tmp_name = name.to_os_string();
-    tmp_name.push(PUBLISH_TMP_SUFFIX);
-    let tmp = target.with_file_name(tmp_name);
+    }
+    let tmp = util::path::temp_sibling(target);
     if let Err(e) = copy(src, &tmp) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
