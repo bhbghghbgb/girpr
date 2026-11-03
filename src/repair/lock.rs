@@ -113,15 +113,45 @@ fn lock_path(game_dir: &Path) -> PathBuf {
 }
 
 /// A stable key for a canonical path.
+///
+/// The lossy spelling keeps every key for a valid UTF-8 path exactly as it was,
+/// which matters because the key names a lock file that may already exist.
+/// `to_string_lossy` replaces invalid bytes and unpaired surrogates, though, so
+/// distinct non-Unicode paths can share a spelling. For those paths only, the
+/// raw encoding is mixed in after a separator: it is injective, so the keys
+/// differ, while valid UTF-8 paths keep their old key.
 fn key_for(path: &Path) -> u64 {
     let mut key = FNV_OFFSET;
     for byte in path.as_os_str().to_string_lossy().bytes() {
+        key = fnv_step(key, byte);
+    }
+    if path.to_str().is_none() {
+        key = fnv_step(key, 0xff);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            for &byte in path.as_os_str().as_bytes() {
+                key = fnv_step(key, byte);
+            }
+        }
         #[cfg(windows)]
-        let byte = byte.to_ascii_lowercase();
-        key ^= u64::from(byte);
-        key = key.wrapping_mul(FNV_PRIME);
+        {
+            use std::os::windows::ffi::OsStrExt;
+            for unit in path.as_os_str().encode_wide() {
+                key = fnv_step(key, (unit & 0xff) as u8);
+                key = fnv_step(key, (unit >> 8) as u8);
+            }
+        }
     }
     key
+}
+
+/// One FNV-1a step, with ASCII case folded on Windows because its filesystem
+/// is case-insensitive for ASCII.
+fn fnv_step(key: u64, byte: u8) -> u64 {
+    #[cfg(windows)]
+    let byte = byte.to_ascii_lowercase();
+    (key ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
 }
 
 impl Drop for Lock {
@@ -394,5 +424,60 @@ mod tests {
             key_for(Path::new(r"C:\Game")),
             key_for(Path::new(r"D:\Game"))
         );
+    }
+
+    /// The hash of the lossy spelling alone: the key every valid UTF-8 path
+    /// had before raw bytes were mixed in for non-Unicode paths.
+    fn lossy_key(path: &Path) -> u64 {
+        let mut key = FNV_OFFSET;
+        for byte in path.as_os_str().to_string_lossy().bytes() {
+            key = fnv_step(key, byte);
+        }
+        key
+    }
+
+    #[test]
+    fn utf8_paths_keep_their_existing_key() {
+        for path in [
+            Path::new("/tmp/girpr game"),
+            Path::new("/tmp/jeu d'ete"),
+            Path::new(r"C:\Games\Jeu d'ete"),
+        ] {
+            assert_eq!(
+                key_for(path),
+                lossy_key(path),
+                "a valid UTF-8 path keeps its key: {}",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn distinct_non_utf8_paths_do_not_share_a_key() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let one = Path::new(OsStr::from_bytes(b"/tmp/game-\x80"));
+        let two = Path::new(OsStr::from_bytes(b"/tmp/game-\x81"));
+        assert_eq!(one.to_string_lossy(), two.to_string_lossy());
+        assert_ne!(key_for(one), key_for(two));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn distinct_non_utf16_paths_do_not_share_a_key() {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        let weird = |unit: u16| {
+            let mut wide: Vec<u16> = r"C:\game".encode_utf16().collect();
+            wide.push(unit);
+            PathBuf::from(OsString::from_wide(&wide))
+        };
+        let one = weird(0xd800);
+        let two = weird(0xd801);
+        assert_eq!(one.to_string_lossy(), two.to_string_lossy());
+        assert_ne!(key_for(&one), key_for(&two));
     }
 }
