@@ -396,6 +396,7 @@ cargo check -p girsync -p gircap # the dev tools, which a root command does not 
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
 cargo clippy -p girpr --all-targets -- -D warnings
+cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
@@ -413,13 +414,32 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throu
 
 - **One lint policy for the product and its shared policy crates.** The root
   `Cargo.toml` holds `[workspace.lints]`; `girpr`, `girpr-log` and
-  `girpr-tempdir` opt in with `[lints] workspace = true`. The two dev tools
-  (`gircap`, `girsync`) keep their own settings. `clippy::all` and the
+  `girpr-tempdir` opt in with `[lints] workspace = true`. `clippy::all` and the
   `unwrap_used`/`expect_used` pair warn; `unsafe_code` is denied, with the
   counting allocator in `tests/peak_heap.rs` the one explicit test-only
   exception. Test code may `unwrap`/`expect` — those are assertions, and the
   lint is about the paths a user runs. Nothing denies warnings at the crate
   level: CI, or the command above, is free to add `-D warnings`.
+
+  Test allowances stay in the code, not in `clippy.toml`: on the toolchain this
+  workspace builds with (clippy 0.1.99 / rustc 1.99.1) the
+  `allow-unwrap-in-tests` and `allow-expect-in-tests` options are accepted and
+  then ignored, for unit-test and integration-test targets alike (the same
+  happens to `allow-unwrap-in-consts`). So `#[cfg_attr(test, allow(...))]` on a
+  crate root covers its unit tests, and each integration test file (a test
+  target of its own) carries one crate-level `allow`; those are as narrow as
+  the mechanism gets. Re-test the options before moving these allows to a
+  config file.
+
+- **The two dev tools opt into a smaller lint subset.** `girsync` and `gircap`
+  set `[lints.rust] unsafe_code = "deny"` and `[lints.clippy] all = "warn"`
+  themselves instead of inheriting the workspace table, and the command above
+  checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
+  deliberately absent: for a repair run a panic is a failed run, while for a
+  dev tool it is a failed developer run, and those paths may assert. The one
+  deliberate `unsafe` is the Windows handle call in `tools/sync/src/hardlink.rs`,
+  annotated at its item; the test that sets an environment variable in
+  `tools/sync/tests/cli_dispatch.rs` carries the same narrow annotation.
 
 - **`cargo nextest run` is not `cargo test`.** It runs each test in its own
   process, which is what makes the suite's isolation real rather than
