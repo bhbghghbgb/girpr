@@ -218,9 +218,7 @@ pub fn flush_log() {
     let sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(e) = flush_sinks(&sinks) {
         static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            eprintln!("WARN cannot flush the log file: {e}");
-        }
+        report_flush_failure(&e, &REPORTED, &mut std::io::stderr());
     }
 }
 
@@ -240,6 +238,14 @@ fn flush_sinks(sinks: &[FileSink]) -> Option<std::io::Error> {
 
 fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
     sink.lock().unwrap_or_else(|e| e.into_inner()).flush()
+}
+
+/// Report a flush failure at most once, without letting the report itself fail
+/// the run.
+fn report_flush_failure(error: &std::io::Error, reported: &AtomicBool, stderr: &mut dyn Write) {
+    if !reported.swap(true, Ordering::Relaxed) {
+        let _ = writeln!(stderr, "WARN cannot flush the log file: {error}");
+    }
 }
 
 /// Open the log file for appending, creating the parent directory if needed.
@@ -370,5 +376,23 @@ mod tests {
 
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
         assert_eq!(flushes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_flush_failure_is_reported_once() {
+        let reported = AtomicBool::new(false);
+        let error = std::io::Error::other("disk full");
+        let mut stderr = Vec::new();
+
+        report_flush_failure(&error, &reported, &mut stderr);
+        report_flush_failure(&error, &reported, &mut stderr);
+
+        let message = String::from_utf8(stderr).expect("the report is utf-8");
+        assert_eq!(
+            message.matches("WARN cannot flush the log file").count(),
+            1,
+            "{message}"
+        );
+        assert!(message.contains("disk full"), "{message}");
     }
 }
