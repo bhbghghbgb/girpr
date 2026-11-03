@@ -824,14 +824,43 @@ mod tests {
         std::fs::write(&path, previous).unwrap();
         // A directory where the temp would go makes the write fail before the
         // target is touched.
-        std::fs::create_dir(dir.join("plan.json.girpr_tmp")).unwrap();
+        let tmp = crate::util::path::temp_sibling(&path);
+        std::fs::create_dir(&tmp).unwrap();
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
-        doc.write_to(&path).unwrap_err();
+        let mut failed = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            failed = Some(doc.write_to(&path).unwrap_err());
+        });
+        failed.expect("the write must fail");
         assert_eq!(
             std::fs::read(&path).unwrap(),
             previous.as_slice(),
             "the target keeps its old contents when the write fails"
+        );
+        assert!(
+            logs.contains("could not remove the temp file after a failed publish"),
+            "a directory at the temp path cannot be removed; the cleanup is warned: {logs}"
+        );
+    }
+
+    /// A target with no file name still reaches the shared temp-name fallback:
+    /// writing beside it fails, but nothing is published and no temp is left at
+    /// the fallback name.
+    #[test]
+    fn a_target_without_a_file_name_publishes_nothing_and_leaves_no_temp() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "no_file_name");
+        let path = dir.join("..");
+        assert!(path.file_name().is_none(), "the fixture names no file");
+        let tmp = crate::util::path::temp_sibling(&path);
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let err = doc.write_to(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("publish"), "{err:#}");
+        assert!(path.is_dir(), "the directory target is untouched");
+        assert!(
+            !tmp.exists(),
+            "the fallback temp is cleaned up when the publish fails"
         );
     }
 
