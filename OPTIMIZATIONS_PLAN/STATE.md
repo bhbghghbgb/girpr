@@ -311,7 +311,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | REPORT-API-01 | F42, F43, F48, F83 | done | Wave B; report type visibility and construction; medium; 1cd5039, 3080e19, e23a64f |
 | PHASE-01 | F114, F115 | done | Wave B; phase-timer coverage and error-path logging; low; fa568fd, 3539316 |
 | TEST-MANIFEST-01 | F18, F110 | done | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium; a45f32b, 25b95b2 |
-| ATOMIC-01 | F11, F60, F65, F66 | in_progress | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low |
+| ATOMIC-01 | F11, F60, F65, F66 | pending_review | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low; 1711f38, a673fb7, a90d7c7 |
 | PLANID-01 | F56, F57, F58, F59 | todo | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high |
 | EXIT-01 | F85, F86, F87 | todo | Wave C, after CHECK-01; named exit-code API and prose; medium |
 | DRYRUN-01 | F46, F47, F51, F73 | todo | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high |
