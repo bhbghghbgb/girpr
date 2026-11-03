@@ -1,5 +1,6 @@
 use anyhow::Result;
 use futures_util::StreamExt;
+use futures_util::stream::Stream;
 use md5::Digest;
 use prost::Message;
 use std::io::Write;
@@ -477,7 +478,7 @@ async fn stream_body<S, B, E>(
     sink: &mut impl ChunkSink,
 ) -> Result<ChunkDigest, StreamFailure>
 where
-    S: futures_core::Stream<Item = Result<B, E>> + Unpin,
+    S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
     E: std::fmt::Display,
 {
