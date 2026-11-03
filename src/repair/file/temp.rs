@@ -335,7 +335,6 @@ fn try_reuse_slice(call: &mut ReuseCall<'_>) -> Result<ChunkOutcome> {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
         return Ok(ChunkOutcome::Resumed);
     }
-    call.out.seek(SeekFrom::Start(c.offset as u64))?;
 
     let candidate = call.reuse_entries.and_then(|reuse| reuse.get(c));
     let Some(entry) = candidate else {
@@ -383,6 +382,10 @@ fn try_reuse_slice(call: &mut ReuseCall<'_>) -> Result<ChunkOutcome> {
         tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
         return Ok(ChunkOutcome::Download);
     }
+    // Position the sink only on the copy path. The download path does not need
+    // it: `write_downloaded_chunk` builds a `ChunkFileSink`, whose constructor
+    // seeks this same file to the chunk's offset before the stream starts.
+    call.out.seek(SeekFrom::Start(c.offset as u64))?;
     let mut remaining = c.uncompressed_size as u64;
     let buf = scratch_slice(&mut *call.scratch, COPY_BUF);
     while remaining > 0 {
@@ -893,7 +896,7 @@ mod tests {
         let src = dir.join("never-written.bin");
         let md5 = "d41d8cd98f00b204e9800998ecf8427e";
         let reuse = reuse_at(md5, 4, 8);
-        let c = chunk_at("c0", md5, 0, 4);
+        let c = chunk_at("c0", md5, 4, 4);
         let mut out = temp_out(&dir.join("out.bin"));
         let ctx = test_ctx();
         let mut scratch = Vec::new();
@@ -916,6 +919,11 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, ChunkOutcome::Download));
         assert!(handle.is_none(), "a failed open leaves no handle behind");
+        assert_eq!(
+            out.stream_position().unwrap(),
+            0,
+            "the download path leaves the sink unpositioned; the streaming sink places it"
+        );
     }
 
     /// Resume-by-length reads the tracked counter, so a chunk the failed
