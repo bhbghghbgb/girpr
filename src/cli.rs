@@ -325,15 +325,18 @@ impl Args {
 /// The warning for a file window wider than the host's parallelism.
 ///
 /// `--jobs` bounds in-flight file tasks, not worker threads: each file task
-/// does synchronous disk I/O, so admitting more tasks than the host can run at
-/// once can starve timers and network polling. It is a warning rather than a
-/// refusal because an oversized window can still be a deliberate choice.
+/// does synchronous disk I/O, so admitting more tasks than logical CPUs can
+/// contend for the disk without adding throughput. The runtime itself is sized
+/// to `max(parallelism, jobs + 1)`, so it keeps a worker free for timers and
+/// network polling; this warning is about oversubscription, not starvation. It
+/// is a warning rather than a refusal because an oversized window can still be
+/// a deliberate choice.
 fn excessive_jobs_warning(jobs: usize, available: usize) -> Option<String> {
     (jobs > available).then(|| {
         format!(
-            "--jobs {jobs} exceeds the {available} available workers; more file tasks than \
-             workers can starve timers and network polling. --jobs bounds concurrent files, \
-             not worker threads"
+            "--jobs {jobs} exceeds the host's {available} logical CPUs; file tasks do blocking \
+             disk I/O, so a wider window than the CPU count can contend for the disk without \
+             adding throughput. --jobs bounds concurrent files, not worker threads"
         )
     })
 }
@@ -501,10 +504,17 @@ mod tests {
     #[test]
     fn an_oversized_file_window_warns_but_still_runs() {
         assert_eq!(excessive_jobs_warning(4, 4), None);
-        let warning = excessive_jobs_warning(8, 4).expect("8 files on 4 workers warns");
+        let warning = excessive_jobs_warning(8, 4).expect("8 files on 4 CPUs warns");
         assert!(warning.contains("--jobs 8"), "{warning}");
-        assert!(warning.contains("4 available workers"), "{warning}");
+        assert!(warning.contains("4 logical CPUs"), "{warning}");
         assert!(warning.contains("not worker threads"), "{warning}");
+        // The runtime is sized to `max(parallelism, jobs + 1)`, so a file task
+        // never outnumbers a worker; the warning is about CPU oversubscription.
+        assert!(
+            !warning.contains("more file tasks than workers"),
+            "the warning must not claim the runtime has fewer workers than the file window: \
+             {warning}"
+        );
 
         let args = Args::parse_from([
             "girpr",

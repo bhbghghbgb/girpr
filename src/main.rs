@@ -176,6 +176,19 @@ mod tests {
     }
 
     #[test]
+    fn the_runtime_keeps_a_worker_beyond_every_file_window() {
+        // The oversized-window warning is about CPU oversubscription, not about
+        // the runtime running out of workers: `jobs + 1` is always one more,
+        // even on a single-CPU host.
+        for jobs in [1, 4, 8, 1000] {
+            assert!(
+                worker_threads(1, jobs) > jobs,
+                "{jobs} files must leave a worker for timers and network polling"
+            );
+        }
+    }
+
+    #[test]
     fn the_documented_exit_codes_reach_the_process_unchanged() {
         for code in 0..=5 {
             assert_eq!(exit_code(code), ExitCode::from(code as u8));
