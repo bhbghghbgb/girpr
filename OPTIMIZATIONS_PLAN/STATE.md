@@ -117,11 +117,11 @@ until the main tasks and rework are done.
 | F16 | RC-03 review | `src/repair/phases/manifest.rs` | A fast failure still waits for slower siblings; reorder incrementally and cancel the rest. | completed |
 | F17 | T08 implementer | `src/repair/phases/metadata.rs` | Blocking local reads are dropped unawaited on early return; drain them for stricter lifetime hygiene. | completed |
 | F18 | T09 implementer | `tests/common` | The mock models a single latest manifest; multi-manifest integration coverage needs fixture work. | todo |
-| F19 | RC-04 review | `src/repair/phases/check.rs` | `--check-only` emits progress only after the whole verify pass; a ticker should keep it live. | todo |
+| F19 | RC-04 review | `src/repair/phases/check.rs` | `--check-only` emits progress only after the whole verify pass; a ticker should keep it live. | completed |
 | F20 | RC-04 review | `src/repair/phases/post.rs`, `src/repair/purge.rs` | `delete_deprecated` and `apply_purge` still run synchronous filesystem loops on async workers. | todo |
-| F21 | RC-04 review | `src/repair/phases/check.rs` | A panicking check task becomes a damaged-file verdict instead of failing the run, unlike purging. | todo |
+| F21 | RC-04 review | `src/repair/phases/check.rs` | A panicking check task becomes a damaged-file verdict instead of failing the run, unlike purging. | completed |
 | F22 | RC-04 review | `src/main.rs`, `src/cli.rs` | A huge `--io-threads` now fails runtime construction rather than clamping; validate the flag. | completed |
-| F23 | T10 implementer | `src/repair/phases/check.rs` | The damaged-chunk total from check is only logged, not carried on `Summary`. | todo |
+| F23 | T10 implementer | `src/repair/phases/check.rs` | The damaged-chunk total from check is only logged, not carried on `Summary`. | completed |
 | F24 | RC-05 review | `src/util/md5.rs` | `scan_reader`/`Scan.file_md5` return hex that callers re-parse; carry `Md5` instead. | todo |
 | F25 | RC-05 review | `src/repair/file/temp.rs` tests | The rollback resume-point test sets `tmp_len` by hand; the caller's update is not exercised end-to-end. | completed |
 | F26 | RC-05 review | `src/repair/file/temp.rs` | The sink's seek-failure refund path has no test seam. | completed |
@@ -150,7 +150,7 @@ until the main tasks and rework are done.
 | F49 | RC-08 review | `src/logging.rs` tests | A flush test asserts it is the only setter of the global sink; fragile if another test installs tracing. | completed |
 | F50 | T20 implementer | `src/repair/phases/post.rs` | A dry run now does a second purge walk plus the audio walk, adding I/O and network work. | dropped (the extra walks are the intended cost of exercising the post-phase) |
 | F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | todo |
-| F52 | T21 implementer | `src/repair/phases/check.rs` | Check-only counters are folded after `collect`, so the ticker may report `done=0` mid-phase. | todo |
+| F52 | T21 implementer | `src/repair/phases/check.rs` | Check-only counters are folded after `collect`, so the ticker may report `done=0` mid-phase. | completed |
 | F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | todo |
 | F54 | T22 implementer | `src/logging.rs` | The flush handle is a `OnceLock` for the first sink only; a second `init_tracing` is unflushable. | completed |
 | F55 | T22 implementer | `src/logging.rs` | The flush-failure stderr branch has no test (stderr capture is process-level). | completed |
@@ -271,6 +271,10 @@ until the main tasks and rework are done.
 | F170 | INPLACE-01 review | `src/repair/file/inplace.rs` | The natural evasion window is narrower than the forced test suggests; the recorded mtime must share the coarse tick with the post-scan rewrite. | todo |
 | F171 | INPLACE-01 review | `src/repair/file/inplace.rs` | `trim_is_free` uses `is_none_or`, so an overflowing `r + s` would read as inside the target if the offset type ever widens. | todo |
 | F172 | INPLACE-01 review | `src/repair/file/inplace.rs` | `reusable_verdict` stats the path instead of the open handle, so a replacement between open and stat is not detected. | todo |
+| F173 | CHECK-01 review | `src/repair/phases/check.rs` | The live-progress test observes the fold by a bounded `yield_now` spin; a oneshot/watch would remove the timing assumption. | todo |
+| F174 | CHECK-01 review | `src/report/summary.rs` | `check_damaged_chunks` is 0 both for "no damage" and "never measured"; an `Option` accessor would disambiguate. | todo |
+| F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | todo |
+| F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | todo |
 
 ## Follow-up batches
 
@@ -295,7 +299,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-01 | F25, F26, F27, F28, F30 | done | Wave B; temp writer rollback, refunds, docs, seek; medium; a98d906, 5e55c8f, 470cad9, beaf64d, 6fc928a |
 | TEMP-PUBLISH-01 | F05, F06, F09, F12 | done | Wave B; temp-sibling publish of audio and plan files; medium; 8485d11, 3f232f3, 1a6e4e6, 2fb2e21 |
 | INPLACE-01 | F29, F33, F34, F70, F79 | done | Wave B; in-place reuse accuracy and guards; medium; e7b963d, 7dd2316, 4f49e07, 0c3cea4, 13d5335 |
-| CHECK-01 | F19, F21, F23, F52 | pending_review | Wave B; check-phase progress, totals, panic verdict; high; 3468022, d919207 |
+| CHECK-01 | F19, F21, F23, F52 | done | Wave B; check-phase progress, totals, panic verdict; high; 3468022, d919207 |
 | REPORT-API-01 | F42, F43, F48, F83 | todo | Wave B; report type visibility and construction; medium |
 | PHASE-01 | F114, F115 | todo | Wave B; phase-timer coverage and error-path logging; low |
 | TEST-MANIFEST-01 | F18, F110 | todo | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium |
@@ -325,6 +329,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | todo | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
 | INPLACE-02 | F169, F170, F171, F172 | todo | Wave D; coarse-mtime skip-path hardening and guard robustness; medium |
+| CHECK-02 | F173, F174, F175, F176 | todo | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
