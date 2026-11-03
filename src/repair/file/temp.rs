@@ -287,8 +287,9 @@ struct ReuseCall<'a> {
 }
 
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
-/// `false` when there is no candidate or the slice does not verify, so the
-/// caller falls back to downloading.
+/// [`ChunkOutcome::Reused`] when the copy lands, and
+/// [`ChunkOutcome::Download`] when there is no candidate or the slice does not
+/// verify, so the caller falls back to downloading.
 ///
 /// V1-SIMPLIFICATION (S2, see README): same-file-only reuse. Starward maps each
 /// chunk to any local file via `OriginalFileFullPath/Offset` (cross-file dedup);
