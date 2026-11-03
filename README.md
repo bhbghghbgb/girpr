@@ -421,15 +421,15 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throu
   lint is about the paths a user runs. Nothing denies warnings at the crate
   level: CI, or the command above, is free to add `-D warnings`.
 
-  Test allowances stay in the code, not in `clippy.toml`: on the toolchain this
-  workspace builds with (clippy 0.1.99 / rustc 1.99.1) the
-  `allow-unwrap-in-tests` and `allow-expect-in-tests` options are accepted and
-  then ignored, for unit-test and integration-test targets alike (the same
-  happens to `allow-unwrap-in-consts`). So `#[cfg_attr(test, allow(...))]` on a
-  crate root covers its unit tests, and each integration test file (a test
-  target of its own) carries one crate-level `allow`; those are as narrow as
-  the mechanism gets. Re-test the options before moving these allows to a
-  config file.
+  Test allowances stay in the code. On this toolchain (clippy 0.1.99 / rustc
+  1.99.1) `clippy.toml`'s `allow-unwrap-in-tests` and `allow-expect-in-tests`
+  exempt only code inside a `#[cfg(test)]` module or a `#[test]` function. The
+  shared helpers in `tests/common/mod.rs` are ordinary functions compiled into
+  every integration target, so the options miss them, while a crate-level
+  `allow` at the target root covers that whole module tree; the library's
+  `#[cfg_attr(test, allow(...))]` covers its unit tests without a second lint
+  policy file. Re-test the options before moving these allowances to a config
+  file.
 
 - **The two dev tools opt into a smaller lint subset.** `girsync` and `gircap`
   set `[lints.rust] unsafe_code = "deny"` and `[lints.clippy] all = "warn"`
