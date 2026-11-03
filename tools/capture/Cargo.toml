@@ -29,7 +29,13 @@ clap = { version = "4", features = ["derive"] }
 # §2, "no shared contracts": the flag *names* and defaults are shared on
 # purpose now, the behaviour is not).
 girpr-log = { path = "../../crates/log" }
-tokio = { version = "1", features = ["full"] }
+# The runtime (`#[tokio::main]` runs the multi-threaded one), its macros
+# (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
+# Nothing here uses `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`;
+# `reqwest` enables tokio's network surface in every build anyway, so the
+# saving is what this list does not ask for. `spawn`/`spawn_blocking`/`JoinSet`
+# come with `rt`, which `rt-multi-thread` already includes.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 # No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
 # or handed on as raw bytes, and nothing reads a streaming body. The `stream`
 # feature is what a future "hash the blob as it lands" would ask for.
