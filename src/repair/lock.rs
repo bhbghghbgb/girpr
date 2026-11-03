@@ -15,7 +15,9 @@
 //! so a killed run never leaves a wall-clock wait behind. The file body names
 //! the pid and the time it was taken, so a refusal can name the run to look
 //! at. A leftover file with no holder is harmless: the next `try_lock`
-//! succeeds. `Drop` unlocks and removes the file best-effort.
+//! succeeds and overwrites its body. `Drop` only releases the handle; it never
+//! removes the file, because deleting it after unlocking would let a second and
+//! a third run hold two different files for the same key at once.
 //!
 //! Read-only runs (`--check-only`, `--dry-run`, `--print-plan`) take no lock.
 //!
@@ -126,10 +128,12 @@ fn key_for(path: &Path) -> u64 {
 impl Drop for Lock {
     fn drop(&mut self) {
         // The OS handle is the exclusion; releasing it lets the next run in.
-        // Removing the file is tidy-up only — a leftover unlocked file is
-        // harmless because the next `try_lock` succeeds.
+        // The file is deliberately left behind. Removing it after unlocking
+        // would race a run that opens the same path between our unlock and our
+        // delete: it holds the old file while a third run creates a new one,
+        // and both then think they are the single writer. A leftover unlocked
+        // file is harmless because the next `try_lock` succeeds.
         let _ = self.file.unlock();
-        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -198,13 +202,17 @@ mod tests {
             msg.contains(&std::process::id().to_string()) || msg.contains("body is unreadable"),
             "{msg}"
         );
-        // The lock is released when it is dropped.
+        // The lock is released when it is dropped, and the file is left for
+        // the next run to reuse rather than unlinked under a racing opener.
         let path = lock.path().to_path_buf();
         drop(lock);
-        assert!(!path.exists());
+        assert!(
+            path.exists(),
+            "the unlocked file is left in place, not removed"
+        );
         // And the next run takes it.
         let lock = Lock::acquire(&dir).expect("the lock is free again");
-        assert!(lock.path().exists());
+        assert_eq!(lock.path(), path);
     }
 
     #[test]
@@ -235,13 +243,16 @@ mod tests {
     }
 
     #[test]
-    fn dropping_releases_the_lock() {
+    fn dropping_releases_the_lock_and_keeps_the_file() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "release");
         let path = {
             let lock = Lock::acquire(&dir).expect("the lock is taken");
             lock.path().to_path_buf()
         };
-        assert!(!path.exists(), "the temp file is removed best-effort");
+        assert!(
+            path.exists(),
+            "the file is left behind so an opener cannot be unlinked"
+        );
         let _again = Lock::acquire(&dir).expect("the OS released the lock");
     }
 
