@@ -162,15 +162,10 @@ async fn repair_attempt_inner(
                     // chunk's offset makes the resume honest — the chunks
                     // before it were each digest-checked when they were
                     // written, and everything from it on is gone.
-                    if let Err(rollback) = rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64) {
+                    if let Err(rollback) = rollback_failed_chunk(&mut f, tmp_path, c, &mut tmp_len)
+                    {
                         return Err(chunk_failure_after_rollback(tmp_path, rollback, e));
                     }
-                    tmp_len = c.offset.max(0) as u64;
-                    tracing::debug!(
-                        tmp_bytes = tmp_len,
-                        chunk = %c.id,
-                        "tmp resume point after rollback"
-                    );
                     return Err(e);
                 }
                 tmp_len = tmp_len.max(end);
@@ -253,6 +248,31 @@ fn rollback_tmp(f: &mut File, tmp_path: &std::path::Path, offset: u64) -> Result
         tmp_bytes = len,
         offset,
         "the failed chunk is rolled back out of the tmp"
+    );
+    Ok(())
+}
+
+/// Roll a failed chunk out of the `_tmp` and move the tracked resume point
+/// back with it.
+///
+/// The truncation and the counter update belong together: the next chunk's
+/// resume check reads `tmp_len`, so the tracked point must never claim bytes
+/// the rollback removed. The order matters — a failed rollback leaves both the
+/// `_tmp` and the counter as they were, and the caller reports the combined
+/// failure.
+fn rollback_failed_chunk(
+    f: &mut File,
+    tmp_path: &std::path::Path,
+    c: &SophonChunk,
+    tmp_len: &mut u64,
+) -> Result<()> {
+    let offset = c.offset.max(0) as u64;
+    rollback_tmp(f, tmp_path, offset)?;
+    *tmp_len = offset;
+    tracing::debug!(
+        tmp_bytes = *tmp_len,
+        chunk = %c.id,
+        "tmp resume point after rollback"
     );
     Ok(())
 }
@@ -924,8 +944,10 @@ mod tests {
             "the chunk's end is inside the tmp"
         );
 
-        rollback_tmp(&mut out, &tmp, c.offset.max(0) as u64).unwrap();
-        tmp_len = c.offset.max(0) as u64;
+        // The rollback and the tracked resume point move together; the update
+        // is the caller's, not a value the test sets by hand.
+        rollback_failed_chunk(&mut out, &tmp, &c, &mut tmp_len).unwrap();
+        assert_eq!(tmp_len, 4, "the tracked point follows the truncation");
         let outcome = try_reuse_slice(&mut ReuseCall {
             ctx: &ctx,
             src: &missing,
