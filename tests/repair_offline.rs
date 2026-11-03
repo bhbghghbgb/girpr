@@ -43,7 +43,7 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
+    ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
     build_fixture_spec, ctx_for, load_counters, read_game_file, run_binary, scope, temp_dir,
     write_game_file,
 };
@@ -515,6 +515,200 @@ async fn a_run_without_a_local_version_issues_only_the_latest_build() {
     assert!(
         summary.flags.local_manifest.is_none(),
         "no local version means no lookup to report"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn several_latest_manifests_are_selected_in_build_order() {
+    // The build advertises four manifests: the primary `game`, an unselected
+    // audio field, and two ordinary fields that describe the same path. Every
+    // selected manifest contributes its own files, but when two describe the
+    // same path the earlier selection wins — and an unselected audio field is
+    // never fetched at all.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "en-us",
+            vec![FileSpec::new(
+                "audio/english.dat",
+                vec![ChunkSpec::new("chunk_en", vec![0x45u8; 16], 0)],
+            )],
+        ))
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "alpha",
+            vec![FileSpec::new(
+                "game/shared.dat",
+                vec![ChunkSpec::new("chunk_alpha_shared", vec![0xAAu8; 48], 0)],
+            )],
+        ))
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "beta",
+            vec![
+                FileSpec::new(
+                    "game/shared.dat",
+                    vec![ChunkSpec::new("chunk_beta_shared", vec![0xBBu8; 48], 0)],
+                ),
+                FileSpec::new(
+                    "game/beta_only.dat",
+                    vec![ChunkSpec::new("chunk_beta_only", vec![0xCCu8; 16], 0)],
+                ),
+            ],
+        )),
+    );
+    let en_id = fx.extra_latest_manifests[0].id.clone();
+    let alpha_id = fx.extra_latest_manifests[1].id.clone();
+    let beta_id = fx.extra_latest_manifests[2].id.clone();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("multi_manifest_order");
+
+    // Explicit `--audio none` makes the audio manifest's exclusion a fact of
+    // the fixture rather than of the absent scan file's default.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.audio_explicit = true;
+    ctx.audio.clear();
+    let (summary, code) = run(ctx).await.expect("the multi-manifest run succeeds");
+    assert_eq!(code, 0);
+    assert_eq!(summary.files_total, 3, "base + shared + beta_only");
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 3);
+
+    // Both selected manifests contributed, and the earlier selection's claim
+    // about the shared path is the one that was written.
+    assert_eq!(
+        read_game_file(&dir, "game/base.dat").unwrap(),
+        vec![0x41u8; 32]
+    );
+    assert_eq!(
+        read_game_file(&dir, "game/shared.dat").unwrap(),
+        vec![0xAAu8; 48],
+        "alpha is selected before beta, so alpha's shared path wins"
+    );
+    assert_eq!(
+        read_game_file(&dir, "game/beta_only.dat").unwrap(),
+        vec![0xCCu8; 16]
+    );
+    assert!(
+        read_game_file(&dir, "audio/english.dat").is_none(),
+        "an unselected audio manifest must not contribute files"
+    );
+
+    // Only the selected manifests were requested, and only the chunks of the
+    // files the plan kept were downloaded.
+    let targets = mock.request_targets();
+    assert!(
+        targets.iter().any(|t| t.ends_with(&alpha_id)),
+        "{targets:?}"
+    );
+    assert!(targets.iter().any(|t| t.ends_with(&beta_id)), "{targets:?}");
+    assert!(
+        !targets.iter().any(|t| t.ends_with(&en_id)),
+        "the unselected audio manifest was fetched: {targets:?}"
+    );
+    let hits = mock.chunk_hits();
+    assert!(hits.iter().any(|id| id == "chunk_alpha_shared"), "{hits:?}");
+    assert!(hits.iter().any(|id| id == "chunk_beta_only"), "{hits:?}");
+    assert!(
+        !hits.iter().any(|id| id == "chunk_beta_shared"),
+        "the duplicate path from the later manifest was dropped: {hits:?}"
+    );
+    assert!(
+        !hits.iter().any(|id| id == "chunk_en"),
+        "the unselected audio chunk was fetched: {hits:?}"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_failed_selected_manifest_fails_the_binary_without_a_fallback() {
+    // The build advertises the primary `game` manifest and a second selected
+    // field whose body is gone. The run must fail as metadata (exit 2) instead
+    // of quietly planning only the manifest that did answer.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "extra",
+                vec![FileSpec::new(
+                    "game/extra.dat",
+                    vec![ChunkSpec::new("chunk_extra", vec![0x5Au8; 16], 0)],
+                )],
+            )
+            .not_served(),
+        ),
+    );
+    let game_id = fx.manifest_id.clone();
+    let extra_id = fx.extra_latest_manifests[0].id.clone();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("manifest_fallback");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        code, 2,
+        "a selected manifest that is gone is metadata: {stderr}"
+    );
+    assert!(
+        stderr.contains("manifest extra"),
+        "the failing manifest is named: {stderr}"
+    );
+    assert!(
+        stderr.contains("404"),
+        "the failure is the missing body: {stderr}"
+    );
+    let fatal = stderr
+        .lines()
+        .find(|line| line.starts_with("FATAL"))
+        .unwrap_or_else(|| panic!("a fatal error line: {stderr}"));
+    assert!(
+        !fatal.contains("manifest game"),
+        "the successful manifest must not be blamed: {fatal}"
+    );
+    assert!(
+        !stdout.contains("SUMMARY"),
+        "a failed plan must not emit a success summary: {stdout}"
+    );
+    assert!(!game.exists(), "the plan failed before any write");
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the version was not bumped"
+    );
+    assert!(
+        read_game_file(&dir, "game/extra.dat").is_none(),
+        "nothing from the failed manifest was written"
+    );
+
+    // Both selected manifests were requested: the run did not skip the failing
+    // one, and did not fall back to the one that succeeded.
+    let targets = mock.request_targets();
+    assert!(targets.iter().any(|t| t.ends_with(&game_id)), "{targets:?}");
+    assert!(
+        targets.iter().any(|t| t.ends_with(&extra_id)),
+        "{targets:?}"
     );
 
     mock.stop();
