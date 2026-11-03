@@ -4,7 +4,8 @@
 //! This is the one place that answers "is my install intact?" without touching
 //! it: no `config.ini` bump, no purge, no `*_tmp` sweep, no audio scan write.
 //! Exit code is `0` when clean, `4` when any file fails size, MD5, or is
-//! unreadable.
+//! unreadable. A check task that panics is a run failure (exit `3`), not a
+//! damage verdict: the file was not shown to be bad, the verifier itself broke.
 //!
 //! `files_skipped` counts verified-clean files and `files_failed` counts damaged
 //! ones, so the `SUMMARY`/`PROGRESS` counters read the same as a repair run.
@@ -16,6 +17,7 @@ use std::sync::atomic::Ordering;
 
 use futures_util::StreamExt;
 
+use crate::config::RunFailure;
 use crate::report::{self, Summary};
 use crate::util::{self, Md5};
 
@@ -41,7 +43,28 @@ pub async fn verify_plan(
     output: report::OutputFormat,
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
-) -> u64 {
+) -> Result<u64, RunFailure> {
+    verify_plan_with(game_dir, root, plan, summary, output, scan, jobs, check_one).await
+}
+
+/// The body of [`verify_plan`], with the per-file check injectable for tests.
+#[allow(clippy::too_many_arguments)] // the phase's inputs are one run's shared context
+async fn verify_plan_with<F>(
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: Arc<RepairPlan>,
+    summary: Arc<Summary>,
+    output: report::OutputFormat,
+    scan: Option<Arc<ScanReport>>,
+    jobs: usize,
+    check: F,
+) -> Result<u64, RunFailure>
+where
+    F: for<'a> Fn(&PlannedFile, &anyhow::Result<PathBuf>, DigestSource<'a>) -> CheckOutcome
+        + Send
+        + Sync
+        + 'static,
+{
     let timer = crate::phase::PhaseTimer::start("check");
     // One progress owner for the phase: the ticker reads the counters below as
     // they are folded. Dropping the guard on return stops it, so the check-only
@@ -51,14 +74,17 @@ pub async fn verify_plan(
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let game_dir = game_dir.to_path_buf();
-    let mut outcomes: Vec<(usize, CheckOutcome)> = futures_util::stream::iter(0..plan.files.len())
+    let check = Arc::new(check);
+    let mut outcomes: Vec<(usize, CheckOutcome)> = Vec::with_capacity(plan.files.len());
+    let mut checks = futures_util::stream::iter(0..plan.files.len())
         .map(|idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.clone();
             let root = root.clone();
             let scan = scan.clone();
+            let check = Arc::clone(&check);
             async move {
-                match tokio::task::spawn_blocking(move || {
+                let result = tokio::task::spawn_blocking(move || {
                     let f = &plan.files[idx];
                     // Resolve once. A containment failure is a *diagnostic*:
                     // `build_plan` already refused an escaping rel, so this is
@@ -70,42 +96,40 @@ pub async fn verify_plan(
                         || util::contained_join(&game_dir, &f.rel),
                         |root| root.join(&f.rel),
                     );
-                    let outcome = match scan.as_deref().and_then(|s| s.get(FileId::new(idx))) {
-                        Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
-                        None => check_one(f, &path, DigestSource::Read),
-                    };
-                    (idx, outcome)
-                })
-                .await
-                {
-                    Ok(outcome) => outcome,
-                    Err(e) => {
-                        // A panicked or cancelled task is a bug, not a clean
-                        // verdict. Keep the file counted as damaged instead of
-                        // dropping it from the total without a trace.
-                        (
-                            idx,
-                            CheckOutcome::failed(CheckFailure::Read(format!(
-                                "check task failed: {e}"
-                            ))),
-                        )
+                    match scan.as_deref().and_then(|s| s.get(FileId::new(idx))) {
+                        Some(v) => check(f, &path, DigestSource::Scanned(v)),
+                        None => check(f, &path, DigestSource::Read),
                     }
-                }
+                })
+                .await;
+                (idx, result)
             }
         })
-        .buffer_unordered(jobs.max(1))
-        .collect()
-        .await;
+        .buffer_unordered(jobs.max(1));
+    // Fold each finished task into the live counters immediately. The ordered
+    // pass below still owns the failure log, so its order stays deterministic.
+    while let Some((idx, result)) = checks.next().await {
+        match result {
+            Ok(outcome) => {
+                record_check(&summary, &outcome);
+                outcomes.push((idx, outcome));
+            }
+            Err(e) => {
+                // A panicked or cancelled task is a bug, not a damage verdict:
+                // the file was never shown to be bad. Report the same run
+                // failure class the purge tasks use instead of folding it into
+                // exit `4`.
+                return Err(RunFailure::write(anyhow::anyhow!("check task failed: {e}")));
+            }
+        }
+    }
     outcomes.sort_by_key(|(idx, _)| *idx);
 
     let mut bad = 0u64;
-    let mut clean = 0u64;
     let mut damaged_chunks = 0u64;
     for (idx, outcome) in outcomes {
         let f = &plan.files[idx];
-        if outcome.ok {
-            clean += 1;
-        } else {
+        if !outcome.ok {
             bad += 1;
             damaged_chunks += outcome.damaged_chunks.unwrap_or(0);
             // The one warn site: every failure shape is logged here, in the
@@ -153,11 +177,14 @@ pub async fn verify_plan(
                 }
             }
         }
-        // Keep the counters live so the phase's ticker reflects work done so
-        // far. Only the ticker emits `PROGRESS`.
-        summary.files_skipped.store(clean, Ordering::Relaxed);
-        summary.files_failed.store(bad, Ordering::Relaxed);
     }
+    // Keep the check's own damaged-chunk tally on the summary for callers that
+    // need it, but leave the emitted `damaged_chunks` key alone: that key is
+    // the plan-phase scan's figure and its presence is part of the output
+    // contract.
+    summary
+        .check_damaged_chunks
+        .store(damaged_chunks, Ordering::Relaxed);
     tracing::info!(
         phase = % "check",
         duration_ms = timer.elapsed_ms(),
@@ -167,7 +194,17 @@ pub async fn verify_plan(
         damaged_chunks
     );
     timer.disarm();
-    bad
+    Ok(bad)
+}
+
+/// Fold one finished check into the phase counters as soon as it completes, so
+/// the ticker's `done` tracks the pass instead of waiting for the ordered fold.
+fn record_check(summary: &Summary, outcome: &CheckOutcome) {
+    if outcome.ok {
+        summary.files_skipped.fetch_add(1, Ordering::Relaxed);
+    } else {
+        summary.files_failed.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Where the digest a check compares against the manifest came from.
@@ -332,7 +369,7 @@ mod tests {
         plan: &Arc<RepairPlan>,
         scan: &Option<Arc<ScanReport>>,
         jobs: usize,
-    ) -> (u64, u64, u64, String) {
+    ) -> (u64, u64, u64, u64, String) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -340,20 +377,23 @@ mod tests {
         let summary = Arc::new(Summary::default());
         let mut bad = 0u64;
         let logs = crate::repair::test_support::logs_of(|| {
-            bad = runtime.block_on(verify_plan(
-                base,
-                None,
-                Arc::clone(plan),
-                Arc::clone(&summary),
-                report::OutputFormat::Text,
-                scan.clone(),
-                jobs,
-            ));
+            bad = runtime
+                .block_on(verify_plan(
+                    base,
+                    None,
+                    Arc::clone(plan),
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    scan.clone(),
+                    jobs,
+                ))
+                .expect("the check tasks finish");
         });
         (
             bad,
             summary.files_skipped.load(Ordering::Relaxed),
             summary.files_failed.load(Ordering::Relaxed),
+            summary.check_damaged_chunks.load(Ordering::Relaxed),
             logs,
         )
     }
@@ -391,15 +431,15 @@ mod tests {
         let many = run_verify(base, &plan, &scan, 4);
 
         assert_eq!(
-            (one.0, one.1, one.2),
-            (many.0, many.1, many.2),
+            (one.0, one.1, one.2, one.3),
+            (many.0, many.1, many.2, many.3),
             "jobs must not change the verdict or the counters"
         );
-        assert_eq!((one.0, one.1, one.2), (2, 1, 2));
-        let one_warnings = check_warnings(&one.3);
+        assert_eq!((one.0, one.1, one.2, one.3), (2, 1, 2, 2));
+        let one_warnings = check_warnings(&one.4);
         assert_eq!(
             one_warnings,
-            check_warnings(&many.3),
+            check_warnings(&many.4),
             "the warning set and its plan order are jobs-independent"
         );
         assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
@@ -414,10 +454,151 @@ mod tests {
             one_warnings
         );
         assert!(
-            one.3.contains("damaged_chunks=2"),
+            one.4.contains("damaged_chunks=2"),
             "the scan's damaged-chunk total is folded once: {}",
-            one.3
+            one.4
         );
+    }
+
+    #[test]
+    fn a_panicked_check_task_fails_the_run_instead_of_reporting_damage() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "task_panic");
+        let base = &*dir;
+        let plan = Arc::new(plan_of(vec![planned(
+            "a.dat",
+            0,
+            "00000000000000000000000000000000",
+        )]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let err = runtime
+            .block_on(verify_plan_with(
+                base,
+                None,
+                plan,
+                Arc::clone(&summary),
+                report::OutputFormat::Text,
+                None,
+                1,
+                |_: &PlannedFile,
+                 _: &anyhow::Result<PathBuf>,
+                 _: DigestSource<'_>|
+                 -> CheckOutcome { panic!("injected check-task panic") },
+            ))
+            .expect_err("a panicked check task is a run failure");
+
+        assert_eq!(
+            err.exit_code,
+            crate::RunExit::Write,
+            "a broken verifier is exit 3, not a damage verdict (4)"
+        );
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            0,
+            "the file was never shown to be damaged"
+        );
+    }
+
+    /// The ticker reads the counters while the pass is still running, so a
+    /// finished check is folded before the slowest one returns. The gate keeps
+    /// one task blocked without sleeping; the other task's counter must be
+    /// visible while it is held.
+    #[test]
+    fn finished_checks_move_the_counters_before_the_pass_ends() {
+        #[derive(Default)]
+        struct Gate {
+            slow_started: bool,
+            fast_done: bool,
+            release_slow: bool,
+        }
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "live_progress");
+        let base = dir.to_path_buf();
+        let plan = Arc::new(plan_of(vec![
+            planned("slow.dat", 0, "00000000000000000000000000000000"),
+            planned("fast.dat", 0, "00000000000000000000000000000000"),
+        ]));
+        let summary = Arc::new(Summary::default());
+        let gate = Arc::new((
+            std::sync::Mutex::new(Gate::default()),
+            std::sync::Condvar::new(),
+        ));
+
+        let thread_summary = Arc::clone(&summary);
+        let thread_gate = Arc::clone(&gate);
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(verify_plan_with(
+                    &base,
+                    None,
+                    plan,
+                    thread_summary,
+                    report::OutputFormat::Text,
+                    None,
+                    2,
+                    move |f: &PlannedFile,
+                          _: &anyhow::Result<PathBuf>,
+                          _: DigestSource<'_>|
+                          -> CheckOutcome {
+                        let (lock, cv) = &*thread_gate;
+                        let mut state = lock.lock().unwrap();
+                        if f.rel == "slow.dat" {
+                            state.slow_started = true;
+                            cv.notify_all();
+                            while !state.release_slow {
+                                state = cv.wait(state).unwrap();
+                            }
+                        } else {
+                            state.fast_done = true;
+                            cv.notify_all();
+                        }
+                        CheckOutcome::clean()
+                    },
+                ))
+                .expect("the checks finish")
+        });
+
+        // Wait until both tasks have reached their gate: one is held, the
+        // other has returned and is ready to be folded.
+        let (lock, cv) = &*gate;
+        let mut state = lock.lock().unwrap();
+        while !(state.slow_started && state.fast_done) {
+            state = cv.wait(state).unwrap();
+        }
+        drop(state);
+
+        let mut spins = 0;
+        while summary.files_skipped.load(Ordering::Relaxed) == 0 {
+            spins += 1;
+            assert!(
+                spins < 10_000_000,
+                "the finished check was not folded while the slow task was held"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            summary.files_skipped.load(Ordering::Relaxed),
+            1,
+            "only the finished task is folded so far"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+
+        let (lock, cv) = &*gate;
+        let mut state = lock.lock().unwrap();
+        state.release_slow = true;
+        cv.notify_all();
+        drop(state);
+
+        assert_eq!(thread.join().unwrap(), 0);
+        assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
     }
 
     #[test]

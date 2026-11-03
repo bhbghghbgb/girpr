@@ -662,7 +662,7 @@ async fn execute_phase(
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
-        return Ok(run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await);
+        return run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await;
     }
 
     // 5.6 purge-only: every phase but the repair loop.
@@ -785,7 +785,7 @@ async fn run_check_only(
     plan: &Arc<RepairPlan>,
     scan: Option<Arc<ScanReport>>,
     summary: Summary,
-) -> (Summary, RunExit) {
+) -> Result<(Summary, RunExit), RunFailure> {
     // The execute-phase root was built after `create_dir_all` and the second
     // canonicalize, so it is the current form for these files; no per-file
     // re-resolution is needed.
@@ -799,8 +799,7 @@ async fn run_check_only(
         scan,
         ctx.jobs,
     )
-    .await;
-    summary.files_failed.store(bad, Ordering::Relaxed);
+    .await?;
     // The phase's ticker is stopped when `verify_plan` returns, but its
     // aborted task may not have dropped its clone yet; `snapshot` reads the
     // same counters either way.
@@ -810,7 +809,7 @@ async fn run_check_only(
     } else {
         RunExit::CheckFailed
     };
-    (summary, code)
+    Ok((summary, code))
 }
 
 /// Step 5.6: `check_only` inverted — every phase but the repair loop.

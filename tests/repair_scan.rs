@@ -105,6 +105,40 @@ async fn check_only_matches_between_one_and_many_jobs() {
 }
 
 #[tokio::test]
+async fn check_only_scan_keeps_the_damaged_chunk_total_on_the_summary() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("check_damaged_chunks_summary");
+    let fx2 = build_fixture();
+    let foo = &fx2.files[0];
+    let bar = &fx2.files[1];
+    write_game_file(&dir, &bar.rel, &bar.data);
+    // Same length, different bytes: a digest failure the scan can locate
+    // chunk by chunk.
+    let mut bad_foo = foo.data.clone();
+    for b in bad_foo.iter_mut().skip(64) {
+        *b ^= 0xFF;
+    }
+    write_game_file(&dir, &foo.rel, &bad_foo);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.check_only = true;
+    ctx.scan = true;
+    let (summary, code) = run(ctx).await.expect("check-only runs");
+    assert_eq!(code, 4, "the corrupt file is still damage");
+
+    let checked = summary.check_damaged_chunks.load(Ordering::Relaxed);
+    assert!(checked > 0, "the check carries the chunks it found wrong");
+    assert_eq!(
+        Some(checked),
+        summary.flags.damaged_chunks,
+        "the check's tally matches the scan figure it was given"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
     // The scan's verdict for an absent file carries the empty digest, and a
     // legitimate empty file's manifest entry has exactly that digest. The
