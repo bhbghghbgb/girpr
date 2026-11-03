@@ -285,7 +285,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-01 | F108 | done | Wave A; one shared `md5_hex` test helper; low; dd373fd |
 | LINT-01 | F97, F109 | done | Wave A, after BUILD-TOOLS-01; central test-lint policy; low; 594f37a, a7ea85f, cedb038, c36bf08 |
 | TEMP-WRITER-01 | F25, F26, F27, F28, F30 | done | Wave B; temp writer rollback, refunds, docs, seek; medium; a98d906, 5e55c8f, 470cad9, beaf64d, 6fc928a |
-| TEMP-PUBLISH-01 | F05, F06, F09, F12 | todo | Wave B; temp-sibling publish of audio and plan files; medium |
+| TEMP-PUBLISH-01 | F05, F06, F09, F12 | in_progress | Wave B; temp-sibling publish of audio and plan files; medium |
 | INPLACE-01 | F29, F33, F34, F70, F79 | todo | Wave B; in-place reuse accuracy and guards; medium |
 | CHECK-01 | F19, F21, F23, F52 | todo | Wave B; check-phase progress, totals, panic verdict; high |
 | REPORT-API-01 | F42, F43, F48, F83 | todo | Wave B; report type visibility and construction; medium |
