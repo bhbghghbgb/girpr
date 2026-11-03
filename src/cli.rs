@@ -20,6 +20,9 @@ use crate::repair::scope::{Limits, PathScope};
 use crate::report::OutputFormat;
 use crate::sleep::RealSleep;
 
+/// Concurrent file window used when `--jobs` is omitted.
+pub const DEFAULT_JOBS: usize = 4;
+
 /// Largest accepted `--jobs` value.
 ///
 /// The runtime keeps one worker beyond the file window, so a larger value only
@@ -48,10 +51,10 @@ pub struct Args {
 
     /// Max concurrent FILES (chunks inside a file are sequential -> HDD friendly).
     /// SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker
-    /// threads; `--io-threads` is a deprecated alias. Values above 1024 are a
-    /// usage error.
-    #[arg(long = "jobs", visible_alias = "io-threads", default_value_t = 4)]
-    pub jobs: usize,
+    /// threads; `--io-threads` is a deprecated alias. Defaults to 4 when
+    /// omitted; values above 1024 are a usage error.
+    #[arg(long = "jobs", visible_alias = "io-threads")]
+    pub jobs: Option<usize>,
 
     /// Delete files not in the live manifest after patching (Collapse files-cleanup parity).
     /// Same cleanup as `--purge-before`, only the timing differs.
@@ -263,16 +266,18 @@ impl Args {
     /// Validate the raw flags into a [`RunCtx`]. Every failure here is a usage
     /// error (exit 1), so the caller only has to pick the exit code.
     pub fn into_ctx(self) -> Result<RunCtx> {
-        if self.jobs == 0 {
+        let requested_jobs = self.jobs;
+        let jobs = requested_jobs.unwrap_or(DEFAULT_JOBS);
+        if jobs == 0 {
             bail!("--jobs must be >= 1");
         }
-        if self.jobs > MAX_JOBS {
+        if jobs > MAX_JOBS {
             bail!("--jobs must be <= {MAX_JOBS}");
         }
         let available = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
-        if let Some(warning) = excessive_jobs_warning(self.jobs, available) {
+        if let Some(warning) = excessive_jobs_warning(requested_jobs, available) {
             tracing::warn!("{warning}");
         }
         let (audio, _saw_none) = parse_audio_selection(&self.audio)?;
@@ -301,7 +306,7 @@ impl Args {
             // reports, so it is tracked next to the value: an unflagged run
             // must not grow a key.
             repair_mode_explicit: self.repair_mode.is_some(),
-            jobs: self.jobs,
+            jobs,
             check_only: self.check_only,
             scan: self.scan,
             purge_only: self.purge_only,
@@ -331,7 +336,12 @@ impl Args {
 /// network polling; this warning is about oversubscription, not starvation. It
 /// is a warning rather than a refusal because an oversized window can still be
 /// a deliberate choice.
-fn excessive_jobs_warning(jobs: usize, available: usize) -> Option<String> {
+///
+/// `requested` is the flag's value, not the default: `None` means the user did
+/// not ask for a window at all, and the default is never warned about. A small
+/// host must not make every unflagged run noisy.
+fn excessive_jobs_warning(requested: Option<usize>, available: usize) -> Option<String> {
+    let jobs = requested?;
     (jobs > available).then(|| {
         format!(
             "--jobs {jobs} exceeds the host's {available} logical CPUs; file tasks do blocking \
@@ -495,16 +505,16 @@ mod tests {
         };
         let primary = parse("--jobs");
         let alias = parse("--io-threads");
-        assert_eq!(primary.jobs, 8);
-        assert_eq!(alias.jobs, 8);
+        assert_eq!(primary.jobs, Some(8));
+        assert_eq!(alias.jobs, Some(8));
         assert_eq!(primary.into_ctx().unwrap().jobs, 8);
         assert_eq!(alias.into_ctx().unwrap().jobs, 8);
     }
 
     #[test]
     fn an_oversized_file_window_warns_but_still_runs() {
-        assert_eq!(excessive_jobs_warning(4, 4), None);
-        let warning = excessive_jobs_warning(8, 4).expect("8 files on 4 CPUs warns");
+        assert_eq!(excessive_jobs_warning(Some(4), 4), None);
+        let warning = excessive_jobs_warning(Some(8), 4).expect("8 files on 4 CPUs warns");
         assert!(warning.contains("--jobs 8"), "{warning}");
         assert!(warning.contains("4 logical CPUs"), "{warning}");
         assert!(warning.contains("not worker threads"), "{warning}");
@@ -529,12 +539,31 @@ mod tests {
     }
 
     #[test]
+    fn the_default_file_window_does_not_warn_on_a_small_host() {
+        // `available_parallelism` cannot be controlled from a unit test, so the
+        // decision is pinned here: omitting `--jobs` never warns, while an
+        // explicit value above the host still does.
+        assert_eq!(excessive_jobs_warning(None, 1), None);
+        assert_eq!(excessive_jobs_warning(None, 2), None);
+        assert_eq!(
+            excessive_jobs_warning(Some(DEFAULT_JOBS), DEFAULT_JOBS),
+            None,
+            "an explicit value equal to the host still fits"
+        );
+        assert!(
+            excessive_jobs_warning(Some(DEFAULT_JOBS), 1).is_some(),
+            "explicitly asking for 4 on a 1-CPU host still warns"
+        );
+    }
+
+    #[test]
     fn omitted_audio_is_not_explicit_and_defaults_jobs_to_4() {
         let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
+        assert_eq!(args.jobs, None, "the default is not an explicit value");
         let ctx = args.into_ctx().unwrap();
         assert!(!ctx.audio_explicit);
         assert!(ctx.audio.is_empty());
-        assert_eq!(ctx.jobs, 4);
+        assert_eq!(ctx.jobs, DEFAULT_JOBS);
     }
 
     #[test]
