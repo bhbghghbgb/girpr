@@ -235,6 +235,12 @@ fn test_no_fsync() -> bool {
 
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
 ///
+/// The game directory must already exist; only `config.ini` itself may be
+/// missing (the fresh-install input). A missing directory is an error and is
+/// not created, even though the shared atomic writer would create a parent:
+/// this writer repairs an existing install, so a wrong path must be reported
+/// rather than turned into a stray file tree.
+///
 /// Collapse parity (`GameVersionBase.UpdateGameVersion` /
 /// `UpdateGameChannels` and `Hi3Helper.Data.IniFile` load/save):
 /// section-preserving surgical update.
@@ -281,7 +287,21 @@ pub fn write_config_ini(
     // read error is refused rather than silently treated as an empty config.
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // `NotFound` covers both "no config.ini yet" (fresh install, a
+            // supported input) and "no game dir". This writer only updates an
+            // existing install, so the missing directory stays an error: the
+            // post phase runs after the game dir was scanned, and creating a
+            // tree for a wrong path would hide the mistake instead of
+            // reporting it.
+            if !game_dir.is_dir() {
+                return Err(anyhow::anyhow!(
+                    "game dir {} does not exist",
+                    game_dir.display()
+                ));
+            }
+            String::new()
+        }
         Err(e) => return Err(e.into()),
     };
     let mut sections = parse_ini(&text);
@@ -941,6 +961,23 @@ mod tests {
         assert!(text2.contains("fps=60"), "{text2}");
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
+    }
+
+    /// The writer updates an existing install: an absent `config.ini` inside an
+    /// existing game dir is the fresh-install input and is created, but an
+    /// absent game dir is an error and must not be created by the shared atomic
+    /// writer's parent creation.
+    #[test]
+    fn config_bump_requires_an_existing_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "missing_game_dir");
+        let missing = root.join("not-installed");
+        let err = write_config_ini(&missing, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a missing game dir must be reported, not created");
+        assert!(
+            format!("{err:#}").contains("does not exist"),
+            "the refusal names the missing game dir: {err:#}"
+        );
+        assert!(!missing.exists(), "the writer must not create the game dir");
     }
 
     /// Both readers take the first `=`. `parse_ini` keeps its raw key/value
