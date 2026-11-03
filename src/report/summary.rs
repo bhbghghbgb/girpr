@@ -118,6 +118,15 @@ pub struct Summary {
     /// that made this counter over-report, and a run that had to retry claimed
     /// it had touched fewer bytes than it had.
     pub kept_bytes: AtomicU64,
+    /// The chunks the check phase found wrong where they belong, across the
+    /// verified plan. Zero when the check read the digests itself, because that
+    /// path does not map a mismatch to chunks; the `--scan` path does.
+    ///
+    /// Kept apart from [`SummaryFlags::damaged_chunks`], which is the
+    /// plan-phase scan's figure and a conditional `SUMMARY` key. This is an
+    /// internal tally: it lets a caller of `--check-only` see the same total
+    /// the phase logs without changing the emitted keys.
+    pub check_damaged_chunks: AtomicU64,
 }
 
 impl Summary {
@@ -149,6 +158,7 @@ impl Summary {
             files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
             files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
             kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
+            check_damaged_chunks: AtomicU64::new(self.check_damaged_chunks.load(Ordering::Relaxed)),
         }
     }
 }

@@ -320,17 +320,21 @@ fn snapshot_copies_every_counter() {
     let s = Summary {
         files_total: 7,
         files_skipped: AtomicU64::new(1),
+        check_damaged_chunks: AtomicU64::new(3),
         ..Summary::default()
     };
     s.download.settle(9);
     let snap = s.snapshot();
     assert_eq!(snap.files_total, 7);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(snap.check_damaged_chunks.load(Ordering::Relaxed), 3);
     assert_eq!(snap.download.settled(), 9);
     assert_eq!(snap.flags, SummaryFlags::default());
     // Mutating the source afterwards must not touch the snapshot.
     s.files_skipped.store(5, Ordering::Relaxed);
+    s.check_damaged_chunks.store(4, Ordering::Relaxed);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(snap.check_damaged_chunks.load(Ordering::Relaxed), 3);
 }
 
 fn cfg_full() -> GameConfig {
