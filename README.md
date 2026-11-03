@@ -278,7 +278,9 @@ the completed `*_tmp` prefix and continuing it.
 
 - Rust 1.89+ (the crate is `edition = "2024"`, and the single-writer lock uses
   `File::try_lock`/`File::unlock`, which stabilised in 1.89); network to
-  HoYoPlay + Sophon CDNs (production runs only).
+  HoYoPlay + Sophon CDNs (production runs only). This is the **product's**
+  minimum: the dev-only `girsync` cache is built on `redb`, which needs 1.90,
+  so checking the whole workspace needs that toolchain.
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
