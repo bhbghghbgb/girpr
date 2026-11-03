@@ -311,7 +311,7 @@ cargo build --release
 | `--game-path <DIR>` | (required) | Install dir (`config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
 | `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr` (case-insensitive, `_` accepted for `-`; display names `chinese`/`english`/`english(us)`/`japanese`/`korean` also work); `none` = game-only (overwrites scan file) |
-| `--jobs <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2. Bounds in-flight file tasks, not tokio worker threads; a value above the host's parallelism warns and still runs. `--io-threads` is a deprecated alias |
+| `--jobs <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2. Bounds in-flight file tasks, not tokio worker threads; a value above the host's parallelism warns and still runs. Values above `1024` are a usage error (exit `1`). `--io-threads` is a deprecated alias |
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include`. A content glob such as `mods/*` hides the files under `mods` but not `mods` itself, so an empty `mods` directory is still visible and may be swept; a directory is hidden only when the glob matches the directory path itself |
