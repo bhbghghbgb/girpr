@@ -354,6 +354,16 @@ impl<'a> PlanDocument<'a> {
     /// renamed, so a full disk or a crash cannot leave a truncated plan where
     /// the caller asked for a parseable one. The plan is an advisory artifact,
     /// so it is published without a durable sync.
+    ///
+    /// The rename replaces whatever is at `path` wholesale. Two consequences
+    /// are deliberate for an output artifact: a symlink at `path` is replaced
+    /// by a regular file instead of writing through to its target, and the
+    /// published file gets the new file's default mode rather than the old
+    /// target's. Preserving either would mean following a link whose target the
+    /// caller did not name, and inheriting a mode from a file this write is
+    /// about to replace. A caller that needs the link or the mode preserved
+    /// owns that decision; the plan writer's contract is "the bytes you asked
+    /// for are at this exact path, all or nothing".
     pub fn write_to(&self, path: &Path) -> anyhow::Result<()> {
         util::atomic::write_atomic_with(path, false, |writer| {
             serde_json::to_writer_pretty(&mut *writer, self).context("serialize plan")?;
@@ -822,6 +832,43 @@ mod tests {
             std::fs::read(&path).unwrap(),
             previous.as_slice(),
             "the target keeps its old contents when the write fails"
+        );
+    }
+
+    /// The documented publish trade, pinned: a symlink at the plan path is
+    /// replaced by a regular file and the file it pointed at keeps its bytes.
+    /// Windows needs a privilege to create a symlink, so the case only runs
+    /// where one can be made.
+    #[cfg(unix)]
+    #[test]
+    fn publishing_over_a_symlink_replaces_the_link_not_its_target() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "symlink");
+        let real = dir.join("real.json");
+        std::fs::write(&real, b"old\n").unwrap();
+        let path = dir.join("plan.json");
+        std::os::unix::fs::symlink(&real, &path).unwrap();
+
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        doc.write_to(&path).unwrap();
+
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the publish replaces the link with a regular file"
+        );
+        assert_eq!(
+            std::fs::read(&real).unwrap(),
+            b"old\n",
+            "the link target is not written through"
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("game/foo.dat"),
+            "the requested path holds the plan"
         );
     }
 
