@@ -384,6 +384,7 @@ mod tests {
             ],
             bytes: 0,
             damaged_chunks: 0,
+            scanned_at: None,
         }));
 
         let one = run_verify(base, &plan, &scan, 1);

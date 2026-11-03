@@ -206,13 +206,18 @@ fn open_and_scan(
     // still the one that was scanned.
     let scan = match reusable_verdict(ctx, id, file, final_path, &handle) {
         Some(v) => {
-            let age_secs = v
-                .modified
-                .and_then(|m| m.elapsed().ok())
-                .map(|d| d.as_secs());
+            // How long ago the plan scan ran, not how old the file's mtime is:
+            // the verdict records the latter for the guard, and the two are
+            // unrelated.
+            let scan_age_secs = ctx
+                .scan
+                .as_deref()
+                .and_then(|report| report.scanned_at)
+                .and_then(|started| started.elapsed().ok())
+                .map(|age| age.as_secs());
             tracing::debug!(
                 file = %file.rel,
-                age_secs = ?age_secs,
+                scan_age_secs = ?scan_age_secs,
                 "reusing the plan scan in the in-place writer"
             );
             util::Scan {
@@ -1115,6 +1120,7 @@ mod tests {
             files: vec![Some(verdict)],
             bytes: bytes.len() as u64,
             damaged_chunks: 0,
+            scanned_at: None,
         };
         let ctx = test_ctx(Some(Arc::new(report)));
         let id = FileId::new(0);

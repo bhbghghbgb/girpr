@@ -72,6 +72,9 @@ pub struct ScanReport {
     pub bytes: u64,
     /// The chunks that are wrong where they belong, over the whole plan.
     pub damaged_chunks: u64,
+    /// When the scan started. The in-place writer reports how old the plan
+    /// scan is when it reuses a verdict; `None` for a report built by hand.
+    pub scanned_at: Option<SystemTime>,
 }
 
 impl ScanReport {
@@ -231,6 +234,7 @@ pub async fn scan_plan(
     jobs: usize,
 ) -> ScanReport {
     let timer = crate::phase::PhaseTimer::start("scan");
+    let scanned_at = Some(SystemTime::now());
     // NOTE: the plan is shared by `Arc` and each task is handed an index, not a
     // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
     // per task would deep-clone the whole plan — the same reason
@@ -256,7 +260,10 @@ pub async fn scan_plan(
         })
         .buffer_unordered(jobs.max(1));
 
-    let mut out = ScanReport::default();
+    let mut out = ScanReport {
+        scanned_at,
+        ..Default::default()
+    };
     out.files.resize(total_files, None);
     while let Some((idx, res)) = stream.next().await {
         let scanned = match res {
@@ -767,6 +774,7 @@ mod tests {
             ],
             bytes: 0,
             damaged_chunks: 0,
+            scanned_at: None,
         };
 
         assert!(report.get(FileId::new(0)).is_none());
