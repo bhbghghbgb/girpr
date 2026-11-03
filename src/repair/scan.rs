@@ -365,6 +365,19 @@ pub(crate) fn source_ok_by_chunk(
     source_ok
 }
 
+/// The inverse of [`source_ok_by_chunk`]: one verdict per source range, in the
+/// order [`scan_ranges`] built them, from one verdict per chunk.
+///
+/// The in-place writer uses this when it replaces a fresh scan with the plan's
+/// per-chunk verdict. Both directions share the same ownership rule, and they
+/// are pinned against each other in one test so the two cannot drift.
+pub(crate) fn source_ok_by_range(chunk_source_ok: &[bool], source_owner: &[usize]) -> Vec<bool> {
+    source_owner
+        .iter()
+        .map(|&i| chunk_source_ok.get(i).copied().unwrap_or(false))
+        .collect()
+}
+
 /// Scan one file: one read, every answer.
 fn scan_one(
     game_dir: &Path,
@@ -672,6 +685,34 @@ mod tests {
             source_ok_by_chunk(3, &[0, 2], &[true]),
             vec![true, false, false],
             "a missing per-range verdict is false, not a panic"
+        );
+    }
+
+    /// The per-range view is the exact inverse of the shared remap: a
+    /// round-trip through both leaves every range verdict unchanged, and a
+    /// chunk the owner list does not claim is simply absent from the result.
+    #[test]
+    fn the_per_range_view_inverts_the_shared_remap() {
+        let owner = [0usize, 2];
+        for ranges in [[true, true], [true, false], [false, true], [false, false]] {
+            let by_chunk = source_ok_by_chunk(3, &owner, &ranges);
+            assert_eq!(
+                source_ok_by_range(&by_chunk, &owner),
+                ranges.to_vec(),
+                "every per-range verdict survives the round-trip"
+            );
+        }
+
+        // A per-chunk list maps onto the ranges that own those chunks only.
+        assert_eq!(
+            source_ok_by_range(&[true, false, true], &owner),
+            vec![true, true]
+        );
+        // A missing per-chunk verdict keeps the conservative answer.
+        assert_eq!(
+            source_ok_by_range(&[true], &owner),
+            vec![true, false],
+            "a chunk with no verdict is not an intact source"
         );
     }
 

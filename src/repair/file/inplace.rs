@@ -17,7 +17,7 @@ use super::{
 use crate::config::RepairMode;
 use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
-use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk};
+use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk, source_ok_by_range};
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
@@ -224,7 +224,7 @@ fn open_and_scan(
                 file_md5: v.file_md5.clone(),
                 file_len: v.file_len,
                 dest_ok: v.dest_ok.clone(),
-                source_ok: source_ok_by_range(v, source_owner),
+                source_ok: source_ok_by_range(&v.source_ok, source_owner),
             }
         }
         None => util::scan_reader(&mut handle, dest_ranges, source_ranges)
@@ -636,15 +636,6 @@ fn reusable_verdict<'a>(
         return None;
     }
     Some(verdict)
-}
-
-/// The plan verdict's per-chunk source answers, mapped onto the source ranges
-/// [`scan_ranges`] built. One entry per range, in the order the scan expects.
-fn source_ok_by_range(verdict: &Verdict, source_owner: &[usize]) -> Vec<bool> {
-    source_owner
-        .iter()
-        .map(|&i| verdict.source_ok.get(i).copied().unwrap_or(false))
-        .collect()
 }
 
 /// The success settle shared by the first verify and the redo.
