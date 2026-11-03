@@ -35,12 +35,24 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
 /// `=` stays in the value. A line with nothing after `=` is not a match; the
 /// caller keeps the **last** match.
 fn game_version_line(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("game_version")?;
-    let rest = rest.trim_start().strip_prefix('=')?;
+    let (key, rest) = split_first_eq(line)?;
+    if key.trim_end() != "game_version" {
+        return None;
+    }
     if rest.is_empty() {
         return None;
     }
     Some(rest.trim().to_string())
+}
+
+/// Split an INI line at its **first** `=`.
+///
+/// Both the config loader and the `game_version` scan treat the first `=` as
+/// the key/value boundary; a later `=` belongs to the value. This helper shares
+/// only that boundary: the callers keep their own key anchoring, trimming and
+/// empty-value rules, which deliberately differ.
+fn split_first_eq(line: &str) -> Option<(&str, &str)> {
+    line.split_once('=')
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
@@ -363,18 +375,15 @@ fn parse_ini(text: &str) -> Vec<Section> {
             }
             continue;
         }
-        let Some(eq) = line.find('=') else {
+        let Some((key, rest)) = split_first_eq(line) else {
             continue;
         };
-        if eq < 1 {
-            continue;
-        }
-        let key = line[..eq].trim_end();
+        let key = key.trim_end();
         if key.is_empty() {
             continue;
         }
         // Collapse: value is trimmed, surrounding `"` stripped.
-        let value = line[eq + 1..].trim().trim_matches('"');
+        let value = rest.trim().trim_matches('"');
         let target = match current {
             Some(i) => i,
             None => {
@@ -932,6 +941,53 @@ mod tests {
         assert!(text2.contains("fps=60"), "{text2}");
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
+    }
+
+    /// Both readers take the first `=`. `parse_ini` keeps its raw key/value
+    /// shape (key trimmed at the end only, value trimmed and unquoted, an
+    /// empty value allowed), while the version scan stays anchored.
+    #[test]
+    fn readers_split_on_the_first_equals() {
+        let sections = parse_ini(
+            "k e y= raw = value \n\
+             empty=\n\
+             quoted=  \"a=b\"  \n\
+             =value\n\
+                =value\n\
+             spaced   =1\n",
+        );
+        assert_eq!(sections.len(), 1, "header-less keys land in [General]");
+        let general = &sections[0];
+        assert_eq!(general.name, "General");
+        let keys: Vec<(&str, &str)> = general
+            .keys
+            .iter()
+            .map(|(k, _, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("k e y", "raw = value"),
+                ("empty", ""),
+                ("quoted", "a=b"),
+                ("spaced", "1"),
+            ],
+            "keys split at the first '=', only end-trimmed; a leading '=' is not a key"
+        );
+
+        for (line, expected) in [
+            ("game_version=1=2=3", Some("1=2=3")),
+            ("game_version==x", Some("=x")),
+            (" game_version=1.0.0", None),
+            ("game_version_extra=1.0.0", None),
+            ("game_version=   ", Some("")),
+        ] {
+            assert_eq!(
+                game_version_line(line).as_deref(),
+                expected,
+                "line {line:?}"
+            );
+        }
     }
 
     /// The extracted parse / merge / render steps keep the documented section
