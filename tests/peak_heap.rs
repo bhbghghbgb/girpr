@@ -56,21 +56,17 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use common::md5hex;
 use girpr::test_support::{ChunkFetch, ChunkSink, RealSleep, stream_chunk_to};
 use girpr_tempdir::TempDir;
-
-fn md5_hex(data: &[u8]) -> String {
-    use md5::Digest as _;
-    md5::Md5::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // the counting allocator
@@ -319,7 +315,7 @@ async fn the_chunk_paths_peak_live_heap() {
     assert_eq!(digest.bytes, payload.len() as u64, "the whole chunk landed");
     assert_eq!(
         digest.md5.to_hex(),
-        md5_hex(&payload),
+        md5hex(&payload),
         "and it is the right chunk"
     );
 

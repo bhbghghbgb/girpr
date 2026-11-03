@@ -75,6 +75,8 @@
 
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
+#[path = "common/mod.rs"]
+mod common;
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
@@ -82,8 +84,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
+use common::md5hex;
 use girpr_tempdir::TempDir;
-use server::{Bridge, Bundle, Origins, md5_hex};
+use server::{Bridge, Bundle, Origins};
 
 // ---------------------------------------------------------------------------
 // gate: locating a bundle
@@ -601,7 +604,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         let bytes = std::fs::read(&target)
             .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));
         assert_eq!(
-            md5_hex(&bytes),
+            md5hex(&bytes),
             capture.result_md5,
             "{}: the patched file must equal expectations.result_md5",
             capture.id

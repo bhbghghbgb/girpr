@@ -181,6 +181,7 @@ pub struct FixtureManifest {
 /// manifests are available" (i.e. chunk reuse is available).
 pub const LATEST_TAG: &str = "9.9.9-test";
 
+/// Lowercase hex MD5 of a byte slice.
 pub fn md5hex(data: &[u8]) -> String {
     use md5::Digest as _;
     md5::Md5::digest(data)

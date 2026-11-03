@@ -677,15 +677,6 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Lowercase hex MD5 of a byte slice.
-pub fn md5_hex(data: &[u8]) -> String {
-    use md5::Digest as _;
-    md5::Md5::digest(data)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// A `RequestId` shaped like the recorded one and derived from the key, so a
 /// given request replays identically on every run.
 ///
@@ -695,7 +686,7 @@ pub fn md5_hex(data: &[u8]) -> String {
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    md5_hex(key.as_bytes())
+    super::common::md5hex(key.as_bytes())
         .to_uppercase()
         .chars()
         .take(24)
