@@ -710,4 +710,57 @@ mod tests {
         let mut f = File::open(dir.join("f.dat")).unwrap();
         assert!(read_range(&mut f, 0, u64::MAX).is_err());
     }
+
+    /// Whole-file MD5 throughput, on the path the repair gate uses:
+    /// [`md5_file`] → [`md5_reader_digest`], with the 512 KiB read buffer.
+    ///
+    /// This is a measurement, not a property, so it is `#[ignore]`d and is
+    /// never part of the normal suite or CI. It writes a file of
+    /// `GIRPR_MD5_BENCH_MIB` MiB (default 64), hashes it `GIRPR_MD5_BENCH_RUNS`
+    /// times (default 5), and prints the throughput. Run it by hand:
+    ///
+    /// ```text
+    /// cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
+    /// ```
+    #[test]
+    #[ignore = "throughput measurement, run by hand"]
+    fn md5_throughput() {
+        let mib: usize = std::env::var("GIRPR_MD5_BENCH_MIB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(64);
+        let runs: usize = std::env::var("GIRPR_MD5_BENCH_RUNS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
+        assert!(
+            mib > 0 && runs > 0,
+            "the benchmark needs a non-zero size and run count"
+        );
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "throughput");
+        let path = dir.join("throughput.bin");
+        let block: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let mut file = File::create(&path).expect("create the benchmark file");
+        for _ in 0..mib {
+            std::io::Write::write_all(&mut file, &block).expect("write the benchmark file");
+        }
+        file.sync_all().expect("flush the benchmark file");
+        drop(file);
+
+        // Warm the page cache and the hasher before taking the clock, so the
+        // number is throughput and not first-touch I/O.
+        let _ = md5_file(&path).expect("warm-up hash");
+        let start = std::time::Instant::now();
+        let mut digest = String::new();
+        for _ in 0..runs {
+            digest = md5_file(&path).expect("hash the benchmark file");
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let bytes = (mib * 1024 * 1024) as f64 * runs as f64;
+        println!(
+            "md5_file: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (digest {digest})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
+        assert_eq!(digest.len(), 32, "the benchmark hashed a real file");
+    }
 }

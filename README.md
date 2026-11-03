@@ -388,7 +388,7 @@ the prebuilt release for the platform. Every crate in the workspace (`girpr`,
 [`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
 
 ```powershell
-cargo nextest run             # 362 tests in this package, all offline (7 #[ignore]d)
+cargo nextest run             # this package's offline suite (ignored tests excluded)
 cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
 cargo check -p girsync -p gircap # the dev tools, which a root command does not build
 cargo nextest run --test repair_offline
@@ -397,7 +397,17 @@ cargo clippy -p girpr --all-targets -- -D warnings
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+
+# the whole-file MD5 throughput measurement: #[ignore]d, prints MiB/s
+cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
 ```
+
+- **MD5 throughput is measured by hand, not asserted.** The ignored
+  `util::md5::tests::md5_throughput` hashes a generated file through the same
+  whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`) and
+  prints MiB/s; run it with `--release`, because the debug profile measures the
+  compiler, not the hasher. `GIRPR_MD5_BENCH_MIB` (default 64) sizes the file
+  and `GIRPR_MD5_BENCH_RUNS` (default 5) the repetitions.
 
 - **One lint policy for the product and its shared policy crates.** The root
   `Cargo.toml` holds `[workspace.lints]`; `girpr`, `girpr-log` and
