@@ -558,6 +558,7 @@ mod tests {
 
     #[test]
     fn omitted_audio_is_not_explicit_and_defaults_jobs_to_4() {
+        assert_eq!(DEFAULT_JOBS, 4, "the documented default stays 4");
         let args = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"]);
         assert_eq!(args.jobs, None, "the default is not an explicit value");
         let ctx = args.into_ctx().unwrap();
