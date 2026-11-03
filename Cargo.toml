@@ -42,9 +42,12 @@ chrono = "0.4"
 # `--log-file`, the env vars and the default levels mean the same thing in
 # all three.
 girpr-log = { path = "crates/log" }
-# The runtime, its macros (`join!`) and the timers the pipeline awaits. The
-# network and I/O surfaces used by the tests are requested as dev-only features
-# below, so a normal build does not compile them.
+# The runtime, its macros (`join!`) and the timers the pipeline awaits. This
+# list is the crate's own request; `reqwest` enables tokio's network surface in
+# every build anyway, so the real saving is what this list does *not* ask for:
+# `process` and `signal`. `process` is needed only by the CLI tests, which run
+# the built binary, so it stays a dev-only feature below; `test-util` is
+# dev-only for the same reason. A normal build compiles neither.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
