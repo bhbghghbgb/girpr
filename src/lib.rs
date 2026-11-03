@@ -80,6 +80,21 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 /// These items are implementation details. They are public only so that the
 /// integration tests can construct a run and inspect its results without
 /// importing a private module. Nothing here is production API.
+///
+/// The list is deliberately explicit:
+///
+/// - `RepairMode`, `Lock`, `Limits` and `PathScope` let a test build a
+///   [`RunCtx`] and drive the real pipeline;
+/// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
+///   for real;
+/// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile`,
+///   `SophonChunkManifest` and `stream_chunk_to` are the manifest and stream
+///   helpers the offline artifact server and the peak-heap probe need;
+/// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk.
+///
+/// `Record` and `summary_record` repeat the root exports on purpose: an
+/// integration test can import everything it needs from this one module. That
+/// repetition is a convenience of the test seam, not a second API.
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::config::RepairMode;
