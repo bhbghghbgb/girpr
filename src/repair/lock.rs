@@ -25,8 +25,8 @@
 //! one is left over it is left alone (and kept by the cleanup) rather than
 //! deleted behind the user's back.
 
-use std::fs::{File, TryLockError};
-use std::io::{Seek, SeekFrom, Write};
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -61,13 +61,8 @@ impl Lock {
     /// The implementation, with the path injected so tests can take two
     /// locks for one key without depending on the global temp directory.
     fn acquire_at(path: PathBuf) -> Result<Lock> {
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)
-            .with_context(|| format!("open lock file {}", path.display()))?;
+        let (mut file, created) =
+            open_lock_file(&path).with_context(|| format!("open lock file {}", path.display()))?;
         match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Err(held(&path)),
@@ -77,14 +72,18 @@ impl Lock {
         }
         // The contents are for a human: which process holds it, and since
         // when. A lock whose body cannot be written is still a lock — the
-        // open handle and its OS lock are what exclude.
-        let body = format!(
-            "pid={}\nstarted={}\n",
-            std::process::id(),
-            chrono::Utc::now().to_rfc3339()
-        );
-        if file.set_len(0).is_ok() && file.seek(SeekFrom::Start(0)).is_ok() {
-            let _ = file.write_all(body.as_bytes());
+        // open handle and its OS lock are what exclude. A file we did not
+        // create is only rewritten when its body is already one of ours; an
+        // arbitrary file (or a symlink target) is never truncated.
+        if may_write_body(&path, &mut file, created) {
+            let body = format!(
+                "pid={}\nstarted={}\n",
+                std::process::id(),
+                chrono::Utc::now().to_rfc3339()
+            );
+            if file.set_len(0).is_ok() && file.seek(SeekFrom::Start(0)).is_ok() {
+                let _ = file.write_all(body.as_bytes());
+            }
         }
         Ok(Lock { path, file })
     }
@@ -135,6 +134,70 @@ impl Drop for Lock {
         // file is harmless because the next `try_lock` succeeds.
         let _ = self.file.unlock();
     }
+}
+
+/// Open the lock file without creating or truncating anything unexpected.
+///
+/// A fresh file is claimed with `create_new`, which refuses to follow a
+/// dangling symlink into a new target. An existing path is opened read/write
+/// without create, so a pre-created symlink cannot make us create its target,
+/// and nothing is truncated at open time. The bool reports whether this call
+/// created the file, the only case where the body is certainly ours.
+fn open_lock_file(path: &Path) -> io::Result<(File, bool)> {
+    // Bounded: an existing file may vanish between the two opens, but only a
+    // hostile or broken process keeps doing that.
+    for _ in 0..3 {
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(file) => return Ok((file, true)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                match OpenOptions::new().read(true).write(true).open(path) {
+                    Ok(file) => return Ok((file, false)),
+                    // The path still exists (for example a dangling symlink)
+                    // but cannot be opened without creating its target.
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        if std::fs::symlink_metadata(path).is_ok() {
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(io::Error::other("lock file kept changing while opening it"))
+}
+
+/// May this run rewrite the body of the lock file?
+///
+/// A file we created is ours. An existing file is only ours if it is a regular
+/// file (not a symlink or other special file, which opening may have followed)
+/// and already carries a lock body, or is empty. Anything else is left exactly
+/// as it is: the OS lock still excludes, and a refusal can report an
+/// unreadable body without having damaged a user file.
+fn may_write_body(path: &Path, file: &mut File, created: bool) -> bool {
+    if created {
+        return true;
+    }
+    let regular = std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_file())
+        .unwrap_or(false);
+    if !regular {
+        return false;
+    }
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return false;
+    }
+    let mut head = [0u8; 8];
+    let Ok(read) = file.read(&mut head) else {
+        return false;
+    };
+    read == 0 || head[..read].starts_with(b"pid=")
 }
 
 /// The refusal for a lock that a live process holds.
@@ -265,6 +328,47 @@ mod tests {
         std::fs::write(&path, "pid=1\nstarted=2000-01-01T00:00:00Z\n").unwrap();
         let lock = Lock::acquire(&dir).expect("an unlocked leftover is harmless");
         assert_eq!(lock.path(), path);
+        // The stale body is replaced by the live holder's.
+        drop(lock);
+        let body = std::fs::read_to_string(&path).expect("the body is readable again");
+        assert!(
+            body.contains(&format!("pid={}", std::process::id())),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn a_preexisting_foreign_file_is_not_truncated() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "foreign");
+        let path = lock_path(&dir);
+        std::fs::write(&path, "this is not a lock body").unwrap();
+        let lock = Lock::acquire(&dir).expect("the path can still be locked");
+        assert_eq!(lock.path(), path);
+        drop(lock);
+        // The file is still ours to lock, but its contents were left alone.
+        assert_eq!(
+            std::fs::read(&path).expect("the file is still there"),
+            b"this is not a lock body"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_preexisting_symlink_target_is_not_truncated() {
+        use std::os::unix::fs::symlink;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "symlink");
+        let target = dir.join("user-written.txt");
+        std::fs::write(&target, "user data").unwrap();
+        let path = lock_path(&dir);
+        symlink(&target, &path).expect("the symlink is created");
+        let lock = Lock::acquire(&dir).expect("the existing target can be locked");
+        assert_eq!(lock.path(), path);
+        drop(lock);
+        assert_eq!(
+            std::fs::read(&target).expect("the target is untouched"),
+            b"user data"
+        );
     }
 
     #[test]
