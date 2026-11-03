@@ -156,6 +156,9 @@ pub struct GameFixture {
     /// for a non-latest tag. `None` = the server does not serve the local tag
     /// at all (`getBuild(local)` answers -202), which is the default.
     pub local_manifest: Option<FixtureManifest>,
+    /// Additional manifests in the **latest** build, after the primary `game`
+    /// one. Their metadata is part of `getBuild`'s answer, in this order.
+    pub extra_latest_manifests: Vec<FixtureLatestManifest>,
     /// The old file's bytes — the thing the repair has to move — for the
     /// fixtures that have one.
     pub old_data: Option<(String, Vec<u8>)>,
@@ -173,6 +176,18 @@ pub struct FixtureManifest {
     pub id: String,
     pub zstd: Vec<u8>,
     pub checksum: String,
+}
+
+/// Another manifest in the same latest build, with its own fields and file
+/// list. `served = false` advertises it in `getBuild` but answers `404` for its
+/// body, which is what a build whose manifest is gone looks like.
+pub struct FixtureLatestManifest {
+    pub matching_field: String,
+    pub category_id: String,
+    pub id: String,
+    pub zstd: Vec<u8>,
+    pub checksum: String,
+    pub served: bool,
 }
 
 /// The fixture's latest tag. The mock serves the chunk manifest for
@@ -295,11 +310,44 @@ pub struct Lies {
     pub wrong_file_md5: Vec<String>,
 }
 
+/// Another manifest in the latest build, beyond the primary `game` one.
+#[derive(Clone, Debug)]
+pub struct ExtraManifestSpec {
+    /// The `matching_field`/`category_id` the build advertises.
+    pub matching_field: String,
+    pub category_id: String,
+    /// The files this manifest describes.
+    pub files: Vec<FileSpec>,
+    /// Whether the mock serves the body. `false` models a build whose manifest
+    /// is advertised but no longer exists at the origin (a `404`).
+    pub served: bool,
+}
+
+impl ExtraManifestSpec {
+    /// An extra latest-build manifest with the given field and files.
+    pub fn new(matching_field: &str, files: Vec<FileSpec>) -> Self {
+        Self {
+            matching_field: matching_field.to_string(),
+            category_id: matching_field.to_string(),
+            files,
+            served: true,
+        }
+    }
+
+    /// The same manifest, advertised by `getBuild` but `404` when fetched.
+    pub fn not_served(mut self) -> Self {
+        self.served = false;
+        self
+    }
+}
+
 /// A whole fixture: the new side, the old side, and what is on disk.
 #[derive(Clone, Debug, Default)]
 pub struct FixtureSpec {
     /// The files the **latest** manifest describes — the repair's target.
     pub new: Vec<FileSpec>,
+    /// Additional latest-build manifests, in build order after the primary one.
+    pub extra_manifests: Vec<ExtraManifestSpec>,
     /// The files the **local** build's manifest describes — the reuse map's
     /// sources. `None` = the server does not serve the local tag at all,
     /// which is what "no chunk reuse" looks like.
@@ -324,6 +372,12 @@ impl FixtureSpec {
     /// sources.
     pub fn with_old(mut self, files: Vec<FileSpec>) -> Self {
         self.old = Some(files);
+        self
+    }
+
+    /// The same fixture, with another manifest in the latest build.
+    pub fn with_extra_manifest(mut self, extra: ExtraManifestSpec) -> Self {
+        self.extra_manifests.push(extra);
         self
     }
 
@@ -358,18 +412,20 @@ pub fn lay_out(chunks: &[ChunkSpec]) -> Vec<u8> {
     out
 }
 
-/// Build the mock's fixture from a description.
+/// Build one manifest's files and protobuf view, filling the chunk stores.
 ///
-/// The two sides are two lists of files and the bytes on disk are a third, so
-/// every shape the repair has a branch for is a description rather than a
-/// builder.
-pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
-    let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut files: Vec<FixtureFile> = Vec::new();
-
+/// The primary manifest and extra latest-build manifests share this so a
+/// multi-manifest fixture cannot describe its files differently from a
+/// single-manifest one.
+fn build_new_side(
+    files_spec: &[FileSpec],
+    lies: &Lies,
+    chunk_store: &mut HashMap<String, Vec<u8>>,
+    corrupt_chunk_store: &mut HashMap<String, Vec<u8>>,
+) -> (Vec<FixtureFile>, Vec<SophonChunkFile>) {
     // The new side, as the mock's own view of it.
-    for f in &spec.new {
+    let mut files: Vec<FixtureFile> = Vec::new();
+    for f in files_spec {
         let data = lay_out(&f.chunks);
         files.push(FixtureFile {
             rel: f.rel.clone(),
@@ -396,7 +452,7 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             // A chunk the store serves as something that is not a zstd frame
             // is served **raw**: the decode is what has to fail, and a
             // well-formed frame with wrong bytes would fail somewhere else.
-            let served = if spec.lies.not_zstd.contains(&c.id) {
+            let served = if lies.not_zstd.contains(&c.id) {
                 c.data.clone()
             } else {
                 compressed.clone()
@@ -410,22 +466,22 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
             pb_chunks.push(SophonChunk {
                 id: c.id.clone(),
-                uncompressed_md5: if spec.lies.wrong_chunk_md5.contains(&c.id) {
+                uncompressed_md5: if lies.wrong_chunk_md5.contains(&c.id) {
                     // A digest no payload can have: the chunk must be refused.
                     "00000000000000000000000000000000".to_string()
                 } else {
                     md5hex(&c.data)
                 },
-                offset: if spec.lies.huge_offset.contains(&c.id) {
+                offset: if lies.huge_offset.contains(&c.id) {
                     // Past `i64::MAX` once the chunk's length is added: the
                     // layout of the file on disk is unchanged, only the claim.
                     i64::MAX
                 } else {
                     c.offset
                 },
-                compressed_size: if spec.lies.wrong_chunk_size.contains(&c.id) {
+                compressed_size: if lies.wrong_chunk_size.contains(&c.id) {
                     compressed.len() as i64 + 7
-                } else if spec.lies.huge_compressed_size.contains(&c.id) {
+                } else if lies.huge_compressed_size.contains(&c.id) {
                     // The blob on the wire is still a normal frame; only the
                     // manifest's claim about its length is hostile.
                     i64::MAX
@@ -441,14 +497,14 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             file: f.rel.clone(),
             chunks: pb_chunks,
             is_folder: false,
-            size: if spec.lies.huge_file_size.contains(&f.rel) {
+            size: if lies.huge_file_size.contains(&f.rel) {
                 // The bytes on disk are the fixture's real layout; only the
                 // manifest's claim about the file's length is hostile.
                 i64::MAX
             } else {
                 f.data.len() as i64
             },
-            md5: if spec.lies.wrong_file_md5.contains(&f.rel) {
+            md5: if lies.wrong_file_md5.contains(&f.rel) {
                 // A digest no payload can have. The layout on disk is
                 // unchanged; only the manifest's claim about the file is
                 // hostile.
@@ -458,7 +514,50 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             },
         });
     }
+    (files, pb_files)
+}
+
+/// Build the mock's fixture from a description.
+///
+/// The two sides are two lists of files and the bytes on disk are a third, so
+/// every shape the repair has a branch for is a description rather than a
+/// builder.
+pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
+    let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let (files, pb_files) = build_new_side(
+        &spec.new,
+        &spec.lies,
+        &mut chunk_store,
+        &mut corrupt_chunk_store,
+    );
     let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
+
+    // Extra manifests in the same latest build, in the order the fixture
+    // described them. The mock's own build answer lists them after `game`, so
+    // selection-order tests can rely on that order.
+    let extra_latest_manifests: Vec<FixtureLatestManifest> = spec
+        .extra_manifests
+        .iter()
+        .enumerate()
+        .map(|(index, extra)| {
+            let (_, extra_pb) = build_new_side(
+                &extra.files,
+                &Lies::default(),
+                &mut chunk_store,
+                &mut corrupt_chunk_store,
+            );
+            let (zstd, checksum) = encode_manifest(&extra_pb);
+            FixtureLatestManifest {
+                matching_field: extra.matching_field.clone(),
+                category_id: extra.category_id.clone(),
+                id: format!("manifest_test_extra_{index}_001"),
+                zstd,
+                checksum,
+                served: extra.served,
+            }
+        })
+        .collect();
 
     // The local build's manifest: the old side's chunk layout, and nothing
     // else. Its chunks are never fetched — the local manifest only ever feeds
@@ -513,6 +612,7 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
         chunk_store,
         corrupt_chunk_store,
         local_manifest,
+        extra_latest_manifests,
         old_data,
         disk: spec.disk.clone(),
     }
@@ -805,6 +905,9 @@ struct Responses {
     build_local: Option<Vec<u8>>,
     /// The local manifest's body, by id.
     local_manifest: Option<(String, Vec<u8>)>,
+    /// Extra latest-build manifest bodies, by id. A manifest advertised by
+    /// `getBuild` but absent here is a `404`.
+    extra_manifests: Vec<(String, Vec<u8>)>,
     latest_tag: String,
     fail_chunks: bool,
     fail_branches: bool,
@@ -895,31 +998,50 @@ fn build_responses(
             }]
         }
     });
+    let mut latest_manifests = vec![serde_json::json!({
+        "category_id": "10016",
+        "category_name": "game-test",
+        "matching_field": "game",
+        "manifest": {
+            "id": fx.manifest_id,
+            "checksum": if opts.wrong_manifest_checksum {
+                // A checksum no blob can have: the manifest must be
+                // refused, and the run must fail as metadata.
+                "00000000000000000000000000000000".to_string()
+            } else {
+                fx.manifest_checksum.clone()
+            },
+            "compressed_size": fx.manifest_zstd.len() as i64,
+            "uncompressed_size": raw_manifest_len as i64
+        },
+        "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
+        "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
+    })];
+    for m in &fx.extra_latest_manifests {
+        let raw_len = zstd::stream::decode_all(std::io::Cursor::new(m.zstd.clone()))
+            .expect("decode extra fixture manifest")
+            .len();
+        latest_manifests.push(serde_json::json!({
+            "category_id": m.category_id,
+            "category_name": m.matching_field,
+            "matching_field": m.matching_field,
+            "manifest": {
+                "id": m.id,
+                "checksum": m.checksum,
+                "compressed_size": m.zstd.len() as i64,
+                "uncompressed_size": raw_len as i64
+            },
+            "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
+            "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
+        }));
+    }
     let build_latest = serde_json::json!({
         "retcode": 0,
         "message": "OK",
         "data": {
             "build_id": "build_test_001",
             "tag": fx.latest_tag,
-            "manifests": [{
-                "category_id": "10016",
-                "category_name": "game-test",
-                "matching_field": "game",
-                "manifest": {
-                    "id": fx.manifest_id,
-                    "checksum": if opts.wrong_manifest_checksum {
-                        // A checksum no blob can have: the manifest must be
-                        // refused, and the run must fail as metadata.
-                        "00000000000000000000000000000000".to_string()
-                    } else {
-                        fx.manifest_checksum.clone()
-                    },
-                    "compressed_size": fx.manifest_zstd.len() as i64,
-                    "uncompressed_size": raw_manifest_len as i64
-                },
-                "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
-                "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
-            }]
+            "manifests": latest_manifests
         }
     });
     // The local build, when the server serves one: a different manifest, and
@@ -952,6 +1074,12 @@ fn build_responses(
         .local_manifest
         .as_ref()
         .map(|m| (m.id.clone(), m.zstd.clone()));
+    let extra_manifests = fx
+        .extra_latest_manifests
+        .iter()
+        .filter(|m| m.served)
+        .map(|m| (m.id.clone(), m.zstd.clone()))
+        .collect();
     Responses {
         configs: serde_json::to_vec(&configs).unwrap(),
         branches: serde_json::to_vec(&branches).unwrap(),
@@ -960,6 +1088,7 @@ fn build_responses(
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
         build_local: build_local.map(|b| serde_json::to_vec(&b).unwrap()),
         local_manifest,
+        extra_manifests,
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
         fail_branches: opts.fail_branches,
@@ -1062,6 +1191,8 @@ async fn serve_one(
         } else if let Some((local_id, body)) = &r.local_manifest
             && id == local_id
         {
+            ("200 OK", "application/octet-stream", body.clone())
+        } else if let Some((_, body)) = r.extra_manifests.iter().find(|(mid, _)| mid == id) {
             ("200 OK", "application/octet-stream", body.clone())
         } else {
             ("404 Not Found", "text/plain", b"no such manifest".to_vec())
