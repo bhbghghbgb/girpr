@@ -40,6 +40,10 @@ impl Ceiling {
 
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
+///
+/// The types of the public counter fields — [`SummaryFlags`], [`Meter`] and
+/// [`Ceiling`] — are re-exported alongside [`Summary`](crate::Summary), so a
+/// caller outside the crate can name every value it can read.
 #[derive(Debug, Default)]
 pub struct Summary {
     pub files_total: u64,

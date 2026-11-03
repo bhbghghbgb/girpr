@@ -17,7 +17,8 @@
 //!
 //! - [`run`] — the whole pipeline, and its configuration ([`RunCtx`]) and
 //!   typed failure ([`RunFailure`]);
-//! - [`Summary`], [`OutputFormat`], [`Record`], [`emit`](fn@emit) and
+//! - [`Summary`], the types its public fields name ([`SummaryFlags`], [`Meter`],
+//!   [`Ceiling`]), [`OutputFormat`], [`Record`], [`emit`](fn@emit) and
 //!   [`summary_record`] — the run counters and the stdout automation contract;
 //! - [`Args`] plus the audio helpers — the command-line parser;
 //! - [`Biz`] — the game/channel selector;
@@ -71,7 +72,8 @@ pub use config::{RunCtx, RunExit, RunFailure};
 pub use girpr_log::Level;
 pub use logging::{flush_log, init_tracing};
 pub use repair::run;
-pub use report::{OutputFormat, Record, Summary, emit, summary_record};
+pub use repair::scope::ledger::Meter;
+pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, summary_record};
 
 /// The integration tests' seam.
 ///

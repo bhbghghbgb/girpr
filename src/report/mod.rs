@@ -33,4 +33,4 @@ pub mod summary;
 
 pub use self::emit::{ProgressGuard, ReportProvenance, emit, report_record, summary_record};
 pub use self::record::{OutputFormat, Record};
-pub use self::summary::Summary;
+pub use self::summary::{Ceiling, Summary, SummaryFlags};

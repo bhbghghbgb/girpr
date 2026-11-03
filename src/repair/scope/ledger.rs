@@ -118,6 +118,11 @@ impl StoppedBy {
 /// way. The **settled** figure is what a *verified* ceiling bounds: the bytes
 /// the repair was allowed to spend, which is a function of the install rather
 /// than of the transport.
+///
+/// This type is part of [`crate::Summary`]'s public field surface, so it is
+/// re-exported at the crate root: a caller can name the meter behind
+/// [`Summary::download`](crate::Summary#structfield.download) and
+/// [`Summary::write`](crate::Summary#structfield.write).
 #[derive(Debug)]
 pub struct Meter {
     /// The bytes the run has spent.
