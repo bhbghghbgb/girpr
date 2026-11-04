@@ -115,6 +115,20 @@ impl ScanReport {
         }
     }
 
+    /// [`Self::for_test`] with a plan-scan start time, so a test can exercise
+    /// the reuse guard's age rule instead of always reading the file again.
+    #[cfg(test)]
+    pub(crate) fn for_test_at(
+        plan: &RepairPlan,
+        files: Vec<Option<Verdict>>,
+        scanned_at: SystemTime,
+    ) -> Self {
+        Self {
+            scanned_at: Some(scanned_at),
+            ..Self::for_test(plan, files)
+        }
+    }
+
     /// The verdict for one planned file, when this report is from `plan` and
     /// the scan produced one.
     ///
