@@ -324,12 +324,15 @@ pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
     let mut would_be = 0u64;
     for c in &plan.files {
         if dry_run {
-            would_be += c.bytes;
+            // Saturating: the sum of on-disk sizes can only exceed `u64::MAX`
+            // if the volume itself could, so the clamp is unreachable and the
+            // add is never allowed to panic on a large install.
+            would_be = would_be.saturating_add(c.bytes);
             tracing::info!("would purge extra {} ({} bytes)", c.path.display(), c.bytes);
         } else {
             match std::fs::remove_file(&c.path) {
                 Ok(()) => {
-                    deleted_bytes += c.bytes;
+                    deleted_bytes = deleted_bytes.saturating_add(c.bytes);
                     tracing::info!("purged extra {} ({} bytes)", c.path.display(), c.bytes);
                 }
                 Err(e) => {

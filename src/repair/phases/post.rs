@@ -391,7 +391,10 @@ fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_ru
             match std::fs::remove_file(&p) {
                 Ok(()) => {
                     if let Some(sz) = sz {
-                        deleted_bytes += sz;
+                        // A size the file system reported can never make the
+                        // sum wrap; saturation only documents that a total of
+                        // deleted bytes is allowed to clamp rather than panic.
+                        deleted_bytes = deleted_bytes.saturating_add(sz);
                     }
                     tracing::info!("deleted deprecated {n}");
                 }
