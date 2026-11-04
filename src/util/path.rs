@@ -640,6 +640,18 @@ mod tests {
         );
     }
 
+    /// A path with no file name still names its sibling: the fallback prefix is
+    /// empty and the helper appends the same suffix, so the name is the suffix
+    /// alone.
+    #[test]
+    fn temp_sibling_names_the_no_file_name_fallback() {
+        let path = Path::new("");
+        assert!(path.file_name().is_none());
+        let mut want = std::ffi::OsString::new();
+        want.push(TEMP_SUFFIX);
+        assert_eq!(temp_sibling(path).file_name(), Some(want.as_os_str()));
+    }
+
     /// The suffix is pushed onto the `OsString`, so a name that is not UTF-8
     /// keeps every byte instead of being round-tripped through a lossy string.
     #[test]
