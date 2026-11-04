@@ -203,6 +203,8 @@ impl Meter {
     /// value it replaces, and no interleaving can wrap.
     fn add_saturating(cell: &AtomicU64, n: u64) {
         let mut cur = cell.load(Ordering::Relaxed);
+        #[cfg(test)]
+        tests::pause_before_cas();
         loop {
             let next = cur.saturating_add(n);
             match cell.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
@@ -607,7 +609,30 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::cell::RefCell;
+    use std::sync::{Arc, Barrier};
+
+    thread_local! {
+        /// A test-only pause after the load and before the compare-exchange.
+        static CAS_PAUSE: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
+    }
+
+    /// Wait at the current thread's pause barrier, when one is installed.
+    ///
+    /// This is what makes the wrap race deterministic: every racing thread
+    /// loads the counter, then stops here, so all of them are guaranteed to
+    /// have seen the same value before any of them tries to commit.
+    pub(super) fn pause_before_cas() {
+        let barrier = CAS_PAUSE.with(|pause| pause.borrow().clone());
+        if let Some(barrier) = barrier {
+            barrier.wait();
+        }
+    }
+
+    /// Install (or clear) this thread's pause barrier.
+    fn set_pause_before_cas(barrier: Option<Arc<Barrier>>) {
+        CAS_PAUSE.with(|pause| *pause.borrow_mut() = barrier);
+    }
 
     /// The meter's two numbers, and the rule that tells them apart.
     ///
@@ -770,38 +795,35 @@ mod tests {
     /// wrap the counter. A load followed by `fetch_add` loses exactly this
     /// race: every thread sees `MAX - 1` as room for one more byte.
     ///
-    /// The window between the load and the add is only a few instructions, so
-    /// one round says little; every round starts a fresh meter at `MAX - 1` and
-    /// releases the threads together, and a wrap in any round leaves the
-    /// counter far below `u64::MAX` for the rest of that round.
+    /// The test installs a pause after the load, so every thread is guaranteed
+    /// to have read `MAX - 1` before any of them commits. That is the exact
+    /// interleaving the compare-exchange loop has to survive, without a
+    /// probabilistic loop of thousands of spawned threads.
     #[test]
     fn concurrent_charges_cannot_wrap_a_meter_near_the_top() {
-        use std::sync::Barrier;
-
-        for _ in 0..256 {
-            let s = Arc::new(Summary::default());
-            assert!(s.reserve_download_bytes(u64::MAX - 1));
-            let start = Arc::new(Barrier::new(65));
-            let handles: Vec<_> = (0..64)
-                .map(|_| {
-                    let s = s.clone();
-                    let start = start.clone();
-                    std::thread::spawn(move || {
-                        start.wait();
-                        assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
-                    })
+        const THREADS: usize = 8;
+        let s = Arc::new(Summary::default());
+        assert!(s.reserve_download_bytes(u64::MAX - 1));
+        let paused = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let s = s.clone();
+                let paused = paused.clone();
+                std::thread::spawn(move || {
+                    set_pause_before_cas(Some(paused));
+                    assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
+                    set_pause_before_cas(None);
                 })
-                .collect();
-            start.wait();
-            for h in handles {
-                h.join().unwrap();
-            }
-            assert_eq!(
-                s.download.live(),
-                u64::MAX,
-                "charges at the top saturate, never wrap"
-            );
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
         }
+        assert_eq!(
+            s.download.live(),
+            u64::MAX,
+            "charges at the top saturate, never wrap"
+        );
     }
 
     /// A ceiling installed after construction is still honored: the setter
