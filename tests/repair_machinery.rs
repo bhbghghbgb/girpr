@@ -440,6 +440,18 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
 }
 
+/// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
+/// so a `--scan` run can still exercise the guarded plan-scan reuse.
+fn age_mtime(path: &Path) {
+    use std::time::{Duration, SystemTime};
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+        .unwrap();
+}
+
 /// A `--scan` repair and an unscanned repair of the same damage are the same
 /// repair: same bytes, same exit code, and the same chunk accounting.
 ///
@@ -468,6 +480,7 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
 
     let scanned_rig = Rig::start(&spec).await;
     scanned_rig.at_local_version();
+    age_mtime(&scanned_rig.game().join("game/parity.dat"));
     let mut scanned_args = vec!["--scan"];
     scanned_args.extend_from_slice(&args);
     let scanned = scanned_rig.run(&scanned_args).await;
