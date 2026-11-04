@@ -14,6 +14,7 @@
 //! optimization (chunk reuse), never an input to correctness.
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -187,12 +188,54 @@ impl RepairPlan {
         self.files.is_empty()
     }
 
+    /// A fingerprint of this plan's identity: the ordered file list, each
+    /// file's manifest facts, and its ordered chunk layout.
+    ///
+    /// Two plans with the same fingerprint have the same files at the same
+    /// positions and the same chunks in the same order, so a per-file scan
+    /// index means the same thing in both. A scan records the fingerprint of
+    /// the plan it was taken from and refuses to answer for any other plan.
+    ///
+    /// This is an in-process check only. It is never persisted or emitted, so
+    /// it does not extend the output contract; the hash function is whatever
+    /// `DefaultHasher` provides in this build.
+    pub(crate) fn fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.latest.hash(&mut hasher);
+        self.files.len().hash(&mut hasher);
+        for file in &self.files {
+            file.rel.hash(&mut hasher);
+            file.size.hash(&mut hasher);
+            file.md5.hash(&mut hasher);
+            file.url_prefix.as_ref().hash(&mut hasher);
+            file.chunks.len().hash(&mut hasher);
+            for chunk in &file.chunks {
+                chunk.id.hash(&mut hasher);
+                chunk.uncompressed_md5.hash(&mut hasher);
+                chunk.offset.hash(&mut hasher);
+                chunk.compressed_size.hash(&mut hasher);
+                chunk.uncompressed_size.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
     /// Every planned file with the id that addresses it, in plan order.
     pub fn iter(&self) -> impl Iterator<Item = (FileId, &PlannedFile)> {
         self.files
             .iter()
             .enumerate()
             .map(|(index, file)| (FileId::new(index), file))
+    }
+
+    /// A plan from its parts — the test-only constructor for the private file
+    /// list. Production builds the plan through [`build_plan`].
+    #[cfg(test)]
+    pub(crate) fn from_files(latest: impl Into<String>, files: Vec<PlannedFile>) -> Self {
+        Self {
+            latest: latest.into(),
+            files,
+        }
     }
 
     /// Paths the files-cleanup must treat as expected (docs/02 step 7).

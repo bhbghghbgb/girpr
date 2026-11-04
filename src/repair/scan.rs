@@ -75,11 +75,47 @@ pub struct ScanReport {
     /// When the scan started. The in-place writer reports how old the plan
     /// scan is when it reuses a verdict; `None` for a report built by hand.
     pub scanned_at: Option<SystemTime>,
+    /// The [`RepairPlan::fingerprint`] of the plan this scan read.
+    ///
+    /// A scan's `files` are indexed by plan position, so this is the identity
+    /// that makes those positions meaningful. `None` is a report built by
+    /// hand; it answers for no plan rather than accidentally matching one.
+    plan_fingerprint: Option<u64>,
 }
 
 impl ScanReport {
-    /// The verdict for one planned file, when the scan produced one.
-    pub fn get(&self, id: FileId) -> Option<&Verdict> {
+    /// Whether this report was taken from `plan`.
+    ///
+    /// The comparison is exactly `self.plan_fingerprint == Some(plan.fingerprint())`:
+    /// the same ordered file list, file metadata and chunk layout. A report
+    /// from another plan is not an answer, even at an in-range index.
+    pub(crate) fn matches_plan(&self, plan: &RepairPlan) -> bool {
+        self.plan_fingerprint == Some(plan.fingerprint())
+    }
+
+    /// A report for `files`, bound to `plan` — the test-only constructor for
+    /// the private index fields.
+    #[cfg(test)]
+    pub(crate) fn for_test(plan: &RepairPlan, files: Vec<Option<Verdict>>) -> Self {
+        let damaged_chunks = files.iter().flatten().map(Verdict::damaged_chunks).sum();
+        Self {
+            files,
+            damaged_chunks,
+            plan_fingerprint: Some(plan.fingerprint()),
+            ..Default::default()
+        }
+    }
+
+    /// The verdict for one planned file, when this report is from `plan` and
+    /// the scan produced one.
+    ///
+    /// A report from a different plan returns `None` for every id: the caller
+    /// then re-reads the file or estimates it in full, which is safe. The scan
+    /// is never silently applied to a plan it does not describe.
+    pub fn get(&self, plan: &RepairPlan, id: FileId) -> Option<&Verdict> {
+        if !self.matches_plan(plan) {
+            return None;
+        }
         self.files.get(id.index()).and_then(Option::as_ref)
     }
 
@@ -138,7 +174,13 @@ impl ScanReport {
                     // escapes is not readable, so nothing is reusable.
                     Err(_) => return all_chunks_download_bytes(&f.chunks),
                 };
-                est_file_download_bytes(&f.chunks, self.get(id), &sources, requested, resolved)
+                est_file_download_bytes(
+                    &f.chunks,
+                    self.get(plan, id),
+                    &sources,
+                    requested,
+                    resolved,
+                )
             })
             .collect()
     }
@@ -244,6 +286,7 @@ pub async fn scan_plan(
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let total_files = plan.files.len();
+    let plan_fingerprint = plan.fingerprint();
     let mut stream = futures_util::stream::iter(0..total_files)
         .map(move |idx| {
             let plan = Arc::clone(&plan);
@@ -262,6 +305,7 @@ pub async fn scan_plan(
 
     let mut out = ScanReport {
         scanned_at,
+        plan_fingerprint: Some(plan_fingerprint),
         ..Default::default()
     };
     out.files.resize(total_files, None);
@@ -802,6 +846,16 @@ mod tests {
 
     #[test]
     fn the_report_returns_verdicts_by_file_id() {
+        let plan = RepairPlan {
+            latest: "1.0".into(),
+            files: vec![PlannedFile {
+                rel: "a.dat".into(),
+                size: 0,
+                md5: "m".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![],
+            }],
+        };
         let report = ScanReport {
             files: vec![
                 None,
@@ -816,13 +870,64 @@ mod tests {
             bytes: 0,
             damaged_chunks: 0,
             scanned_at: None,
+            plan_fingerprint: Some(plan.fingerprint()),
         };
 
-        assert!(report.get(FileId::new(0)).is_none());
-        assert_eq!(report.get(FileId::new(1)).unwrap().file_md5, "present");
+        assert!(report.get(&plan, FileId::new(0)).is_none());
+        assert_eq!(
+            report.get(&plan, FileId::new(1)).unwrap().file_md5,
+            "present"
+        );
         assert!(
-            report.get(FileId::new(2)).is_none(),
+            report.get(&plan, FileId::new(2)).is_none(),
             "an id outside the report is not a verdict"
+        );
+    }
+
+    /// The report's file positions belong to the plan it read. A report paired
+    /// with a different plan answers `None` for every id instead of handing
+    /// back a verdict at a position that means something else there.
+    #[test]
+    fn a_report_from_another_plan_is_rejected() {
+        let plan_a = RepairPlan {
+            latest: "1.0".into(),
+            files: vec![PlannedFile {
+                rel: "a.dat".into(),
+                size: 1,
+                md5: "a".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![chunk_at("c0", "m0", 0, 1)],
+            }],
+        };
+        let plan_b = RepairPlan {
+            latest: "1.0".into(),
+            files: vec![PlannedFile {
+                rel: "b.dat".into(),
+                size: 2,
+                md5: "b".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![chunk_at("c0", "m1", 0, 2)],
+            }],
+        };
+        let report = ScanReport {
+            files: vec![Some(Verdict {
+                file_md5: "a".into(),
+                dest_ok: vec![true],
+                source_ok: vec![true],
+                file_len: 1,
+                modified: None,
+            })],
+            bytes: 1,
+            damaged_chunks: 0,
+            scanned_at: None,
+            plan_fingerprint: Some(plan_a.fingerprint()),
+        };
+
+        assert!(report.matches_plan(&plan_a));
+        assert!(!report.matches_plan(&plan_b));
+        assert!(
+            report.get(&plan_b, FileId::new(0)).is_none(),
+            "a verdict from another plan must not be applied"
         );
     }
 }

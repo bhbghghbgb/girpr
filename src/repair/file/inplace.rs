@@ -653,7 +653,7 @@ fn reusable_verdict<'a>(
     path: &std::path::Path,
     handle: &std::fs::File,
 ) -> Option<&'a Verdict> {
-    let verdict = ctx.scan.as_deref()?.get(id)?;
+    let verdict = ctx.scan.as_deref()?.get(&ctx.plan, id)?;
     if verdict.dest_ok.len() != file.chunks.len() || verdict.source_ok.len() != file.chunks.len() {
         return None;
     }
@@ -1208,12 +1208,9 @@ mod tests {
             file_len: good.len() as u64,
             modified: Some(recorded),
         };
-        let mut ctx = test_ctx(Some(Arc::new(ScanReport {
-            files: vec![Some(verdict)],
-            bytes: good.len() as u64,
-            damaged_chunks: 1,
-            scanned_at: None,
-        })));
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(verdict)]);
+        let mut ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         ctx.dry_run = false;
 
         // Both chunks change, the length stays the same, and the mtime is
@@ -1292,12 +1289,9 @@ mod tests {
             file_len: bytes.len() as u64,
             modified: Some(recorded),
         };
-        let ctx = test_ctx(Some(Arc::new(ScanReport {
-            files: vec![Some(wrong_shape)],
-            bytes: bytes.len() as u64,
-            damaged_chunks: 0,
-            scanned_at: None,
-        })));
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(wrong_shape)]);
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         assert!(
             reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
             "a verdict for another chunk layout is not this file's verdict"
@@ -1310,12 +1304,9 @@ mod tests {
             file_len: bytes.len() as u64,
             modified: None,
         };
-        let ctx = test_ctx(Some(Arc::new(ScanReport {
-            files: vec![Some(no_time)],
-            bytes: bytes.len() as u64,
-            damaged_chunks: 0,
-            scanned_at: None,
-        })));
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(no_time)]);
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         assert!(
             reusable_verdict(&ctx, id, &file, &path, &handle).is_none(),
             "without a recorded mtime the guard cannot prove the file unchanged"
@@ -1323,14 +1314,15 @@ mod tests {
     }
 
     fn test_ctx(scan: Option<Arc<ScanReport>>) -> FileCtx {
+        test_ctx_with_plan(RepairPlan::from_files("", Vec::new()), scan)
+    }
+
+    fn test_ctx_with_plan(plan: RepairPlan, scan: Option<Arc<ScanReport>>) -> FileCtx {
         FileCtx {
             game_dir: std::path::PathBuf::new(),
             root: None,
             http: reqwest::Client::new(),
-            plan: Arc::new(RepairPlan {
-                latest: String::new(),
-                files: Vec::new(),
-            }),
+            plan: Arc::new(plan),
             local_map: Arc::new(LocalChunkMap::new()),
             scan,
             summary: Arc::new(Summary::new()),
@@ -1374,13 +1366,9 @@ mod tests {
             file_len: bytes.len() as u64,
             modified: Some(recorded),
         };
-        let report = ScanReport {
-            files: vec![Some(verdict)],
-            bytes: bytes.len() as u64,
-            damaged_chunks: 0,
-            scanned_at: None,
-        };
-        let ctx = test_ctx(Some(Arc::new(report)));
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(verdict)]);
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
         let id = FileId::new(0);
 
         let handle = std::fs::File::open(&path).unwrap();

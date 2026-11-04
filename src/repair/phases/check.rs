@@ -96,7 +96,7 @@ where
                         || util::contained_join(&game_dir, &f.rel),
                         |root| root.join(&f.rel),
                     );
-                    match scan.as_deref().and_then(|s| s.get(FileId::new(idx))) {
+                    match scan.as_deref().and_then(|s| s.get(&plan, FileId::new(idx))) {
                         Some(v) => check(f, &path, DigestSource::Scanned(v)),
                         None => check(f, &path, DigestSource::Read),
                     }
@@ -413,8 +413,9 @@ mod tests {
             planned("b.dat", 4, "ffffffffffffffffffffffffffffffff"),
             planned("c.dat", 7, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
         ]));
-        let scan = Some(Arc::new(ScanReport {
-            files: vec![
+        let scan = Some(Arc::new(ScanReport::for_test(
+            &plan,
+            vec![
                 None,
                 Some(verdict(
                     "00000000000000000000000000000000",
@@ -422,10 +423,7 @@ mod tests {
                 )),
                 None,
             ],
-            bytes: 0,
-            damaged_chunks: 0,
-            scanned_at: None,
-        }));
+        )));
 
         let one = run_verify(base, &plan, &scan, 1);
         let many = run_verify(base, &plan, &scan, 4);
