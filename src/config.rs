@@ -65,8 +65,9 @@ impl std::fmt::Display for RepairMode {
 ///
 /// The numbers are the automation contract: a run's final `SUMMARY` carries
 /// one, and a fatal failure carries one through [`RunFailure`]. Named variants
-/// keep the choice at each return site explicit; the single conversion to an
-/// integer happens at the process boundary in `main`.
+/// keep the choice at each return site explicit. Converting a variant to the
+/// process status happens at the boundary in `main`; the `SUMMARY` and the
+/// fatal log line call [`RunExit::code`] only to describe the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunExit {
     /// The run did everything it was asked to do.
