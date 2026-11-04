@@ -824,7 +824,9 @@ pub(super) fn trim_is_free(
     chunks.iter().zip(sources).all(|(c, src)| {
         let Some(r) = *src else { return true };
         let s = c.uncompressed_size.max(0) as u64;
-        r.checked_add(s).is_none_or(|end| end <= size)
+        // An overflowing end is unrepresentable and therefore certainly past
+        // any real target: treat it as outside, never as inside.
+        r.checked_add(s).is_some_and(|end| end <= size)
     })
 }
 
@@ -1589,6 +1591,45 @@ mod tests {
         assert!(
             !mtime_predates_scan(recorded + COARSE_MTIME_TICK, Some(recorded)),
             "a recorded mtime after the scan is uncertain, not reusable"
+        );
+    }
+
+    /// An overflowing candidate end is unrepresentable, so it cannot be
+    /// inside the target: the eager trim is deferred and the source survives.
+    /// The non-overflow boundaries keep their old answers.
+    #[test]
+    fn an_overflowing_trim_candidate_is_not_free() {
+        let small = chunk("c0", 10);
+        let chunks = vec![small.clone()];
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 10,
+            md5: "m".into(),
+            url_prefix: Arc::from(""),
+            chunks: chunks.clone(),
+        };
+        assert!(
+            trim_is_free(&file, &chunks, &[Some(0)]),
+            "the end is exactly the target's"
+        );
+        assert!(
+            !trim_is_free(&file, &chunks, &[Some(1)]),
+            "one past the target is not free"
+        );
+        assert!(
+            trim_is_free(&file, &chunks, &[None]),
+            "no candidate loses nothing"
+        );
+
+        let huge = vec![chunk("c0", i64::MAX)];
+        let huge_file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 10,
+            ..file
+        };
+        assert!(
+            !trim_is_free(&huge_file, &huge, &[Some(u64::MAX)]),
+            "a source that overflows r + s is outside the target, never inside"
         );
     }
 }
