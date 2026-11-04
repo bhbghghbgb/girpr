@@ -11,7 +11,7 @@ use common::{
     build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters, read_game_file,
     run_binary, temp_dir, write_game_file,
 };
-use girpr::run;
+use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ async fn check_only_clean_reports_zero() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
     let (summary, code) = run(ctx).await.expect("check-only runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (skipped, _rep, failed, _, _) = load_counters(&summary);
     assert_eq!(failed, 0);
     assert_eq!(skipped, 2);
@@ -53,7 +53,7 @@ async fn check_only_dirty_reports_damage_and_writes_nothing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
     let (summary, code) = run(ctx).await.expect("check-only runs");
-    assert_eq!(code, 4, "check-only damage exit");
+    assert_eq!(code, RunExit::CheckFailed, "check-only damage exit");
     let (_sk, _rep, failed, _, _) = load_counters(&summary);
     assert_eq!(failed, 1);
 
@@ -97,7 +97,11 @@ async fn check_only_matches_between_one_and_many_jobs() {
         runs[0], runs[1],
         "jobs must not change the check's verdict or counters"
     );
-    assert_eq!(runs[0].1, 4, "the corrupt file is still damage");
+    assert_eq!(
+        runs[0].1,
+        RunExit::CheckFailed,
+        "the corrupt file is still damage"
+    );
     let (skipped, _repaired, failed, _, _) = runs[0].0;
     assert_eq!((skipped, failed), (1, 1));
 
@@ -125,7 +129,11 @@ async fn check_only_scan_keeps_the_damaged_chunk_total_on_the_summary() {
     ctx.check_only = true;
     ctx.scan = true;
     let (summary, code) = run(ctx).await.expect("check-only runs");
-    assert_eq!(code, 4, "the corrupt file is still damage");
+    assert_eq!(
+        code,
+        RunExit::CheckFailed,
+        "the corrupt file is still damage"
+    );
 
     let checked = summary.check_damaged_chunks.load(Ordering::Relaxed);
     assert!(checked > 0, "the check carries the chunks it found wrong");
@@ -152,7 +160,11 @@ async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
         ctx.check_only = true;
         ctx.scan = scan;
         let (summary, code) = run(ctx).await.expect("check-only runs");
-        assert_eq!(code, 4, "scan={scan}: an absent file is damage");
+        assert_eq!(
+            code,
+            RunExit::CheckFailed,
+            "scan={scan}: an absent file is damage"
+        );
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),
             1,
@@ -167,7 +179,11 @@ async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
         ctx.check_only = true;
         ctx.scan = scan;
         let (_summary, code) = run(ctx).await.expect("check-only runs");
-        assert_eq!(code, 0, "scan={scan}: an empty file that exists is clean");
+        assert_eq!(
+            code,
+            RunExit::Success,
+            "scan={scan}: an empty file that exists is clean"
+        );
     }
 
     mock.stop();
@@ -447,7 +463,11 @@ async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
     ctx.check_only = true;
     ctx.limits.files = Some(1);
     let (summary, code) = run(ctx).await.expect("refusal is not an error");
-    assert_eq!(code, 5, "the ceiling is asked before the verification");
+    assert_eq!(
+        code,
+        RunExit::Limit,
+        "the ceiling is asked before the verification"
+    );
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
         0,
@@ -458,7 +478,7 @@ async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
     let mut ctx2 = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx2.check_only = true;
     let (_, code2) = run(ctx2).await.expect("check runs");
-    assert_eq!(code2, 4);
+    assert_eq!(code2, RunExit::CheckFailed);
 
     mock.stop();
 }
@@ -752,7 +772,11 @@ async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
     let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("a manifest that does not match its checksum cannot be planned from");
-    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Metadata,
+        "metadata, not a write failure"
+    );
     assert!(!dir.join("config.ini").exists(), "nothing was written");
     mock.stop();
 }

@@ -14,7 +14,7 @@ use common::{
     build_fixture_spec, ctx_for, field, load_counters, read_game_file, run_binary, temp_dir,
     write_game_file,
 };
-use girpr::run;
+use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -32,7 +32,7 @@ async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     let (summary, code) = run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     // The run reported the plan, not a repair.
     assert!(summary.files_repaired.load(Ordering::Relaxed) == 0);
 
@@ -84,7 +84,7 @@ async fn print_plan_reports_the_plan_and_writes_nothing() {
     ctx.print_plan = true;
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     // The counters report a plan, not a repair.
     let (skipped, repaired, failed, dl, deleted) = load_counters(&summary);
@@ -374,7 +374,7 @@ async fn print_plan_out_writes_the_per_file_json_document() {
     ctx.purge_after = true;
     ctx.plan_out = Some(out.clone());
     let (_, code) = run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     let written = std::fs::read_to_string(&out).expect("--plan-out file");
     let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
@@ -466,7 +466,11 @@ async fn a_ceiling_trips_print_plan_like_any_other_mode() {
     ctx.print_plan = true;
     ctx.limits.download_bytes = Some(est - 1);
     let (summary, code) = run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5, "the assert comes before the plan report");
+    assert_eq!(
+        code,
+        RunExit::Limit,
+        "the assert comes before the plan report"
+    );
     assert_eq!(summary.flags.plan_download_bytes, Some(est));
 }
 
@@ -484,7 +488,7 @@ async fn print_plan_does_not_imply_check_only() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
     let (summary, code) = run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 0);
 
@@ -492,7 +496,7 @@ async fn print_plan_does_not_imply_check_only() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
     let (_, code) = run(ctx).await.expect("check runs");
-    assert_eq!(code, 4);
+    assert_eq!(code, RunExit::CheckFailed);
 
     mock.stop();
 }
@@ -512,7 +516,7 @@ async fn print_plan_with_dry_run_is_coherent() {
     ctx.print_plan = true;
     ctx.dry_run = true;
     let (summary, code) = run(ctx).await.expect("print-plan + dry-run runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_total, 2);
     assert!(!dir.join("config.ini").exists(), "dry-run writes nothing");
 

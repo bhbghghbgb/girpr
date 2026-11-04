@@ -12,7 +12,7 @@ use common::{
     build_fixture_spec, ctx_for, read_game_file, scope, temp_dir, write_game_file,
 };
 use girpr::test_support::summary_record;
-use girpr::{OutputFormat, run};
+use girpr::{OutputFormat, RunExit, run};
 use std::sync::atomic::Ordering;
 
 /// How many times `stream_chunk_to` asks a *retryable* origin — the linear
@@ -37,7 +37,7 @@ async fn max_files_refuses_before_touching_anything() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.files = Some(1); // the plan is 2 files
     let (summary, code) = run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5, "a tripped ceiling is exit 5");
+    assert_eq!(code, RunExit::Limit, "a tripped ceiling is exit 5");
     assert!(summary.flags.limited);
     assert_eq!(summary.files_total, 2, "plan_files is still reported");
     assert_eq!(
@@ -64,7 +64,7 @@ async fn max_files_refuses_before_touching_anything() {
     let mut ctx = ctx_for(missing.clone(), &mock, 1);
     ctx.limits.files = Some(1);
     let (_, code) = run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5);
+    assert_eq!(code, RunExit::Limit);
     assert!(!missing.exists(), "a refusal must not even create game_dir");
 
     mock.stop();
@@ -83,7 +83,7 @@ async fn max_files_at_the_boundary_does_not_refuse() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(2); // == plan.files.len()
     let (summary, code) = run(ctx).await.expect("the boundary must pass");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(
         summary.flags.limited,
         "the flag was passed, so it is reported"
@@ -108,7 +108,7 @@ async fn max_files_zero_is_a_ceiling_not_a_usage_error() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.files = Some(0);
     let (_, code) = run(ctx).await.expect("0 is a ceiling");
-    assert_eq!(code, 5, "0 files allowed, 2 planned -> refuse");
+    assert_eq!(code, RunExit::Limit, "0 files allowed, 2 planned -> refuse");
 
     mock.stop();
 }
@@ -128,7 +128,7 @@ async fn max_files_is_checked_after_the_scope_filter() {
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.limits.files = Some(1); // the *filtered* plan is 1 file
     let (summary, code) = run(ctx).await.expect("scoped boundary passes");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_total, 1);
     assert!(summary.flags.scoped && summary.flags.limited);
 
@@ -138,7 +138,7 @@ async fn max_files_is_checked_after_the_scope_filter() {
     ctx2.path_scope = scope(&["game/foo.dat"], &[]);
     ctx2.limits.files = Some(0);
     let (_, code2) = run(ctx2).await.expect("refusal is not an error");
-    assert_eq!(code2, 5);
+    assert_eq!(code2, RunExit::Limit);
 
     mock.stop();
 }
@@ -160,7 +160,7 @@ async fn max_delete_bytes_refuses_and_deletes_nothing() {
     ctx.purge_after = true;
     ctx.limits.delete_bytes = Some(100);
     let (summary, code) = run(ctx).await.expect("refusal is not an error");
-    assert_eq!(code, 5, "170 > 100");
+    assert_eq!(code, RunExit::Limit, "170 > 100");
     assert_eq!(
         summary.deleted_extra_bytes.load(Ordering::Relaxed),
         0,
@@ -174,7 +174,7 @@ async fn max_delete_bytes_refuses_and_deletes_nothing() {
     ctx2.purge_after = true;
     ctx2.limits.delete_bytes = Some(170);
     let (summary2, code2) = run(ctx2).await.expect("the boundary passes");
-    assert_eq!(code2, 0);
+    assert_eq!(code2, RunExit::Success);
     assert_eq!(summary2.deleted_extra_bytes.load(Ordering::Relaxed), 170);
 
     mock.stop();
@@ -199,7 +199,11 @@ async fn an_out_of_scope_path_never_counts_toward_the_delete_ceiling() {
     ctx.purge_after = true;
     ctx.limits.delete_bytes = Some(1); // would be blown by the orphan
     let (_, code) = run(ctx).await.expect("scoped run");
-    assert_eq!(code, 0, "the out-of-scope orphan is not a candidate at all");
+    assert_eq!(
+        code,
+        RunExit::Success,
+        "the out-of-scope orphan is not a candidate at all"
+    );
     assert!(read_game_file(&dir, "huge/orphan.dat").is_some(), "kept");
 
     mock.stop();
@@ -246,7 +250,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.download_bytes = Some(est - 1);
     let (summary, code) = run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5);
+    assert_eq!(code, RunExit::Limit);
     assert_eq!(
         summary.flags.plan_download_bytes,
         Some(est),
@@ -259,7 +263,7 @@ async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary()
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.limits.download_bytes = Some(est);
     let (summary, code) = run(ctx).await.expect("the boundary passes");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.download.settled(), est);
     let line = summary_record(&summary, code.code()).text();
     assert!(
@@ -306,7 +310,8 @@ async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
     ctx.limits.download_bytes = Some(compressed);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
-        code, 5,
+        code,
+        RunExit::Limit,
         "a settle that crosses the ceiling is the runtime hard stop"
     );
     assert_eq!(
@@ -370,7 +375,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(limit);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
-    assert_eq!(code, 5, "the runtime hard stop is also exit 5");
+    assert_eq!(code, RunExit::Limit, "the runtime hard stop is also exit 5");
     assert_eq!(
         summary.flags.stopped,
         Some("--max-download-bytes"),
@@ -424,7 +429,7 @@ async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("plain run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     for format in [OutputFormat::Text, OutputFormat::Json] {
         let line = summary_record(&summary, code.code()).render(format);
         for k in [
@@ -481,7 +486,11 @@ async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
     let started = std::time::Instant::now();
     let (summary, code) = run(ctx).await.expect("a failed repair is not an Err");
     let elapsed = started.elapsed();
-    assert_eq!(code, 3, "a file failed, so the post-phase is skipped");
+    assert_eq!(
+        code,
+        RunExit::Write,
+        "a file failed, so the post-phase is skipped"
+    );
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
         1,
@@ -570,7 +579,8 @@ async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
         let elapsed = started.elapsed();
 
         assert_eq!(
-            code, 3,
+            code,
+            RunExit::Write,
             "{name}: a file failed, so the post-phase is skipped"
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1, "{name}");
@@ -609,7 +619,11 @@ async fn a_404_manifest_fails_the_run_without_waiting_for_it() {
         .await
         .expect_err("no manifests means the run cannot plan");
     let elapsed = started.elapsed();
-    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Metadata,
+        "metadata, not a write failure"
+    );
     assert!(
         elapsed < std::time::Duration::from_secs(5),
         "a 404 must not be retried at all, took {elapsed:?}"
@@ -645,7 +659,7 @@ async fn a_run_that_stops_before_acting_creates_no_game_dir() {
     let err = run(ctx_for(missing.clone(), &mock, 1))
         .await
         .expect_err("non-chunk mode must fail");
-    assert_eq!(err.exit_code, 1);
+    assert_eq!(err.exit_code, RunExit::Usage);
     assert!(
         !missing.exists(),
         "a run that refuses must not create game_dir"

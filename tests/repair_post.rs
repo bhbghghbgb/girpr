@@ -11,7 +11,7 @@ use common::{
     MockOpts, MockServer, absent_game_dir, build_fixture, ctx_for, ctx_for_biz, load_counters,
     read_game_file, run_binary, temp_dir, write_game_file,
 };
-use girpr::{Biz, run};
+use girpr::{Biz, RunExit, run};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
@@ -64,7 +64,7 @@ async fn deprecated_files_deleted_in_post_phase() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("run with deprecated list");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, _, _, _, deleted) = load_counters(&summary);
     assert_eq!(deleted, 50);
     assert!(read_game_file(&dir, "old/legacy.dll").is_none());
@@ -96,7 +96,7 @@ async fn a_deprecated_path_that_escapes_the_game_dir_is_kept() {
     let (summary, code) = run(ctx_for(game, &mock, 2))
         .await
         .expect("the run itself is fine");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         std::fs::read(dir.join("victim.dll")).unwrap(),
         b"do not delete",
@@ -144,7 +144,11 @@ async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
         let err = run(ctx_for(game.clone(), &mock, 2))
             .await
             .expect_err("an escaping audio dir is metadata");
-        assert_eq!(err.exit_code, 2, "an escaping audio dir is metadata");
+        assert_eq!(
+            err.exit_code,
+            RunExit::Metadata,
+            "an escaping audio dir is metadata"
+        );
         assert!(
             !game.join("config.ini").exists(),
             "the version must not be bumped for refused server data"
@@ -189,7 +193,7 @@ async fn explicit_audio_selection_overwrites_scan_file() {
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
     let (_, code) = run(ctx).await.expect("audio run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
 
@@ -202,7 +206,7 @@ async fn explicit_audio_selection_overwrites_scan_file() {
     ctx2.audio = HashSet::new();
     ctx2.audio_explicit = true;
     let (_, code2) = run(ctx2).await.expect("audio-none run");
-    assert_eq!(code2, 0);
+    assert_eq!(code2, RunExit::Success);
     let scan2 = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
     assert!(scan2.is_empty(), "{scan2}");
 
@@ -236,7 +240,11 @@ async fn an_unreadable_audio_scan_file_fails_before_any_repair() {
     let err = run(ctx)
         .await
         .expect_err("an unreadable scan file must not default to en-us");
-    assert_eq!(err.exit_code, 1, "local config read failure: {err:#}");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "local config read failure: {err:#}"
+    );
     assert!(
         format!("{err:#}").contains("scan.txt"),
         "the report names the file: {err:#}"
@@ -393,7 +401,7 @@ async fn dry_run_lists_the_post_phase_and_changes_nothing() {
     ctx.dry_run = true;
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("dry-run runs the post-phase");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     assert_eq!(
         read_game_file(&dir, "old/legacy.dll").unwrap(),

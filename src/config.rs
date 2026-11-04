@@ -96,16 +96,6 @@ impl From<RunFailure> for RunExit {
     }
 }
 
-/// Compare against the documented numeric status.
-///
-/// Tests and external automation pin the numbers, so this keeps an assertion
-/// readable as `code == 4` while the pipeline itself only names variants.
-impl PartialEq<i32> for RunExit {
-    fn eq(&self, other: &i32) -> bool {
-        self.code() == *other
-    }
-}
-
 /// Typed failure carrying the process exit code.
 #[derive(Debug)]
 pub struct RunFailure {

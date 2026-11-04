@@ -11,7 +11,7 @@ use common::{
     ctx_for, load_counters, read_game_file, scope, temp_dir, write_game_file,
 };
 use girpr::test_support::summary_record;
-use girpr::{RunCtx, run};
+use girpr::{RunCtx, RunExit, run};
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -28,7 +28,7 @@ async fn purge_after_deletes_orphans_keeps_manifest_and_config() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("purge-after runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, _, _, _, deleted) = load_counters(&summary);
     assert!(deleted >= 100, "orphan bytes counted, got {deleted}");
     assert!(
@@ -62,7 +62,7 @@ async fn purge_after_keeps_the_case_variant_it_just_verified() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.purge_after = true;
     let (_summary, code) = run(ctx).await.expect("case-differing purge run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     #[cfg(windows)]
     assert_eq!(
@@ -99,7 +99,7 @@ async fn purge_before_deletes_orphans_then_repairs() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_before = true;
     let (summary, code) = run(ctx).await.expect("purge-before runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, deleted) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert!(deleted >= 64);
@@ -127,7 +127,7 @@ async fn purge_before_and_after_share_the_keys_and_delete_the_orphan_once() {
     ctx.purge_before = true;
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("both purge passes run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, deleted) = load_counters(&summary);
     assert_eq!((repaired, failed), (0, 0));
     assert_eq!(deleted, 96, "the orphan is deleted exactly once");
@@ -181,7 +181,7 @@ async fn blacklisted_files_survive_every_purge_spelling() {
         let (summary, code) = run(ctx)
             .await
             .unwrap_or_else(|e| panic!("{name}: run failed: {e:#}"));
-        assert_eq!(code, 0, "{name}: exit");
+        assert_eq!(code, RunExit::Success, "{name}: exit");
         assert!(
             read_game_file(&dir, "game/foo.dat").is_some(),
             "{name}: a blacklisted manifest file must never be deleted"
@@ -225,7 +225,8 @@ async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest()
     ctx.path_scope = scope(&["game/removed.dat"], &[]);
     let (summary, code) = run(ctx).await.expect("a cleanup run must not be refused");
     assert_eq!(
-        code, 0,
+        code,
+        RunExit::Success,
         "an empty repair plan is not a typo when there is cleanup to do"
     );
     assert!(
@@ -271,7 +272,7 @@ async fn purge_only_cleans_up_without_repairing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_only = true;
     let (summary, code) = run(ctx).await.expect("purge-only runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         summary.files_repaired.load(Ordering::Relaxed),
         0,
@@ -332,7 +333,7 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
     ctx.purge_only = true;
     ctx.dry_run = true;
     let (summary, code) = run(ctx).await.expect("purge-only --dry-run runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     // Nothing moved, nothing deleted, nothing promoted.
     assert_eq!(
@@ -379,14 +380,14 @@ async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.check_only = true;
     let (_, code) = run(ctx).await.expect("check runs");
-    assert_eq!(code, 4);
+    assert_eq!(code, RunExit::CheckFailed);
     assert!(read_game_file(&dir, "stray/orphan.dat").is_some());
 
     // purge-only: the orphan is gone, the damage is untouched.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_only = true;
     let (_, code) = run(ctx).await.expect("purge-only runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
     assert_eq!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),

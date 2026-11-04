@@ -12,8 +12,8 @@ use common::{
     build_moved_fixture, ctx_for, field, load_counters, read_game_file, scope, temp_dir,
     write_game_file,
 };
-use girpr::run;
 use girpr::test_support::{RepairMode, summary_record};
+use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -44,7 +44,7 @@ async fn verified_local_slice_is_reused_without_redownload() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("reuse run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -73,7 +73,7 @@ async fn partial_tmp_prefix_is_resumed() {
     ctx.repair_mode = RepairMode::Temp;
     ctx.repair_mode_explicit = true;
     let (summary, code) = run(ctx).await.expect("resume run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     // The prefix was kept, not rewritten: the temp path resumes by length, so
@@ -116,7 +116,7 @@ async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
     ctx.repair_mode = RepairMode::Temp;
     ctx.repair_mode_explicit = true;
     let (summary, code) = run(ctx).await.expect("the retry repairs the file");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         summary.files_failed.load(Ordering::Relaxed),
         0,
@@ -164,7 +164,7 @@ async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -207,7 +207,7 @@ async fn a_file_that_grows_writes_only_the_growth() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         fx2.files[0].data,
@@ -251,7 +251,7 @@ async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Discard;
     let (summary, code) = run(ctx).await.expect("discard run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -292,7 +292,7 @@ async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("read-only run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -330,7 +330,7 @@ async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("moved run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -376,7 +376,7 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
     // "stage nothing at all" is what selects the ordered tier.
     ctx.limits.ram_bytes = Some(0);
     let (summary, code) = run(ctx).await.expect("moved run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(
@@ -414,7 +414,7 @@ async fn an_interrupted_in_place_run_resumes_by_verification() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("in-place run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         read_game_file(&dir, &fx2.files[0].rel).unwrap(),
         fx2.files[0].data
@@ -450,7 +450,7 @@ async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run()
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.write_bytes = Some(limit);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
-    assert_eq!(code, 5);
+    assert_eq!(code, RunExit::Limit);
     assert_eq!(
         summary.flags.stopped,
         Some("--max-write-bytes"),
@@ -501,7 +501,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(summary.write.settled() > 0, "it was counted");
     let line = summary_record(&summary, code.code()).text();
     assert!(!line.contains("write_bytes"), "{line}");
@@ -522,7 +522,7 @@ async fn write_bytes_is_counted_only_when_the_flag_is_active() {
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.limits.write_bytes = Some(1 << 20);
     let (summary, code) = run(ctx).await.expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(summary.flags.stopped.is_none());
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("write_bytes="), "{line}");
@@ -545,7 +545,7 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(!line.contains("_spent"), "{line}");
 
@@ -562,7 +562,7 @@ async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
     ctx.limits.download_bytes = Some(1 << 20);
     ctx.limits.write_bytes = Some(1 << 20);
     let (summary, code) = run(ctx).await.expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("download_bytes_spent="), "{line}");
     assert!(line.contains("write_bytes_spent="), "{line}");
@@ -601,7 +601,8 @@ async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
     ctx.limits.verified_write_bytes = Some(limit);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
-        code, 5,
+        code,
+        RunExit::Limit,
         "the verified ceiling is a hard stop, like every other"
     );
     assert_eq!(
@@ -666,7 +667,7 @@ async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() 
         ctx.limits.write_bytes = Some(live);
         ctx.limits.verified_write_bytes = Some(verified);
         let (summary, code) = girpr::run(ctx).await.expect("a stop is not an error");
-        assert_eq!(code, 5, "a ceiling bound");
+        assert_eq!(code, RunExit::Limit, "a ceiling bound");
         mock.stop();
         summary
             .flags
@@ -707,7 +708,8 @@ async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
     ctx.limits.verified_download_bytes = Some(0);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
     assert_eq!(
-        code, 5,
+        code,
+        RunExit::Limit,
         "the verified ceiling is a hard stop, like every other"
     );
     assert_eq!(
@@ -764,7 +766,11 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
         ctx.repair_mode_explicit = true;
         ctx.path_scope = scope(&["game/foo.dat"], &[]);
         let (summary, code) = girpr::run(ctx).await.expect("run");
-        assert_eq!(code, 0, "the file was repaired on the second attempt");
+        assert_eq!(
+            code,
+            RunExit::Success,
+            "the file was repaired on the second attempt"
+        );
         assert_eq!(
             read_game_file(&dir, &fx2.files[0].rel).unwrap(),
             fx2.files[0].data,
@@ -822,7 +828,7 @@ async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the retry must recover");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         read_game_file(&dir, &fx2.files[1].rel).unwrap(),
         fx2.files[1].data
@@ -902,7 +908,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
         let (summary, code) = girpr::run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect("run");
-        assert_eq!(code, 0, "the repair recovered");
+        assert_eq!(code, RunExit::Success, "the repair recovered");
         for f in &fx2.files {
             assert_eq!(
                 read_game_file(&dir, &f.rel).unwrap(),
@@ -986,7 +992,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=ok"), "{line}");
     assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
@@ -1019,7 +1025,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("a degraded run still succeeds");
-    assert_eq!(code, 0, "the fallback is not an error");
+    assert_eq!(code, RunExit::Success, "the fallback is not an error");
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("local_manifest=unavailable"), "{line}");
     assert_eq!(
@@ -1075,7 +1081,11 @@ async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
     // is the one that must **not** be downloaded twice.
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     let (summary, code) = run(ctx).await.expect("the retry must recover");
-    assert_eq!(code, 0, "the file was repaired on the second attempt");
+    assert_eq!(
+        code,
+        RunExit::Success,
+        "the file was repaired on the second attempt"
+    );
     let (_, repaired, failed, _, _) = load_counters(&summary);
     assert_eq!((repaired, failed), (1, 0));
     assert_eq!(

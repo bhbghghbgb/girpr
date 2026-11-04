@@ -10,8 +10,8 @@ mod common;
 use common::{
     MockOpts, MockServer, build_fixture, ctx_for, read_game_file, scope, temp_dir, write_game_file,
 };
-use girpr::run;
 use girpr::test_support::summary_record;
+use girpr::{RunExit, run};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
@@ -35,7 +35,7 @@ async fn include_repairs_exactly_the_selected_file() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     let (summary, code) = run(ctx).await.expect("scoped run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_total, 1, "only the selected file is planned");
     assert!(summary.flags.scoped, "scoped run reports scoped=1");
 
@@ -90,7 +90,7 @@ async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("scoped purge run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     // Everything survives: the fixture files, and the orphans that were out of
     // scope even though they are not in the manifest.
@@ -130,7 +130,7 @@ async fn a_scoped_purge_keeps_an_empty_out_of_scope_directory() {
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     ctx.purge_only = true;
     let (summary, code) = run(ctx).await.expect("scoped purge-only run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     assert!(
         dir.join("mods/nested").is_dir(),
@@ -161,7 +161,7 @@ async fn an_unscoped_purge_still_deletes_orphans() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
     let (summary, code) = run(ctx).await.expect("plain purge run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(
         read_game_file(&dir, "log/output.txt").is_none(),
         "orphan deleted"
@@ -195,7 +195,7 @@ async fn an_include_matching_nothing_is_a_usage_error() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/nope.dat"], &[]);
     let err = run(ctx).await.expect_err("an empty scope must fail");
-    assert_eq!(err.exit_code, 1);
+    assert_eq!(err.exit_code, RunExit::Usage);
     let msg = format!("{:#}", err.source);
     assert!(msg.contains("game/nope.dat"), "must name the glob: {msg}");
     assert!(msg.contains("plan_files=0"), "{msg}");
@@ -204,7 +204,7 @@ async fn an_include_matching_nothing_is_a_usage_error() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&[], &["no/such/thing"]);
     let (_, code) = run(ctx).await.expect("a non-matching exclude is fine");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     mock.stop();
 }
@@ -234,7 +234,7 @@ async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scop
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
     let err = run(ctx).await.expect_err("--audio under a scope");
-    assert_eq!(err.exit_code, 1);
+    assert_eq!(err.exit_code, RunExit::Usage);
     let msg = format!("{:#}", err.source);
     assert!(
         msg.contains("Audio/scan.txt"),
@@ -255,7 +255,7 @@ async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scop
     ctx2.audio = HashSet::from(["ja-jp".to_string()]);
     ctx2.audio_explicit = true;
     let (_, code) = run(ctx2).await.expect("scan file in scope is allowed");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let scan = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
 
@@ -284,7 +284,7 @@ async fn deprecated_files_outside_the_scope_are_not_deleted() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&["old/*", "game/foo.dat", "game/bar.dat"], &[]);
     let (summary, code) = run(ctx).await.expect("scoped deprecated run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(
         read_game_file(&dir, "old/legacy.dll").is_none(),
         "in-scope deprecated file deleted"
@@ -324,7 +324,7 @@ async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&[], &["old/*"]);
     let (summary, code) = run(ctx).await.expect("scoped deprecated run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         read_game_file(&dir, "old/legacy.dll").unwrap(),
         &[0x7Eu8; 50],
@@ -365,7 +365,7 @@ async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
     ctx.audio = HashSet::from(["ja-jp".to_string()]);
     ctx.audio_explicit = true;
     let (_, code) = run(ctx).await.expect("the cleaned scan rel is in scope");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
     assert!(scan.contains("Japanese"), "{scan}");
 
@@ -397,7 +397,7 @@ async fn a_dot_spelled_audio_cache_hidden_by_the_scope_is_not_moved() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.path_scope = scope(&[], &["Audio/*"]);
     let (_, code) = run(ctx).await.expect("scoped audio run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
         read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
         &[0x3Bu8; 128],
@@ -429,7 +429,7 @@ async fn an_include_that_selects_nothing_at_all_is_still_a_typo() {
     let err = run(ctx)
         .await
         .expect_err("a scope that selects nothing is still a typo");
-    assert_eq!(err.exit_code, 1);
+    assert_eq!(err.exit_code, RunExit::Usage);
     let msg = format!("{:#}", err.source);
     assert!(
         msg.contains("game/never-existed.dat"),

@@ -47,8 +47,8 @@ use common::{
     build_fixture_spec, ctx_for, load_counters, read_game_file, run_binary, scope, temp_dir,
     write_game_file,
 };
-use girpr::run;
 use girpr::test_support::{Lock, RepairMode, summary_record};
+use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -73,7 +73,7 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("run must succeed");
-    assert_eq!(code, 0, "repair exit");
+    assert_eq!(code, RunExit::Success, "repair exit");
     assert_eq!(summary.files_total, 2);
     let (skipped, repaired, failed, dl, _del) = load_counters(&summary);
     assert_eq!((skipped, repaired, failed), (1, 1, 0));
@@ -105,7 +105,7 @@ async fn dry_run_writes_nothing() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.dry_run = true;
     let (_summary, code) = run(ctx).await.expect("dry-run runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert!(
         read_game_file(&dir, &fx2.files[0].rel).is_none(),
         "dry-run must not create the missing file"
@@ -133,7 +133,7 @@ async fn a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write()
         let err = run(ctx_for(game.clone(), &mock, 1))
             .await
             .expect_err("an escaping manifest path is metadata");
-        assert_eq!(err.exit_code, 2, "{bad}");
+        assert_eq!(err.exit_code, RunExit::Metadata, "{bad}");
         assert!(!game.exists(), "{bad}: the game dir must not be created");
         assert!(!dir.join("outside.dat").exists(), "{bad}: escaped write");
         assert!(!dir.join("evil.dat").exists(), "{bad}: escaped write");
@@ -215,7 +215,7 @@ async fn the_run_counts_the_paths_it_used() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 1);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 0);
 
@@ -226,7 +226,7 @@ async fn the_run_counts_the_paths_it_used() {
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
     let (summary, code) = run(ctx).await.expect("temp run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
     // The temp path wrote the whole file; the in-place path wrote one chunk.
@@ -256,7 +256,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
         assert!(
@@ -273,7 +273,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     ctx.repair_mode = RepairMode::Auto;
     ctx.repair_mode_explicit = true;
     let (summary, code) = run(ctx).await.expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("repair_mode=auto"), "{line}");
     assert!(line.contains("inplace=1"), "{line}");
@@ -290,7 +290,7 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     let mut ctx = ctx_for(dir3.to_path_buf(), &mock, 1);
     ctx.limits.ram_bytes = Some(0);
     let (summary, code) = run(ctx).await.expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("ram_bytes=0"), "{line}");
 
@@ -314,7 +314,11 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("the second run is refused");
-    assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "a live lock is a usage refusal"
+    );
     let msg = format!("{:#}", err.source);
     assert!(
         msg.contains(lock_path.to_string_lossy().as_ref()),
@@ -332,7 +336,11 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
     let err = run(ctx).await.expect_err("a scoped run is refused too");
-    assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "a live lock is a usage refusal"
+    );
 
     // The lock is released when the run that holds it ends; the file is left
     // for the next run to reuse rather than unlinked under a racing opener.
@@ -341,7 +349,7 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the next run is not refused");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     // foo.dat was missing and is repaired; bar.dat was intact.
     assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 1);
@@ -365,17 +373,17 @@ async fn read_only_runs_do_not_take_the_lock() {
     let mut check = ctx_for(dir.to_path_buf(), &mock, 1);
     check.check_only = true;
     let (_, code) = run(check).await.expect("check-only ignores the lock");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     let mut dry = ctx_for(dir.to_path_buf(), &mock, 1);
     dry.dry_run = true;
     let (_, code) = run(dry).await.expect("dry-run ignores the lock");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     let mut plan = ctx_for(dir.to_path_buf(), &mock, 1);
     plan.print_plan = true;
     let (_, code) = run(plan).await.expect("print-plan ignores the lock");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
 
     mock.stop();
 }
@@ -399,7 +407,7 @@ async fn a_legacy_in_install_lock_is_left_alone() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
     let (_, code) = run(ctx).await.expect("the purge runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     // The old lock is an ordinary unexpected file that the cleanup keeps;
     // only the new temp-dir lock is the run's own.
     assert!(legacy.exists(), "the legacy in-install lock is left alone");
@@ -434,7 +442,11 @@ async fn non_chunk_download_mode_is_a_usage_error() {
         let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect_err("non-chunk mode must fail");
-        assert_eq!(err.exit_code, 1, "mode {mode:?} must be a usage error");
+        assert_eq!(
+            err.exit_code,
+            RunExit::Usage,
+            "mode {mode:?} must be a usage error"
+        );
         assert!(
             err.source.to_string().contains("not chunk mode"),
             "mode {mode:?}: {err}"
@@ -469,7 +481,11 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("non-chunk mode must fail");
-    assert_eq!(err.exit_code, 1, "the mode refusal wins: {err:#}");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "the mode refusal wins: {err:#}"
+    );
     assert!(
         err.source.to_string().contains("not chunk mode"),
         "the refusal is the mode one: {err:#}"
@@ -497,7 +513,7 @@ async fn a_run_without_a_local_version_issues_only_the_latest_build() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.print_plan = true;
     let (summary, code) = run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     let builds = mock
         .request_targets()
         .into_iter()
@@ -572,7 +588,7 @@ async fn several_latest_manifests_are_selected_in_build_order() {
     ctx.audio_explicit = true;
     ctx.audio.clear();
     let (summary, code) = run(ctx).await.expect("the multi-manifest run succeeds");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_total, 3, "base + shared + beta_only");
     assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 3);
 
