@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn the_disk_plan_keeps_its_place_when_a_path_cannot_be_resolved() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "aligned");
-        let mut files = plan().files().to_vec();
+        let mut files: Vec<PlannedFile> = plan().iter().map(|(_, f)| f.clone()).collect();
         files.truncate(2);
         files[1].rel = "../escape.dat".into();
         let plan = RepairPlan::from_files("9.9", files);
