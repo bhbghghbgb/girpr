@@ -16,7 +16,7 @@
 //! The deprecated list itself is **not** fetched here — it arrives as an
 //! argument, having been read during the plan phase.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -90,7 +90,16 @@ async fn run_inner(
     deprecated: &[String],
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
-    delete_deprecated(game_dir, deprecated, summary, &ctx.path_scope, dry);
+    // The deprecated list can be long and every entry is a stat plus a delete:
+    // that is blocking filesystem work, not a task the async worker should sit
+    // through. The audio move below and the cleanup pass use the same discipline.
+    let delete_game_dir = game_dir.to_path_buf();
+    let delete_list = deprecated.to_vec();
+    let delete_scope = ctx.path_scope.clone();
+    let deleted = spawn_delete_deprecated(delete_game_dir, delete_list, delete_scope, dry).await;
+    summary
+        .deleted_extra_bytes
+        .fetch_add(deleted, Ordering::Relaxed);
     // The audio move walks the cache and renames/copies its files. It is
     // best-effort, so a panicked task is logged and the phase carries on; it
     // must not stall the runtime while it runs.
@@ -223,7 +232,7 @@ async fn purge_after_pass(
         );
         return Ok(None);
     }
-    let bytes = purge::apply_purge(&purge_plan, dry).map_err(RunFailure::write)?;
+    let bytes = spawn_apply_purge(purge_plan, dry).await?;
     // A dry run lists the candidates; nothing is deleted, so nothing may be
     // counted as freed space. `apply_purge` returns 0 in dry-run today, and the
     // gate keeps that invariant local to the counter as well.
@@ -235,6 +244,59 @@ async fn purge_after_pass(
     Ok(None)
 }
 
+/// Run a blocking closure on the blocking pool with the caller's tracing
+/// dispatcher installed.
+///
+/// `spawn_blocking` starts on a pool thread with no thread-local subscriber.
+/// Production installs a global one, so its lines are unaffected; this keeps a
+/// caller that scoped a subscriber (a test, or any explicit `with_default`)
+/// seeing the best-effort step's log lines, which are part of the operator
+/// contract.
+async fn spawn_blocking_traced<F, R>(f: F) -> Result<R, tokio::task::JoinError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f)).await
+}
+
+/// Run the blocking deprecated-file delete on the blocking pool, keeping the
+/// step best-effort: a panicked task is logged and the phase carries on, the
+/// same way the audio move does. Returns the bytes it deleted, which is `0` in
+/// a dry run.
+async fn spawn_delete_deprecated(
+    game_dir: PathBuf,
+    list: Vec<String>,
+    scope: PathScope,
+    dry_run: bool,
+) -> u64 {
+    match spawn_blocking_traced(move || delete_deprecated(&game_dir, &list, &scope, dry_run)).await
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "deprecated-file delete task failed; the post-phase carries on"
+            );
+            0
+        }
+    }
+}
+
+/// Run the blocking purge delete on the blocking pool. The plan is moved, not
+/// cloned, so the worker threads only pay for the filesystem work.
+async fn spawn_apply_purge(plan: purge::PurgePlan, dry_run: bool) -> Result<u64, RunFailure> {
+    spawn_blocking_traced(move || purge::apply_purge(&plan, dry_run))
+        .await
+        .map_err(|e| {
+            RunFailure::write(anyhow::anyhow!(
+                "cleanup delete task failed during the post-repair cleanup: {e}"
+            ))
+        })?
+        .map_err(RunFailure::write)
+}
+
 /// Run the blocking purge planner on its own task and give its join failure
 /// the run's write class.
 ///
@@ -243,7 +305,7 @@ async fn purge_after_pass(
 async fn spawn_purge_plan(
     planning: impl FnOnce() -> purge::PurgePlan + Send + 'static,
 ) -> Result<purge::PurgePlan, RunFailure> {
-    tokio::task::spawn_blocking(planning).await.map_err(|e| {
+    spawn_blocking_traced(planning).await.map_err(|e| {
         RunFailure::write(anyhow::anyhow!(
             "purge planning task failed before the post-repair cleanup: {e}"
         ))
@@ -275,14 +337,10 @@ pub enum PostOutcome {
 /// the boundary where the server list enters the run, so this gate and the
 /// `contained_join` sink below see one spelling.
 ///
-/// `dry_run` lists instead of deleting, and adds nothing to the byte counter.
-fn delete_deprecated(
-    game_dir: &Path,
-    list: &[String],
-    summary: &Summary,
-    scope: &PathScope,
-    dry_run: bool,
-) {
+/// `dry_run` lists instead of deleting, and returns `0` so the caller adds
+/// nothing to the byte counter. A real run returns the bytes it deleted.
+fn delete_deprecated(game_dir: &Path, list: &[String], scope: &PathScope, dry_run: bool) -> u64 {
+    let mut deleted_bytes = 0u64;
     for n in list {
         if !scope.is_visible(n) {
             tracing::debug!("deprecated path out of scope, kept: {n}");
@@ -339,7 +397,7 @@ fn delete_deprecated(
             match std::fs::remove_file(&p) {
                 Ok(()) => {
                     if let Some(sz) = sz {
-                        summary.deleted_extra_bytes.fetch_add(sz, Ordering::Relaxed);
+                        deleted_bytes += sz;
                     }
                     tracing::info!("deleted deprecated {n}");
                 }
@@ -356,6 +414,7 @@ fn delete_deprecated(
             }
         }
     }
+    deleted_bytes
 }
 
 /// What a deprecated entry's one `metadata` call said.
@@ -891,13 +950,13 @@ mod tests {
         let summary = Summary::new();
 
         let logs = logs_of(|| {
-            delete_deprecated(
+            let deleted = delete_deprecated(
                 base,
                 &["old/legacy.dll".to_string()],
-                &summary,
                 &PathScope::default(),
                 true,
-            )
+            );
+            assert_eq!(deleted, 0, "a dry run counts no deleted bytes");
         });
 
         assert!(

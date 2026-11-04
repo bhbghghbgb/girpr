@@ -121,8 +121,9 @@ struct PlanPhase {
     /// The work list, shared with the repair loop. The post-phase purge reads it.
     plan: Arc<RepairPlan>,
     /// The up-front purge candidates, when a purge or `--print-plan` asked for
-    /// them.
-    purge_plan: Option<PurgePlan>,
+    /// them. Shared rather than cloned: the before pass hands the blocking
+    /// delete task the same plan the post-phase later reads.
+    purge_plan: Option<Arc<PurgePlan>>,
     /// The plan-derived keep inputs, folded once here and reused by the
     /// post-repair pass. `None` when no purge flag or `--print-plan` asked for
     /// a purge plan at all.
@@ -242,7 +243,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         meta,
         http,
         plan: work.plan,
-        purge_plan: work.purge_plan,
+        purge_plan: work.purge_plan.map(Arc::new),
         purge_keys: work.purge_keys,
         scan: work.scan,
         deprecated: work.deprecated,
@@ -679,7 +680,7 @@ async fn execute_phase(
     write_explicit_audio(ctx, &game_dir, &meta, readonly)?;
 
     // 5.2 files-cleanup before.
-    run_purge_before(ctx, purge_plan.as_ref(), &mut summary)?;
+    run_purge_before(ctx, purge_plan.clone(), &mut summary).await?;
 
     // 5.5 check-only: verify only, then return. Nothing is written.
     if ctx.check_only {
@@ -692,7 +693,7 @@ async fn execute_phase(
             ctx,
             &game_dir,
             purge_keys,
-            purge_plan.as_ref(),
+            purge_plan.as_deref(),
             &meta,
             &deprecated,
             summary,
@@ -718,7 +719,7 @@ async fn execute_phase(
             ctx,
             &game_dir,
             purge_keys,
-            purge_plan.as_ref(),
+            purge_plan.as_deref(),
             &meta,
             &deprecated,
             summary,
@@ -799,9 +800,14 @@ fn write_explicit_audio(
 /// The plan built in step 4.1 is executed here to free space for the repair
 /// itself. Skipped entirely in `--check-only` (verification reports damage; it
 /// must not delete). In `--dry-run` it runs in log-only mode.
-fn run_purge_before(
+///
+/// The delete is a sequence of blocking syscalls over the whole candidate
+/// list, so it runs on the blocking pool; the async worker only waits for the
+/// byte total. The plan is shared by `Arc`, not cloned, so this costs one
+/// reference bump.
+async fn run_purge_before(
     ctx: &RunCtx,
-    purge_plan: Option<&PurgePlan>,
+    purge_plan: Option<Arc<PurgePlan>>,
     summary: &mut Summary,
 ) -> Result<(), RunFailure> {
     if ctx.purge_before
@@ -809,7 +815,15 @@ fn run_purge_before(
         && let Some(pp) = purge_plan
     {
         let timer = PhaseTimer::start("purge-before");
-        let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
+        let dry = ctx.dry_run;
+        let bytes = tokio::task::spawn_blocking(move || purge::apply_purge(&pp, dry))
+            .await
+            .map_err(|e| {
+                RunFailure::write(anyhow::anyhow!(
+                    "purge delete task failed before the repair: {e}"
+                ))
+            })?
+            .map_err(RunFailure::write)?;
         summary
             .deleted_extra_bytes
             .fetch_add(bytes, Ordering::Relaxed);
