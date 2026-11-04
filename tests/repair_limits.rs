@@ -37,7 +37,7 @@ async fn max_files_refuses_before_touching_anything() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.files = Some(1); // the plan is 2 files
     let (summary, code) = run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, RunExit::Limit, "a tripped ceiling is exit 5");
+    assert_eq!(code, RunExit::Limit, "a tripped ceiling is a limit");
     assert!(summary.flags.limited);
     assert_eq!(summary.files_total, 2, "plan_files is still reported");
     assert_eq!(
@@ -375,7 +375,11 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.limits.download_bytes = Some(limit);
     let (summary, code) = run(ctx).await.expect("a stop is not an error");
-    assert_eq!(code, RunExit::Limit, "the runtime hard stop is also exit 5");
+    assert_eq!(
+        code,
+        RunExit::Limit,
+        "the runtime hard stop is also a limit"
+    );
     assert_eq!(
         summary.flags.stopped,
         Some("--max-download-bytes"),

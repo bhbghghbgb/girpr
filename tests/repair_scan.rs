@@ -19,7 +19,7 @@ use std::sync::atomic::Ordering;
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn check_only_clean_reports_zero() {
+async fn check_only_clean_reports_success() {
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("check_clean");
@@ -449,9 +449,9 @@ async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
 }
 
 #[tokio::test]
-async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
-    // A ceiling narrows *what is verified*; `4` (damage found) must not be
-    // masked by narrowing — but a ceiling is a different fact entirely.
+async fn check_only_trips_a_ceiling_not_damage() {
+    // A ceiling narrows *what is verified*; `CheckFailed` must not be masked by
+    // narrowing — but a ceiling is a different fact entirely.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("max_files_check");
