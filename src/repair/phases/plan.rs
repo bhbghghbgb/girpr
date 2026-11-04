@@ -174,13 +174,55 @@ impl FileId {
     }
 }
 
+/// The fingerprint of an ordered file list and each file's chunk layout.
+///
+/// Only what the scan's per-file and per-chunk positions depend on is hashed:
+/// the file's identity and manifest facts in plan order, then its chunks'
+/// identity, offsets and sizes in plan order. Kept separate from
+/// [`RepairPlan::fingerprint`] so the expensive walk can be done once.
+fn fingerprint_files(files: &[PlannedFile]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    files.len().hash(&mut hasher);
+    for file in files {
+        file.rel.hash(&mut hasher);
+        file.size.hash(&mut hasher);
+        file.md5.hash(&mut hasher);
+        file.url_prefix.as_ref().hash(&mut hasher);
+        file.chunks.len().hash(&mut hasher);
+        for chunk in &file.chunks {
+            chunk.id.hash(&mut hasher);
+            chunk.uncompressed_md5.hash(&mut hasher);
+            chunk.offset.hash(&mut hasher);
+            chunk.compressed_size.hash(&mut hasher);
+            chunk.uncompressed_size.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 /// The sorted, deduped work list for one run.
 pub struct RepairPlan {
     pub latest: String,
     files: Vec<PlannedFile>,
+    /// The fingerprint of `files`, computed once when the plan is built.
+    ///
+    /// `files` is private and never mutated after construction, so caching it
+    /// cannot go stale. [`fingerprint`](Self::fingerprint) mixes in `latest`,
+    /// which stays public, so a changed tag is still part of the answer.
+    files_fingerprint: u64,
 }
 
 impl RepairPlan {
+    /// Assemble the plan, computing the immutable file list's fingerprint once.
+    fn new(latest: String, files: Vec<PlannedFile>) -> Self {
+        let files_fingerprint = fingerprint_files(&files);
+        Self {
+            latest,
+            files,
+            files_fingerprint,
+        }
+    }
+
     /// The planned files, in plan order.
     ///
     /// The one crate-private view used where an operation is intrinsically
@@ -218,24 +260,14 @@ impl RepairPlan {
     /// This is an in-process check only. It is never persisted or emitted, so
     /// it does not extend the output contract; the hash function is whatever
     /// `DefaultHasher` provides in this build.
+    ///
+    /// The file-list half is cached at construction, because callers ask this
+    /// per file and rehashing the whole plan for each one would be quadratic in
+    /// the plan size.
     pub(crate) fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.latest.hash(&mut hasher);
-        self.files.len().hash(&mut hasher);
-        for file in &self.files {
-            file.rel.hash(&mut hasher);
-            file.size.hash(&mut hasher);
-            file.md5.hash(&mut hasher);
-            file.url_prefix.as_ref().hash(&mut hasher);
-            file.chunks.len().hash(&mut hasher);
-            for chunk in &file.chunks {
-                chunk.id.hash(&mut hasher);
-                chunk.uncompressed_md5.hash(&mut hasher);
-                chunk.offset.hash(&mut hasher);
-                chunk.compressed_size.hash(&mut hasher);
-                chunk.uncompressed_size.hash(&mut hasher);
-            }
-        }
+        self.files_fingerprint.hash(&mut hasher);
         hasher.finish()
     }
 
@@ -251,10 +283,7 @@ impl RepairPlan {
     /// list. Production builds the plan through [`build_plan`].
     #[cfg(test)]
     pub(crate) fn from_files(latest: impl Into<String>, files: Vec<PlannedFile>) -> Self {
-        Self {
-            latest: latest.into(),
-            files,
-        }
+        Self::new(latest.into(), files)
     }
 
     /// Paths the files-cleanup must treat as expected (docs/02 step 7).
@@ -459,10 +488,7 @@ pub fn build_plan(
     }
     // Stable order so log lines and the parallel spawn order are reproducible.
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(RepairPlan {
-        latest: latest_tag.to_string(),
-        files,
-    })
+    Ok(RepairPlan::new(latest_tag.to_string(), files))
 }
 
 #[cfg(test)]
@@ -715,6 +741,26 @@ mod tests {
     fn a_file_id_debugs_as_its_index() {
         assert_eq!(format!("{:?}", FileId::new(0)), "0");
         assert_eq!(format!("{:?}", FileId::new(7)), "7");
+    }
+
+    /// The fingerprint is stable for one plan, and the cached file-list half
+    /// does not hide a changed tag: `latest` stays public, so it is mixed in on
+    /// every call rather than frozen at construction.
+    #[test]
+    fn a_plan_fingerprint_is_stable_and_covers_the_tag() {
+        let per = vec![(
+            "http://x".to_string(),
+            vec![manifest_file("a.dat", 1, vec![])],
+        )];
+        let mut plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+        let first = plan.fingerprint();
+        assert_eq!(plan.fingerprint(), first, "one plan, one fingerprint");
+        plan.latest = "6.0".into();
+        assert_ne!(
+            plan.fingerprint(),
+            first,
+            "the tag is part of the plan's identity"
+        );
     }
 
     #[test]
