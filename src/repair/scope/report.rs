@@ -312,6 +312,18 @@ impl<'a> PlanDocument<'a> {
         est_by_file: &[u64],
         disk: &DiskPlan,
     ) -> Self {
+        // `disk` and `plan` share one source: the publisher builds the disk
+        // plan with `DiskPlan::new`, which pushes exactly one entry per file
+        // from `plan.iter()`, in plan order. Coverage is therefore an
+        // invariant of that construction rather than a caller obligation.
+        // The release `expect` below still refuses a hand-built `DiskPlan`
+        // that breaks it, instead of silently shifting another file's figures
+        // onto this position.
+        debug_assert_eq!(
+            disk.per_file.len(),
+            plan.len(),
+            "the disk plan covers every file in the plan"
+        );
         Self {
             repair: plan
                 .iter()
