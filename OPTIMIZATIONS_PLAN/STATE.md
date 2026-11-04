@@ -286,10 +286,10 @@ until the main tasks and rework are done.
 | F185 | ATOMIC-01 review | `src/report/emit.rs` | The rustdoc links the private `write_line`, producing the sole `cargo doc` warning. | todo |
 | F186 | ATOMIC-01 review | `src/repair/phases/post.rs` | The same private `temp_sibling` doc link pattern; silent now because private docs are not built. | todo |
 | F187 | ATOMIC-01 review | `src/util/path.rs` | `temp_sibling` has no direct unit test pinning the `file_name() == None` fallback name. | completed |
-| F188 | PLANID-01 review | `src/repair/phases/plan.rs` | `RepairPlan::latest` stays public and mutable; a read-only accessor would prevent accidental fingerprint invalidation. | todo |
-| F189 | PLANID-01 review | `src/repair/scope/report.rs` | `PlanDocument::new`'s `expect` on the disk table is an invariant; a fallible signature or `debug_assert` would protect future callers. | todo |
-| F190 | PLANID-01 review | `src/repair/scan.rs` | `matches_plan` relies on a 64-bit non-cryptographic hash; revisit if a scan report ever crosses a process boundary. | todo |
-| F191 | PLANID-01 review | tests | A few tests use the crate-private `RepairPlan::files()` where `iter()` would express intent better. | todo |
+| F188 | PLANID-01 review | `src/repair/phases/plan.rs` | `RepairPlan::latest` stays public and mutable; a read-only accessor would prevent accidental fingerprint invalidation. | completed |
+| F189 | PLANID-01 review | `src/repair/scope/report.rs` | `PlanDocument::new`'s `expect` on the disk table is an invariant; a fallible signature or `debug_assert` would protect future callers. | completed |
+| F190 | PLANID-01 review | `src/repair/scan.rs` | `matches_plan` relies on a 64-bit non-cryptographic hash; revisit if a scan report ever crosses a process boundary. | completed |
+| F191 | PLANID-01 review | tests | A few tests use the crate-private `RepairPlan::files()` where `iter()` would express intent better. | completed |
 | F192 | EXIT-01 review | `src/main.rs` | `parse_args`'s doc says it maps failures to `RunExit::Usage`, but the body still exits with literal `0`/`1`. | todo |
 | F193 | EXIT-01 review | `src/main.rs` | `exit_code` takes `i32`, forcing callers to call `.code()` first; it could take `RunExit`. | todo |
 | F194 | EXIT-01 review | `src/config.rs` | `RunExit`'s doc claims one integer conversion at the boundary, but the tracing line also calls `.code()`. | todo |
@@ -342,7 +342,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MD5-TYPE-01 | F24 | done | Wave D, after PLANID-01; carry `Md5` through scan results; medium; f7a5a1e |
 | PATHHELPERS-01 | F67, F68, F69, F71, F187 | done | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low; 44ce5ed, 9bfbf9b, 40b23a5, 684b89a |
 | REFACTOR-01 | F80, F82 | done | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium; c21fa15, 231e6bd |
-| PLANID-02 | F188, F189, F190, F191 | pending_review | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
+| PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
 | EXIT-02 | F192, F193, F194, F195 | todo | Wave D; exit-code boundary polish and prose; low |
 | DRYRUN-02 | F196, F197, F198 | todo | Wave D; dry-run end-to-end coverage and cleanup-line parity; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | todo | Wave D; purge arithmetic hardening and blocking-helper consistency; low |
