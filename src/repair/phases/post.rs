@@ -56,7 +56,7 @@ pub async fn run(
     before_purge: Option<&purge::PurgePlan>,
     meta: &Meta,
     summary: &Summary,
-    deprecated: &[String],
+    deprecated: &Arc<[String]>,
 ) -> Result<PostOutcome, RunFailure> {
     let timer = crate::phase::PhaseTimer::start("post");
     match run_inner(
@@ -88,14 +88,16 @@ async fn run_inner(
     before_purge: Option<&purge::PurgePlan>,
     meta: &Meta,
     summary: &Summary,
-    deprecated: &[String],
+    deprecated: &Arc<[String]>,
 ) -> Result<PostOutcome, RunFailure> {
     let dry = ctx.dry_run;
     // The deprecated list can be long and every entry is a stat plus a delete:
     // that is blocking filesystem work, not a task the async worker should sit
     // through. The audio move below and the cleanup pass use the same discipline.
     let delete_game_dir = game_dir.to_path_buf();
-    let delete_list = deprecated.to_vec();
+    // A reference bump, not a deep copy: the list is already shared and the
+    // blocking task only reads it.
+    let delete_list = Arc::clone(deprecated);
     let delete_scope = ctx.path_scope.clone();
     let deleted = spawn_delete_deprecated(delete_game_dir, delete_list, delete_scope, dry).await;
     summary
@@ -261,7 +263,7 @@ async fn purge_after_pass(
 /// a dry run.
 async fn spawn_delete_deprecated(
     game_dir: PathBuf,
-    list: Vec<String>,
+    list: Arc<[String]>,
     scope: PathScope,
     dry_run: bool,
 ) -> u64 {

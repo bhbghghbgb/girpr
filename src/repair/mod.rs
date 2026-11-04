@@ -132,8 +132,10 @@ struct PlanPhase {
     /// `--check-only` verifier so neither path deep-clones it.
     scan: Option<Arc<ScanReport>>,
     /// The server's deprecated-file list (empty in read-only modes, or when the
-    /// best-effort fetch failed).
-    deprecated: Vec<String>,
+    /// best-effort fetch failed). Shared by `Arc` so the post-phase's blocking
+    /// delete task borrows the same elements instead of cloning them for
+    /// `'static`.
+    deprecated: Arc<[String]>,
     /// The local chunk map, shared with the repair loop and the scan.
     local_map: Arc<manifest::LocalChunkMap>,
 }
@@ -247,7 +249,7 @@ struct PlanWork {
     plan: Arc<RepairPlan>,
     purge_plan: Option<PurgePlan>,
     purge_keys: Option<Arc<purge::PurgeKeys>>,
-    deprecated: Vec<String>,
+    deprecated: Arc<[String]>,
     scan: Option<Arc<ScanReport>>,
     /// The per-file download estimate. One derivation feeds both the `PLAN`
     /// total and the `--plan-out` document.
@@ -547,13 +549,16 @@ fn ensure_scope_selected_something(
 /// It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
 /// extra network call. The call is needed exactly when the post-phase will list
 /// its deletes: any run that reaches the execution half.
-async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Vec<String> {
+async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Arc<[String]> {
     let wants_deprecated = !ctx.print_plan && !ctx.check_only;
     if wants_deprecated {
-        fetch_deprecated(&meta.hyp).await
+        // The fetch already returns an owned `Vec`; converting it once here
+        // means the post-phase can share it with its blocking task for a
+        // reference bump instead of copying every name.
+        fetch_deprecated(&meta.hyp).await.into()
     } else {
         tracing::debug!("read-only mode: not fetching the deprecated-file list");
-        Vec::new()
+        Vec::new().into()
     }
 }
 
@@ -1007,7 +1012,7 @@ async fn run_purge_only(
     purge_keys: Option<Arc<purge::PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    deprecated: &[String],
+    deprecated: &Arc<[String]>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
     summary.flags.config_bumped_zero = true;
@@ -1060,7 +1065,7 @@ async fn run_post(
     purge_keys: Option<Arc<purge::PurgeKeys>>,
     before_purge: Option<&PurgePlan>,
     meta: &Meta,
-    deprecated: &[String],
+    deprecated: &Arc<[String]>,
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
     let outcome = phases::post::run(
