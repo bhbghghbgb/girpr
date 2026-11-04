@@ -346,7 +346,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | EXIT-03 | F208 | todo | Wave E; clamp helper reachability; low |
-| DRYRUN-02 | F196, F197, F198 | todo | Wave D; dry-run end-to-end coverage and cleanup-line parity; low |
+| DRYRUN-02 | F196, F197, F198 | in_progress | Wave D; dry-run end-to-end coverage and cleanup-line parity; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | todo | Wave D; purge arithmetic hardening and blocking-helper consistency; low |
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
