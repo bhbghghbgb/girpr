@@ -792,6 +792,49 @@ mod tests {
         assert_eq!(std::fs::read(&src).unwrap(), b"cache bytes");
     }
 
+    /// The same partial-copy failure through the post-phase move: the source is
+    /// kept, nothing is published, and the outcome is reported as `kept`, not
+    /// as a move that did not happen.
+    #[test]
+    fn a_partial_copy_through_the_move_keeps_the_source_and_reports_kept() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "partial_move");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        let target = base.join("Audio/res/a.pck");
+        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            move_audio_cache_with(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+                |_, _| Err(std::io::Error::other("injected rename refusal")),
+                |_, dst| {
+                    std::fs::write(dst, b"partial")?;
+                    Err(std::io::Error::other("injected partial copy"))
+                },
+            )
+        });
+
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"cache bytes",
+            "a partial copy must not remove its source"
+        );
+        assert!(!target.exists(), "a partial copy is never published");
+        assert!(!tmp.exists(), "the temp sibling is cleaned up on failure");
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=0")
+                && logs.contains("kept=1"),
+            "the failed move is reported as kept: {logs}"
+        );
+    }
+
     /// A complete copy publishes exactly the source bytes and leaves nothing
     /// behind; the caller removes the source only after that.
     #[test]

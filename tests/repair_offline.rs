@@ -94,6 +94,53 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
 }
 
 #[tokio::test]
+async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
+    // The audio move is housekeeping: a destination that refuses both the
+    // rename and the copy must not fail the run, must keep the source, and
+    // must not publish a partial file. The post-phase still reaches its
+    // `config.ini` bump, because the repair itself completed.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            cache_dir: "Audio/cache".to_string(),
+            res_dir: "Audio/res".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_move_failed");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "Audio/cache/a.pck", b"cache bytes");
+    // A directory at the destination makes both the rename and the copy fail.
+    std::fs::create_dir_all(dir.join("Audio/res/a.pck")).unwrap();
+
+    let (_summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
+        .await
+        .expect("a refused audio move is not a run failure");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        read_game_file(&dir, "Audio/cache/a.pck").unwrap(),
+        b"cache bytes",
+        "the refused move keeps its source"
+    );
+    assert!(
+        dir.join("Audio/res/a.pck").is_dir(),
+        "the destination that refused the publish is untouched"
+    );
+    let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
+    assert!(
+        cfg.contains("game_version=9.9.9-test"),
+        "the completed repair still advances the version: {cfg}"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn dry_run_writes_nothing() {
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
