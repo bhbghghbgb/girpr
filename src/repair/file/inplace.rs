@@ -137,14 +137,16 @@ async fn attempt_inplace_inner(
         ctx,
         writes,
         &mut handle,
-        file,
-        prefix,
-        final_path,
-        &sources,
-        &scan.source_ok,
-        &bad,
-        &captured,
-        tier,
+        Patch {
+            file,
+            prefix,
+            final_path,
+            sources: &sources,
+            source_ok: &scan.source_ok,
+            bad: &bad,
+            captured: &captured,
+            tier,
+        },
         stats,
     )
     .await?;
@@ -418,22 +420,37 @@ fn stage_sources(
     Ok(captured)
 }
 
+/// The plan-side inputs to [`patch_chunks`]: what is wrong, where its bytes
+/// come from, and the write tier the patch runs in.
+struct Patch<'a> {
+    file: &'a PlannedFile,
+    prefix: &'a str,
+    final_path: &'a std::path::Path,
+    sources: &'a [Option<u64>],
+    source_ok: &'a [bool],
+    bad: &'a [usize],
+    captured: &'a [Option<Vec<u8>>],
+    tier: Tier,
+}
+
 /// Step 4: write the wrong chunks, fill the holes, and end at the target size.
-#[allow(clippy::too_many_arguments)] // one parameter per piece of the patch decision
 async fn patch_chunks(
     ctx: &FileCtx,
     writes: &mut FileWrites,
     handle: &mut std::fs::File,
-    file: &PlannedFile,
-    prefix: &str,
-    final_path: &std::path::Path,
-    sources: &[Option<u64>],
-    source_ok: &[bool],
-    bad: &[usize],
-    captured: &[Option<Vec<u8>>],
-    tier: Tier,
+    patch: Patch<'_>,
     stats: &mut ChunkStats,
 ) -> Result<()> {
+    let Patch {
+        file,
+        prefix,
+        final_path,
+        sources,
+        source_ok,
+        bad,
+        captured,
+        tier,
+    } = patch;
     // The order (ordered tier only): the direction that keeps the most
     // sources alive, and which sources those are. Only the sources the scan
     // found intact can be salvaged — the rest have to be downloaded.
