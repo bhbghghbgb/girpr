@@ -39,7 +39,7 @@ fn main() -> ExitCode {
             tracing::error!("usage error: {e:#}");
             eprintln!("ERROR {e:#}");
             flush_log();
-            return exit_code(RunExit::Usage.code());
+            return exit_code(RunExit::Usage);
         }
     };
 
@@ -68,22 +68,27 @@ fn main() -> ExitCode {
             // repair failure: `RunExit::Usage` like any other usage-level error.
             eprintln!("ERROR failed to start runtime: {e:#}");
             flush_log();
-            return exit_code(RunExit::Usage.code());
+            return exit_code(RunExit::Usage);
         }
     };
 
     let code = runtime.block_on(run(ctx));
     flush_log();
-    exit_code(code.code())
+    exit_code(code)
 }
 
 /// Map a documented exit status to what the process returns.
 ///
-/// The pipeline only produces a [`RunExit`] code, so this is a plain cast in
-/// practice; clamping keeps a future bug from wrapping a code into `259` on a
-/// platform whose exit status is narrower than an `i32`.
-fn exit_code(code: i32) -> ExitCode {
-    ExitCode::from(code.clamp(0, u8::MAX as i32) as u8)
+/// [`RunExit`] is the pipeline's only exit type; this is where it becomes the
+/// process status. Clamping keeps a future bug from wrapping a code into `259`
+/// on a platform whose exit status is narrower than an `i32`.
+fn exit_code(status: RunExit) -> ExitCode {
+    ExitCode::from(clamp_code(status.code()))
+}
+
+/// Keep a code in the range a process exit status can carry.
+fn clamp_code(code: i32) -> u8 {
+    code.clamp(0, u8::MAX as i32) as u8
 }
 
 /// Worker threads for a run that admits `jobs` files at once.
@@ -155,7 +160,8 @@ fn parse_args() -> Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{exit_code, worker_threads};
+    use super::{clamp_code, exit_code, worker_threads};
+    use girpr::RunExit;
     use std::process::ExitCode;
 
     #[test]
@@ -188,14 +194,22 @@ mod tests {
 
     #[test]
     fn the_documented_exit_codes_reach_the_process_unchanged() {
-        for code in 0..=5 {
-            assert_eq!(exit_code(code), ExitCode::from(code as u8));
+        let cases = [
+            (RunExit::Success, 0),
+            (RunExit::Usage, 1),
+            (RunExit::Metadata, 2),
+            (RunExit::Write, 3),
+            (RunExit::CheckFailed, 4),
+            (RunExit::Limit, 5),
+        ];
+        for (status, number) in cases {
+            assert_eq!(exit_code(status), ExitCode::from(number), "{status:?}");
         }
     }
 
     #[test]
     fn an_out_of_range_code_is_clamped_instead_of_wrapping() {
-        assert_eq!(exit_code(300), ExitCode::from(u8::MAX));
-        assert_eq!(exit_code(-1), ExitCode::SUCCESS);
+        assert_eq!(clamp_code(300), u8::MAX);
+        assert_eq!(clamp_code(-1), 0);
     }
 }
