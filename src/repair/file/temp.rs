@@ -720,10 +720,7 @@ mod tests {
             game_dir: std::path::PathBuf::new(),
             root: None,
             http: reqwest::Client::new(),
-            plan: Arc::new(RepairPlan {
-                latest: String::new(),
-                files: Vec::new(),
-            }),
+            plan: Arc::new(RepairPlan::from_files("", Vec::new())),
             local_map: Arc::new(LocalChunkMap::new()),
             scan: None,
             summary: Arc::new(Summary::new()),

@@ -546,10 +546,9 @@ mod tests {
     }
 
     fn plan_of_all(rels: &[&str]) -> RepairPlan {
-        RepairPlan {
-            latest: "5.0".into(),
-            files: rels
-                .iter()
+        RepairPlan::from_files(
+            "5.0",
+            rels.iter()
                 .map(|rel| PlannedFile {
                     rel: (*rel).into(),
                     size: 4,
@@ -558,7 +557,7 @@ mod tests {
                     chunks: vec![],
                 })
                 .collect(),
-        }
+        )
     }
 
     fn purge_now(dir: &Path, plan: &RepairPlan, dry_run: bool) -> u64 {

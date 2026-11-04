@@ -368,7 +368,7 @@ async fn build_and_assert_plan(
     );
     tracing::info!(
         "work list: {} files{}",
-        plan.files.len(),
+        plan.len(),
         if scope.is_active() {
             " (filtered by --include/--exclude)"
         } else {
@@ -440,7 +440,7 @@ async fn build_and_assert_plan(
     // it. (This also means a new `--include` on a `--print-plan` run reports
     // `files=0 purge_files=1` instead of erroring, which is what "print the
     // plan" should do.)
-    if scope.has_includes() && plan.files.is_empty() && purge_candidates == 0 {
+    if scope.has_includes() && plan.is_empty() && purge_candidates == 0 {
         // Say which of the two plans came back empty: the diagnosis differs, and
         // so does the fix the user needs.
         let message = if purge_plan.is_some() {
@@ -534,7 +534,7 @@ async fn build_and_assert_plan(
     if let Some(s) = &scan {
         summary.flags.damaged_chunks = Some(s.damaged_chunks);
     }
-    summary.files_total = plan.files.len() as u64;
+    summary.files_total = plan.len() as u64;
     summary.flags.limited = ctx.limits.is_active();
     let hits = ctx.limits.check_preflight(scope::Preflight {
         plan: &plan,

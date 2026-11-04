@@ -75,8 +75,8 @@ where
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
     let game_dir = game_dir.to_path_buf();
     let check = Arc::new(check);
-    let mut outcomes: Vec<(usize, CheckOutcome)> = Vec::with_capacity(plan.files.len());
-    let mut checks = futures_util::stream::iter(0..plan.files.len())
+    let mut outcomes: Vec<(usize, CheckOutcome)> = Vec::with_capacity(plan.len());
+    let mut checks = futures_util::stream::iter(0..plan.len())
         .map(|idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.clone();
@@ -85,7 +85,7 @@ where
             let check = Arc::clone(&check);
             async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    let f = &plan.files[idx];
+                    let f = &plan.files()[idx];
                     // Resolve once. A containment failure is a *diagnostic*:
                     // `build_plan` already refused an escaping rel, so this is
                     // defence in depth, and it must not be mislabelled as a
@@ -128,7 +128,7 @@ where
     let mut bad = 0u64;
     let mut damaged_chunks = 0u64;
     for (idx, outcome) in outcomes {
-        let f = &plan.files[idx];
+        let f = &plan.files()[idx];
         if !outcome.ok {
             bad += 1;
             damaged_chunks += outcome.damaged_chunks.unwrap_or(0);
@@ -189,7 +189,7 @@ where
         phase = % "check",
         duration_ms = timer.elapsed_ms(),
         "check-only: total={} bad={} damaged_chunks={}",
-        plan.files.len(),
+        plan.len(),
         bad,
         damaged_chunks
     );
@@ -337,10 +337,7 @@ mod tests {
     }
 
     fn plan_of(files: Vec<PlannedFile>) -> RepairPlan {
-        RepairPlan {
-            latest: "9.9".into(),
-            files,
-        }
+        RepairPlan::from_files("9.9", files)
     }
 
     fn verdict(file_md5: &str, dest_ok: Vec<bool>) -> Verdict {

@@ -67,7 +67,7 @@ pub struct ScanReport {
     /// Per planned file, in `plan.files` order. `None` is a file the scan did
     /// not reach: a task that panicked or was cancelled, or a plan this report
     /// was not built from.
-    pub files: Vec<Option<Verdict>>,
+    files: Vec<Option<Verdict>>,
     /// The bytes the scan read.
     pub bytes: u64,
     /// The chunks that are wrong where they belong, over the whole plan.
@@ -285,7 +285,7 @@ pub async fn scan_plan(
     // The install root is resolved once here, not once per file, and shared by
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
-    let total_files = plan.files.len();
+    let total_files = plan.len();
     let plan_fingerprint = plan.fingerprint();
     let mut stream = futures_util::stream::iter(0..total_files)
         .map(move |idx| {
@@ -295,7 +295,7 @@ pub async fn scan_plan(
             let root = root.clone();
             async move {
                 let result = tokio::task::spawn_blocking(move || {
-                    scan_one(&game_dir, root.as_deref(), &plan.files[idx], &local_map)
+                    scan_one(&game_dir, root.as_deref(), &plan.files()[idx], &local_map)
                 })
                 .await;
                 (idx, result)
@@ -846,16 +846,16 @@ mod tests {
 
     #[test]
     fn the_report_returns_verdicts_by_file_id() {
-        let plan = RepairPlan {
-            latest: "1.0".into(),
-            files: vec![PlannedFile {
+        let plan = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
                 rel: "a.dat".into(),
                 size: 0,
                 md5: "m".into(),
                 url_prefix: Arc::from(""),
                 chunks: vec![],
             }],
-        };
+        );
         let report = ScanReport {
             files: vec![
                 None,
@@ -889,26 +889,26 @@ mod tests {
     /// back a verdict at a position that means something else there.
     #[test]
     fn a_report_from_another_plan_is_rejected() {
-        let plan_a = RepairPlan {
-            latest: "1.0".into(),
-            files: vec![PlannedFile {
+        let plan_a = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
                 rel: "a.dat".into(),
                 size: 1,
                 md5: "a".into(),
                 url_prefix: Arc::from(""),
                 chunks: vec![chunk_at("c0", "m0", 0, 1)],
             }],
-        };
-        let plan_b = RepairPlan {
-            latest: "1.0".into(),
-            files: vec![PlannedFile {
+        );
+        let plan_b = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
                 rel: "b.dat".into(),
                 size: 2,
                 md5: "b".into(),
                 url_prefix: Arc::from(""),
                 chunks: vec![chunk_at("c0", "m1", 0, 2)],
             }],
-        };
+        );
         let report = ScanReport {
             files: vec![Some(Verdict {
                 file_md5: "a".into(),

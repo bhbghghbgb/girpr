@@ -85,7 +85,7 @@ impl DiskPlan {
     ) -> Self {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
-        for f in &plan.files {
+        for (_, f) in plan.iter() {
             let joined = root.map_or_else(
                 || util::contained_join(game_dir, &f.rel),
                 |root| root.join(&f.rel),
@@ -210,7 +210,7 @@ impl PlanTotals {
         scan_bytes: Option<u64>,
     ) -> Self {
         Self {
-            files: plan.files.len() as u64,
+            files: plan.len() as u64,
             est_download_bytes,
             purge_files: purge.map_or(0, |p| p.files.len() as u64),
             purge_bytes: purge.map_or(0, |p| p.total_bytes),
@@ -220,9 +220,8 @@ impl PlanTotals {
             // enforces it: it is the number a `--max-chunk-bytes` ceiling would
             // take, and it is one line to print.
             max_chunk_bytes: plan
-                .files
                 .iter()
-                .flat_map(|f| f.chunks.iter())
+                .flat_map(|(_, f)| f.chunks.iter())
                 .map(|c| c.compressed_size.max(0) as u64)
                 .max()
                 .unwrap_or(0),
@@ -312,18 +311,16 @@ impl<'a> PlanDocument<'a> {
     ) -> Self {
         Self {
             repair: plan
-                .files
                 .iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    let est = est_by_file.get(i).copied().unwrap_or_else(|| {
+                .map(|(id, f)| {
+                    let est = est_by_file.get(id.index()).copied().unwrap_or_else(|| {
                         // Server-controlled sizes: saturate, so a corrupt
                         // manifest cannot overflow the fallback.
                         f.chunks.iter().fold(0u64, |n, c| {
                             n.saturating_add(c.compressed_size.max(0) as u64)
                         })
                     });
-                    let d = disk.for_id(FileId::new(i));
+                    let d = disk.for_id(id);
                     RepairEntry {
                         rel: &f.rel,
                         size: f.size,
@@ -393,9 +390,9 @@ mod tests {
     }
 
     fn plan() -> RepairPlan {
-        RepairPlan {
-            latest: "9.9".into(),
-            files: vec![
+        RepairPlan::from_files(
+            "9.9",
+            vec![
                 PlannedFile {
                     rel: "game/foo.dat".into(),
                     size: 128,
@@ -418,7 +415,7 @@ mod tests {
                     chunks: vec![],
                 },
             ],
-        }
+        )
     }
 
     fn purge_plan() -> PurgePlan {
@@ -505,10 +502,7 @@ mod tests {
         let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
-            &RepairPlan {
-                files: vec![],
-                ..plan()
-            },
+            &RepairPlan::from_files("9.9", vec![]),
             None,
             0,
             false,
@@ -558,9 +552,10 @@ mod tests {
     #[test]
     fn the_disk_plan_keeps_its_place_when_a_path_cannot_be_resolved() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "aligned");
-        let mut plan = plan();
-        plan.files.truncate(2);
-        plan.files[1].rel = "../escape.dat".into();
+        let mut files = plan().files().to_vec();
+        files.truncate(2);
+        files[1].rel = "../escape.dat".into();
+        let plan = RepairPlan::from_files("9.9", files);
 
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 1);
         assert_eq!(disk.for_id(FileId::new(0)).mode, "temp");
@@ -700,9 +695,9 @@ mod tests {
         // fit in a `u64`: the debug build must not panic and a release build
         // must not wrap a smaller "estimate" onto the PLAN line.
         let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "overflow");
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: ["a.dat", "b.dat", "c.dat"]
+        let plan = RepairPlan::from_files(
+            "9.9",
+            ["a.dat", "b.dat", "c.dat"]
                 .into_iter()
                 .map(|rel| PlannedFile {
                     rel: rel.into(),
@@ -712,7 +707,7 @@ mod tests {
                     chunks: vec![],
                 })
                 .collect(),
-        };
+        );
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 3);
         assert_eq!(disk.est_write_bytes, u64::MAX);
         // The peak is the largest single file (`i64::MAX`); three files in
@@ -725,9 +720,9 @@ mod tests {
         // The caller supplies the same split the total was folded from. A
         // short slice is a caller bug; the fallback over-approximates and
         // saturates, rather than inventing a zero or overflowing.
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: vec![PlannedFile {
+        let plan = RepairPlan::from_files(
+            "9.9",
+            vec![PlannedFile {
                 rel: "game/huge.dat".into(),
                 size: 192,
                 md5: "m".into(),
@@ -738,7 +733,7 @@ mod tests {
                     chunk("c2", i64::MAX),
                 ],
             }],
-        };
+        );
         let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
         assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
         let sum = doc

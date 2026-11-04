@@ -98,7 +98,7 @@ impl Limits {
     pub fn check_preflight(&self, pf: Preflight<'_>) -> Vec<LimitHit> {
         let mut hits = Vec::new();
         if let Some(limit) = self.files {
-            let actual = pf.plan.files.len() as u64;
+            let actual = pf.plan.len() as u64;
             if actual > limit {
                 hits.push(LimitHit::Exceeded {
                     what: "--max-files",
@@ -229,9 +229,9 @@ mod tests {
     use std::sync::Arc;
 
     fn plan(n: usize) -> RepairPlan {
-        RepairPlan {
-            latest: "9.9".into(),
-            files: (0..n)
+        RepairPlan::from_files(
+            "9.9",
+            (0..n)
                 .map(|i| PlannedFile {
                     rel: format!("f{i}.dat"),
                     size: 1,
@@ -240,7 +240,7 @@ mod tests {
                     chunks: vec![],
                 })
                 .collect(),
-        }
+        )
     }
 
     fn purge(total: u64) -> PurgePlan {

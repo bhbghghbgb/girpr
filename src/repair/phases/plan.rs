@@ -177,10 +177,21 @@ impl FileId {
 /// The sorted, deduped work list for one run.
 pub struct RepairPlan {
     pub latest: String,
-    pub files: Vec<PlannedFile>,
+    files: Vec<PlannedFile>,
 }
 
 impl RepairPlan {
+    /// The planned files, in plan order.
+    ///
+    /// The one crate-private view used where an operation is intrinsically
+    /// index-based (a parallel task is handed a position). Everything that
+    /// starts from a plan position or addresses a file should prefer
+    /// [`file`](Self::file) or [`iter`](Self::iter), so the id and the file
+    /// stay together.
+    pub(crate) fn files(&self) -> &[PlannedFile] {
+        &self.files
+    }
+
     /// The file `id` names, or `None` when the id is not from this plan.
     pub fn file(&self, id: FileId) -> Option<&PlannedFile> {
         self.files.get(id.index())

@@ -209,7 +209,7 @@ pub async fn repair_all(
     sleep: Arc<dyn Sleep>,
 ) -> Summary {
     let summary = Arc::new(summary);
-    let total_files = plan.files.len();
+    let total_files = plan.len();
     // NOTE: these are shared by Arc on purpose. `local_map` holds every local
     // chunk (~10^4 entries) and the plan holds every planned file, so a
     // per-task deep clone once cost ~6GB across ~3k tasks.
@@ -262,7 +262,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
         seq = idx + 1,
         total = total_files,
         task = ?tokio::task::try_id(),
-        path = %ctx.plan.files[idx].rel,
+        path = %ctx.plan.files()[idx].rel,
     );
     async move {
         tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
@@ -271,7 +271,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
         // One per-file total, at debug: a chunk line per chunk would drown the
         // log, and the phase's own duration is already on its completion line.
         tracing::debug!(
-            file = %ctx.plan.files[idx].rel,
+            file = %ctx.plan.files()[idx].rel,
             duration_ms = crate::phase::millis_between(started, std::time::Instant::now()),
             "file repair finished"
         );
@@ -322,7 +322,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
                 // abandoned attempt wrote is in the install, so it is
                 // not a byte the repair did not have to touch.
                 let kept =
-                    (ctx.plan.files[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
+                    (ctx.plan.files()[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
                 ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
             }
             Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
@@ -435,7 +435,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if ctx.summary.stopped_by() != StoppedBy::None || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
-    let file = &ctx.plan.files[idx];
+    let file = &ctx.plan.files()[idx];
     // A test-only seam for the wiring, not the helper: the unit test on
     // `join_file_tasks` proves the join loop counts a `JoinError`, but only a
     // panic raised *inside* a real `repair_all` task proves that `repair_all`
@@ -893,16 +893,16 @@ mod tests {
     #[tokio::test]
     async fn a_panic_inside_a_file_task_fails_the_run() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_panic_wiring", "run");
-        let plan = Arc::new(RepairPlan {
-            latest: "1.0".into(),
-            files: vec![PlannedFile {
+        let plan = Arc::new(RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
                 rel: TEST_PANIC_REL.into(),
                 size: 4,
                 md5: String::new(),
                 url_prefix: Arc::from(""),
                 chunks: Vec::new(),
             }],
-        });
+        ));
         let summary = repair_all(
             reqwest::Client::new(),
             dir.to_path_buf(),
