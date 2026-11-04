@@ -514,6 +514,58 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
     );
 }
 
+/// A file changed **after** the plan scan is read again instead of being
+/// skipped from the stale verdict.
+///
+/// The plan scans both files. `a_first.dat` is missing, so repairing it fetches
+/// a chunk; the mock changes `z_target.dat` just before serving that first
+/// chunk body, which is after the scan and before the loop reaches the target.
+/// The plan's verdict for the target said "intact", so a writer that trusted it
+/// would skip the file and leave the damage in place. The fresh read must
+/// notice the change and repair the bytes.
+#[tokio::test]
+async fn a_file_changed_after_the_plan_scan_is_read_again() {
+    let size = 64usize;
+    let want = lay_out(&[chunk("target", 0x42, size, 0)]);
+    let spec = FixtureSpec::new(vec![
+        FileSpec::new("game/a_first.dat", vec![chunk("first", 0x41, size, 0)]),
+        FileSpec::new("game/z_target.dat", vec![chunk("target", 0x42, size, 0)]),
+    ])
+    .with_disk("game/z_target.dat", want.clone());
+
+    // The path is filled in after the rig exists; the hook cannot run before
+    // the first chunk request, which is after `run` starts.
+    let target_path = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let hook_path = std::sync::Arc::clone(&target_path);
+    let opts = MockOpts {
+        on_first_chunk: Some(std::sync::Arc::new(move || {
+            let path = hook_path
+                .lock()
+                .expect("hook path lock")
+                .clone()
+                .expect("the test sets the path before the run");
+            std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
+        })),
+        ..Default::default()
+    };
+
+    let rig = Rig::start_with(&spec, opts).await;
+    *target_path.lock().expect("hook path lock") = Some(rig.game().join("game/z_target.dat"));
+
+    let run = rig.run(&["--scan"]).await;
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.num("summary", "repaired"),
+        2,
+        "the changed file must not be skipped"
+    );
+    assert_eq!(
+        rig.read("game/z_target.dat"),
+        want,
+        "the changed bytes must be repaired from a fresh read"
+    );
+}
+
 /// The `chunks_*` figures from the one `repaired in place` line in a trace log.
 fn in_place_chunk_stats(log: &str) -> BTreeMap<&'static str, u64> {
     let line = log

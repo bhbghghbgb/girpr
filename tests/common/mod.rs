@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use girpr::test_support::{
@@ -850,6 +850,12 @@ pub struct MockOpts {
     pub truncate_first_chunks: u32,
     /// How many bytes of a truncated body to write before closing.
     pub truncate_bytes: usize,
+    /// Called in the server task just before the **first** chunk body is sent.
+    ///
+    /// The request necessarily arrives after the plan phase has finished, so a
+    /// test can use this to change the install between the plan scan and the
+    /// repair loop without racing a timer.
+    pub on_first_chunk: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 pub struct MockServer {
@@ -969,6 +975,10 @@ struct Responses {
     /// deliver `truncate_bytes` of it.
     truncate_first_chunks: u32,
     truncate_bytes: usize,
+    /// Runs once, before the first chunk body is sent.
+    on_first_chunk: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Whether `on_first_chunk` has already run.
+    first_chunk_seen: AtomicBool,
     /// The ids whose first response was already served corrupt. An id is in
     /// here from its first corrupt response onwards, so the second request for
     /// the same id gets the good bytes: a flaky origin, not a broken one.
@@ -1139,6 +1149,8 @@ fn build_responses(
         corrupt_chunks: opts.corrupt_chunks.clone(),
         truncate_first_chunks: opts.truncate_first_chunks,
         truncate_bytes: opts.truncate_bytes,
+        on_first_chunk: opts.on_first_chunk.clone(),
+        first_chunk_seen: AtomicBool::new(false),
         corrupt_served: Mutex::new(HashSet::new()),
         served: AtomicU64::new(0),
     }
@@ -1190,6 +1202,8 @@ async fn serve_one(
     // A body that is cut short is written in full-length header terms and then
     // abandoned, which is what a transport that dies mid-body looks like.
     let mut cut: Option<usize> = None;
+    // Set when this response is the first successful chunk body.
+    let mut first_chunk_body = false;
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
         ("200 OK", "application/json", r.configs.clone())
     } else if target.contains("getGameBranches") {
@@ -1269,6 +1283,7 @@ async fn serve_one(
         } else {
             match fx.chunk_store.get(id) {
                 Some(bytes) => {
+                    first_chunk_body = true;
                     log.lock().unwrap().push(id.to_string());
                     let n = r.served.fetch_add(1, Ordering::Relaxed);
                     // The named ids are corrupt on their **first** request
@@ -1308,6 +1323,17 @@ async fn serve_one(
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())
     };
+
+    // The plan phase is over by the time a chunk is requested, so this is the
+    // deterministic seam for "the install changed between planning and
+    // repair". It runs before the body, so the change is visible when the
+    // repair loop reaches the next file.
+    if first_chunk_body
+        && let Some(hook) = &r.on_first_chunk
+        && !r.first_chunk_seen.swap(true, Ordering::Relaxed)
+    {
+        hook();
+    }
 
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
