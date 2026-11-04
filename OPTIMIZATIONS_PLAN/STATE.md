@@ -361,7 +361,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
-| TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
+| TEST-OUTPUT-01 | F53, F116, F119 | in_progress | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | HYP-02 | F177 | todo | Wave D; validate the hyp response identity against the request; medium |
