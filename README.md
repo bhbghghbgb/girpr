@@ -222,8 +222,14 @@ flowchart TD
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
   no `config.ini`, byte counters stay 0). `--dry-run` also exercises the post-phase's
   read-only paths: it lists the deprecated deletes, the audio cache move and the
-  cleanup, and stops before the `config.ini` bump. `--check-only` and `--print-plan`
-  do not run the post-phase, so they also skip its deprecated-list request.
+  cleanup, and stops before the `config.ini` bump. With both purge flags it lists
+  each candidate once — the after pass names only candidates the before pass did
+  not. A tripped ceiling still stops a dry run, including the post-repair delete
+  re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
+  purge that cannot be planned is the same write-class failure (exit `3`) as in a
+  real run. `--check-only` and `--print-plan` do not run the post-phase, so they
+  also skip its deprecated-list request; `--print-plan --dry-run` is just
+  `--print-plan`.
   A malformed manifest chunk range is a **plan** error (exit `2`) in every
   mode, including these read-only ones, so `--check-only` cannot report such a
   file intact and `--print-plan` cannot print a plan that cannot run.

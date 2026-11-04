@@ -586,10 +586,17 @@ and a ceiling there costs nothing and refuses for free.
 | `--max-files N` | refuses before the hash storm | refuses before verifying | reports `files=` and refuses if over |
 | exit on a tripped ceiling | `5` | `5` | `5` |
 
-`--check-only` keeps its `0`/`4` semantics — a ceiling narrows *what is
-verified*, and `4` must not be masked by narrowing — but a ceiling that trips
+`--check-only` keeps its `0`/`4` semantics - a ceiling narrows *what is
+verified*, and `4` must not be masked by narrowing - but a ceiling that trips
 during `--check-only` is still `5`, because that is a different fact from
 "damage found".
+
+The post-repair delete re-check follows the same rule: a dry run stops with `5`
+when it trips, rather than logging the ceiling and finishing clean. A dry run
+that cannot re-plan the purge is a write-class failure (`3`), exactly as in a
+real run, even though the dry run itself wrote nothing. With both purge flags a
+dry run lists each candidate once; the after pass names only candidates the
+before pass did not.
 
 ---
 

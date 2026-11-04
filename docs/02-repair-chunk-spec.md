@@ -153,7 +153,9 @@ Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parit
 §Step-7 cleanup *now* — after the plan exists, before any repair — to free space
 for the repair itself. Same file set as `--purge-after`; only the timing differs.
 Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
-`--check-only` (verification must not delete).
+`--check-only` (verification must not delete). In `--dry-run` the two purge
+passes share their listing: because nothing was deleted, the after pass names
+only candidates the before pass did not, so each candidate is reported once.
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
 Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
@@ -370,6 +372,8 @@ optimization).
    set, then remove emptied dirs (dir sweep runs whenever a purge runs with writes
    enabled, i.e. both `--purge-before` and `--purge-after`; skipped in `--dry-run`).
    `--dry-run` only logs candidates + bytes and leaves `deleted_extra_bytes` at 0 by design.
+   When the before pass already ran in the same dry run, this pass lists only the
+   candidates the before pass did not name.
    Counts to the single `deleted_extra_bytes` counter (shared with deprecated-file
    deletes above). `--purge-before` runs
    this same cleanup at Step 5. Manifests are never cached inside `game_dir`; the only
