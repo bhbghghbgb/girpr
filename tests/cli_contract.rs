@@ -851,6 +851,24 @@ struct DataPlaneRun {
 
 /// Run the binary in JSON mode against the mock server, and index its records.
 async fn run_data_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str]) -> DataPlaneRun {
+    run_data_plane_as(game, mock, extra, "json").await
+}
+
+/// Run the binary in text mode against the mock server, and index its records.
+///
+/// The text and JSON planes render the same [`girpr::Record`], so the caller
+/// can check both against the same golden. This reports just the event and the
+/// field keys; a text line's values are not part of the contract.
+async fn run_text_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str]) -> DataPlaneRun {
+    run_data_plane_as(game, mock, extra, "text").await
+}
+
+async fn run_data_plane_as(
+    game: &std::path::Path,
+    mock: &MockServer,
+    extra: &[&str],
+    output: &str,
+) -> DataPlaneRun {
     let mut args: Vec<String> = vec![
         "--game-path".into(),
         game.display().to_string(),
@@ -863,7 +881,7 @@ async fn run_data_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str
         "--jobs".into(),
         "1".into(),
         "--output".into(),
-        "json".into(),
+        output.into(),
         // Keep the trace log out of the build tree; the log is not the plane
         // under test.
         "--no-log-file".into(),
@@ -877,7 +895,21 @@ async fn run_data_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str
         .expect("run girpr");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-    let records = stdout
+    let records = match output {
+        "json" => json_records(&stdout),
+        "text" => text_records(&stdout),
+        other => panic!("unknown output plane {other}"),
+    };
+    DataPlaneRun {
+        code: out.status.code().expect("process must exit normally"),
+        records,
+        stdout,
+        stderr,
+    }
+}
+
+fn json_records(stdout: &str) -> Vec<(String, Vec<String>)> {
+    stdout
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
@@ -892,13 +924,38 @@ async fn run_data_plane(game: &std::path::Path, mock: &MockServer, extra: &[&str
             keys.remove(0);
             (event, keys)
         })
-        .collect();
-    DataPlaneRun {
-        code: out.status.code().expect("process must exit normally"),
-        records,
-        stdout,
-        stderr,
-    }
+        .collect()
+}
+
+/// Index `EVENT key=value …` lines, keeping the keys in the line's order.
+///
+/// Parsing the text plane rather than matching substrings is what pins its
+/// shape: every field must carry its key, in report order, and a line must
+/// still begin with its event label.
+fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
+    stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut fields = line.split_whitespace();
+            let label = fields
+                .next()
+                .unwrap_or_else(|| panic!("empty data-plane line: {line}"));
+            assert!(
+                label.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+                "text record must start with its event label: {line}"
+            );
+            let mut keys = Vec::new();
+            for field in fields {
+                let (key, _value) = field.split_once('=').unwrap_or_else(|| {
+                    panic!("text record field is not key=value ({field:?}): {line}")
+                });
+                assert!(!key.is_empty(), "text record field has no key: {line}");
+                keys.push(key.to_string());
+            }
+            (label.to_ascii_lowercase(), keys)
+        })
+        .collect()
 }
 
 /// Check a run against a golden sequence of `(event, field keys)`.
@@ -1110,6 +1167,66 @@ async fn check_only_emits_report_then_exactly_one_summary() {
     let run = run_data_plane(&dir, &mock, &["--check-only"]).await;
     assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
     assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+    mock.stop();
+}
+
+/// Exactly one `SUMMARY` record is emitted by a real binary run, and it is
+/// the terminal record.
+fn assert_one_terminal_summary(run: &DataPlaneRun) {
+    let summaries = run
+        .records
+        .iter()
+        .filter(|(event, _)| event == "summary")
+        .count();
+    assert_eq!(
+        summaries, 1,
+        "the run must emit exactly one SUMMARY:\n{}",
+        run.stdout
+    );
+    assert_eq!(
+        run.records.last().map(|(event, _)| event.as_str()),
+        Some("summary"),
+        "SUMMARY must be the final record:\n{}",
+        run.stdout
+    );
+}
+
+/// The text plane is the same records as the JSON plane, rendered as
+/// `EVENT key=value …`: same events, same field order, exactly one terminal
+/// `SUMMARY`. The keys come from the shared constants above rather than a
+/// second copy of the expectation.
+#[tokio::test]
+async fn a_tiny_repair_pins_the_text_plane_with_one_terminal_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("text_plane_repair");
+    seed_one_damaged_one_clean(&dir);
+
+    let run = run_text_plane(&dir, &mock, &[]).await;
+    assert_eq!(run.code, 0, "a tiny repair exits 0:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+    mock.stop();
+}
+
+/// The text plane's `PLAN` sits between `REPORT` and the single terminal
+/// `SUMMARY`, with the same field order the JSON plane uses.
+#[tokio::test]
+async fn the_text_plane_pins_plan_between_report_and_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("text_plane_print_plan");
+    seed_one_damaged_one_clean(&dir);
+
+    let run = run_text_plane(&dir, &mock, &["--print-plan"]).await;
+    assert_eq!(run.code, 0, "--print-plan exits 0:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
+    assert_golden(
+        &run,
+        &[
+            ("report", REPORT_KEYS),
+            ("plan", PLAN_KEYS),
+            ("summary", SUMMARY_KEYS),
+        ],
+    );
     mock.stop();
 }
 
