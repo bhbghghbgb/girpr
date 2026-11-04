@@ -473,7 +473,13 @@ fn scan_one(
         util::Scan::absent(dest_ranges.len(), source_ranges.len())
     });
     // Back to one verdict per chunk, in the plan's order: a chunk with no
-    // source has no intact source, by definition.
+    // source has no intact source, by definition. The scan answers one verdict
+    // per source range, so the two lists are the same length here.
+    debug_assert_eq!(
+        source_owner.len(),
+        scan.source_ok.len(),
+        "the scan answers one source verdict per source range"
+    );
     let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
     Scanned {
         bytes: scan.file_len,

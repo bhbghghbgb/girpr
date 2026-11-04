@@ -285,6 +285,13 @@ fn plan_bad_chunks(
     // Back to one source verdict per chunk, in the plan's order: a chunk with
     // no source has no intact source, by definition. Everything below indexes
     // `source_ok` by chunk, and the discard scan is per range like the rest.
+    // The scan answers one verdict per source range, so the two lists are the
+    // same length here.
+    debug_assert_eq!(
+        source_owner.len(),
+        scan.source_ok.len(),
+        "the scan answers one source verdict per source range"
+    );
     scan.source_ok = source_ok_by_chunk(file.chunks.len(), source_owner, &scan.source_ok);
 
     // The chunks that are not correct where they belong. `file.chunks` is
