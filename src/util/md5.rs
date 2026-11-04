@@ -119,8 +119,9 @@ pub type ScanRange<'a> = (u64, u64, &'a str);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scan {
     /// Whole-file MD5 of what was on disk. The MD5 of the empty file when the
-    /// file was absent.
-    pub file_md5: String,
+    /// file was absent. Kept as a digest: callers compare bytes, and only a
+    /// report or log turns it back into hex.
+    pub file_md5: Md5,
     /// Bytes on disk (`0` when the file was absent).
     pub file_len: u64,
     /// Per destination range, **in the order given**: is the range already
@@ -140,7 +141,7 @@ impl Scan {
     /// scan.
     pub fn absent(dest_len: usize, source_len: usize) -> Self {
         Self {
-            file_md5: EMPTY_MD5.to_string(),
+            file_md5: Md5::EMPTY,
             file_len: 0,
             dest_ok: vec![false; dest_len],
             source_ok: vec![false; source_len],
@@ -272,7 +273,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     }
 
     Ok(Scan {
-        file_md5: Md5::from(whole.finalize()).to_hex(),
+        file_md5: Md5::from(whole.finalize()),
         file_len: total,
         dest_ok: dest_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
         source_ok: source_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
@@ -345,6 +346,11 @@ pub fn md5_digest(data: &[u8]) -> Md5 {
 }
 
 /// Lowercase hex MD5 of a file.
+///
+/// The text form callers that report a digest use; the internal gates compare
+/// [`Md5`] bytes through [`md5_file_digest`]. Kept as the public hex wrapper
+/// even though the crate's own gates no longer need to go through it.
+#[allow(dead_code)]
 pub fn md5_file(path: &Path) -> Result<String> {
     Ok(md5_file_digest(path)?.to_hex())
 }
@@ -532,7 +538,7 @@ mod tests {
         let dest = Ranges::of(&[(0, 64, hex(&data[0..64])), (64, 65, hex(&data[64..129]))]);
         let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
         assert_eq!(scan.file_len, data.len() as u64);
-        assert_eq!(scan.file_md5, hex(&data));
+        assert_eq!(scan.file_md5, md5_digest(&data));
         assert_eq!(scan.dest_ok, vec![true, true]);
         assert!(scan.source_ok.is_empty());
     }
@@ -552,7 +558,11 @@ mod tests {
             vec![true, false],
             "only the block that was actually damaged is wrong"
         );
-        assert_ne!(scan.file_md5, hex(&good), "the whole file is wrong too");
+        assert_ne!(
+            scan.file_md5,
+            md5_digest(&good),
+            "the whole file is wrong too"
+        );
     }
 
     #[test]
@@ -573,7 +583,7 @@ mod tests {
         let dest = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let source = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let scan = scan_file(&dir.join("nope.dat"), &dest.view(), &source.view()).unwrap();
-        assert_eq!(scan.file_md5, EMPTY_MD5);
+        assert_eq!(scan.file_md5, Md5::EMPTY);
         assert_eq!(scan.file_len, 0);
         assert_eq!(scan.dest_ok, vec![false]);
         assert_eq!(scan.source_ok, vec![false]);

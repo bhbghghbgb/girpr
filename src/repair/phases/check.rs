@@ -12,7 +12,6 @@
 //! `files_skipped` counts verified-clean files and `files_failed` counts damaged
 //! ones, so the `SUMMARY`/`PROGRESS` counters read the same as a repair run.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -21,7 +20,7 @@ use futures_util::StreamExt;
 
 use crate::config::RunFailure;
 use crate::report::{self, Summary};
-use crate::util::{self, Md5};
+use crate::util;
 
 use super::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::scan::{ScanReport, Verdict};
@@ -304,14 +303,14 @@ fn check_one(
     if actual_size != f.size as u64 {
         return CheckOutcome::failed(CheckFailure::Size(actual_size));
     }
-    let actual: Cow<'_, str> = match digest {
-        DigestSource::Scanned(v) => Cow::Borrowed(v.file_md5.as_str()),
-        DigestSource::Read => match util::md5_file(path) {
-            Ok(h) => Cow::Owned(h),
+    let actual = match digest {
+        DigestSource::Scanned(v) => v.file_md5,
+        DigestSource::Read => match util::md5::md5_file_digest(path) {
+            Ok(digest) => digest,
             Err(e) => return CheckOutcome::failed(CheckFailure::Read(format!("{e:#}"))),
         },
     };
-    if Md5::parse_hex(&actual).is_ok_and(|actual| actual.matches_hex(&f.md5)) {
+    if actual.matches_hex(&f.md5) {
         return CheckOutcome::clean();
     }
     let damaged_chunks = match digest {
@@ -319,7 +318,7 @@ fn check_one(
         DigestSource::Read => None,
     };
     CheckOutcome::failed(CheckFailure::Md5 {
-        actual: actual.into_owned(),
+        actual: actual.to_hex(),
         damaged_chunks,
     })
 }
@@ -327,6 +326,7 @@ fn check_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::Md5;
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -344,7 +344,7 @@ mod tests {
 
     fn verdict(file_md5: &str, dest_ok: Vec<bool>) -> Verdict {
         Verdict {
-            file_md5: file_md5.into(),
+            file_md5: Md5::parse_hex(file_md5).unwrap(),
             dest_ok,
             source_ok: Vec::new(),
             file_len: 0,
@@ -605,11 +605,12 @@ mod tests {
         std::fs::write(base.join("f.dat"), b"on disk").unwrap();
         let f = planned("f.dat", 7, "expected");
         let path = util::contained_join(base, &f.rel);
+        let actual_hex = "00000000000000000000000000000002";
 
         let outcome = check_one(
             &f,
             &path,
-            DigestSource::Scanned(&verdict("actual", vec![true, false, false])),
+            DigestSource::Scanned(&verdict(actual_hex, vec![true, false, false])),
         );
         assert!(!outcome.ok);
         assert_eq!(
@@ -622,7 +623,7 @@ mod tests {
             Some(CheckFailure::Md5 {
                 ref actual,
                 damaged_chunks: Some(2)
-            }) if actual == "actual"
+            }) if actual == actual_hex
         ));
     }
 
@@ -634,7 +635,7 @@ mod tests {
 
         for digest in [
             DigestSource::Read,
-            DigestSource::Scanned(&verdict("actual", vec![true])),
+            DigestSource::Scanned(&verdict("00000000000000000000000000000000", vec![true])),
         ] {
             let outcome = check_one(&f, &path, digest);
             assert!(!outcome.ok);

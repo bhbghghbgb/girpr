@@ -221,7 +221,7 @@ fn open_and_scan(
                 "reusing the plan scan in the in-place writer"
             );
             util::Scan {
-                file_md5: v.file_md5.clone(),
+                file_md5: v.file_md5,
                 file_len: v.file_len,
                 dest_ok: v.dest_ok.clone(),
                 source_ok: source_ok_by_range(&v.source_ok, source_owner),
@@ -236,7 +236,7 @@ fn open_and_scan(
         on_disk = scan.file_len,
         "scanned"
     );
-    if Md5::parse_hex(&scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
+    if scan.file_md5.matches_hex(&file.md5) {
         tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
         return Ok(OpenScan::Finished(Inplace::Skipped));
     }
@@ -1023,7 +1023,7 @@ mod tests {
             ..Default::default()
         };
         let mut scan = util::Scan {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             file_len: 60,
             dest_ok: vec![true, false, true],
             source_ok: vec![true, false],
@@ -1202,7 +1202,7 @@ mod tests {
             chunks: vec![chunk_at("c0", &md5_0, 0, 4), chunk_at("c1", &md5_1, 4, 4)],
         };
         let verdict = Verdict {
-            file_md5: util::md5::md5_digest(&damaged).to_hex(),
+            file_md5: util::md5::md5_digest(&damaged),
             dest_ok: vec![true, false],
             source_ok: vec![true, true],
             file_len: good.len() as u64,
@@ -1234,7 +1234,7 @@ mod tests {
             panic!("a stale damaged verdict must not make the writer skip");
         };
         assert!(
-            !Md5::parse_hex(&scan.file_md5).is_ok_and(|reused| reused.matches_hex(&file.md5)),
+            !scan.file_md5.matches_hex(&file.md5),
             "the guard reused a verdict whose digest is not the manifest's"
         );
         assert_ne!(std::fs::read(&path).unwrap(), good);
@@ -1283,7 +1283,7 @@ mod tests {
         let handle = std::fs::File::open(&path).unwrap();
 
         let wrong_shape = Verdict {
-            file_md5: file.md5.clone(),
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
             dest_ok: vec![true, true],
             source_ok: vec![true, true],
             file_len: bytes.len() as u64,
@@ -1298,7 +1298,7 @@ mod tests {
         );
 
         let no_time = Verdict {
-            file_md5: file.md5.clone(),
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
             dest_ok: vec![true],
             source_ok: vec![true],
             file_len: bytes.len() as u64,
@@ -1360,7 +1360,7 @@ mod tests {
             chunks: Vec::new(),
         };
         let verdict = Verdict {
-            file_md5: file.md5.clone(),
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
             dest_ok: Vec::new(),
             source_ok: Vec::new(),
             file_len: bytes.len() as u64,

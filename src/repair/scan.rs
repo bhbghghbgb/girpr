@@ -35,12 +35,14 @@ use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util;
+use crate::util::Md5;
 
 /// What one file's scan found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
-    /// The whole-file MD5 of what was on disk.
-    pub file_md5: String,
+    /// The whole-file MD5 of what was on disk, as a digest. Hex is produced
+    /// only where a report or a log needs text.
+    pub file_md5: Md5,
     /// Per chunk, in the plan's order: is it correct where it belongs?
     pub dest_ok: Vec<bool>,
     /// Per chunk, in the plan's order: is its reuse source intact?
@@ -447,7 +449,7 @@ fn scan_one(
             return Scanned {
                 bytes: 0,
                 verdict: Verdict {
-                    file_md5: util::EMPTY_MD5.to_string(),
+                    file_md5: Md5::EMPTY,
                     dest_ok: vec![false; n],
                     source_ok: vec![false; n],
                     file_len: 0,
@@ -514,7 +516,7 @@ mod tests {
         // c0 is wrong but has an intact source the ascending order keeps; c1
         // is wrong and has none.
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false, false],
             source_ok: vec![true, false],
             file_len: 0,
@@ -547,7 +549,7 @@ mod tests {
     fn the_ordered_tier_can_download_a_chunk_whose_source_the_scan_found_intact() {
         let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false, false],
             source_ok: vec![true, true],
             file_len: 0,
@@ -587,7 +589,7 @@ mod tests {
     fn the_temp_estimate_counts_the_correct_chunks_the_in_place_path_keeps() {
         let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![true, false],
             source_ok: vec![false, false],
             file_len: 0,
@@ -646,7 +648,7 @@ mod tests {
         );
 
         let all_wrong = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false; 3],
             source_ok: vec![false; 3],
             file_len: 0,
@@ -786,7 +788,7 @@ mod tests {
         assert_eq!(owner, vec![0, 2]);
         let source_ok = source_ok_by_chunk(chunks.len(), &owner, &[true, true]);
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false; 3],
             source_ok,
             file_len: 0,
@@ -835,7 +837,7 @@ mod tests {
     #[test]
     fn the_damaged_chunk_count_is_the_wrong_chunks() {
         let v = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![true, false, false, true],
             source_ok: vec![true; 4],
             file_len: 0,
@@ -856,11 +858,12 @@ mod tests {
                 chunks: vec![],
             }],
         );
+        let present = Md5::parse_hex("00000000000000000000000000000001").unwrap();
         let report = ScanReport {
             files: vec![
                 None,
                 Some(Verdict {
-                    file_md5: "present".into(),
+                    file_md5: present,
                     dest_ok: vec![],
                     source_ok: vec![],
                     file_len: 0,
@@ -874,10 +877,7 @@ mod tests {
         };
 
         assert!(report.get(&plan, FileId::new(0)).is_none());
-        assert_eq!(
-            report.get(&plan, FileId::new(1)).unwrap().file_md5,
-            "present"
-        );
+        assert_eq!(report.get(&plan, FileId::new(1)).unwrap().file_md5, present);
         assert!(
             report.get(&plan, FileId::new(2)).is_none(),
             "an id outside the report is not a verdict"
@@ -911,7 +911,7 @@ mod tests {
         );
         let report = ScanReport {
             files: vec![Some(Verdict {
-                file_md5: "a".into(),
+                file_md5: Md5::EMPTY,
                 dest_ok: vec![true],
                 source_ok: vec![true],
                 file_len: 1,

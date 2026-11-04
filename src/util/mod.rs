@@ -21,7 +21,5 @@ pub mod md5;
 pub mod path;
 
 pub use self::ini::{read_blacklist, read_game_version, read_ignore_categories, write_config_ini};
-pub use self::md5::{
-    EMPTY_MD5, Md5, Scan, ScanRange, md5_file, read_range, scan_file, scan_reader,
-};
+pub use self::md5::{EMPTY_MD5, Md5, Scan, ScanRange, read_range, scan_file, scan_reader};
 pub use self::path::{FileLen, PathRoot, clean_rel, contained_join, file_len};
