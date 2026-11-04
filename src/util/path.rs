@@ -173,23 +173,28 @@ pub fn clean_rel(rel: &str) -> Result<String> {
 /// under the base, but the empty rel names no file, and the walks skip the
 /// base itself.
 pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
-    Some(
-        path.strip_prefix(base)
-            .ok()?
-            .to_string_lossy()
-            .replace('\\', "/"),
-    )
+    Some(lossy_slash(path.strip_prefix(base).ok()?))
+}
+
+/// Spell a path as a lossy string with `/` separators.
+///
+/// The conversion is shared by [`rel_from_base`] and [`join_rel`], so both
+/// halves of a rel use the same separator rule on every host.
+fn lossy_slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
 }
 
 /// Join a rel directory and a name into the `/`-separated form the scope
 /// matches on.
 ///
-/// `dir_rel` is already in the clean `/` form ([`clean_rel`]); `name` is a path
-/// fragment from a walk and is converted lossily, with `\` reported as `/`. An
-/// empty `dir_rel` yields `name` alone, so the result never starts with `/`;
-/// a non-empty one adds exactly one separator, never `//`.
+/// `dir_rel` is already in the clean `/` form ([`clean_rel`]) and must not end
+/// with a separator: that is the form [`clean_rel`] returns, and this helper
+/// adds the one separator itself. `name` is a path fragment from a walk and is
+/// converted lossily, with `\` reported as `/`. An empty `dir_rel` yields
+/// `name` alone, so the result never starts with `/`; a non-empty one adds
+/// exactly one separator, never `//`.
 pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
-    let name = name.to_string_lossy().replace('\\', "/");
+    let name = lossy_slash(name);
     if dir_rel.is_empty() {
         name
     } else {
@@ -598,6 +603,14 @@ mod tests {
         // A name Windows spelled with `\` is reported in the `/` form.
         assert_eq!(
             join_rel("Audio/cache", Path::new("sub\\a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+        // The clean form clean_rel returns has no trailing separator, so the
+        // one join adds is the only one in the result.
+        let dir = clean_rel("Audio//cache").unwrap();
+        assert!(!dir.ends_with('/'));
+        assert_eq!(
+            join_rel(&dir, Path::new("sub/a.pck")),
             "Audio/cache/sub/a.pck"
         );
     }
