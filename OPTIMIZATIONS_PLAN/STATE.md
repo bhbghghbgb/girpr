@@ -343,7 +343,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-01 | F67, F68, F69, F71, F187 | done | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low; 44ce5ed, 9bfbf9b, 40b23a5, 684b89a |
 | REFACTOR-01 | F80, F82 | done | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium; c21fa15, 231e6bd |
 | PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
-| EXIT-02 | F192, F193, F194, F195 | in_progress | Wave D; exit-code boundary polish and prose; low |
+| EXIT-02 | F192, F193, F194, F195 | pending_review | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | DRYRUN-02 | F196, F197, F198 | todo | Wave D; dry-run end-to-end coverage and cleanup-line parity; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | todo | Wave D; purge arithmetic hardening and blocking-helper consistency; low |
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
