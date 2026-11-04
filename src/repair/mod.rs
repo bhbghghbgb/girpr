@@ -397,32 +397,30 @@ async fn build_and_assert_plan(
     // configuration, so fold them once and let both purge passes (and the
     // `--print-plan` numbers) share them. The walked candidates stay
     // per-pass: the filesystem can change between the before and after walks.
-    let purge_keys = if purge_wanted {
-        Some(Arc::new(purge::PurgeKeys::new(
-            &plan,
-            purge::keep_set(),
-            &meta.blacklist,
-        )))
-    } else {
-        None
-    };
-    let purge_plan = if let Some(keys) = purge_keys.as_ref() {
+    //
+    // The fold keys every expected rel with `path_key`, which is proportional
+    // to the manifest size (hundreds of milliseconds on a large install). It
+    // runs in the same blocking task as the walk, so neither the fold nor the
+    // walk occupies an async worker.
+    let (purge_keys, purge_plan) = if purge_wanted {
         let purge_game_dir = game_dir.to_path_buf();
-        let keys = Arc::clone(keys);
+        let keys_plan = Arc::clone(&plan);
+        let blacklist = meta.blacklist.clone();
         let purge_scope = ctx.path_scope.clone();
-        Some(
-            tokio::task::spawn_blocking(move || {
-                purge::plan_purge(&purge_game_dir, &keys, &purge_scope)
-            })
-            .await
-            .map_err(|e| {
-                RunFailure::write(anyhow::anyhow!(
-                    "purge planning task failed before any delete: {e}"
-                ))
-            })?,
-        )
+        let (keys, plan) = tokio::task::spawn_blocking(move || {
+            let keys = purge::PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
+            let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
+            (keys, plan)
+        })
+        .await
+        .map_err(|e| {
+            RunFailure::write(anyhow::anyhow!(
+                "purge planning task failed before any delete: {e}"
+            ))
+        })?;
+        (Some(Arc::new(keys)), Some(plan))
     } else {
-        None
+        (None, None)
     };
 
     let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
