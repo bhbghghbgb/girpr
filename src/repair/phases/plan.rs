@@ -269,11 +269,18 @@ impl RepairPlan {
     ///
     /// This is an in-process check only. It is never persisted or emitted, so
     /// it does not extend the output contract; the hash function is whatever
-    /// `DefaultHasher` provides in this build.
+    /// `DefaultHasher` provides in this build. `DefaultHasher` is not a
+    /// stable, cross-process hash — its output may differ between processes
+    /// or Rust releases — so a value from here must be compared only inside
+    /// the process that built the plan. The one consumer, [`ScanReport`],
+    /// holds it in memory and is never serialized. If a scan report ever has
+    /// to cross a process boundary, replace this with a stable fold first.
     ///
     /// The file-list half is cached at construction, because callers ask this
     /// per file and rehashing the whole plan for each one would be quadratic in
     /// the plan size.
+    ///
+    /// [`ScanReport`]: crate::repair::scan::ScanReport
     pub(crate) fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.latest.hash(&mut hasher);

@@ -82,6 +82,13 @@ pub struct ScanReport {
     /// A scan's `files` are indexed by plan position, so this is the identity
     /// that makes those positions meaningful. `None` is a report built by
     /// hand; it answers for no plan rather than accidentally matching one.
+    ///
+    /// This is an in-memory identity only: it comes from
+    /// [`RepairPlan::fingerprint`], which uses the standard library's
+    /// `DefaultHasher` and is not stable across processes or Rust releases.
+    /// A `ScanReport` is never serialized, persisted, or sent to another
+    /// process. If it ever has to cross such a boundary, the fingerprint must
+    /// become a stable fold first; comparing this value elsewhere is unsafe.
     plan_fingerprint: Option<u64>,
 }
 
