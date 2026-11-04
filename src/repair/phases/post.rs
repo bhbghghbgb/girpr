@@ -109,16 +109,7 @@ async fn run_inner(
     let move_game_dir = game_dir.to_path_buf();
     let move_config = meta.config.clone();
     let move_scope = ctx.path_scope.clone();
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        move_audio_cache(&move_game_dir, &move_config, &move_scope, dry);
-    })
-    .await
-    {
-        tracing::warn!(
-            error = %e,
-            "audio cache move task failed; the post-phase carries on"
-        );
-    }
+    spawn_audio_move(move_game_dir, move_config, move_scope, dry).await;
     if let Some(outcome) =
         purge_after_pass(ctx, game_dir, purge_keys, before_purge, summary).await?
     {
@@ -277,6 +268,26 @@ async fn spawn_delete_deprecated(
             );
             0
         }
+    }
+}
+
+/// Run the blocking audio-cache move on the blocking pool, keeping the step
+/// best-effort: a panicked task is logged and the phase carries on. The same
+/// traced helper as the deletes keeps its log lines attached to the caller's
+/// subscriber.
+async fn spawn_audio_move(
+    game_dir: PathBuf,
+    config: crate::hyp::GameConfig,
+    scope: PathScope,
+    dry_run: bool,
+) {
+    if let Err(e) =
+        spawn_blocking_traced(move || move_audio_cache(&game_dir, &config, &scope, dry_run)).await
+    {
+        tracing::warn!(
+            error = %e,
+            "audio cache move task failed; the post-phase carries on"
+        );
     }
 }
 
@@ -880,6 +891,43 @@ mod tests {
                 && logs.contains("moved=1")
                 && logs.contains("kept=0"),
             "the fallback move is reported as moved: {logs}"
+        );
+    }
+
+    /// The move runs on the blocking pool, whose threads start without the
+    /// caller's thread-local subscriber. Routing it through the traced helper
+    /// keeps the operator's `audio cache -> res` line (and the move itself)
+    /// intact under a scoped subscriber.
+    #[test]
+    fn a_blocking_audio_move_keeps_the_callers_subscriber() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "traced");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::write(base.join("Audio/cache/a.pck"), b"cache bytes").unwrap();
+
+        let logs = logs_of(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(spawn_audio_move(
+                base.to_path_buf(),
+                config("Audio/cache", "Audio/res"),
+                PathScope::default(),
+                false,
+            ));
+        });
+
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=1")
+                && logs.contains("kept=0"),
+            "the blocking move reaches the scoped subscriber: {logs}"
+        );
+        assert!(!base.join("Audio/cache/a.pck").exists());
+        assert_eq!(
+            std::fs::read(base.join("Audio/res/a.pck")).unwrap(),
+            b"cache bytes"
         );
     }
 
