@@ -566,6 +566,39 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
         "the post-phase did not run:\n{body}"
     );
 
+    // An unscanned run must not log a scan completion: the phase only runs
+    // when `--scan` asked for it.
+    let plain_log = dir.join("plain.log");
+    let plain_log_arg = plain_log.to_string_lossy().into_owned();
+    let (code, _, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--log-file",
+            &plain_log_arg,
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let body = std::fs::read_to_string(&plain_log).expect("the plain log file was written");
+    assert!(
+        !body.contains("phase=scan"),
+        "an unscanned run must not log a scan phase:\n{body}"
+    );
+    assert!(
+        body.contains("phase=repair"),
+        "the repair phase still ran:\n{body}"
+    );
+
     mock.stop();
 }
 
