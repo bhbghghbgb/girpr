@@ -128,7 +128,7 @@ async fn run(ctx: RunCtx) -> RunExit {
         Err(f) => {
             tracing::error!("fatal(exit={}): {:#}", f.exit_code.code(), f.source);
             eprintln!("FATAL {:#}", f.source);
-            f.exit_code
+            RunExit::from(f)
         }
     }
 }
