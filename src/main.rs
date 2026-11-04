@@ -146,8 +146,8 @@ fn parse_args() -> Args {
         Err(e) => {
             let _ = e.print();
             std::process::exit(match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
-                _ => 1,
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => RunExit::Success.code(),
+                _ => RunExit::Usage.code(),
             });
         }
     }
