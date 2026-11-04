@@ -167,7 +167,6 @@ enum PlanOutcome {
 async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, RunFailure> {
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only.
-    let readonly = ctx.readonly();
     // NOTE: `game_dir` is NOT created here. `create_dir_all` lives in the
     // execution phase so a run that refuses before doing any work leaves no
     // directory behind. Reads tolerate a missing dir, so the plan phase can
@@ -204,7 +203,6 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
         meta: &meta,
         per_manifest,
         local_map: &local_map,
-        readonly,
     })
     .await?
     else {
@@ -345,7 +343,6 @@ struct PlanInputs<'a> {
     meta: &'a Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
     local_map: &'a Arc<manifest::LocalChunkMap>,
-    readonly: bool,
 }
 
 /// Step 4: the work list, the purge candidates, the deprecated list, the scan,
@@ -366,7 +363,6 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         meta,
         per_manifest,
         local_map,
-        readonly,
     } = inputs;
 
     let (plan, purge_keys, purge_plan) =
@@ -380,7 +376,7 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
         purge_plan.as_ref(),
     )?;
 
-    let deprecated = load_deprecated(ctx, meta, readonly).await;
+    let deprecated = load_deprecated(ctx, meta).await;
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
 
     let estimate = estimate_download(
@@ -541,17 +537,18 @@ fn ensure_scope_selected_something(
 /// `--dry-run` needs it because the post-phase now runs in a dry run and lists
 /// the deprecated deletes it would make. `--check-only` and `--print-plan` still
 /// skip it: neither reaches the post-phase, so the request would only add a
-/// network round-trip and throw the answer away. (`--print-plan` is not covered
-/// by `readonly()` — it leaves by an early return — hence the explicit
-/// disjunct.)
+/// network round-trip and throw the answer away.
+///
+/// Those two modes are the whole exclusion. `readonly()` is
+/// `dry_run || check_only`, so once `check_only` is excluded the remaining
+/// `dry_run || !readonly` reduces to `dry_run || !dry_run` — always true — and
+/// the gate is just `!print_plan && !check_only`.
 ///
 /// It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
 /// extra network call. The call is needed exactly when the post-phase will list
-/// its deletes: a mutating run, or a dry run that is not `--check-only`.
-/// `--print-plan` returns before the execution half and short-circuits
-/// `--dry-run`, so neither fetches a list it would discard.
-async fn load_deprecated(ctx: &RunCtx, meta: &Meta, readonly: bool) -> Vec<String> {
-    let wants_deprecated = !ctx.print_plan && !ctx.check_only && (ctx.dry_run || !readonly);
+/// its deletes: any run that reaches the execution half.
+async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Vec<String> {
+    let wants_deprecated = !ctx.print_plan && !ctx.check_only;
     if wants_deprecated {
         fetch_deprecated(&meta.hyp).await
     } else {
