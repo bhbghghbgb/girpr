@@ -473,7 +473,11 @@ async fn build_and_assert_plan(
     //
     // It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
     // extra network call.
-    let wants_deprecated = ctx.dry_run || (!readonly && !ctx.print_plan);
+    // The call is needed exactly when the post-phase will list its deletes:
+    // a mutating run, or a dry run that is not `--check-only`. `--print-plan`
+    // returns before the execution half and short-circuits `--dry-run`, so
+    // neither fetches a list it would discard.
+    let wants_deprecated = !ctx.print_plan && !ctx.check_only && (ctx.dry_run || !readonly);
     let deprecated = if wants_deprecated {
         fetch_deprecated(&meta.hyp).await
     } else {
@@ -684,7 +688,16 @@ async fn execute_phase(
 
     // 5.6 purge-only: every phase but the repair loop.
     if ctx.purge_only {
-        return run_purge_only(ctx, &game_dir, purge_keys, &meta, &deprecated, summary).await;
+        return run_purge_only(
+            ctx,
+            &game_dir,
+            purge_keys,
+            purge_plan.as_ref(),
+            &meta,
+            &deprecated,
+            summary,
+        )
+        .await;
     }
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
@@ -701,7 +714,16 @@ async fn execute_phase(
     let mutates = !readonly;
     let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
     if mutates || lists_dry_run {
-        return run_post(ctx, &game_dir, purge_keys, &meta, &deprecated, summary).await;
+        return run_post(
+            ctx,
+            &game_dir,
+            purge_keys,
+            purge_plan.as_ref(),
+            &meta,
+            &deprecated,
+            summary,
+        )
+        .await;
     }
 
     Ok((summary, RunExit::Success))
@@ -841,13 +863,23 @@ async fn run_purge_only(
     ctx: &RunCtx,
     game_dir: &Path,
     purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &[String],
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
     summary.flags.config_bumped_zero = true;
     tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-    let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
+    let outcome = phases::post::run(
+        ctx,
+        game_dir,
+        purge_keys,
+        before_purge,
+        meta,
+        &summary,
+        deprecated,
+    )
+    .await?;
     let code = finish(outcome, &mut summary);
     Ok((summary, code))
 }
@@ -904,11 +936,21 @@ async fn run_post(
     ctx: &RunCtx,
     game_dir: &Path,
     purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
     meta: &Meta,
     deprecated: &[String],
     mut summary: Summary,
 ) -> Result<(Summary, RunExit), RunFailure> {
-    let outcome = phases::post::run(ctx, game_dir, purge_keys, meta, &summary, deprecated).await?;
+    let outcome = phases::post::run(
+        ctx,
+        game_dir,
+        purge_keys,
+        before_purge,
+        meta,
+        &summary,
+        deprecated,
+    )
+    .await?;
     let code = finish(outcome, &mut summary);
     Ok((summary, code))
 }

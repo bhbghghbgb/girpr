@@ -52,12 +52,23 @@ pub async fn run(
     ctx: &RunCtx,
     game_dir: &Path,
     purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&purge::PurgePlan>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &[String],
 ) -> Result<PostOutcome, RunFailure> {
     let timer = crate::phase::PhaseTimer::start("post");
-    match run_inner(ctx, game_dir, purge_keys, meta, summary, deprecated).await {
+    match run_inner(
+        ctx,
+        game_dir,
+        purge_keys,
+        before_purge,
+        meta,
+        summary,
+        deprecated,
+    )
+    .await
+    {
         Ok(outcome) => {
             timer.finish();
             Ok(outcome)
@@ -73,6 +84,7 @@ async fn run_inner(
     ctx: &RunCtx,
     game_dir: &Path,
     purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&purge::PurgePlan>,
     meta: &Meta,
     summary: &Summary,
     deprecated: &[String],
@@ -95,51 +107,10 @@ async fn run_inner(
             "audio cache move task failed; the post-phase carries on"
         );
     }
-    if ctx.purge_after || ctx.purge_only {
-        // The plan-derived keep inputs were folded once in the plan phase;
-        // only the walked candidates are recomputed here.
-        let keys = purge_keys.ok_or_else(|| {
-            RunFailure::write(anyhow::anyhow!(
-                "purge planning task started without the run's keyed keep sets"
-            ))
-        })?;
-        let purge_game_dir = game_dir.to_path_buf();
-        let purge_scope = ctx.path_scope.clone();
-        let purge_plan = tokio::task::spawn_blocking(move || {
-            purge::plan_purge(&purge_game_dir, &keys, &purge_scope)
-        })
-        .await
-        .map_err(|e| {
-            RunFailure::write(anyhow::anyhow!(
-                "purge planning task failed before the post-repair cleanup: {e}"
-            ))
-        })?;
-        // The post-repair re-plan is the only purge pass whose candidates were
-        // not computed at assert time, so `--max-delete-bytes` is checked
-        // against it again here. It can only be *smaller* than the
-        // up-front plan — a successful repair promotes every `*_tmp` it
-        // creates, and a run that leaves one behind has already failed (`3`) or
-        // stopped (`5`), both of which skip this phase. That is a property of
-        // the pipeline, not a property of the ceiling, so the check is here
-        // rather than assumed: deletion is the one irreversible act in the tool.
-        // The same check refuses an incomplete plan (`purge.errors > 0`) when a
-        // ceiling is set, because its byte total is only a lower bound.
-        if let Some(hit) = ctx.limits.check_delete(&purge_plan) {
-            tracing::error!("limit exceeded: {hit}");
-            if dry {
-                return Ok(PostOutcome::DeletedNothing);
-            }
-            return Ok(PostOutcome::DeleteCeiling);
-        }
-        let bytes = purge::apply_purge(&purge_plan, dry).map_err(RunFailure::write)?;
-        // A dry run lists the candidates; nothing is deleted, so nothing may
-        // be counted as freed space. `apply_purge` returns 0 in dry-run today,
-        // and the gate keeps that invariant local to the counter as well.
-        if !dry {
-            summary
-                .deleted_extra_bytes
-                .fetch_add(bytes, Ordering::Relaxed);
-        }
+    if let Some(outcome) =
+        purge_after_pass(ctx, game_dir, purge_keys, before_purge, summary).await?
+    {
+        return Ok(outcome);
     }
     // `config.ini` is bumped last so the on-disk version only
     // advances once the bytes are in place. A dry run never put any bytes in
@@ -175,6 +146,110 @@ async fn run_inner(
     Ok(PostOutcome::Ok)
 }
 
+/// The post-repair files-cleanup, when `--purge-after` or `--purge-only`
+/// asked for it.
+///
+/// Returns `Some` only when the pass ends the phase: a tripped delete ceiling.
+/// A completed pass returns `None` and leaves `config.ini` handling to the
+/// caller.
+async fn purge_after_pass(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&purge::PurgePlan>,
+    summary: &Summary,
+) -> Result<Option<PostOutcome>, RunFailure> {
+    if !(ctx.purge_after || ctx.purge_only) {
+        return Ok(None);
+    }
+    let dry = ctx.dry_run;
+    // The plan-derived keep inputs were folded once in the plan phase; only the
+    // walked candidates are recomputed here.
+    let keys = purge_keys.ok_or_else(|| {
+        RunFailure::write(anyhow::anyhow!(
+            "purge planning task started without the run's keyed keep sets"
+        ))
+    })?;
+    let purge_game_dir = game_dir.to_path_buf();
+    let purge_scope = ctx.path_scope.clone();
+    let purge_plan =
+        spawn_purge_plan(move || purge::plan_purge(&purge_game_dir, &keys, &purge_scope)).await?;
+    // The post-repair re-plan is the only purge pass whose candidates were not
+    // computed at assert time, so `--max-delete-bytes` is checked against it
+    // again here. It can only be *smaller* than the up-front plan — a
+    // successful repair promotes every `*_tmp` it creates, and a run that
+    // leaves one behind has already failed (`3`) or stopped (`5`), both of
+    // which skip this phase. That is a property of the pipeline, not a
+    // property of the ceiling, so the check is here rather than assumed:
+    // deletion is the one irreversible act in the tool. The same check refuses
+    // an incomplete plan (`purge.errors > 0`) when a ceiling is set, because
+    // its byte total is only a lower bound.
+    if let Some(hit) = ctx.limits.check_delete(&purge_plan) {
+        tracing::error!("limit exceeded: {hit}");
+        // A dry run stops on the same bound as a real run: it cannot list an
+        // after-pass it is not allowed to perform. The outcome keeps the
+        // ceiling visible in `SUMMARY`, and the exit is the limit class in both
+        // modes.
+        return Ok(Some(PostOutcome::DeleteCeiling));
+    }
+    // In a dry run nothing was deleted by the before pass, so its candidates
+    // are still on disk and the after walk would name them a second time. Only
+    // the *additional* candidates belong to the after pass; a real run has
+    // already removed them and is unaffected. The paths a run that appears
+    // between the passes is still listed.
+    let mut all_already_listed = false;
+    let mut purge_plan = purge_plan;
+    if dry
+        && ctx.purge_before
+        && let Some(before) = before_purge
+    {
+        let listed: std::collections::HashSet<&Path> =
+            before.files.iter().map(|c| c.path.as_path()).collect();
+        let before_len = purge_plan.files.len();
+        purge_plan
+            .files
+            .retain(|c| !listed.contains(c.path.as_path()));
+        if purge_plan.files.len() != before_len {
+            purge_plan.total_bytes = purge_plan
+                .files
+                .iter()
+                .fold(0u64, |n, c| n.saturating_add(c.bytes));
+            all_already_listed = purge_plan.files.is_empty();
+        }
+    }
+    if all_already_listed {
+        tracing::debug!(
+            "purge dry-run: every after-pass candidate was already listed before the repair"
+        );
+        return Ok(None);
+    }
+    let bytes = purge::apply_purge(&purge_plan, dry).map_err(RunFailure::write)?;
+    // A dry run lists the candidates; nothing is deleted, so nothing may be
+    // counted as freed space. `apply_purge` returns 0 in dry-run today, and the
+    // gate keeps that invariant local to the counter as well.
+    if !dry {
+        summary
+            .deleted_extra_bytes
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+    Ok(None)
+}
+
+/// Run the blocking purge planner on its own task and give its join failure
+/// the run's write class.
+///
+/// The split out of [`purge_after_pass`] keeps the exit-class decision testable
+/// without a filesystem that can make the planner panic.
+async fn spawn_purge_plan(
+    planning: impl FnOnce() -> purge::PurgePlan + Send + 'static,
+) -> Result<purge::PurgePlan, RunFailure> {
+    tokio::task::spawn_blocking(planning).await.map_err(|e| {
+        RunFailure::write(anyhow::anyhow!(
+            "purge planning task failed before the post-repair cleanup: {e}"
+        ))
+    })
+}
+
 /// How the post-phase ended. The post-phase mutates the disk, so a caller that
 /// reached it through a path the `readonly` gate does not cover still needs the
 /// outcome spelled out rather than assumed.
@@ -183,11 +258,11 @@ pub enum PostOutcome {
     /// Finished, everything it was asked to do is done.
     Ok,
     /// `--max-delete-bytes` blocked the post-repair cleanup pass. Nothing in
-    /// that pass was deleted; earlier passes were already applied.
+    /// that pass was deleted; earlier passes were already applied. A dry run
+    /// reports the same outcome because it stops on the same bound.
     DeleteCeiling,
     /// `--dry-run`: the post-phase listed what it would do and applied
-    /// nothing. Kept apart from `DeleteCeiling` so a dry run never reports a
-    /// limit it did not hit.
+    /// nothing.
     DeletedNothing,
 }
 
@@ -866,6 +941,139 @@ mod tests {
         assert!(
             !base.join("Audio/res/track_1.pcm").exists(),
             "nothing is published at the destination"
+        );
+    }
+
+    fn purge_ctx(game_dir: std::path::PathBuf) -> RunCtx {
+        RunCtx {
+            game_dir,
+            biz: crate::biz::Biz::Hk4eGlobal,
+            audio: std::collections::HashSet::new(),
+            audio_explicit: false,
+            path_scope: PathScope::default(),
+            limits: crate::repair::scope::Limits::default(),
+            repair_mode: crate::config::RepairMode::Auto,
+            repair_mode_explicit: false,
+            jobs: 1,
+            check_only: false,
+            scan: false,
+            purge_only: false,
+            fail_fast: false,
+            dry_run: false,
+            print_plan: false,
+            plan_out: None,
+            purge_after: false,
+            purge_before: false,
+            output: crate::report::OutputFormat::Text,
+            hyp_base_override: None,
+            sophon_base_override: None,
+            sleep: Arc::new(crate::sleep::NoSleep),
+        }
+    }
+
+    fn purge_keys() -> Arc<purge::PurgeKeys> {
+        let plan = crate::repair::phases::plan::RepairPlan::from_files("5.0", Vec::new());
+        Arc::new(purge::PurgeKeys::new(
+            &plan,
+            purge::keep_set(),
+            &std::collections::HashSet::new(),
+        ))
+    }
+
+    /// A dry run with both purge flags names each candidate once: the before
+    /// pass lists what is on disk, and the after pass adds only what changed
+    /// since. Nothing is deleted, so the before candidates are still there.
+    #[test]
+    fn a_dry_run_after_pass_lists_only_candidates_the_before_pass_did_not() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_post", "dry_purge_once");
+        let base = &*dir;
+        std::fs::write(base.join("orphan_before.dat"), b"a").unwrap();
+        let keys = purge_keys();
+        let before = purge::plan_purge(base, &keys, &PathScope::default());
+
+        let logs = logs_of(|| {
+            purge::apply_purge(&before, true).unwrap();
+            std::fs::write(base.join("orphan_after.dat"), b"bb").unwrap();
+            let mut ctx = purge_ctx(base.to_path_buf());
+            ctx.dry_run = true;
+            ctx.purge_before = true;
+            ctx.purge_after = true;
+            let summary = Summary::new();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let outcome = rt
+                .block_on(purge_after_pass(
+                    &ctx,
+                    base,
+                    Some(Arc::clone(&keys)),
+                    Some(&before),
+                    &summary,
+                ))
+                .unwrap();
+            assert_eq!(outcome, None, "the pass completed without a ceiling");
+        });
+
+        assert_eq!(
+            logs.matches("would purge extra").count(),
+            2,
+            "each candidate is named once: {logs}"
+        );
+        assert_eq!(
+            logs.matches("orphan_before.dat").count(),
+            1,
+            "the before candidate is not listed again: {logs}"
+        );
+        assert_eq!(
+            logs.matches("orphan_after.dat").count(),
+            1,
+            "the candidate that appeared between passes is listed: {logs}"
+        );
+        assert!(base.join("orphan_before.dat").exists());
+        assert!(base.join("orphan_after.dat").exists());
+    }
+
+    /// A dry run stops on the post-repair delete ceiling with the same limit
+    /// class as a real run. It does not log an error and then exit clean.
+    #[tokio::test]
+    async fn a_dry_run_post_delete_ceiling_is_a_limit() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_post", "dry_delete_ceiling");
+        let base = &*dir;
+        std::fs::write(base.join("orphan.dat"), b"12345").unwrap();
+        let mut ctx = purge_ctx(base.to_path_buf());
+        ctx.dry_run = true;
+        ctx.purge_after = true;
+        ctx.limits.delete_bytes = Some(1);
+        let summary = Summary::new();
+
+        let outcome = purge_after_pass(&ctx, base, Some(purge_keys()), None, &summary)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            Some(PostOutcome::DeleteCeiling),
+            "a tripped ceiling is not a successful dry run"
+        );
+        assert!(
+            base.join("orphan.dat").exists(),
+            "the dry run deleted nothing"
+        );
+        assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    /// A post-repair re-plan that cannot complete is the same write-class
+    /// failure in a dry run as in a real one; the dry run did not cause it.
+    #[tokio::test]
+    async fn a_failed_post_purge_plan_is_a_write_failure_for_a_dry_run() {
+        let failure = spawn_purge_plan(|| panic!("injected purge planning failure"))
+            .await
+            .expect_err("a panicked planning task is a failure");
+        assert_eq!(failure.exit_code, crate::config::RunExit::Write);
+        assert!(
+            failure.source.to_string().contains("post-repair cleanup"),
+            "the failure names the pass: {failure}"
         );
     }
 }

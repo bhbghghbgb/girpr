@@ -489,8 +489,9 @@ async fn check_only_and_print_plan_issue_no_deprecated_file_call() {
     // never reach the post-phase, so they skip that network call:
     // `--check-only` and `--print-plan` must issue zero
     // `getGameDeprecatedFileConfigs` requests. (`--dry-run` does fetch it,
-    // because it lists the deprecated deletes.)
-    for mode in ["check", "plan"] {
+    // because it lists the deprecated deletes — but `--print-plan` returns
+    // before the execution phase and is not widened by the combination.)
+    for mode in ["check", "plan", "plan-dry"] {
         let fx = build_fixture();
         let mock = MockServer::start(
             fx,
@@ -510,6 +511,10 @@ async fn check_only_and_print_plan_issue_no_deprecated_file_call() {
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
         match mode {
             "check" => ctx.check_only = true,
+            "plan-dry" => {
+                ctx.print_plan = true;
+                ctx.dry_run = true;
+            }
             _ => ctx.print_plan = true,
         }
         run(ctx).await.expect("run");
