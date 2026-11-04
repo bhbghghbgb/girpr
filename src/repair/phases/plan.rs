@@ -202,13 +202,18 @@ fn fingerprint_files(files: &[PlannedFile]) -> u64 {
 
 /// The sorted, deduped work list for one run.
 pub struct RepairPlan {
-    pub latest: String,
+    /// The latest manifest tag the plan was built from.
+    ///
+    /// Private and read-only: a plan is immutable after construction, so the
+    /// tag that [`fingerprint`](Self::fingerprint) mixes in cannot be changed
+    /// from under a scan that recorded the plan's identity.
+    latest: String,
     files: Vec<PlannedFile>,
     /// The fingerprint of `files`, computed once when the plan is built.
     ///
-    /// `files` is private and never mutated after construction, so caching it
-    /// cannot go stale. [`fingerprint`](Self::fingerprint) mixes in `latest`,
-    /// which stays public, so a changed tag is still part of the answer.
+    /// `files` and `latest` are private and never mutated after construction,
+    /// so caching it cannot go stale. [`fingerprint`](Self::fingerprint)
+    /// mixes in `latest`, so the tag is still part of the answer.
     files_fingerprint: u64,
 }
 
@@ -221,6 +226,11 @@ impl RepairPlan {
             files,
             files_fingerprint,
         }
+    }
+
+    /// The latest manifest tag the plan was built from.
+    pub fn latest(&self) -> &str {
+        &self.latest
     }
 
     /// The planned files, in plan order.
@@ -731,7 +741,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a.dat", "b.dat"]
         );
-        assert_eq!(plan.latest, "5.0");
+        assert_eq!(plan.latest(), "5.0");
         assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
     }
 
@@ -744,20 +754,23 @@ mod tests {
     }
 
     /// The fingerprint is stable for one plan, and the cached file-list half
-    /// does not hide a changed tag: `latest` stays public, so it is mixed in on
-    /// every call rather than frozen at construction.
+    /// does not hide the tag: two plans with the same files but different tags
+    /// have different fingerprints.
     #[test]
     fn a_plan_fingerprint_is_stable_and_covers_the_tag() {
-        let per = vec![(
-            "http://x".to_string(),
-            vec![manifest_file("a.dat", 1, vec![])],
-        )];
-        let mut plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+        let plan_for = |tag: &str| {
+            let per = vec![(
+                "http://x".to_string(),
+                vec![manifest_file("a.dat", 1, vec![])],
+            )];
+            build_plan(per, &HashSet::new(), tag, &PathScope::default()).unwrap()
+        };
+        let plan = plan_for("5.0");
         let first = plan.fingerprint();
         assert_eq!(plan.fingerprint(), first, "one plan, one fingerprint");
-        plan.latest = "6.0".into();
+        let other = plan_for("6.0");
         assert_ne!(
-            plan.fingerprint(),
+            other.fingerprint(),
             first,
             "the tag is part of the plan's identity"
         );
