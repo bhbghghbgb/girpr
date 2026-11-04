@@ -26,7 +26,7 @@ use walkdir::WalkDir;
 use crate::config::{RunCtx, RunFailure};
 use crate::report::Summary;
 use crate::util;
-use crate::util::path::join_rel;
+use crate::util::path::{join_rel, rel_from_base};
 
 use super::metadata::Meta;
 use crate::repair::purge;
@@ -568,26 +568,31 @@ fn move_audio_cache_with(
         .collect();
     if dry_run {
         for src in &files {
-            let Ok(rel) = src.strip_prefix(&cache) else {
+            let Some(rel) = rel_from_base(src, &cache) else {
                 continue;
             };
-            if !scope.is_visible(&join_rel(cache_rel, rel)) {
+            if !scope.is_visible(&join_rel(cache_rel, Path::new(&rel))) {
                 continue;
             }
-            tracing::info!("would move audio cache {} -> res", rel.display());
+            tracing::info!("would move audio cache {} -> res", rel);
         }
         return;
     }
     let mut moved = 0u64;
     let mut kept = 0u64;
     for src in files {
-        let Ok(rel) = src.strip_prefix(&cache) else {
+        // The scope key is the rel spelling; the filesystem operation keeps the
+        // on-disk path itself, so a name that is not UTF-8 is not rewritten.
+        let Some(rel) = rel_from_base(&src, &cache) else {
             continue;
         };
-        if !scope.is_visible(&join_rel(cache_rel, rel)) {
+        let Ok(rel_path) = src.strip_prefix(&cache) else {
+            continue;
+        };
+        if !scope.is_visible(&join_rel(cache_rel, Path::new(&rel))) {
             continue;
         }
-        let target = res.join(rel);
+        let target = res.join(rel_path);
         // `rename` first (cheap, same volume); fall back to copy+remove when
         // the file is in use or the rename is otherwise refused.
         if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
