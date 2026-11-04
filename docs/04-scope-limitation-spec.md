@@ -586,8 +586,8 @@ and a ceiling there costs nothing and refuses for free.
 | `--max-files N` | refuses before the hash storm | refuses before verifying | reports `files=` and refuses if over |
 | exit on a tripped ceiling | `5` | `5` | `5` |
 
-`--check-only` keeps its `0`/`4` semantics - a ceiling narrows *what is
-verified*, and `4` must not be masked by narrowing - but a ceiling that trips
+`--check-only` keeps its `0`/`4` semantics — a ceiling narrows *what is
+verified*, and `4` must not be masked by narrowing — but a ceiling that trips
 during `--check-only` is still `5`, because that is a different fact from
 "damage found".
 

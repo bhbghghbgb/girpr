@@ -195,8 +195,8 @@ async fn purge_after_pass(
     // In a dry run nothing was deleted by the before pass, so its candidates
     // are still on disk and the after walk would name them a second time. Only
     // the *additional* candidates belong to the after pass; a real run has
-    // already removed them and is unaffected. The paths a run that appears
-    // between the passes is still listed.
+    // already removed them and is unaffected. A candidate that appears between
+    // the passes is still listed.
     let mut all_already_listed = false;
     let mut purge_plan = purge_plan;
     if dry
