@@ -207,6 +207,14 @@ async fn purge_after_pass(
     // the *additional* candidates belong to the after pass; a real run has
     // already removed them and is unaffected. A candidate that appears between
     // the passes is still listed.
+    //
+    // The operator contract this produces: each candidate is named once per
+    // run, and `apply_purge`'s "purge dry-run: N bytes would be freed" line is
+    // per pass - emitted only by a pass that has candidates to list. With both
+    // flags the before line covers what was present before the repair, and a
+    // pass with nothing new emits no second byte line. Summing the per-pass
+    // byte lines therefore gives the run's listing total, while the candidate
+    // lines are the exactly-once record.
     let mut all_already_listed = false;
     let mut purge_plan = purge_plan;
     if dry

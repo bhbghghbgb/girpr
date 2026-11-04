@@ -224,7 +224,10 @@ flowchart TD
   read-only paths: it lists the deprecated deletes, the audio cache move and the
   cleanup, and stops before the `config.ini` bump. With both purge flags it lists
   each candidate once — the after pass names only candidates the before pass did
-  not. A tripped ceiling still stops a dry run, including the post-repair delete
+  not. The `purge dry-run: N bytes would be freed` line is per pass: it is
+  emitted only by a pass that has candidates, so when the before pass already
+  named every candidate the after pass adds no second byte line. A tripped
+  ceiling still stops a dry run, including the post-repair delete
   re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
   purge that cannot be planned is the same write-class failure (exit `3`) as in a
   real run. `--check-only` and `--print-plan` do not run the post-phase, so they
