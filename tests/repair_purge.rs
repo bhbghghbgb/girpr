@@ -167,12 +167,13 @@ async fn a_dry_run_with_both_purge_flags_lists_each_candidate_once() {
         1,
         "one candidate, one listing: {logs}"
     );
-    // The chosen per-phase contract: a pass with nothing new to report emits
-    // no second byte summary. The before line already covers this candidate.
+    // The chosen per-phase contract: the after pass returns before the delete
+    // step when it has nothing new to report, so it emits no second byte
+    // summary. The before line already covers this candidate.
     assert_eq!(
         logs.matches("bytes would be freed").count(),
         1,
-        "only the pass that had candidates emits the byte summary: {logs}"
+        "only the before pass reached the delete step, so only it emits a byte summary: {logs}"
     );
     assert!(
         logs.contains("every after-pass candidate was already listed before the repair"),
