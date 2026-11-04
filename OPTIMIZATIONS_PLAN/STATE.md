@@ -144,12 +144,12 @@ until the main tasks and rework are done.
 | F43 | T18 implementer | `src/report/mod.rs` | `Summary` public fields have types (`Meter`, `SummaryFlags`, `Ceiling`) no longer nameable outside the crate. | completed |
 | F44 | T19 implementer | `src/cli.rs` | On hosts with parallelism below 4, the default `--jobs 4` warns on every run. | completed |
 | F45 | T17 implementer | `src/repair/lock.rs` | On Windows the exclusive lock hides the body, so refusals usually cannot name the holder pid. | completed |
-| F46 | RC-08 review | `src/repair/purge.rs`, `src/repair/phases/post.rs` | `--purge-before --purge-after --dry-run` lists the same cleanup candidates twice. | todo |
-| F47 | RC-08 review | `src/repair/phases/post.rs` | A dry run that trips the post-repair ceiling logs error-level `limit exceeded` yet exits 0. | todo |
+| F46 | RC-08 review | `src/repair/purge.rs`, `src/repair/phases/post.rs` | `--purge-before --purge-after --dry-run` lists the same cleanup candidates twice. | completed |
+| F47 | RC-08 review | `src/repair/phases/post.rs` | A dry run that trips the post-repair ceiling logs error-level `limit exceeded` yet exits 0. | completed |
 | F48 | RC-08 review | `src/report/mod.rs` | `emit_progress`/`PROGRESS_INTERVAL_SECS` are no longer re-exported; restore if that is API. | completed |
 | F49 | RC-08 review | `src/logging.rs` tests | A flush test asserts it is the only setter of the global sink; fragile if another test installs tracing. | completed |
 | F50 | T20 implementer | `src/repair/phases/post.rs` | A dry run now does a second purge walk plus the audio walk, adding I/O and network work. | dropped (the extra walks are the intended cost of exercising the post-phase) |
-| F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | todo |
+| F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | completed |
 | F52 | T21 implementer | `src/repair/phases/check.rs` | Check-only counters are folded after `collect`, so the ticker may report `done=0` mid-phase. | completed |
 | F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | todo |
 | F54 | T22 implementer | `src/logging.rs` | The flush handle is a `OnceLock` for the first sink only; a second `init_tracing` is unflushable. | completed |
@@ -171,7 +171,7 @@ until the main tasks and rework are done.
 | F70 | RC-12 review | `src/repair/file/inplace.rs` | `source_ok_by_range` is the inverse mapping; cross-reference or pin it near the shared remap. | completed |
 | F71 | T30 implementer | `src/util/path.rs` | `join_rel` assumes an already-clean `dir_rel` with no trailing separator. | todo |
 | F72 | T30 implementer | `src/util/mod.rs` | The `path` module summary does not mention the two new rel helpers. | todo |
-| F73 | RC-13 review | `src/repair/mod.rs`, `README.md`, `docs/02` | `--print-plan --dry-run` still fetches the deprecated list, contradicting the documented contract. | todo |
+| F73 | RC-13 review | `src/repair/mod.rs`, `README.md`, `docs/02` | `--print-plan --dry-run` still fetches the deprecated list, contradicting the documented contract. | completed |
 | F74 | RC-13 review | `src/report/emit.rs` | Public docs link to the private `write_line`, leaving a rustdoc warning. | todo |
 | F75 | T33 implementer | `tools/sync` | The sibling crate has its own unrelated `Record::event` implementation. | dropped (unrelated sibling-crate implementation) |
 | F76 | T33 implementer | `src/util/ini.rs` | No pure `render_config_ini` helper; future tests observing rendering without writing would need one. | dropped (helper for a test that does not exist yet) |
@@ -294,6 +294,9 @@ until the main tasks and rework are done.
 | F193 | EXIT-01 review | `src/main.rs` | `exit_code` takes `i32`, forcing callers to call `.code()` first; it could take `RunExit`. | todo |
 | F194 | EXIT-01 review | `src/config.rs` | `RunExit`'s doc claims one integer conversion at the boundary, but the tracing line also calls `.code()`. | todo |
 | F195 | EXIT-01 review | tests | A few test names and messages still mention exit numbers rather than variant names. | todo |
+| F196 | DRYRUN-01 review | `tests/repair_purge.rs`, `tests/repair_limits.rs` | Dry-run dedup and the dry post-ceiling have only unit coverage; end-to-end assertions would pin the log/`SUMMARY` contract. | todo |
+| F197 | DRYRUN-01 review | `src/repair/phases/post.rs` | When every after candidate was already listed, the after pass's "bytes would be freed" line is skipped entirely. | todo |
+| F198 | DRYRUN-01 review | `src/repair/mod.rs` | `wants_deprecated`'s `(ctx.dry_run \|\| !readonly)` term is redundant now. | todo |
 
 ## Follow-up batches
 
@@ -325,13 +328,14 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | ATOMIC-01 | F11, F60, F65, F66 | done | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low; 1711f38, a673fb7, a90d7c7 |
 | PLANID-01 | F56, F57, F58, F59 | done | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high; ce142b2, 8f322d3, 7632211, ed935e0, 38514bd |
 | EXIT-01 | F85, F86, F87 | done | Wave C, after CHECK-01; named exit-code API and prose; medium; 2df6b66, ae55a2d, 05f0995 |
-| DRYRUN-01 | F46, F47, F51, F73 | pending_review | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high; f3eb86c, 5f6d49e |
+| DRYRUN-01 | F46, F47, F51, F73 | done | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high; f3eb86c, 5f6d49e, 28c25cc |
 | PURGE-PERF-01 | F20, F102, F103 | todo | Wave C, after TEMP-PUBLISH-01; move purge work off async workers; high |
 | MD5-TYPE-01 | F24 | todo | Wave D, after PLANID-01; carry `Md5` through scan results; medium |
 | PATHHELPERS-01 | F67, F68, F69, F71, F187 | todo | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low |
 | REFACTOR-01 | F80, F82 | todo | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium |
 | PLANID-02 | F188, F189, F190, F191 | todo | Wave D; plan API guardrails and fingerprint robustness; low |
 | EXIT-02 | F192, F193, F194, F195 | todo | Wave D; exit-code boundary polish and prose; low |
+| DRYRUN-02 | F196, F197, F198 | todo | Wave D; dry-run end-to-end coverage and cleanup-line parity; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low |
 | TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
