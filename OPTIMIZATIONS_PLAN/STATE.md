@@ -383,7 +383,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | todo | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
-| INPLACE-02 | F169, F170, F171, F172 | todo | Wave D; coarse-mtime skip-path hardening and guard robustness; medium |
+| INPLACE-02 | F169, F170, F171, F172 | in_progress | Wave D; coarse-mtime skip-path hardening and guard robustness; medium |
 | CHECK-02 | F173, F174, F175, F176 | todo | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
