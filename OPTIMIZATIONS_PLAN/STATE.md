@@ -151,7 +151,7 @@ until the main tasks and rework are done.
 | F50 | T20 implementer | `src/repair/phases/post.rs` | A dry run now does a second purge walk plus the audio walk, adding I/O and network work. | dropped (the extra walks are the intended cost of exercising the post-phase) |
 | F51 | T20 implementer | `src/repair/phases/post.rs` | A post-phase purge re-plan failure in a dry run now maps to exit 3. | completed |
 | F52 | T21 implementer | `src/repair/phases/check.rs` | Check-only counters are folded after `collect`, so the ticker may report `done=0` mid-phase. | completed |
-| F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | todo |
+| F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | completed |
 | F54 | T22 implementer | `src/logging.rs` | The flush handle is a `OnceLock` for the first sink only; a second `init_tracing` is unflushable. | completed |
 | F55 | T22 implementer | `src/logging.rs` | The flush-failure stderr branch has no test (stderr capture is process-level). | completed |
 | F56 | RC-10 review | `src/repair/scan.rs` | `ScanReport` carries no plan identity; index alignment silently mismatches a different plan. | completed |
@@ -214,10 +214,10 @@ until the main tasks and rework are done.
 | F113 | RC-17 review | `tests/repair_offline.rs` | The duration process test always passes `--scan`; absence of `phase=scan` on an unscanned run is unasserted. | completed |
 | F114 | T45 implementer | `src/phase.rs` | `phase=plan` excludes the scan and `publish_plan`; purge execution is not timed at all. | completed |
 | F115 | T45 implementer | `src/phase.rs` | `PhaseTimer` logs on drop during an error path, reporting time-to-failure as if the phase completed. | completed |
-| F116 | RC-18 review | `tests/cli_contract.rs` | `check_golden` allows `PROGRESS` between `REPORT` and `PLAN`, wider than the documented window. | todo |
+| F116 | RC-18 review | `tests/cli_contract.rs` | `check_golden` allows `PROGRESS` between `REPORT` and `PLAN`, wider than the documented window. | completed |
 | F117 | RC-18 review | `README.md` | The data-plane section omits the one-record-per-event rule and that `PLAN` precedes `SUMMARY`. | todo |
 | F118 | RC-18 review | `tests/repair_offline.rs` | Module docs still describe the pre-split case layout ("first ten cases", "three cases run the real binary"). | todo |
-| F119 | T46 implementer | `tests/cli_contract.rs` | Only the JSON plane is pinned; the text plane relies on unit tests. | todo |
+| F119 | T46 implementer | `tests/cli_contract.rs` | Only the JSON plane is pinned; the text plane relies on unit tests. | completed |
 | F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | todo |
 | F121 | HYP-01 review | `docs/07-panic-audit.md` | Still describes `num_from_string` as `u64 as i64` wrapping above `i64::MAX`; the visitor uses `i64::try_from`. | todo |
 | F122 | HYP-01 review | `src/hyp.rs` | `ManifestFile.compressed_size` is deserialized but never read; its doc implies an in-crate clamp that does not exist. | todo |
@@ -314,6 +314,9 @@ until the main tasks and rework are done.
 | F213 | PURGE-PERF-02 review | `src/hyp.rs` | `fetch_deprecated` still returns `Vec<String>`; returning `Arc<[String]>` would remove the one remaining conversion copy. | todo |
 | F214 | TEST-REGRESSION-01 review | `tests/repair_machinery.rs` | The fresh-scan test relies on a same-size rewrite changing mtime; coarse filesystems could make it flake. | todo |
 | F215 | TEST-REGRESSION-01 review | `tests/process.rs` | The unscanned-run assertion is appended to the duration-field test; its own test would keep that one focused. | todo |
+| F216 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | The JSON-plane tests still use only `assert_golden`; reuse `assert_one_terminal_summary` there too. | todo |
+| F217 | TEST-OUTPUT-01 review | `tests/cli_contract.rs`, `src/report/record.rs` | `text_records` splits on whitespace, so a future value containing a space would break parsing. | todo |
+| F218 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | Text-plane coverage misses `--check-only` and `--plan-out`, which stay JSON-only at integration level. | todo |
 
 ## Follow-up batches
 
@@ -358,10 +361,11 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | todo | Wave E; last wrap path and deprecated-list conversion; low |
 | TEST-REGRESSION-02 | F214, F215 | todo | Wave E; coarse-mtime flake and test focus; low |
+| TEST-OUTPUT-02 | F216, F217, F218 | todo | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low |
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
-| TEST-OUTPUT-01 | F53, F116, F119 | pending_review | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
+| TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | HYP-02 | F177 | todo | Wave D; validate the hyp response identity against the request; medium |
