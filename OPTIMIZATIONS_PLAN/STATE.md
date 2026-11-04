@@ -154,10 +154,10 @@ until the main tasks and rework are done.
 | F53 | T21 implementer | `tests/cli_contract.rs` | No integration assertion that a real binary run emits exactly one `SUMMARY`. | todo |
 | F54 | T22 implementer | `src/logging.rs` | The flush handle is a `OnceLock` for the first sink only; a second `init_tracing` is unflushable. | completed |
 | F55 | T22 implementer | `src/logging.rs` | The flush-failure stderr branch has no test (stderr capture is process-level). | completed |
-| F56 | RC-10 review | `src/repair/scan.rs` | `ScanReport` carries no plan identity; index alignment silently mismatches a different plan. | todo |
-| F57 | RC-10 review | `src/repair/phases/plan.rs` | `FileId` derived `Debug` prints `FileId(0)` rather than the index as the task asked. | todo |
-| F58 | T27 implementer | `src/repair/phases/plan.rs`, `src/repair/scan.rs` | `RepairPlan::files` and `ScanReport::files` stay public, so callers can bypass the id accessors. | todo |
-| F59 | T27 implementer | `src/repair/scope/report.rs` | `DiskPlan::for_id` returns a default for an out-of-range id; `PlanDocument` uses raw indices. | todo |
+| F56 | RC-10 review | `src/repair/scan.rs` | `ScanReport` carries no plan identity; index alignment silently mismatches a different plan. | completed |
+| F57 | RC-10 review | `src/repair/phases/plan.rs` | `FileId` derived `Debug` prints `FileId(0)` rather than the index as the task asked. | completed |
+| F58 | T27 implementer | `src/repair/phases/plan.rs`, `src/repair/scan.rs` | `RepairPlan::files` and `ScanReport::files` stay public, so callers can bypass the id accessors. | completed |
+| F59 | T27 implementer | `src/repair/scope/report.rs` | `DiskPlan::for_id` returns a default for an out-of-range id; `PlanDocument` uses raw indices. | completed |
 | F60 | RC-11 review | `src/util/atomic.rs` | Module docs link a `pub(crate)` `temp_sibling`, which may warn under `cargo doc`. | completed |
 | F61 | RC-11 review | `src/util/ini.rs` | `write_config_ini` now creates a missing game directory through the helper where it previously failed. | completed |
 | F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | completed |
@@ -286,6 +286,10 @@ until the main tasks and rework are done.
 | F185 | ATOMIC-01 review | `src/report/emit.rs` | The rustdoc links the private `write_line`, producing the sole `cargo doc` warning. | todo |
 | F186 | ATOMIC-01 review | `src/repair/phases/post.rs` | The same private `temp_sibling` doc link pattern; silent now because private docs are not built. | todo |
 | F187 | ATOMIC-01 review | `src/util/path.rs` | `temp_sibling` has no direct unit test pinning the `file_name() == None` fallback name. | todo |
+| F188 | PLANID-01 review | `src/repair/phases/plan.rs` | `RepairPlan::latest` stays public and mutable; a read-only accessor would prevent accidental fingerprint invalidation. | todo |
+| F189 | PLANID-01 review | `src/repair/scope/report.rs` | `PlanDocument::new`'s `expect` on the disk table is an invariant; a fallible signature or `debug_assert` would protect future callers. | todo |
+| F190 | PLANID-01 review | `src/repair/scan.rs` | `matches_plan` relies on a 64-bit non-cryptographic hash; revisit if a scan report ever crosses a process boundary. | todo |
+| F191 | PLANID-01 review | tests | A few tests use the crate-private `RepairPlan::files()` where `iter()` would express intent better. | todo |
 
 ## Follow-up batches
 
@@ -315,13 +319,14 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PHASE-01 | F114, F115 | done | Wave B; phase-timer coverage and error-path logging; low; fa568fd, 3539316 |
 | TEST-MANIFEST-01 | F18, F110 | done | Wave B, after MANIFEST-01; multi-manifest fixtures and binary ordering; medium; a45f32b, 25b95b2 |
 | ATOMIC-01 | F11, F60, F65, F66 | done | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low; 1711f38, a673fb7, a90d7c7 |
-| PLANID-01 | F56, F57, F58, F59 | pending_review | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high; ce142b2, 8f322d3, 7632211, ed935e0 |
+| PLANID-01 | F56, F57, F58, F59 | done | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high; ce142b2, 8f322d3, 7632211, ed935e0, 38514bd |
 | EXIT-01 | F85, F86, F87 | todo | Wave C, after CHECK-01; named exit-code API and prose; medium |
 | DRYRUN-01 | F46, F47, F51, F73 | todo | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high |
 | PURGE-PERF-01 | F20, F102, F103 | todo | Wave C, after TEMP-PUBLISH-01; move purge work off async workers; high |
 | MD5-TYPE-01 | F24 | todo | Wave D, after PLANID-01; carry `Md5` through scan results; medium |
 | PATHHELPERS-01 | F67, F68, F69, F71, F187 | todo | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low |
 | REFACTOR-01 | F80, F82 | todo | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium |
+| PLANID-02 | F188, F189, F190, F191 | todo | Wave D; plan API guardrails and fingerprint robustness; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | todo | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low |
 | TEST-OUTPUT-01 | F53, F116, F119 | todo | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
