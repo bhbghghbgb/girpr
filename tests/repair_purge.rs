@@ -8,7 +8,7 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, build_fixture, build_fixture_spec,
-    ctx_for, load_counters, read_game_file, scope, temp_dir, write_game_file,
+    ctx_for, load_counters, logs_of, read_game_file, scope, temp_dir, write_game_file,
 };
 use girpr::test_support::summary_record;
 use girpr::{RunCtx, RunExit, run};
@@ -136,6 +136,60 @@ async fn purge_before_and_after_share_the_keys_and_delete_the_orphan_once() {
         assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
     }
     assert!(dir.join("config.ini").exists(), "config.ini kept");
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_dry_run_with_both_purge_flags_lists_each_candidate_once() {
+    // The before pass sees the orphan on disk and names it; a dry run deletes
+    // nothing, so the after pass must recognise it as already listed rather
+    // than name it a second time. Both flags together are the case where the
+    // two walks see the same tree.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("purge_both_dry");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 96]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_before = true;
+    ctx.purge_after = true;
+    ctx.dry_run = true;
+    let (result, logs) = logs_of(run(ctx)).await;
+    let (summary, code) = result.expect("a dry run still returns");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        logs.matches("would purge extra").count(),
+        1,
+        "one candidate, one listing: {logs}"
+    );
+    // The chosen per-phase contract: a pass with nothing new to report emits
+    // no second byte summary. The before line already covers this candidate.
+    assert_eq!(
+        logs.matches("bytes would be freed").count(),
+        1,
+        "only the pass that had candidates emits the byte summary: {logs}"
+    );
+    assert!(
+        logs.contains("every after-pass candidate was already listed before the repair"),
+        "the after pass took the dedup path: {logs}"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "a dry run counts no freed bytes"
+    );
+    assert!(
+        read_game_file(&dir, "stray/orphan.dat").is_some(),
+        "a dry run deletes nothing"
+    );
+    for f in &fx2.files {
+        assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
+    }
 
     mock.stop();
 }

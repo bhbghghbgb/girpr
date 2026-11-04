@@ -743,6 +743,47 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
     std::fs::read(game_dir.join(rel_fs)).ok()
 }
 
+/// Drive `f` under a debug-level scoped subscriber and return its result with
+/// the log lines the run emitted.
+///
+/// The library installs no global subscriber, so `set_default` is
+/// thread-local and cannot race another test. Blocking tasks propagate the
+/// dispatcher themselves, so the post-phase's listing is captured too. The
+/// stdout data plane (`REPORT`/`SUMMARY`) is separate and is asserted through
+/// the returned `Summary`, not through these lines.
+pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured log lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buf = Captured::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let out = f.await;
+    drop(guard);
+    let text = String::from_utf8(buf.0.lock().expect("captured log lock").clone())
+        .expect("tracing writes UTF-8");
+    (out, text)
+}
+
 // ---------------------------------------------------------------------------
 // mock server
 // ---------------------------------------------------------------------------
