@@ -3,9 +3,11 @@
 //!
 //! This is the one place that answers "is my install intact?" without touching
 //! it: no `config.ini` bump, no purge, no `*_tmp` sweep, no audio scan write.
-//! Exit code is `0` when clean, `4` when any file fails size, MD5, or is
-//! unreadable. A check task that panics is a run failure (exit `3`), not a
-//! damage verdict: the file was not shown to be bad, the verifier itself broke.
+//! The exit status is [`RunExit::Success`](crate::RunExit::Success) when clean
+//! and [`RunExit::CheckFailed`](crate::RunExit::CheckFailed) when any file
+//! fails size, MD5, or is unreadable. A check task that panics is a run failure
+//! ([`RunExit::Write`](crate::RunExit::Write)), not a damage verdict: the file
+//! was not shown to be bad, the verifier itself broke.
 //!
 //! `files_skipped` counts verified-clean files and `files_failed` counts damaged
 //! ones, so the `SUMMARY`/`PROGRESS` counters read the same as a repair run.
@@ -118,7 +120,7 @@ where
                 // A panicked or cancelled task is a bug, not a damage verdict:
                 // the file was never shown to be bad. Report the same run
                 // failure class the purge tasks use instead of folding it into
-                // exit `4`.
+                // `RunExit::CheckFailed`.
                 return Err(RunFailure::write(anyhow::anyhow!("check task failed: {e}")));
             }
         }
@@ -489,7 +491,7 @@ mod tests {
         assert_eq!(
             err.exit_code,
             crate::RunExit::Write,
-            "a broken verifier is exit 3, not a damage verdict (4)"
+            "a broken verifier is RunExit::Write, not RunExit::CheckFailed"
         );
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),

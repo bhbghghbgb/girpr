@@ -34,12 +34,12 @@ fn main() -> ExitCode {
     let ctx = match args.into_ctx() {
         Ok(c) => c,
         Err(e) => {
-            // Post-parse validation failures are usage errors, exit 1
-            // (README / docs/02 §1).
+            // Post-parse validation failures are usage errors
+            // (`RunExit::Usage`, README / docs/02 §1).
             tracing::error!("usage error: {e:#}");
             eprintln!("ERROR {e:#}");
             flush_log();
-            return exit_code(1);
+            return exit_code(RunExit::Usage.code());
         }
     };
 
@@ -65,10 +65,10 @@ fn main() -> ExitCode {
         Ok(rt) => rt,
         Err(e) => {
             // A runtime that cannot start is an environment failure, not a
-            // repair failure: exit 1 like any other usage-level error.
+            // repair failure: `RunExit::Usage` like any other usage-level error.
             eprintln!("ERROR failed to start runtime: {e:#}");
             flush_log();
-            return exit_code(1);
+            return exit_code(RunExit::Usage.code());
         }
     };
 
@@ -77,10 +77,10 @@ fn main() -> ExitCode {
     exit_code(code.code())
 }
 
-/// Map a documented exit code (`0`..=`5`) to what the process returns.
+/// Map a documented exit status to what the process returns.
 ///
-/// The pipeline only produces the documented values, so this is a plain cast in
-/// practice; clamping keeps a future bug from wrapping `3` into `259` on a
+/// The pipeline only produces a [`RunExit`] code, so this is a plain cast in
+/// practice; clamping keeps a future bug from wrapping a code into `259` on a
 /// platform whose exit status is narrower than an `i32`.
 fn exit_code(code: i32) -> ExitCode {
     ExitCode::from(code.clamp(0, u8::MAX as i32) as u8)
@@ -133,11 +133,12 @@ async fn run(ctx: RunCtx) -> RunExit {
     }
 }
 
-/// Parse the command line, mapping every argument-level failure to exit `1`.
+/// Parse the command line, mapping every argument-level failure to
+/// [`RunExit::Usage`].
 ///
-/// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with the
-/// documented "2 = metadata/network" code; only `--help` / `--version` keep the
-/// conventional `0`. clap prints the message (and the usage block) either way.
+/// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with
+/// [`RunExit::Metadata`]; only `--help` / `--version` keep the conventional
+/// `0`. clap prints the message (and the usage block) either way.
 /// This runs before `init_tracing`, so a usage error creates no log file.
 fn parse_args() -> Args {
     match Args::try_parse() {
