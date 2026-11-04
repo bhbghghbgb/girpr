@@ -294,9 +294,9 @@ until the main tasks and rework are done.
 | F193 | EXIT-01 review | `src/main.rs` | `exit_code` takes `i32`, forcing callers to call `.code()` first; it could take `RunExit`. | completed |
 | F194 | EXIT-01 review | `src/config.rs` | `RunExit`'s doc claims one integer conversion at the boundary, but the tracing line also calls `.code()`. | completed |
 | F195 | EXIT-01 review | tests | A few test names and messages still mention exit numbers rather than variant names. | completed |
-| F196 | DRYRUN-01 review | `tests/repair_purge.rs`, `tests/repair_limits.rs` | Dry-run dedup and the dry post-ceiling have only unit coverage; end-to-end assertions would pin the log/`SUMMARY` contract. | todo |
-| F197 | DRYRUN-01 review | `src/repair/phases/post.rs` | When every after candidate was already listed, the after pass's "bytes would be freed" line is skipped entirely. | todo |
-| F198 | DRYRUN-01 review | `src/repair/mod.rs` | `wants_deprecated`'s `(ctx.dry_run \|\| !readonly)` term is redundant now. | todo |
+| F196 | DRYRUN-01 review | `tests/repair_purge.rs`, `tests/repair_limits.rs` | Dry-run dedup and the dry post-ceiling have only unit coverage; end-to-end assertions would pin the log/`SUMMARY` contract. | completed |
+| F197 | DRYRUN-01 review | `src/repair/phases/post.rs` | When every after candidate was already listed, the after pass's "bytes would be freed" line is skipped entirely. | completed |
+| F198 | DRYRUN-01 review | `src/repair/mod.rs` | `wants_deprecated`'s `(ctx.dry_run \|\| !readonly)` term is redundant now. | completed |
 | F199 | PURGE-PERF-01 review | `src/repair/purge.rs`, `src/repair/phases/post.rs` | `deleted_bytes`/`would_be` use `+`; `saturating_add` would make the panic branches provably unreachable. | todo |
 | F200 | PURGE-PERF-01 review | `src/repair/phases/post.rs` | `spawn_delete_deprecated` clones the whole deprecated `Vec<String>`; an `Arc<[String]>` would avoid it. | todo |
 | F201 | PURGE-PERF-01 review | `src/repair/phases/post.rs` | `move_audio_cache` still uses raw `spawn_blocking`, losing its log lines under a scoped subscriber. | todo |
@@ -307,6 +307,9 @@ until the main tasks and rework are done.
 | F206 | PATHHELPERS-01 review | `tests/repair_post.rs` | No end-to-end test moves a non-UTF-8-named audio cache file and asserts the destination name bytes. | todo |
 | F207 | REFACTOR-01 review | `src/repair/mod.rs` | `estimate_download` both computes and mutates `summary` flags; separating the flag writes would make it read as pure. | todo |
 | F208 | EXIT-02 review | `src/main.rs` | `clamp_code` is now unreachable via `exit_code`; remove it or document it as defense against a future discriminant change. | todo |
+| F209 | DRYRUN-02 review | `src/repair/purge.rs` | `apply_purge` still emits `0 bytes would be freed` for a dry pass with no candidates; now documented, suppression would be a behavior change. | todo |
+| F210 | DRYRUN-02 review | `tests/repair_limits.rs` | The ceiling test cannot independently distinguish the up-front check from the post-repair re-check. | todo |
+| F211 | DRYRUN-02 review | `src/repair/phases/post.rs` | A real `--purge-after --plan-out <inside install>` deletes the plan document it just wrote; document or exclude it from the keep set. | todo |
 
 ## Follow-up batches
 
@@ -346,7 +349,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | EXIT-03 | F208 | todo | Wave E; clamp helper reachability; low |
-| DRYRUN-02 | F196, F197, F198 | pending_review | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91 |
+| DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
+| DRYRUN-03 | F209, F210, F211 | todo | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | todo | Wave D; purge arithmetic hardening and blocking-helper consistency; low |
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
