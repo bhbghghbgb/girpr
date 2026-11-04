@@ -9,7 +9,7 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
-    build_fixture_spec, ctx_for, read_game_file, scope, temp_dir, write_game_file,
+    build_fixture_spec, ctx_for, logs_of, read_game_file, scope, temp_dir, write_game_file,
 };
 use girpr::test_support::summary_record;
 use girpr::{OutputFormat, RunExit, run};
@@ -176,6 +176,63 @@ async fn max_delete_bytes_refuses_and_deletes_nothing() {
     let (summary2, code2) = run(ctx2).await.expect("the boundary passes");
     assert_eq!(code2, RunExit::Success);
     assert_eq!(summary2.deleted_extra_bytes.load(Ordering::Relaxed), 170);
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_dry_run_post_delete_ceiling_stops_with_the_limit_class() {
+    // The up-front purge plan is built before the plan document is written, so
+    // the up-front delete ceiling sees no candidates. Placing `--plan-out`
+    // inside the install makes it a candidate that appears between that plan
+    // and the post-repair re-plan: this is the deterministic way to reach the
+    // re-check. A dry run must stop on it like a real run, name the flag in
+    // `SUMMARY`, and list nothing.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("dry_post_delete_ceiling");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_after = true;
+    ctx.dry_run = true;
+    ctx.limits.delete_bytes = Some(1);
+    ctx.plan_out = Some(dir.join("plan.json"));
+    let (result, logs) = logs_of(run(ctx)).await;
+    let (summary, code) = result.expect("a stop is not an Err");
+
+    assert_eq!(code, RunExit::Limit, "the post-repair re-check is a limit");
+    assert_eq!(
+        summary.flags.stopped,
+        Some("--max-delete-bytes"),
+        "the stop names the flag that bound"
+    );
+    assert_eq!(
+        summary.deleted_extra_bytes.load(Ordering::Relaxed),
+        0,
+        "a dry run frees nothing"
+    );
+    assert!(
+        !logs.contains("would purge extra"),
+        "the pass stopped before listing its candidates: {logs}"
+    );
+    let line = summary_record(&summary, code.code()).text();
+    assert!(line.contains("exit=5"), "{line}");
+    assert!(line.contains("limited=1"), "{line}");
+    assert!(line.contains("stopped=--max-delete-bytes"), "{line}");
+
+    // Nothing was removed: not the candidate, not the files it was measured
+    // against.
+    assert!(
+        read_game_file(&dir, "plan.json").is_some(),
+        "a stopped dry run deletes nothing"
+    );
+    for f in &fx2.files {
+        assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
+    }
 
     mock.stop();
 }
