@@ -152,8 +152,16 @@ pub struct Layout {
 }
 
 /// A planned file's position in [`RepairPlan::files`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FileId(usize);
+
+impl std::fmt::Debug for FileId {
+    /// Print the index itself: a `FileId` is a position, and the wrapper's
+    /// name adds nothing a reader of a log or a test failure needs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 impl FileId {
     pub(crate) fn new(index: usize) -> Self {
@@ -688,6 +696,14 @@ mod tests {
         );
         assert_eq!(plan.latest, "5.0");
         assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
+    }
+
+    /// A `FileId` is its index: debug output names the position, not an
+    /// opaque wrapper around it.
+    #[test]
+    fn a_file_id_debugs_as_its_index() {
+        assert_eq!(format!("{:?}", FileId::new(0)), "0");
+        assert_eq!(format!("{:?}", FileId::new(7)), "7");
     }
 
     #[test]
