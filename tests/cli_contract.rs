@@ -961,22 +961,26 @@ fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
 /// Check a run against a golden sequence of `(event, field keys)`.
 ///
 /// `PROGRESS` is the only repeatable record. It may appear zero or more times,
-/// but only *between* the fixed records; every fixed event appears once, in the
-/// golden's order, with the golden's key order. A second `PLAN`, a second
-/// `SUMMARY`, or a `SUMMARY` before `PLAN` is therefore a failure.
+/// but only in the documented window before the terminal `SUMMARY`: after
+/// every fixed event except the last one. A run with `--print-plan` therefore
+/// has it between `PLAN` and `SUMMARY`, and a run without one has it between
+/// `REPORT` and `SUMMARY`. Every fixed event appears once, in the golden's
+/// order, with the golden's key order. A second `PLAN`, a second `SUMMARY`, a
+/// `SUMMARY` before `PLAN`, or a `PROGRESS` before `PLAN` is a failure.
 fn check_golden(run: &DataPlaneRun, golden: &[(&str, &[&str])]) -> Result<(), String> {
     let mut at = 0usize;
     for (event, keys) in &run.records {
         let keys = key_list(keys);
         if event == "progress" {
-            if at == 0 {
+            // The only window is the one immediately before the final
+            // `SUMMARY`; every earlier fixed record must already be behind us.
+            let in_window = at + 1 == golden.len()
+                && golden.get(at).is_some_and(|(event, _)| *event == "summary");
+            if !in_window {
                 return Err(format!(
-                    "PROGRESS before the first fixed record:\n{}",
+                    "PROGRESS outside the window before the final SUMMARY:\n{}",
                     run.stdout
                 ));
-            }
-            if at == golden.len() {
-                return Err(format!("PROGRESS after the final record:\n{}", run.stdout));
             }
             if keys != PROGRESS_KEYS {
                 return Err(format!("PROGRESS field keys changed:\n{}", run.stdout));
@@ -1250,10 +1254,10 @@ fn synthetic(records: &[(&str, &[&str])]) -> DataPlaneRun {
 }
 
 /// The golden is only worth keeping if it rejects the breaking changes:
-/// `SUMMARY` moving before `PLAN`, a second `SUMMARY`, a `PROGRESS` after the
-/// run is over, and a renamed field key.
+/// `SUMMARY` moving before `PLAN`, a second `SUMMARY`, a `PROGRESS` before
+/// `PLAN` or after the run is over, and a renamed field key.
 #[test]
-fn the_golden_rejects_a_reorder_a_duplicate_a_late_progress_and_a_rename() {
+fn the_golden_rejects_a_reorder_a_duplicate_a_misplaced_progress_and_a_rename() {
     let golden: &[(&str, &[&str])] = &[
         ("report", REPORT_KEYS),
         ("plan", PLAN_KEYS),
@@ -1287,6 +1291,15 @@ fn the_golden_rejects_a_reorder_a_duplicate_a_late_progress_and_a_rename() {
             ]),
         ),
         (
+            "PROGRESS before PLAN",
+            synthetic(&[
+                ("report", REPORT_KEYS),
+                ("progress", PROGRESS_KEYS),
+                ("plan", PLAN_KEYS),
+                ("summary", SUMMARY_KEYS),
+            ]),
+        ),
+        (
             "PROGRESS after SUMMARY",
             synthetic(&[
                 ("report", REPORT_KEYS),
@@ -1313,5 +1326,28 @@ fn the_golden_rejects_a_reorder_a_duplicate_a_late_progress_and_a_rename() {
     assert!(
         check_golden(&synthetic(golden), golden).is_ok(),
         "the matching sequence must be accepted"
+    );
+    // `PROGRESS` is legitimate in the window before the terminal `SUMMARY`,
+    // with or without a `PLAN` ahead of it.
+    let with_plan = synthetic(&[
+        ("report", REPORT_KEYS),
+        ("plan", PLAN_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ]);
+    assert!(
+        check_golden(&with_plan, golden).is_ok(),
+        "PROGRESS between PLAN and SUMMARY is the documented window"
+    );
+    let without_plan: &[(&str, &[&str])] = &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)];
+    let no_plan = synthetic(&[
+        ("report", REPORT_KEYS),
+        ("progress", PROGRESS_KEYS),
+        ("summary", SUMMARY_KEYS),
+    ]);
+    assert!(
+        check_golden(&no_plan, without_plan).is_ok(),
+        "a run without PLAN has its PROGRESS window between REPORT and SUMMARY"
     );
 }
