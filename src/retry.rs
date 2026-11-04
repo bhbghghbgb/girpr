@@ -287,6 +287,28 @@ mod tests {
         }
     }
 
+    /// The spread is injective over one attempt's caller range.
+    ///
+    /// [`next_salt`] hands each loop in the process a consecutive salt
+    /// (`process id + instance`), so callers racing at the same attempt must
+    /// not share a spread. The range checked is far below the interval over
+    /// which the multiplier is a permutation of the spread range.
+    #[test]
+    fn jitter_is_injective_over_an_attempts_caller_range() {
+        const CALLERS: u64 = 4096;
+        let base = u64::from(std::process::id());
+        for attempt in 1..=5 {
+            let mut seen = std::collections::HashSet::new();
+            for caller in 0..CALLERS {
+                let spread = jitter(attempt, base.wrapping_add(caller));
+                assert!(
+                    seen.insert(spread),
+                    "attempt {attempt}: caller {caller} repeated a spread"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn concurrent_retries_at_the_same_attempt_get_distinct_delays() {
         const CALLERS: usize = 8;
