@@ -325,7 +325,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | ATOMIC-01 | F11, F60, F65, F66 | done | Wave C, after INI-01 and TEMP-PUBLISH-01; atomic-writer edges and docs; low; 1711f38, a673fb7, a90d7c7 |
 | PLANID-01 | F56, F57, F58, F59 | done | Wave C, after INPLACE-01 and ATOMIC-01; plan identity; high; ce142b2, 8f322d3, 7632211, ed935e0, 38514bd |
 | EXIT-01 | F85, F86, F87 | done | Wave C, after CHECK-01; named exit-code API and prose; medium; 2df6b66, ae55a2d, 05f0995 |
-| DRYRUN-01 | F46, F47, F51, F73 | in_progress | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high |
+| DRYRUN-01 | F46, F47, F51, F73 | pending_review | Wave C, after TEMP-PUBLISH-01 and PHASE-01; dry-run post contract; high; f3eb86c, 5f6d49e |
 | PURGE-PERF-01 | F20, F102, F103 | todo | Wave C, after TEMP-PUBLISH-01; move purge work off async workers; high |
 | MD5-TYPE-01 | F24 | todo | Wave D, after PLANID-01; carry `Md5` through scan results; medium |
 | PATHHELPERS-01 | F67, F68, F69, F71, F187 | todo | Wave D, after INPLACE-01, PLANID-01, DRYRUN-01, PURGE-PERF-01; low |
