@@ -31,6 +31,7 @@ use crate::util::path::join_rel;
 use super::metadata::Meta;
 use crate::repair::purge;
 use crate::repair::scope::PathScope;
+use crate::repair::spawn_blocking_traced;
 
 /// Run the post-phase.
 ///
@@ -242,23 +243,6 @@ async fn purge_after_pass(
             .fetch_add(bytes, Ordering::Relaxed);
     }
     Ok(None)
-}
-
-/// Run a blocking closure on the blocking pool with the caller's tracing
-/// dispatcher installed.
-///
-/// `spawn_blocking` starts on a pool thread with no thread-local subscriber.
-/// Production installs a global one, so its lines are unaffected; this keeps a
-/// caller that scoped a subscriber (a test, or any explicit `with_default`)
-/// seeing the best-effort step's log lines, which are part of the operator
-/// contract.
-async fn spawn_blocking_traced<F, R>(f: F) -> Result<R, tokio::task::JoinError>
-where
-    F: FnOnce() -> R + Send + 'static,
-    R: Send + 'static,
-{
-    let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
-    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f)).await
 }
 
 /// Run the blocking deprecated-file delete on the blocking pool, keeping the

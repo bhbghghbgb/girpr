@@ -793,6 +793,22 @@ fn write_explicit_audio(
     Ok(())
 }
 
+/// Run a blocking closure on the blocking pool with the caller's tracing
+/// dispatcher installed.
+///
+/// `spawn_blocking` starts on a pool thread with no thread-local subscriber.
+/// Production installs a global one, so its lines are unaffected; this keeps a
+/// caller that scoped a subscriber (a test, or any explicit `with_default`)
+/// seeing the step's log lines, which are part of the operator contract.
+async fn spawn_blocking_traced<F, R>(f: F) -> Result<R, tokio::task::JoinError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f)).await
+}
+
 /// Step 5.2: the up-front files-cleanup.
 ///
 /// The plan built in step 4.1 is executed here to free space for the repair
@@ -814,7 +830,7 @@ async fn run_purge_before(
     {
         let timer = PhaseTimer::start("purge-before");
         let dry = ctx.dry_run;
-        let bytes = tokio::task::spawn_blocking(move || purge::apply_purge(&pp, dry))
+        let bytes = spawn_blocking_traced(move || purge::apply_purge(&pp, dry))
             .await
             .map_err(|e| {
                 RunFailure::write(anyhow::anyhow!(
@@ -1095,7 +1111,23 @@ async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RunExit, Summary, finish, note_stopped, phases};
+    use super::{RunExit, Summary, finish, note_stopped, phases, spawn_blocking_traced};
+
+    /// A blocking task still reaches the caller's scoped subscriber: the pool
+    /// thread has no thread-local dispatcher, and the cleanup passes log the
+    /// deletes they perform.
+    #[test]
+    fn a_blocking_task_keeps_the_callers_subscriber() {
+        let logs = crate::repair::test_support::logs_of(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(spawn_blocking_traced(|| tracing::info!("blocking line")))
+                .unwrap();
+        });
+        assert!(logs.contains("blocking line"), "{logs}");
+    }
 
     /// `SUMMARY`'s `stopped=` names the **first** ceiling to bind: a later
     /// phase that also hits one must not rewrite the answer.
