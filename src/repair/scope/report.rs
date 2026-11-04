@@ -141,13 +141,11 @@ impl DiskPlan {
         out
     }
 
-    /// The figures for one planned file. An id the plan does not know about has
-    /// no figures — the plan is the only input.
-    pub fn for_id(&self, id: FileId) -> FileDisk {
-        self.per_file.get(id.index()).copied().unwrap_or(FileDisk {
-            mode: "inplace",
-            extra_bytes: 0,
-        })
+    /// The figures for one planned file, or `None` when `id` is not from this
+    /// disk plan. There is no plausible default: the plan is the only input,
+    /// and an id it does not cover has no figures.
+    pub fn for_id(&self, id: FileId) -> Option<FileDisk> {
+        self.per_file.get(id.index()).copied()
     }
 }
 
@@ -303,6 +301,11 @@ impl<'a> PlanDocument<'a> {
     ///
     /// A caller whose slice is short (a bug, not server data) falls back to the
     /// over-approximation for the missing file, never to zero.
+    ///
+    /// `disk` must cover every file in `plan`: both are built from the same
+    /// plan by the publisher, and a missing entry is a caller bug that would
+    /// otherwise print another file's figures at this position.
+    #[allow(clippy::expect_used)] // a disk plan from `DiskPlan::new` covers the whole plan
     pub fn new(
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
@@ -320,7 +323,9 @@ impl<'a> PlanDocument<'a> {
                             n.saturating_add(c.compressed_size.max(0) as u64)
                         })
                     });
-                    let d = disk.for_id(id);
+                    let d = disk
+                        .for_id(id)
+                        .expect("the disk plan covers every file in the plan");
                     RepairEntry {
                         rel: &f.rel,
                         size: f.size,
@@ -416,6 +421,23 @@ mod tests {
                 },
             ],
         )
+    }
+
+    /// A disk plan that covers every file with no on-disk I/O: the tests that
+    /// only exercise the document's shape use this instead of stat-ing a
+    /// fixture.
+    fn plain_disk(plan: &RepairPlan) -> DiskPlan {
+        DiskPlan {
+            est_write_bytes: 0,
+            est_extra_bytes: 0,
+            per_file: vec![
+                FileDisk {
+                    mode: "inplace",
+                    extra_bytes: 0,
+                };
+                plan.len()
+            ],
+        }
     }
 
     fn purge_plan() -> PurgePlan {
@@ -523,14 +545,14 @@ mod tests {
 
         let plan = plan();
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 4);
-        assert_eq!(disk.for_id(FileId::new(0)).mode, "inplace");
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "inplace");
         assert_eq!(
-            disk.for_id(FileId::new(0)).extra_bytes,
+            disk.for_id(FileId::new(0)).unwrap().extra_bytes,
             0,
             "a file that is already the right size needs nothing"
         );
         assert_eq!(
-            disk.for_id(FileId::new(1)).extra_bytes,
+            disk.for_id(FileId::new(1)).unwrap().extra_bytes,
             64,
             "a file that is not there has to be created"
         );
@@ -542,9 +564,22 @@ mod tests {
 
         // The temp path duplicates every file.
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 4);
-        assert_eq!(disk.for_id(FileId::new(0)).mode, "temp");
-        assert_eq!(disk.for_id(FileId::new(0)).extra_bytes, 128);
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "temp");
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
+    }
+
+    /// An id outside the per-file table has no figures: there is no default
+    /// that could be mistaken for a real measurement.
+    #[test]
+    fn a_disk_plan_has_no_figures_for_an_id_outside_it() {
+        let plan = plan();
+        let disk = plain_disk(&plan);
+        assert!(disk.for_id(FileId::new(0)).is_some());
+        assert!(
+            disk.for_id(FileId::new(plan.len())).is_none(),
+            "an id the disk plan does not cover is not a file with zero extra disk"
+        );
     }
 
     /// A path that cannot be resolved keeps its place in the per-file table:
@@ -558,9 +593,9 @@ mod tests {
         let plan = RepairPlan::from_files("9.9", files);
 
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 1);
-        assert_eq!(disk.for_id(FileId::new(0)).mode, "temp");
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "temp");
         assert_eq!(
-            disk.for_id(FileId::new(1)),
+            disk.for_id(FileId::new(1)).unwrap(),
             FileDisk {
                 mode: "inplace",
                 extra_bytes: 0,
@@ -584,12 +619,12 @@ mod tests {
 
         let disk = DiskPlan::new(&dir, None, &plan(), RepairMode::Discard, 4);
         assert_eq!(
-            disk.for_id(FileId::new(0)).extra_bytes,
+            disk.for_id(FileId::new(0)).unwrap().extra_bytes,
             0,
             "a full-size target is deleted and rewritten in place: no second copy"
         );
         assert_eq!(
-            disk.for_id(FileId::new(1)).extra_bytes,
+            disk.for_id(FileId::new(1)).unwrap().extra_bytes,
             64 - 16,
             "a truncated target still grows to its manifest size"
         );
@@ -657,7 +692,7 @@ mod tests {
     #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -679,7 +714,7 @@ mod tests {
         // old reconciliation only handled `summed < est`, which is the
         // direction that never occurs under `--scan`.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &plain_disk(&plan));
         assert_eq!(doc.repair[0].est_download_bytes, 10);
         assert_eq!(doc.repair[1].est_download_bytes, 0);
         let sum = doc
@@ -734,7 +769,7 @@ mod tests {
                 ],
             }],
         );
-        let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[], &plain_disk(&plan));
         assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
         let sum = doc
             .repair
@@ -746,7 +781,7 @@ mod tests {
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -760,7 +795,7 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");
@@ -775,7 +810,7 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "written_shape");
         let path = dir.join("plan.json");
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
         doc.write_to(&path).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(
@@ -802,7 +837,7 @@ mod tests {
         // A directory in place of the target makes the publish rename fail.
         std::fs::create_dir(&path).unwrap();
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let err = doc.write_to(&path).unwrap_err();
         assert!(format!("{err:#}").contains("publish"), "{err:#}");
         assert!(
@@ -822,7 +857,7 @@ mod tests {
         let tmp = crate::util::path::temp_sibling(&path);
         std::fs::create_dir(&tmp).unwrap();
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let mut failed = None;
         let logs = crate::repair::test_support::logs_of(|| {
             failed = Some(doc.write_to(&path).unwrap_err());
@@ -849,7 +884,7 @@ mod tests {
         assert!(path.file_name().is_none(), "the fixture names no file");
         let tmp = crate::util::path::temp_sibling(&path);
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let err = doc.write_to(&path).unwrap_err();
         assert!(format!("{err:#}").contains("publish"), "{err:#}");
         assert!(path.is_dir(), "the directory target is untouched");
@@ -873,7 +908,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &path).unwrap();
 
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         doc.write_to(&path).unwrap();
 
         assert!(
