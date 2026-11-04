@@ -185,6 +185,23 @@ pub enum Mode {
     Temp,
 }
 
+/// Everything the repair loop needs, grouped so the signature names one phase
+/// rather than twelve inputs.
+pub(super) struct RepairInputs {
+    pub(super) http: reqwest::Client,
+    pub(super) game_dir: PathBuf,
+    pub(super) root: Option<util::PathRoot>,
+    pub(super) plan: Arc<RepairPlan>,
+    pub(super) local_map: Arc<LocalChunkMap>,
+    pub(super) scan: Option<Arc<ScanReport>>,
+    pub(super) summary: Summary,
+    pub(super) jobs: usize,
+    pub(super) dry_run: bool,
+    pub(super) output: crate::report::OutputFormat,
+    pub(super) repair_mode: RepairMode,
+    pub(super) sleep: Arc<dyn Sleep>,
+}
+
 /// Run the repair loop over the whole plan, bounded to `jobs` concurrent files.
 ///
 /// Per-file failures are counted, never fatal; the caller decides that a
@@ -193,21 +210,21 @@ pub enum Mode {
 /// `output` rides along rather than being read from a global: the progress
 /// ticker this spawns emits records, and a record's plane has to come from the
 /// same place the rest of the run's does.
-#[allow(clippy::too_many_arguments)] // one parameter per input the repair loop needs
-pub async fn repair_all(
-    http: reqwest::Client,
-    game_dir: PathBuf,
-    root: Option<util::PathRoot>,
-    plan: Arc<RepairPlan>,
-    local_map: Arc<LocalChunkMap>,
-    scan: Option<Arc<ScanReport>>,
-    summary: Summary,
-    jobs: usize,
-    dry_run: bool,
-    output: crate::report::OutputFormat,
-    repair_mode: RepairMode,
-    sleep: Arc<dyn Sleep>,
-) -> Summary {
+pub async fn repair_all(inputs: RepairInputs) -> Summary {
+    let RepairInputs {
+        http,
+        game_dir,
+        root,
+        plan,
+        local_map,
+        scan,
+        summary,
+        jobs,
+        dry_run,
+        output,
+        repair_mode,
+        sleep,
+    } = inputs;
     let summary = Arc::new(summary);
     let total_files = plan.len();
     // NOTE: these are shared by Arc on purpose. `local_map` holds every local
@@ -903,20 +920,20 @@ mod tests {
                 chunks: Vec::new(),
             }],
         ));
-        let summary = repair_all(
-            reqwest::Client::new(),
-            dir.to_path_buf(),
-            None,
+        let summary = repair_all(RepairInputs {
+            http: reqwest::Client::new(),
+            game_dir: dir.to_path_buf(),
+            root: None,
             plan,
-            Arc::new(LocalChunkMap::new()),
-            None,
-            Summary::new(),
-            1,
-            false,
-            crate::report::OutputFormat::Text,
-            RepairMode::Inplace,
-            Arc::new(crate::sleep::NoSleep),
-        )
+            local_map: Arc::new(LocalChunkMap::new()),
+            scan: None,
+            summary: Summary::new(),
+            jobs: 1,
+            dry_run: false,
+            output: crate::report::OutputFormat::Text,
+            repair_mode: RepairMode::Inplace,
+            sleep: Arc::new(crate::sleep::NoSleep),
+        })
         .await;
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),

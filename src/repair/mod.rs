@@ -196,16 +196,16 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
 
     // 4. work list, purge candidates, deprecated list, scan, estimates, and the
     // ceilings — everything decided before a byte is written.
-    let Some(work) = build_and_assert_plan(
+    let Some(work) = build_and_assert_plan(PlanInputs {
         ctx,
         summary,
-        &game_dir,
-        root.as_ref(),
-        &meta,
+        game_dir: &game_dir,
+        root: root.as_ref(),
+        meta: &meta,
         per_manifest,
-        &local_map,
+        local_map: &local_map,
         readonly,
-    )
+    })
     .await?
     else {
         // A limit, returned rather than raised: it is "the run failed", not
@@ -223,17 +223,7 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     //
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
-    publish_plan(
-        ctx,
-        &game_dir,
-        root.as_ref(),
-        &work.plan,
-        work.purge_plan.as_ref(),
-        work.scan.as_deref(),
-        &work.est_download_by_file,
-        work.est_download_bytes,
-    )
-    .await?;
+    publish_plan(ctx, &game_dir, root.as_ref(), &work).await?;
     if ctx.print_plan {
         return Ok(PlanOutcome::Finished(RunExit::Success));
     }
@@ -345,22 +335,96 @@ async fn load_manifests_and_reuse(
     Ok((per_manifest, local_map))
 }
 
+/// The inputs to [`build_and_assert_plan`]: the values `plan_phase` already
+/// resolved, grouped so the signature names one run rather than eight roles.
+struct PlanInputs<'a> {
+    ctx: &'a RunCtx,
+    summary: &'a mut Summary,
+    game_dir: &'a Path,
+    root: Option<&'a util::PathRoot>,
+    meta: &'a Meta,
+    per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
+    local_map: &'a Arc<manifest::LocalChunkMap>,
+    readonly: bool,
+}
+
 /// Step 4: the work list, the purge candidates, the deprecated list, the scan,
 /// the download estimate, and the scope-of-work ceilings.
 ///
 /// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
 /// [`PlanOutcome::Finished`] return so a helper never hands back an exit code.
-#[allow(clippy::too_many_arguments)] // the plan inputs are all distinct, already-built values
-async fn build_and_assert_plan(
+///
+/// The body is the five conceptual steps in order (plan + purge, the include
+/// guard, the deprecated list, the scan, the estimate + ceilings); each one
+/// keeps its own side effects and log lines.
+async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork>, RunFailure> {
+    let PlanInputs {
+        ctx,
+        summary,
+        game_dir,
+        root,
+        meta,
+        per_manifest,
+        local_map,
+        readonly,
+    } = inputs;
+
+    let (plan, purge_keys, purge_plan) =
+        plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest).await?;
+
+    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
+    ensure_scope_selected_something(
+        &ctx.path_scope,
+        &plan,
+        purge_candidates,
+        purge_plan.as_ref(),
+    )?;
+
+    let deprecated = load_deprecated(ctx, meta, readonly).await;
+    let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
+
+    let estimate = estimate_download(
+        ctx,
+        summary,
+        scan.as_deref(),
+        &plan,
+        game_dir,
+        root,
+        local_map,
+    );
+    if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
+        return Ok(None);
+    }
+
+    Ok(Some(PlanWork {
+        plan,
+        purge_plan,
+        purge_keys,
+        deprecated,
+        scan,
+        est_download_by_file: estimate.by_file,
+        est_download_bytes: estimate.bytes,
+    }))
+}
+
+/// Step 4.0: the work list and, when a purge will happen, its candidates.
+///
+/// The `plan` timer covers both, and stops before the include guard and the
+/// network work that follow.
+async fn plan_work_and_purge(
     ctx: &RunCtx,
     summary: &mut Summary,
     game_dir: &Path,
-    root: Option<&util::PathRoot>,
     meta: &Meta,
     per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
-    local_map: &Arc<manifest::LocalChunkMap>,
-    readonly: bool,
-) -> Result<Option<PlanWork>, RunFailure> {
+) -> Result<
+    (
+        Arc<RepairPlan>,
+        Option<Arc<purge::PurgeKeys>>,
+        Option<PurgePlan>,
+    ),
+    RunFailure,
+> {
     let scope = &ctx.path_scope;
     let timer = PhaseTimer::start("plan");
     let plan = Arc::new(
@@ -423,143 +487,179 @@ async fn build_and_assert_plan(
         (None, None)
     };
 
-    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
     timer.finish();
+    Ok((plan, purge_keys, purge_plan))
+}
 
-    // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
-    // that costs 130 GB to discover is the failure mode this whole feature
-    // exists to remove. Exit `1` — a property of the request — rather than `5`,
-    // which means the request was well-formed and the answer was too big.
-    //
-    // "Nothing at all" spans both plans, which is why this sits after 4.1. An
-    // empty *repair* plan on its own is not a typo: a path that is on disk but
-    // absent from the new manifest — the ordinary "removed upstream" case, and
-    // `gircap`'s `removed` capture — is in no repair plan by construction, and
-    // `--purge-only --include <that path>` is precisely the request that deletes
-    // it. (This also means a new `--include` on a `--print-plan` run reports
-    // `files=0 purge_files=1` instead of erroring, which is what "print the
-    // plan" should do.)
-    if scope.has_includes() && plan.is_empty() && purge_candidates == 0 {
-        // Say which of the two plans came back empty: the diagnosis differs, and
-        // so does the fix the user needs.
-        let message = if purge_plan.is_some() {
-            format!(
-                "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
-                 candidates either; check the glob spelling (`*` also crosses `/`) or the \
-                 installed version",
-                scope.describe_includes(),
-            )
-        } else {
-            format!(
-                "--include '{}' matched no file in the live manifest (plan_files=0); \
-                 check the glob spelling (`*` also crosses `/`) or the installed version",
-                scope.describe_includes(),
-            )
-        };
-        return Err(RunFailure::usage(anyhow::anyhow!("{message}")));
+/// Step 4.2: an `--include` that selected **nothing at all** is a typo, and a
+/// typo that costs 130 GB to discover is the failure mode this whole feature
+/// exists to remove. Exit `1` — a property of the request — rather than `5`,
+/// which means the request was well-formed and the answer was too big.
+///
+/// "Nothing at all" spans both plans, which is why this runs after 4.1. An
+/// empty *repair* plan on its own is not a typo: a path that is on disk but
+/// absent from the new manifest — the ordinary "removed upstream" case, and
+/// `gircap`'s `removed` capture — is in no repair plan by construction, and
+/// `--purge-only --include <that path>` is precisely the request that deletes
+/// it. (This also means a new `--include` on a `--print-plan` run reports
+/// `files=0 purge_files=1` instead of erroring, which is what "print the
+/// plan" should do.)
+fn ensure_scope_selected_something(
+    scope: &scope::PathScope,
+    plan: &RepairPlan,
+    purge_candidates: usize,
+    purge_plan: Option<&PurgePlan>,
+) -> Result<(), RunFailure> {
+    if !scope.has_includes() || !plan.is_empty() || purge_candidates != 0 {
+        return Ok(());
     }
+    // Say which of the two plans came back empty: the diagnosis differs, and
+    // so does the fix the user needs.
+    let message = if purge_plan.is_some() {
+        format!(
+            "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
+             candidates either; check the glob spelling (`*` also crosses `/`) or the \
+             installed version",
+            scope.describe_includes(),
+        )
+    } else {
+        format!(
+            "--include '{}' matched no file in the live manifest (plan_files=0); \
+             check the glob spelling (`*` also crosses `/`) or the installed version",
+            scope.describe_includes(),
+        )
+    };
+    Err(RunFailure::usage(anyhow::anyhow!("{message}")))
+}
 
-    // 4.3 the server's deprecated-file list, fetched here rather than in the
-    // post-phase: it is part of what the run will act on, so it belongs with the
-    // rest of the plan. Still best-effort (the list is advisory).
-    //
-    // `--dry-run` needs it because the post-phase now runs in a dry run and
-    // lists the deprecated deletes it would make. `--check-only` and
-    // `--print-plan` still skip it: neither reaches the post-phase, so the
-    // request would only add a network round-trip and throw the answer away.
-    // (`--print-plan` is not covered by `readonly()` — it leaves by an early
-    // return — hence the explicit disjunct.)
-    //
-    // It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
-    // extra network call.
-    // The call is needed exactly when the post-phase will list its deletes:
-    // a mutating run, or a dry run that is not `--check-only`. `--print-plan`
-    // returns before the execution half and short-circuits `--dry-run`, so
-    // neither fetches a list it would discard.
+/// Step 4.3: the server's deprecated-file list.
+///
+/// Fetched here rather than in the post-phase: it is part of what the run will
+/// act on, so it belongs with the rest of the plan. Still best-effort (the list
+/// is advisory).
+///
+/// `--dry-run` needs it because the post-phase now runs in a dry run and lists
+/// the deprecated deletes it would make. `--check-only` and `--print-plan` still
+/// skip it: neither reaches the post-phase, so the request would only add a
+/// network round-trip and throw the answer away. (`--print-plan` is not covered
+/// by `readonly()` — it leaves by an early return — hence the explicit
+/// disjunct.)
+///
+/// It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
+/// extra network call. The call is needed exactly when the post-phase will list
+/// its deletes: a mutating run, or a dry run that is not `--check-only`.
+/// `--print-plan` returns before the execution half and short-circuits
+/// `--dry-run`, so neither fetches a list it would discard.
+async fn load_deprecated(ctx: &RunCtx, meta: &Meta, readonly: bool) -> Vec<String> {
     let wants_deprecated = !ctx.print_plan && !ctx.check_only && (ctx.dry_run || !readonly);
-    let deprecated = if wants_deprecated {
+    if wants_deprecated {
         fetch_deprecated(&meta.hyp).await
     } else {
         tracing::debug!("read-only mode: not fetching the deprecated-file list");
         Vec::new()
-    };
+    }
+}
 
-    // The scan, when it was asked for. It reads every planned file once and
-    // turns the plan's estimates from upper bounds into figures.
-    let scan = if ctx.scan {
-        Some(Arc::new(
-            scan::scan_plan(
-                game_dir,
-                root,
-                Arc::clone(&plan),
-                Arc::clone(local_map),
-                ctx.jobs,
-            )
-            .await,
-        ))
-    } else {
-        None
-    };
+/// The scan, when it was asked for. It reads every planned file once and turns
+/// the plan's estimates from upper bounds into figures.
+async fn scan_if_requested(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    local_map: &Arc<manifest::LocalChunkMap>,
+) -> Option<Arc<ScanReport>> {
+    if !ctx.scan {
+        return None;
+    }
+    Some(Arc::new(
+        scan::scan_plan(
+            game_dir,
+            root,
+            Arc::clone(plan),
+            Arc::clone(local_map),
+            ctx.jobs,
+        )
+        .await,
+    ))
+}
 
-    // === assert: the ceilings, before anything is mutated ===
-    //
-    // Filter → assert → work, in that order. Checking the ceilings
-    // *after* the scope filter is what makes them usable at all: before
-    // filtering, `--max-files 8` would refuse on every real install.
-    //
-    // The download estimate is `Σ compressed_size` over the chunks the local
-    // reuse map cannot supply. It is exactly `gircap`'s `patch_fetch` formula,
-    // and because capture invariant A6 says `len(blob) == compressed_size` it is
-    // the same quantity the runner counts — but it is a **lower bound, not a
-    // promise**: `try_reuse_slice` falls back to a download whenever a local
-    // slice fails its MD5, so a file estimated at 0 bytes can still download its
-    // whole body. That is why the runtime hard stop exists alongside this.
-    //
-    // Under `--scan` the estimate is the **exact** figure for the write path
-    // each file takes: the chunks that are wrong where they belong and have no
-    // intact source the chosen direction keeps. It resolves the mode itself,
-    // including a requested `temp`, so this is one rule for every mode.
-    //
-    // The split is computed once, per file, and both consumers fold it: the
-    // `PLAN` total below and the `--plan-out` document further down. A second
-    // derivation would be a second answer.
-    let est_download_by_file: Vec<u64> = match &scan {
-        Some(s) => s.est_download_bytes_by_file(&plan, game_dir, root, ctx.repair_mode, local_map),
+/// The download estimate: `Σ compressed_size` over the chunks the local reuse
+/// map cannot supply, split per file.
+///
+/// It is exactly `gircap`'s `patch_fetch` formula, and because capture
+/// invariant A6 says `len(blob) == compressed_size` it is the same quantity the
+/// runner counts — but it is a **lower bound, not a promise**: `try_reuse_slice`
+/// falls back to a download whenever a local slice fails its MD5, so a file
+/// estimated at 0 bytes can still download its whole body. That is why the
+/// runtime hard stop exists alongside this.
+///
+/// Under `--scan` the estimate is the **exact** figure for the write path each
+/// file takes: the chunks that are wrong where they belong and have no intact
+/// source the chosen direction keeps. It resolves the mode itself, including a
+/// requested `temp`, so this is one rule for every mode.
+///
+/// The split is computed once, per file, and both consumers fold it: the `PLAN`
+/// total and the `--plan-out` document. A second derivation would be a second
+/// answer.
+struct DownloadEstimate {
+    by_file: Vec<u64>,
+    bytes: u64,
+}
+
+fn estimate_download(
+    ctx: &RunCtx,
+    summary: &mut Summary,
+    scan: Option<&ScanReport>,
+    plan: &Arc<RepairPlan>,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    local_map: &Arc<manifest::LocalChunkMap>,
+) -> DownloadEstimate {
+    let by_file = match scan {
+        Some(s) => s.est_download_bytes_by_file(plan, game_dir, root, ctx.repair_mode, local_map),
         None => plan.est_download_bytes_by_file(local_map),
     };
-    let est_download_bytes = est_download_by_file
+    let bytes = by_file
         .iter()
         .fold(0u64, |total, n| total.saturating_add(*n));
     if ctx.limits.download_bytes.is_some() {
-        tracing::info!("estimated download: {est_download_bytes} bytes");
-        summary.flags.plan_download_bytes = Some(est_download_bytes);
+        tracing::info!("estimated download: {bytes} bytes");
+        summary.flags.plan_download_bytes = Some(bytes);
     }
-    if let Some(s) = &scan {
+    if let Some(s) = scan {
         summary.flags.damaged_chunks = Some(s.damaged_chunks);
     }
     summary.files_total = plan.len() as u64;
     summary.flags.limited = ctx.limits.is_active();
-    let hits = ctx.limits.check_preflight(scope::Preflight {
-        plan: &plan,
-        est_download_bytes,
-        purge: purge_plan.as_ref().filter(|_| !ctx.check_only),
-    });
-    if !hits.is_empty() {
-        for hit in &hits {
-            tracing::error!("limit exceeded: {hit}");
-        }
-        return Ok(None);
-    }
+    DownloadEstimate { by_file, bytes }
+}
 
-    Ok(Some(PlanWork {
+/// === assert: the ceilings, before anything is mutated ===
+///
+/// Filter → assert → work, in that order. Checking the ceilings *after* the
+/// scope filter is what makes them usable at all: before filtering,
+/// `--max-files 8` would refuse on every real install.
+///
+/// Returns `false` when a ceiling refused the run, after logging every hit.
+fn within_limits(
+    ctx: &RunCtx,
+    plan: &Arc<RepairPlan>,
+    purge_plan: Option<&PurgePlan>,
+    est_download_bytes: u64,
+) -> bool {
+    let hits = ctx.limits.check_preflight(scope::Preflight {
         plan,
-        purge_plan,
-        purge_keys,
-        deprecated,
-        scan,
-        est_download_by_file,
         est_download_bytes,
-    }))
+        purge: purge_plan.filter(|_| !ctx.check_only),
+    });
+    if hits.is_empty() {
+        return true;
+    }
+    for hit in &hits {
+        tracing::error!("limit exceeded: {hit}");
+    }
+    false
 }
 
 /// Step 4.7: publish the plan when `--print-plan` or `--plan-out` asked for it.
@@ -568,18 +668,18 @@ async fn build_and_assert_plan(
 /// the `--plan-out` document. Compute it when either was asked for, so the
 /// document is written for a run that does the work as well as for
 /// `--print-plan`.
-#[allow(clippy::too_many_arguments)] // the published plan is one document over several borrowed parts
 #[allow(clippy::expect_used)] // each `disk` use is inside the branch that computed it
 async fn publish_plan(
     ctx: &RunCtx,
     game_dir: &Path,
     root: Option<&util::PathRoot>,
-    plan: &Arc<RepairPlan>,
-    purge_plan: Option<&PurgePlan>,
-    scan: Option<&ScanReport>,
-    est_download_by_file: &[u64],
-    est_download_bytes: u64,
+    work: &PlanWork,
 ) -> Result<(), RunFailure> {
+    let plan = &work.plan;
+    let purge_plan = work.purge_plan.as_ref();
+    let scan = work.scan.as_deref();
+    let est_download_by_file = &work.est_download_by_file;
+    let est_download_bytes = work.est_download_bytes;
     // Publishing only costs anything when it produces a plan; an ordinary run's
     // call is a no-op and must not add a zero-duration line.
     let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
@@ -700,7 +800,24 @@ async fn execute_phase(
     }
 
     // 6. repair files (bounded file parallelism, sequential chunks per file).
-    summary = run_repair(ctx, http, &game_dir, root, &plan, local_map, scan, summary).await;
+    summary = run_repair(
+        ctx,
+        file::RepairInputs {
+            http,
+            game_dir: game_dir.to_path_buf(),
+            root,
+            plan: Arc::clone(&plan),
+            local_map,
+            scan,
+            summary,
+            jobs: ctx.jobs,
+            dry_run: ctx.dry_run,
+            output: ctx.output,
+            repair_mode: ctx.repair_mode,
+            sleep: ctx.sleep.clone(),
+        },
+    )
+    .await;
     if let Some(code) = apply_run_flags(ctx, &mut summary) {
         return Ok((summary, code));
     }
@@ -913,44 +1030,24 @@ async fn run_purge_only(
 }
 
 /// Step 6: the repair loop.
-#[allow(clippy::too_many_arguments)] // one parameter per input the loop needs
-async fn run_repair(
-    ctx: &RunCtx,
-    http: reqwest::Client,
-    game_dir: &Path,
-    root: Option<util::PathRoot>,
-    plan: &Arc<RepairPlan>,
-    local_map: Arc<manifest::LocalChunkMap>,
-    scan: Option<Arc<ScanReport>>,
-    mut summary: Summary,
-) -> Summary {
-    summary.set_download_limit(ctx.limits.download_bytes);
-    summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
-    summary.set_write_limit(ctx.limits.write_bytes);
-    summary.set_verified_write_limit(ctx.limits.verified_write_bytes);
-    summary.set_ram_limit(ctx.limits.ram_bytes);
-    summary.set_fail_fast(ctx.fail_fast);
+async fn run_repair(ctx: &RunCtx, mut inputs: file::RepairInputs) -> Summary {
+    inputs.summary.set_download_limit(ctx.limits.download_bytes);
+    inputs
+        .summary
+        .set_verified_download_limit(ctx.limits.verified_download_bytes);
+    inputs.summary.set_write_limit(ctx.limits.write_bytes);
+    inputs
+        .summary
+        .set_verified_write_limit(ctx.limits.verified_write_bytes);
+    inputs.summary.set_ram_limit(ctx.limits.ram_bytes);
+    inputs.summary.set_fail_fast(ctx.fail_fast);
     tracing::info!(
         mode = ctx.repair_mode.as_str(),
         ram_budget = ?ctx.ram_budget(),
         "repair mode"
     );
     let timer = PhaseTimer::start("repair");
-    let summary = file::repair_all(
-        http,
-        game_dir.to_path_buf(),
-        root,
-        Arc::clone(plan),
-        local_map,
-        scan,
-        summary,
-        ctx.jobs,
-        ctx.dry_run,
-        ctx.output,
-        ctx.repair_mode,
-        ctx.sleep.clone(),
-    )
-    .await;
+    let summary = file::repair_all(inputs).await;
     timer.finish();
     summary
 }
