@@ -379,6 +379,11 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
     // The same handle: seek back to the slice start and copy the bytes that
     // were just verified, instead of opening `src` again.
     if let Err(e) = sf.seek(SeekFrom::Start(ro as u64)) {
+        // Leave the handle slot empty, the way a failed read does: a seek that
+        // failed means this handle cannot be trusted to position the next
+        // slice, so the next chunk opens the path once more rather than
+        // reusing a bad handle. Restoring it here would only change the retry
+        // path, not the outcome — the chunk is downloaded either way.
         tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
         return Ok(ChunkOutcome::Download);
     }
