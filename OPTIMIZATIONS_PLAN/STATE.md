@@ -266,7 +266,7 @@ until the main tasks and rework are done.
 | F165 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | Five tests still spell `.girpr_tmp` literally instead of deriving it from `temp_sibling`. | todo |
 | F166 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | The fallback test could assert source-present/target-absent inside the injected copy, not only after. | todo |
 | F167 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | `copy_publish_with`'s no-file-name refusal has no direct test. | todo |
-| F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | todo |
+| F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | blocked (needs a Linux/macOS host) |
 | F169 | INPLACE-01 review | `src/repair/file/inplace.rs`, `src/repair/scan.rs` | An intact scan verdict on a coarse-mtime filesystem can still be accepted after a same-tick rewrite, so the run reports the file skipped and leaves it unrepaired until a later run. | completed |
 | F170 | INPLACE-01 review | `src/repair/file/inplace.rs` | The natural evasion window is narrower than the forced test suggests; the recorded mtime must share the coarse tick with the post-scan rewrite. | completed |
 | F171 | INPLACE-01 review | `src/repair/file/inplace.rs` | `trim_is_free` uses `is_none_or`, so an overflowing `r + s` would read as inside the target if the offset type ever widens. | completed |
@@ -424,7 +424,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
-| TEMP-PUBLISH-02 | F165, F166, F167, F168 | todo | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
+| TEMP-PUBLISH-02 | F165, F166, F167, F168 | in_progress | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
