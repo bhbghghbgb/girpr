@@ -206,24 +206,30 @@ mod tests {
         }
     }
 
+    /// The variants the exit-status test must cover.
+    ///
+    /// The list drives both the loop and a wildcard-free `match`, so a new
+    /// variant leaves the match non-exhaustive until it is named here.
+    macro_rules! documented_exit_codes {
+        ($($variant:ident),+ $(,)?) => {{
+            let cases = [$(RunExit::$variant),+];
+            for status in cases {
+                match status {
+                    $(RunExit::$variant => {}),+
+                }
+                assert!(
+                    u8::try_from(status.code()).is_ok(),
+                    "{status:?} ({}) must fit in a process exit status",
+                    status.code()
+                );
+            }
+        }};
+    }
+
     #[test]
     fn every_documented_exit_code_fits_in_a_process_status() {
         // `ExitCode` carries a `u8`; a new variant outside that range must be a
         // test failure, not a silently truncated process status.
-        let cases = [
-            RunExit::Success,
-            RunExit::Usage,
-            RunExit::Metadata,
-            RunExit::Write,
-            RunExit::CheckFailed,
-            RunExit::Limit,
-        ];
-        for status in cases {
-            assert!(
-                u8::try_from(status.code()).is_ok(),
-                "{status:?} ({}) must fit in a process exit status",
-                status.code()
-            );
-        }
+        documented_exit_codes!(Success, Usage, Metadata, Write, CheckFailed, Limit);
     }
 }
