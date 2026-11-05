@@ -1001,7 +1001,7 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    the fixture and the tool disagree about the file before a single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1`, `--io-threads 1` and `--fail-fast`. `--max-files 1`
+   path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
