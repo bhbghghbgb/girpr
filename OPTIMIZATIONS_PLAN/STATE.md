@@ -243,9 +243,9 @@ until the main tasks and rework are done.
 | F142 | LOGGING-01 review | `src/logging.rs` | `FILE_SINKS` is append-only for the process lifetime; repeated installs retain every sink and handle. | todo |
 | F143 | LOGGING-01 review | `src/logging.rs` | No test drives `install_sink` through `flush_log`; only `flush_sinks` is pinned. | todo |
 | F144 | LOGGING-01 review | `src/logging.rs` | Only the first sink's flush error is reported; later failures are silent by design. | todo |
-| F145 | LOCK-01 review | `src/repair/lock.rs` | `may_write_body` still accepts a hard link to an empty/`pid=` regular file, and a symlink swapped between open and metadata defeats the check. | todo |
-| F146 | LOCK-01 review | `src/repair/lock.rs` tests | Lock files now persist, so tests leave `girpr-*.lock` files and a dangling symlink in the temp directory. | todo |
-| F147 | LOCK-01 review | `src/repair/lock.rs` | The Unix-only lock cases never ran on this host; they need a Linux/macOS run. | todo |
+| F145 | LOCK-01 review | `src/repair/lock.rs` | `may_write_body` still accepts a hard link to an empty/`pid=` regular file, and a symlink swapped between open and metadata defeats the check. | completed |
+| F146 | LOCK-01 review | `src/repair/lock.rs` tests | Lock files now persist, so tests leave `girpr-*.lock` files and a dangling symlink in the temp directory. | completed |
+| F147 | LOCK-01 review | `src/repair/lock.rs` | The Unix-only lock cases never ran on this host; they need a Linux/macOS run. | blocked (needs a Linux/macOS host) |
 | F148 | INI-01 review | `src/util/ini.rs` | The refusal says "does not exist" even when the path exists as a non-directory. | todo |
 | F149 | INI-01 review | `tests/` | No CLI-level case for the game dir vanishing between `prepare_install` and the post-phase bump. | todo |
 | F150 | INI-01 review | `src/util/ini.rs` | `split_first_eq` is a thin wrapper over `split_once`; keep it only while the shared rule earns its name. | todo |
@@ -322,6 +322,9 @@ until the main tasks and rework are done.
 | F221 | INPLACE-02 review | `src/repair/file/inplace.rs` | The age rule assumes a forward-moving wall clock; a backwards jump is unhandled and worth a note. | todo |
 | F222 | CHECK-02 review | `src/repair/phases/check.rs` | The live-progress test blocks indefinitely if a fold is lost; a bounded `recv_timeout` would fail clearly. | todo |
 | F223 | CHECK-02 review | `src/report/summary.rs` | The raw `check_damaged_chunks` field is still `pub`; the accessor doc discourages direct use, but the field could be private. | todo |
+| F224 | LOCK-02 review | `tests/repair_offline.rs`, CLI tests | Integration runs still persist `girpr-*.lock` files (123 per full suite) in the temp dir; needs test hygiene. | todo |
+| F225 | LOCK-02 review | `src/repair/lock.rs` | An `nlink == 0` file reports "has 0 names (hard links)"; "has no remaining names" would read better. | todo |
+| F226 | LOCK-02 review | `tools/sync/Cargo.toml` | `redb 4.3.0` requires Rust 1.90, so `cargo check --workspace` fails on the declared MSRV 1.89. | todo |
 
 ## Follow-up batches
 
@@ -381,9 +384,10 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-02 | F136, F137 | todo | Wave D; manifest mock shutdown and out-of-order stream coverage; low |
 | JOBS-02 | F139, F140, F141 | todo | Wave D; alias boundary case, help default annotation and ceiling review; low |
 | LOGGING-02 | F142, F143, F144 | todo | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low |
-| LOCK-02 | F145, F146, F147 | pending_review | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e |
+| LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
+| LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | todo | Wave D; ini refusal wording, external-race coverage and helper scope; low |
-| BUILD-02 | F151, F152, F153 | todo | Wave D; per-member MSRV, scan-path benchmark and import tidy; low |
+| BUILD-02 | F151, F152, F153, F226 | todo | Wave D; per-member MSRV, scan-path benchmark and import tidy; low |
 | BUILD-TOOLS-02 | F154, F155 | todo | Wave D; tools build-doc note and explicit digest trait import; low |
 | TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
