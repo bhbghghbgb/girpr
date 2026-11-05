@@ -1,6 +1,5 @@
 use anyhow::Result;
-use futures_util::StreamExt;
-use futures_util::stream::Stream;
+use futures_util::{StreamExt, stream::Stream};
 use md5::Digest;
 use prost::Message;
 use std::io::Write;
