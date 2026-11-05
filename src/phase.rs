@@ -5,16 +5,22 @@
 //! Durations come from a monotonic clock and are whole milliseconds; a phase
 //! that never started never logs one.
 //!
-//! The steps are non-overlapping, so no line double-counts another:
+//! The phase steps are non-overlapping, so no *phase* line double-counts
+//! another:
 //!
 //! - the plan half is attributed to `metadata` + `manifest` + `plan` + `scan` +
-//!   `publish`; `publish` appears only when `--print-plan` or `--plan-out`
-//!   asked it to produce something. The ceiling checks and estimate folding
-//!   between those steps are not separately timed;
+//!   `publish`; `plan` covers both the work-list build and the purge-plan walk,
+//!   and `publish` appears only when `--print-plan` or `--plan-out` asked it to
+//!   produce something. The ceiling checks, the estimate folding, and the
+//!   `REPORT` emission between those steps are not separately timed;
 //! - the execute half is `purge-before` + `check` or `repair` + `post`, where
 //!   `post` includes its own files-cleanup pass;
 //! - `run` is the whole-run total. It covers those steps plus the untimed gaps,
-//!   so it is the figure to compare against the wall clock.
+//!   including `REPORT`, so it is the figure to compare against the wall clock.
+//!
+//! The debug per-file `duration_ms` line is the one nested duration: it
+//! measures a single file inside `repair`, so it is not a phase and must not be
+//! added to the phase totals.
 //!
 //! A timer dropped before it finishes does not claim a completion: it logs
 //! `outcome=incomplete` and `elapsed_ms`, never `duration_ms`.
