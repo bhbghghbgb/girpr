@@ -64,11 +64,16 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     }
 }
 
-/// The blocking local reads and the exit class each one's join failure takes.
+/// The blocking local reads, and the exit class each one's **join** failure
+/// takes.
 ///
-/// The classification lives in one place rather than at each `await`: the
-/// version and audio reads are user-facing setup (exit 1), while the ignore and
-/// blacklist lists are inputs to the repair metadata (exit 2).
+/// The class here is the one for a task-level failure (a panic or a cancelled
+/// task on the blocking pool), not necessarily the class of the error the read
+/// itself returns. `Ignore` and `Blacklist` map an unreadable file to
+/// [`ReadClass::Usage`] inside the task, while their join failure is
+/// [`ReadClass::Metadata`]; `Version` and `Audio` use `Usage` for both. The
+/// join classes live in one table because [`Self::join_failure`] is their only
+/// reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalRead {
     Version,
@@ -92,7 +97,10 @@ impl LocalRead {
         }
     }
 
-    /// The documented exit class for this read's failure.
+    /// The documented exit class for this read's **join** failure.
+    ///
+    /// An `Ignore` or `Blacklist` read that fails inside its task reports
+    /// [`ReadClass::Usage`]; only a join failure of that read is metadata.
     const fn class(self) -> ReadClass {
         match self {
             Self::Version | Self::Audio => ReadClass::Usage,
