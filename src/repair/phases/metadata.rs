@@ -716,4 +716,37 @@ mod tests {
             "the branch error must not replace the config one: {text}"
         );
     }
+
+    /// The branch call's terminal error is what the phase reports when the
+    /// config call succeeds.
+    ///
+    /// Both first-wave answers are immediate and neither is retried, so the
+    /// result does not depend on which one the selector sees first: a branch
+    /// error that settles early is retained, and one still running is awaited
+    /// after the config answer.
+    #[tokio::test]
+    async fn a_branch_error_is_reported_when_the_config_call_succeeds() {
+        let base = serve(
+            Reply::Body(
+                r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#,
+            ),
+            Reply::Body(r#"{"retcode":-1001,"message":"invalid params","data":null}"#),
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "branch_failure");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let failure = match fetch(&ctx, &dir).await {
+            Ok(_) => panic!("a terminal branch failure must stop the phase"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.exit_code, RunExit::Metadata);
+        let text = format!("{:#}", failure);
+        assert!(text.contains("getGameBranches"), "{text}");
+        assert!(text.contains("-1001"), "{text}");
+        assert!(
+            !text.contains("getGameConfigs"),
+            "the config call succeeded, so it must not be blamed: {text}"
+        );
+    }
 }
