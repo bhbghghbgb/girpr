@@ -308,8 +308,11 @@ pub struct Lies {
 /// Another manifest in the latest build, beyond the primary `game` one.
 #[derive(Clone, Debug)]
 pub struct ExtraManifestSpec {
-    /// The `matching_field`/`category_id` the build advertises.
+    /// The `matching_field` the build advertises.
     pub matching_field: String,
+    /// The `category_id` the build advertises. Defaults to `matching_field`
+    /// for the fixtures that model the two as one value; [`Self::with_category_id`]
+    /// is how a fixture names the excluded category independently.
     pub category_id: String,
     /// The files this manifest describes.
     pub files: Vec<FileSpec>,
@@ -332,6 +335,17 @@ impl ExtraManifestSpec {
     /// The same manifest, advertised by `getBuild` but `404` when fetched.
     pub fn not_served(mut self) -> Self {
         self.served = false;
+        self
+    }
+
+    /// The same manifest, advertised under a `category_id` other than its
+    /// `matching_field`.
+    ///
+    /// The `res_category_dir` ignore set is matched against both fields, so
+    /// this is how a fixture models a category the user excluded without
+    /// also changing the field the manifest is selected by.
+    pub fn with_category_id(mut self, category_id: &str) -> Self {
+        self.category_id = category_id.to_string();
         self
     }
 }

@@ -43,7 +43,7 @@ mod common;
 
 use common::{
     ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, ctx_for, load_counters, read_game_file, run_binary, scope, temp_dir,
+    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run_binary, scope, temp_dir,
     write_game_file,
 };
 use girpr::test_support::{Lock, RepairMode, summary_record};
@@ -776,6 +776,100 @@ async fn a_failed_selected_manifest_fails_the_binary_without_a_fallback() {
     assert!(
         targets.iter().any(|t| t.ends_with(&extra_id)),
         "{targets:?}"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_ignored_manifest_category_is_not_planned_by_the_binary() {
+    // The `res_category_dir` ignore list drops a manifest by its
+    // `category_id` as well as by its `matching_field`. This fixture advertises
+    // the category under a field the ignore file does not name, so only the
+    // category id can be what excludes it.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "extra",
+                vec![FileSpec::new(
+                    "game/skipped.dat",
+                    vec![ChunkSpec::new("chunk_skipped", vec![0x5Au8; 16], 0)],
+                )],
+            )
+            .with_category_id("10302"),
+        ),
+    );
+    let extra_id = fx.extra_latest_manifests[0].id.clone();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            res_category_dir: "res_category.txt".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("ignored_manifest");
+    write_game_file(
+        &dir,
+        "res_category.txt",
+        br#"{"category":"10302","is_delete":true}"#,
+    );
+    let game_arg = dir.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(
+        code, 0,
+        "an ignored manifest is not an error: {stderr}\n{stdout}"
+    );
+
+    let summary = stdout
+        .lines()
+        .find(|line| line.starts_with("SUMMARY "))
+        .unwrap_or_else(|| panic!("the run ends with a SUMMARY: {stdout}"));
+    assert_eq!(
+        field(summary, "total"),
+        1,
+        "only game/base.dat is planned: {summary}"
+    );
+    assert_eq!(field(summary, "repaired"), 1, "{summary}");
+    assert_eq!(field(summary, "failed"), 0, "{summary}");
+
+    assert_eq!(
+        read_game_file(&dir, "game/base.dat").unwrap(),
+        vec![0x41u8; 32]
+    );
+    assert!(
+        read_game_file(&dir, "game/skipped.dat").is_none(),
+        "the ignored manifest contributes no files"
+    );
+
+    let targets = mock.request_targets();
+    assert!(
+        !targets.iter().any(|t| t.ends_with(&extra_id)),
+        "the ignored manifest was fetched: {targets:?}"
+    );
+    assert!(
+        !mock.chunk_hits().iter().any(|id| id == "chunk_skipped"),
+        "the ignored manifest's chunk was fetched"
     );
 
     mock.stop();
