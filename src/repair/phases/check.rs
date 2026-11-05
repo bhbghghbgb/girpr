@@ -133,6 +133,15 @@ where
                 // the file was never shown to be bad. Report the same run
                 // failure class the purge tasks use instead of folding it into
                 // `RunExit::CheckFailed`.
+                //
+                // Returning drops the stream, so no further file starts. A
+                // check already running on the blocking pool cannot be
+                // cancelled: it finishes its read before releasing the thread.
+                // That tail is bounded by `jobs` reads, and it affects only
+                // teardown — the output and exit class above are already
+                // decided. Cutting it short would need a cancellation check
+                // threaded through the read itself, which is a wider change
+                // than this failure path justifies.
                 return Err(RunFailure::write(anyhow::anyhow!("check task failed: {e}")));
             }
         }
