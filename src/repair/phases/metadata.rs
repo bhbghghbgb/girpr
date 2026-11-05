@@ -99,8 +99,9 @@ impl LocalRead {
 
     /// The documented exit class for this read's **join** failure.
     ///
-    /// An `Ignore` or `Blacklist` read that fails inside its task reports
-    /// [`ReadClass::Usage`]; only a join failure of that read is metadata.
+    /// An `Ignore` or `Blacklist` read that cannot read its file reports
+    /// [`ReadClass::Usage`]; its join failure is metadata. Failing to resolve
+    /// the configured directory is metadata inside the task as well.
     const fn class(self) -> ReadClass {
         match self {
             Self::Version | Self::Audio => ReadClass::Usage,
