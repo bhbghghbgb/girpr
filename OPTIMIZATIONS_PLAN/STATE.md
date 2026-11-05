@@ -275,7 +275,7 @@ until the main tasks and rework are done.
 | F174 | CHECK-01 review | `src/report/summary.rs` | `check_damaged_chunks` is 0 both for "no damage" and "never measured"; an `Option` accessor would disambiguate. | completed |
 | F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | completed |
 | F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | completed |
-| F177 | REPORT-API-01 review | `src/hyp.rs`, `src/repair/phases/metadata.rs` | `GameConfig::game`/`ChunkBuild::tag` are unread; validate them against the requested biz/tag in a hardening batch. | todo |
+| F177 | REPORT-API-01 review | `src/hyp.rs`, `src/repair/phases/metadata.rs` | `GameConfig::game`/`ChunkBuild::tag` are unread; validate them against the requested biz/tag in a hardening batch. | completed |
 | F178 | REPORT-API-01 review | `src/hyp.rs` | `ChunkBuild::tag`'s comment says the run compares the build id, but it only reports it; the `ManifestFile` size doc also overstates. | todo |
 | F179 | REPORT-API-01 review | `README.md` | The module map still names `src/report.rs`, `emit_progress` and `spawn_progress_reporter`. | todo |
 | F180 | PHASE-01 review | `src/phase.rs` | The no-double-count doc omits that the debug per-file `duration_ms` line nests inside `repair`. | todo |
@@ -351,6 +351,9 @@ until the main tasks and rework are done.
 | F250 | TEMP-PUBLISH-02 implementer | `src/repair/phases/post.rs` | The no-file-name guard is unreachable through `move_audio_cache_with`; the direct unit test is its only coverage. | todo |
 | F251 | SYNC-01 review | `tools/sync/src/commands/sync/plan/pairs.rs` | `shared_pairs` has no non-ASCII unit case of its own; a planner regression is only caught indirectly by the e2e test. | todo |
 | F252 | SYNC-01 review | `tools/sync/src/hash/set.rs` | The hash test targets an unknown name; no non-ASCII lookalike reaches an accepted algorithm today. Revisit if a name containing `k` is added. | todo |
+| F253 | HYP-02 review | `tests/common/mod.rs` | The local build fixture tag is hardcoded as `9.9.8-test`; deriving it from the requested local version would keep reuse tests honest. | todo |
+| F254 | HYP-02 review | `src/repair/phases/metadata.rs` | The local-build mismatch warning wording is not pinned by a test; only the resulting `local_build = None` is. | todo |
+| F255 | HYP-02 review | `src/repair/phases/metadata.rs` | Biz mismatch is checked before the download-mode refusal, so a wrong-biz non-chunk response reports metadata; precedence is undocumented. | todo |
 
 ## Follow-up batches
 
@@ -404,7 +407,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
-| HYP-02 | F177 | pending_review | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
+| HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
+| HYP-03 | F253, F254, F255 | todo | Wave E; local fixture tag, warning wording and mismatch precedence; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
 | SYNC-02 | F251, F252 | todo | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
