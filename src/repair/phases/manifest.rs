@@ -158,6 +158,17 @@ impl<'a> ManifestFetches<'a> {
         }
     }
 
+    /// Build the reader around a stream the test controls, so the ordering
+    /// logic can be driven by real completions rather than hand-fed results.
+    #[cfg(test)]
+    fn from_stream(manifests: Vec<&'a ChunkManifestMeta>, results: ManifestStream<'a>) -> Self {
+        Self {
+            ordered: OrderedResults::new(manifests.len()),
+            manifests,
+            results,
+        }
+    }
+
     /// The next manifest in selection order with its result, waiting only for
     /// that selection's fetch.
     ///
@@ -276,6 +287,7 @@ mod tests {
     use prost::Message;
     use std::collections::HashSet;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -495,6 +507,77 @@ mod tests {
         );
         assert_eq!(ordered.take_next(), Some((2, Ok("third"))));
         assert!(!ordered.has_next());
+    }
+
+    /// Drive the reader with a stream that settles in reverse selection order:
+    /// the last selection finishes first, then its predecessor, and the error
+    /// at the first selection settles last. The output still follows selection
+    /// order, and the first selection's error is the one reported.
+    #[tokio::test]
+    async fn ordered_results_follow_selection_order_through_an_out_of_order_stream() {
+        let first = meta("first", "first", "");
+        let second = meta("second", "second", "");
+        let third = meta("third", "third", "");
+        let manifests = vec![&first, &second, &third];
+
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        // Each completion releases the next selection towards the front, so
+        // the stream settles in reverse order without any timing.
+        let (release_third, wait_third) = tokio::sync::oneshot::channel();
+        let (release_second, wait_second) = tokio::sync::oneshot::channel();
+        let (release_first, wait_first) = tokio::sync::oneshot::channel();
+
+        let log = completed.clone();
+        let third_result = async move {
+            let _ = wait_third.await;
+            log.lock().expect("completion log").push(2);
+            let _ = release_second.send(());
+            (2, Ok(Vec::new()))
+        };
+        let log = completed.clone();
+        let second_result = async move {
+            let _ = wait_second.await;
+            log.lock().expect("completion log").push(1);
+            let _ = release_first.send(());
+            (1, Ok(Vec::new()))
+        };
+        let log = completed.clone();
+        let first_result = async move {
+            let _ = wait_first.await;
+            log.lock().expect("completion log").push(0);
+            (0, Err(anyhow::anyhow!("the first manifest is down")))
+        };
+
+        release_third.send(()).expect("the third selection waits");
+        type ResultFuture = Pin<Box<dyn std::future::Future<Output = (usize, ManifestResult)>>>;
+        let futures: Vec<ResultFuture> = vec![
+            Box::pin(first_result),
+            Box::pin(second_result),
+            Box::pin(third_result),
+        ];
+        let results = futures_util::stream::iter(futures).buffer_unordered(3);
+        let mut fetches = ManifestFetches::from_stream(manifests, Box::pin(results));
+
+        let mut seen: Vec<(&str, Result<(), anyhow::Error>)> = Vec::new();
+        while let Some((m, result)) = fetches.next_ordered().await {
+            seen.push((m.matching_field.as_str(), result.map(|_| ())));
+        }
+
+        assert_eq!(
+            completed.lock().expect("completion log").as_slice(),
+            [2, 1, 0],
+            "the fetches completed out of selection order"
+        );
+        assert_eq!(
+            seen.iter().map(|(field, _)| *field).collect::<Vec<_>>(),
+            ["first", "second", "third"],
+            "the reader yields in selection order"
+        );
+        assert!(
+            seen[0].1.is_err(),
+            "the first selection's failure is reported first even though it settled last"
+        );
+        assert!(seen[1].1.is_ok() && seen[2].1.is_ok());
     }
 
     /// The first manifest fails at once while a later one never answers. The
