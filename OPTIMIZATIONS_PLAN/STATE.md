@@ -161,7 +161,7 @@ until the main tasks and rework are done.
 | F60 | RC-11 review | `src/util/atomic.rs` | Module docs link a `pub(crate)` `temp_sibling`, which may warn under `cargo doc`. | completed |
 | F61 | RC-11 review | `src/util/ini.rs` | `write_config_ini` now creates a missing game directory through the helper where it previously failed. | completed |
 | F62 | RC-11 review | `src/retry.rs` | Jitter is salted by process id and attempt only, so concurrent files share the same spread. | completed |
-| F63 | RC-11 review | `src/repair/file/mod.rs` | A comment still budgets 5 × (15 s + 10 s); with the final sleep removed it is ~100 s. | todo |
+| F63 | RC-11 review | `src/repair/file/mod.rs` | A comment still budgets 5 × (15 s + 10 s); with the final sleep removed it is ~100 s. | completed |
 | F64 | RC-11 review | `src/hyp.rs` | No call-site test that `get_node`/`get_direct` retry a retryable error and stop on a fatal one. | completed |
 | F65 | T28 implementer | `src/util/ini.rs` tests | No config-specific "no temp left" assertion after the helper extraction. | completed |
 | F66 | T28 implementer | `src/util/atomic.rs` | Error context is artifact-neutral; artifact-specific labels would need a parameter. | completed |
@@ -170,12 +170,12 @@ until the main tasks and rework are done.
 | F69 | RC-12 review | `src/repair/scan.rs` | The helper tolerates length mismatch; a `debug_assert` at the two call sites would still be useful. | completed |
 | F70 | RC-12 review | `src/repair/file/inplace.rs` | `source_ok_by_range` is the inverse mapping; cross-reference or pin it near the shared remap. | completed |
 | F71 | T30 implementer | `src/util/path.rs` | `join_rel` assumes an already-clean `dir_rel` with no trailing separator. | completed |
-| F72 | T30 implementer | `src/util/mod.rs` | The `path` module summary does not mention the two new rel helpers. | todo |
+| F72 | T30 implementer | `src/util/mod.rs` | The `path` module summary does not mention the two new rel helpers. | completed |
 | F73 | RC-13 review | `src/repair/mod.rs`, `README.md`, `docs/02` | `--print-plan --dry-run` still fetches the deprecated list, contradicting the documented contract. | completed |
-| F74 | RC-13 review | `src/report/emit.rs` | Public docs link to the private `write_line`, leaving a rustdoc warning. | todo |
+| F74 | RC-13 review | `src/report/emit.rs` | Public docs link to the private `write_line`, leaving a rustdoc warning. | completed |
 | F75 | T33 implementer | `tools/sync` | The sibling crate has its own unrelated `Record::event` implementation. | dropped (unrelated sibling-crate implementation) |
 | F76 | T33 implementer | `src/util/ini.rs` | No pure `render_config_ini` helper; future tests observing rendering without writing would need one. | dropped (helper for a test that does not exist yet) |
-| F77 | RC-14 review | `src/repair/mod.rs` | `publish_plan`'s doc describes a disk-figures computation that moved into `build_and_assert_plan`. | todo |
+| F77 | RC-14 review | `src/repair/mod.rs` | `publish_plan`'s doc describes a disk-figures computation that moved into `build_and_assert_plan`. | skipped (doc already matches) |
 | F78 | RC-14 review | `src/repair/mod.rs`, `src/repair/file/inplace.rs` | Four new `too_many_arguments` allows are parameter bags for T35 to absorb. | dropped (superseded by F82 (current five-site inventory)) |
 | F79 | RC-14 review | `src/repair/file/inplace.rs`, `src/repair/mod.rs` | Trim/tier decisions and plan-step guards have only end-to-end coverage. | completed |
 | F80 | T34 implementer | `src/repair/mod.rs` | `build_and_assert_plan` is still ~150 lines and could split further. | completed |
@@ -216,18 +216,18 @@ until the main tasks and rework are done.
 | F115 | T45 implementer | `src/phase.rs` | `PhaseTimer` logs on drop during an error path, reporting time-to-failure as if the phase completed. | completed |
 | F116 | RC-18 review | `tests/cli_contract.rs` | `check_golden` allows `PROGRESS` between `REPORT` and `PLAN`, wider than the documented window. | completed |
 | F117 | RC-18 review | `README.md` | The data-plane section omits the one-record-per-event rule and that `PLAN` precedes `SUMMARY`. | completed |
-| F118 | RC-18 review | `tests/repair_offline.rs` | Module docs still describe the pre-split case layout ("first ten cases", "three cases run the real binary"). | todo |
+| F118 | RC-18 review | `tests/repair_offline.rs` | Module docs still describe the pre-split case layout ("first ten cases", "three cases run the real binary"). | completed |
 | F119 | T46 implementer | `tests/cli_contract.rs` | Only the JSON plane is pinned; the text plane relies on unit tests. | completed |
-| F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | todo |
-| F121 | HYP-01 review | `docs/07-panic-audit.md` | Still describes `num_from_string` as `u64 as i64` wrapping above `i64::MAX`; the visitor uses `i64::try_from`. | todo |
-| F122 | HYP-01 review | `src/hyp.rs` | `ManifestFile.compressed_size` is deserialized but never read; its doc implies an in-crate clamp that does not exist. | todo |
+| F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | completed |
+| F121 | HYP-01 review | `docs/07-panic-audit.md` | Still describes `num_from_string` as `u64 as i64` wrapping above `i64::MAX`; the visitor uses `i64::try_from`. | completed |
+| F122 | HYP-01 review | `src/hyp.rs` | `ManifestFile.compressed_size` is deserialized but never read; its doc implies an in-crate clamp that does not exist. | completed |
 | F123 | PATHKEY-01 review | `tools/sync` | No end-to-end case exercises a map-key site (`diff_maps`, `check_mixed_case_keys`, planner pairing) with a non-ASCII pair. | completed |
-| F124 | PATHKEY-01 review | `src/repair/scope/filter.rs`, `src/util/path.rs` | The docs imply the glob fold is a different width; `glob`'s fold is also ASCII-only, so the real distinction is predicate-vs-key plus Windows-only folding. | todo |
+| F124 | PATHKEY-01 review | `src/repair/scope/filter.rs`, `src/util/path.rs` | The docs imply the glob fold is a different width; `glob`'s fold is also ASCII-only, so the real distinction is predicate-vs-key plus Windows-only folding. | completed |
 | F125 | PATHKEY-01 review | `tools/sync/src/hash/set.rs` | `parse_hash_list` still uses Unicode `to_lowercase`, so `bla\u{212A}e3` folds onto `blake3`. | completed |
 | F126 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test's failure on the old shape is probabilistic; a test-only pause seam would make it deterministic. | completed |
 | F127 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test spawns ~16k threads (1-3 s); trim rounds if CI time matters. | completed |
 | F128 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The unlimited charge/settle hot path is now a CAS loop; revisit only if profiling shows counter contention (e.g. sharding). | dropped (no profile shows counter contention; speculative) |
-| F129 | RETRY-01 review | `src/retry.rs` | The jitter doc's "distinct by construction" holds only until the salt times the multiplier wraps (~6.9e9), not merely the counter. | todo |
+| F129 | RETRY-01 review | `src/retry.rs` | The jitter doc's "distinct by construction" holds only until the salt times the multiplier wraps (~6.9e9), not merely the counter. | completed |
 | F130 | RETRY-01 review | `src/retry.rs` | No explicit test that `jitter` is injective over a fixed attempt's caller range; the invariant is implicit. | completed |
 | F131 | METADATA-01 review | `src/repair/phases/metadata.rs` | The class table builds failures via `class().failure(...)`, so `join_failure` bypassing `class()` would go unnoticed. | completed |
 | F132 | METADATA-01 review | `src/repair/phases/metadata.rs` | The enum `label()` strings duplicate the literals in `fetch`; a shared constant would pin them. | completed |
@@ -276,15 +276,15 @@ until the main tasks and rework are done.
 | F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | completed |
 | F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | completed |
 | F177 | REPORT-API-01 review | `src/hyp.rs`, `src/repair/phases/metadata.rs` | `GameConfig::game`/`ChunkBuild::tag` are unread; validate them against the requested biz/tag in a hardening batch. | completed |
-| F178 | REPORT-API-01 review | `src/hyp.rs` | `ChunkBuild::tag`'s comment says the run compares the build id, but it only reports it; the `ManifestFile` size doc also overstates. | todo |
-| F179 | REPORT-API-01 review | `README.md` | The module map still names `src/report.rs`, `emit_progress` and `spawn_progress_reporter`. | todo |
-| F180 | PHASE-01 review | `src/phase.rs` | The no-double-count doc omits that the debug per-file `duration_ms` line nests inside `repair`. | todo |
-| F181 | PHASE-01 review | `src/phase.rs` | The `plan` interval also contains the purge-plan walk, and the `REPORT` emission is an unnamed untimed gap. | todo |
+| F178 | REPORT-API-01 review | `src/hyp.rs` | `ChunkBuild::tag`'s comment says the run compares the build id, but it only reports it; the `ManifestFile` size doc also overstates. | completed |
+| F179 | REPORT-API-01 review | `README.md` | The module map still names `src/report.rs`, `emit_progress` and `spawn_progress_reporter`. | completed |
+| F180 | PHASE-01 review | `src/phase.rs` | The no-double-count doc omits that the debug per-file `duration_ms` line nests inside `repair`. | completed |
+| F181 | PHASE-01 review | `src/phase.rs` | The `plan` interval also contains the purge-plan walk, and the `REPORT` emission is an unnamed untimed gap. | completed |
 | F182 | TEST-MANIFEST-01 review | `tests/repair_offline.rs` | The multi-manifest binary test does not cover the `ignore` set (`res_category_dir`). | completed |
 | F183 | TEST-MANIFEST-01 review | `tests/common/mod.rs` | `ExtraManifestSpec::new` ties `category_id` to `matching_field`, so an ignored-by-category fixture cannot be expressed. | completed |
 | F184 | TEST-MANIFEST-01 review | `tests/common/mod.rs` | Extra manifests' chunks are registered even when `served = false`; a future "absent manifest" case needs that adjusted. | completed |
-| F185 | ATOMIC-01 review | `src/report/emit.rs` | The rustdoc links the private `write_line`, producing the sole `cargo doc` warning. | todo |
-| F186 | ATOMIC-01 review | `src/repair/phases/post.rs` | The same private `temp_sibling` doc link pattern; silent now because private docs are not built. | todo |
+| F185 | ATOMIC-01 review | `src/report/emit.rs` | The rustdoc links the private `write_line`, producing the sole `cargo doc` warning. | completed |
+| F186 | ATOMIC-01 review | `src/repair/phases/post.rs` | The same private `temp_sibling` doc link pattern; silent now because private docs are not built. | completed |
 | F187 | ATOMIC-01 review | `src/util/path.rs` | `temp_sibling` has no direct unit test pinning the `file_name() == None` fallback name. | completed |
 | F188 | PLANID-01 review | `src/repair/phases/plan.rs` | `RepairPlan::latest` stays public and mutable; a read-only accessor would prevent accidental fingerprint invalidation. | completed |
 | F189 | PLANID-01 review | `src/repair/scope/report.rs` | `PlanDocument::new`'s `expect` on the disk table is an invariant; a fallible signature or `debug_assert` would protect future callers. | completed |
@@ -301,7 +301,7 @@ until the main tasks and rework are done.
 | F200 | PURGE-PERF-01 review | `src/repair/phases/post.rs` | `spawn_delete_deprecated` clones the whole deprecated `Vec<String>`; an `Arc<[String]>` would avoid it. | completed |
 | F201 | PURGE-PERF-01 review | `src/repair/phases/post.rs` | `move_audio_cache` still uses raw `spawn_blocking`, losing its log lines under a scoped subscriber. | completed |
 | F202 | PURGE-PERF-01 review | `src/repair/purge.rs` | `mark_kept_ancestors`'s per-ancestor `PathBuf` could be avoided with an index set, at the cost of coupling to walk order. | completed |
-| F203 | MD5-TYPE-01 review | `src/util/mod.rs`, `README.md` | Docs still say `util::md5_file` resolves at the module root and name it in the repair path, but only `util::md5::md5_file` exists now. | todo |
+| F203 | MD5-TYPE-01 review | `src/util/mod.rs`, `README.md` | Docs still say `util::md5_file` resolves at the module root and name it in the repair path, but only `util::md5::md5_file` exists now. | completed |
 | F204 | PATHHELPERS-01 review | `src/repair/phases/post.rs` | `move_audio_cache_with` now strips the cache prefix twice; a helper returning both key and destination path would avoid it. | completed |
 | F205 | PATHHELPERS-01 review | `src/repair/phases/post.rs` | The dry-run log for nested cache paths now prints the `/` rel instead of the platform spelling. | completed |
 | F206 | PATHHELPERS-01 review | `tests/repair_post.rs` | No end-to-end test moves a non-UTF-8-named audio cache file and asserts the destination name bytes. | completed |
@@ -363,6 +363,10 @@ until the main tasks and rework are done.
 | F262 | DOCS-USER-01 review | `README.md` | Per-file counts ("74 cases", "25 cases") drift like the removed total; soften them. | todo |
 | F263 | DOCS-USER-01 review | `src/report/emit.rs`, `src/main.rs` | `summary_record` ("ending every run") and the `main` comment ("every return path ends with exactly one") overstate the fatal path. | todo |
 | F264 | DOCS-USER-01 review | `tests/artifact_bridge.rs` | `base_args` uses the deprecated `--io-threads` spelling; switch to `--jobs` unless intentional alias coverage. | todo |
+| F265 | DOCS-COMMENTS-01 review | `README.md` | The module map still lists `src/sophon.rs` although the code is `src/sophon/`. | todo |
+| F266 | DOCS-COMMENTS-01 review | `src/repair/scope/filter.rs`, `docs/04-scope-limitation-spec.md` | `util::contained_rel` is named, but it is only `util::path::contained_rel`. | todo |
+| F267 | DOCS-COMMENTS-01 review | `docs/07-panic-audit.md` | Table line ranges are stale after the module splits. | todo |
+| F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | todo |
 
 ## Follow-up batches
 
@@ -417,7 +421,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | done | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low; e8ae20c, 3a0d207, b4b5c48, 3fc46c6, 1ddbb61 |
 | DOCS-USER-02 | F262, F263, F264 | todo | Wave E; drifting counts, fatal-path wording and alias spelling; low |
-| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | pending_review | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca |
+| DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
+| DOCS-COMMENTS-02 | F265, F266, F267, F268 | todo | Wave E; remaining module-map, re-export and line-range staleness; low |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | todo | Wave E; local fixture tag, warning wording and mismatch precedence; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
