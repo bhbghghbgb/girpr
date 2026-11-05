@@ -401,7 +401,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-02 | F216, F217, F218 | todo | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low |
 | INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
-| PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
+| PATHHELPERS-02 | F204, F205, F206 | in_progress | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
