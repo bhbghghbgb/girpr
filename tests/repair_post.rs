@@ -7,8 +7,9 @@
 mod common;
 
 use common::{
-    MockOpts, MockServer, absent_game_dir, build_fixture, ctx_for, ctx_for_biz, load_counters,
-    read_game_file, run_binary, temp_dir, write_game_file,
+    ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
+    build_fixture_spec, ctx_for, ctx_for_biz, load_counters, read_game_file, run_binary, temp_dir,
+    write_game_file,
 };
 use girpr::{Biz, RunExit, run};
 use std::collections::HashSet;
@@ -433,6 +434,78 @@ async fn dry_run_lists_the_post_phase_and_changes_nothing() {
         mock.first_target_with("getGameDeprecatedFileConfigs")
             .is_some(),
         "the dry run fetches the list it lists"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_game_dir_that_vanishes_before_the_config_bump_is_a_write_failure() {
+    // The install can disappear between `prepare_install` and the post-phase
+    // bump: a user unmounts or cleans the tree while the repair is running.
+    // The repaired file is still written through the handle the repair opened,
+    // so the run reaches the bump; the bump cannot create a game dir, and a
+    // missing install there is fatal (exit 3), not a best-effort post step.
+    //
+    // The first chunk request is the deterministic seam: `prepare_install` has
+    // already created the dir and the file task has opened its target, so
+    // removing the tree now leaves the repair with a valid handle and the
+    // post-phase with a vanished game dir.
+    let fx = build_fixture_spec(&FixtureSpec::new(vec![FileSpec::new(
+        "game/only.dat",
+        vec![ChunkSpec::new("chunk_only", vec![0x41u8; 64], 0)],
+    )]));
+    let dir = temp_dir("game_dir_vanished");
+    let game = dir.join("install");
+    let hook_game = game.clone();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            on_first_chunk: Some(std::sync::Arc::new(move || {
+                std::fs::remove_dir_all(&hook_game).expect("remove the game dir before the bump");
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+
+    let game_arg = game.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        code, 3,
+        "a vanished game dir at the bump is a write failure:\n{stdout}\n{stderr}"
+    );
+    assert!(
+        stderr.contains("FATAL write config.ini"),
+        "the bump is the fatal step: {stderr}"
+    );
+    assert!(
+        stderr.contains("does not exist"),
+        "the refusal names the missing game dir: {stderr}"
+    );
+    assert!(
+        !stdout.contains("SUMMARY"),
+        "a fatal post-phase failure must not emit a success summary: {stdout}"
+    );
+    assert!(
+        !game.exists(),
+        "the test's vanishing game dir must stay gone"
     );
 
     mock.stop();
