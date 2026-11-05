@@ -416,7 +416,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | todo | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low |
-| REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
+| REFACTOR-02 | F207 | in_progress | Wave E; make the download estimate read as pure; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | done | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low; e8ae20c, 3a0d207, b4b5c48, 3fc46c6, 1ddbb61 |
