@@ -45,10 +45,17 @@ pub async fn verify_plan(
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
 ) -> Result<u64, RunFailure> {
-    verify_plan_with(game_dir, root, plan, summary, output, scan, jobs, check_one).await
+    verify_plan_with(
+        game_dir, root, plan, summary, output, scan, jobs, None, check_one,
+    )
+    .await
 }
 
 /// The body of [`verify_plan`], with the per-file check injectable for tests.
+///
+/// `folded` receives the number of outcomes folded so far, once per completion.
+/// Production passes `None`; a test uses it to wait for a specific fold instead
+/// of polling the counters.
 #[allow(clippy::too_many_arguments)] // the phase's inputs are one run's shared context
 async fn verify_plan_with<F>(
     game_dir: &Path,
@@ -58,6 +65,7 @@ async fn verify_plan_with<F>(
     output: report::OutputFormat,
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
+    folded: Option<tokio::sync::mpsc::UnboundedSender<usize>>,
     check: F,
 ) -> Result<u64, RunFailure>
 where
@@ -114,6 +122,11 @@ where
             Ok(outcome) => {
                 record_check(&summary, &outcome);
                 outcomes.push((idx, outcome));
+                if let Some(tx) = &folded {
+                    // The count, not a bare ping: a waiter can tell which
+                    // completion it observed.
+                    let _ = tx.send(outcomes.len());
+                }
             }
             Err(e) => {
                 // A panicked or cancelled task is a bug, not a damage verdict:
@@ -481,6 +494,7 @@ mod tests {
                 report::OutputFormat::Text,
                 None,
                 1,
+                None,
                 |_: &PlannedFile,
                  _: &anyhow::Result<PathBuf>,
                  _: DigestSource<'_>|
@@ -524,6 +538,10 @@ mod tests {
             std::sync::Mutex::new(Gate::default()),
             std::sync::Condvar::new(),
         ));
+        // The fold reports each completion on this channel. The test waits for
+        // the signal instead of polling the counter, so it has no timing
+        // assumption to violate on a single-core or heavily loaded host.
+        let (folded_tx, mut folded_rx) = tokio::sync::mpsc::unbounded_channel::<usize>();
 
         let thread_summary = Arc::clone(&summary);
         let thread_gate = Arc::clone(&gate);
@@ -541,6 +559,7 @@ mod tests {
                     report::OutputFormat::Text,
                     None,
                     2,
+                    Some(folded_tx),
                     move |f: &PlannedFile,
                           _: &anyhow::Result<PathBuf>,
                           _: DigestSource<'_>|
@@ -572,15 +591,13 @@ mod tests {
         }
         drop(state);
 
-        let mut spins = 0;
-        while summary.files_skipped.load(Ordering::Relaxed) == 0 {
-            spins += 1;
-            assert!(
-                spins < 10_000_000,
-                "the finished check was not folded while the slow task was held"
-            );
-            std::thread::yield_now();
-        }
+        // The first fold is the finished task. `blocking_recv` parks the test
+        // thread until the fold happens; it cannot race the runtime.
+        assert_eq!(
+            folded_rx.blocking_recv(),
+            Some(1),
+            "the finished check was not folded while the slow task was held"
+        );
         assert_eq!(
             summary.files_skipped.load(Ordering::Relaxed),
             1,
