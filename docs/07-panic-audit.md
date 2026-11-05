@@ -52,7 +52,7 @@ server-controlled.
 | `src/sophon.rs:210-219` protobuf decode | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
 | `src/sophon.rs:296-313` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
 | `src/sophon.rs:563` compressed-body sum | network bytes | server | **Saturating**. |
-| `src/hyp.rs:120-145` `num_from_string` | JSON number/string sizes | server | `u64 as i64` **wraps** for values above `i64::MAX` but does not panic; negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. Non-panic, recorded rather than changed. |
+| `src/hyp.rs:120-145` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
 | `src/repair/phases/plan.rs:195-227` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
 | `src/repair/phases/plan.rs:57-102` `layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
 | `src/repair/phases/plan.rs:166-181` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
@@ -83,13 +83,12 @@ Every server field that reaches arithmetic is either checked at plan time
 (every sum that can exceed `u64`). Every direct index is into a vector whose
 length is established in the same function or the same plan, not by the server.
 
-One **non-panic** observation remains, deliberately not changed: the
-`u64 as i64` conversion in `src/hyp.rs:135` wraps values above `i64::MAX`. The
-wrapped value is negative, and the plan refuses negative sizes and clamps
-non-negative fields with `max(0)`, so the outcome is a refused file or a
-conservative estimate, not a panic or a write outside the install. Fixing the
-cast would change the JSON acceptance boundary for a shape no capture has
-produced; it is recorded here instead.
+One observation from the first sweep is now closed: the `u64 as i64`
+conversion in `num_from_string` used to wrap values above `i64::MAX`. It now
+uses `i64::try_from`, so an out-of-range number is a deserialization error
+rather than a wrapped negative size. Values that fit but are negative are still
+refused by the plan or clamped with `max(0)`, so the outcome remains a refused
+file or a conservative estimate, never a write outside the install.
 
 The plan-time range gate covers the temp-file overflow path, and the
 file-semaphore `unwrap` is the named `expect` above.
