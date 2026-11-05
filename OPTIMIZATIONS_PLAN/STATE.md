@@ -396,7 +396,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | todo | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low |
 | BUILD-TOOLS-03 | F230, F231 | todo | Wave E; tokio default features and manifest comment precision; low |
-| TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
+| TEST-HELPERS-02 | F156, F157 | in_progress | Wave D; shared-module build cost and redundant `#[path]`; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
