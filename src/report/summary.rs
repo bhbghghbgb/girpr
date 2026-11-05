@@ -130,7 +130,17 @@ pub struct Summary {
     /// plan-phase scan's figure and a conditional `SUMMARY` key. This is an
     /// internal tally: it lets a caller of `--check-only` see the same total
     /// the phase logs without changing the emitted keys.
+    ///
+    /// Read it through the `check_damaged_chunks()` accessor: this raw counter
+    /// is zero both before the check has run and after a clean one.
     pub check_damaged_chunks: AtomicU64,
+    /// Whether the check has published its raw damaged-chunk tally.
+    /// `false` on a default `Summary`, so "not measured" is not read as
+    /// "measured zero".
+    ///
+    /// The store is `Release` and the accessor's load is `Acquire`: a reader
+    /// that observes the flag also observes the tally it publishes.
+    pub check_damaged_chunks_measured: AtomicBool,
 }
 
 impl Summary {
@@ -163,7 +173,23 @@ impl Summary {
             files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
             kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
             check_damaged_chunks: AtomicU64::new(self.check_damaged_chunks.load(Ordering::Relaxed)),
+            check_damaged_chunks_measured: AtomicBool::new(
+                self.check_damaged_chunks_measured.load(Ordering::Relaxed),
+            ),
         }
+    }
+
+    /// The chunks the check phase found wrong, or `None` when the check has
+    /// not run.
+    ///
+    /// The raw `check_damaged_chunks` counter is zero both before the check
+    /// and after a clean one; this accessor tells those apart. Both values
+    /// still mean "no damage found" when the check ran, because a check that
+    /// reads the digests itself cannot locate the bad chunks.
+    pub fn check_damaged_chunks(&self) -> Option<u64> {
+        self.check_damaged_chunks_measured
+            .load(Ordering::Acquire)
+            .then(|| self.check_damaged_chunks.load(Ordering::Relaxed))
     }
 }
 

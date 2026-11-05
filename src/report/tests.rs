@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
@@ -321,20 +321,41 @@ fn snapshot_copies_every_counter() {
         files_total: 7,
         files_skipped: AtomicU64::new(1),
         check_damaged_chunks: AtomicU64::new(3),
+        check_damaged_chunks_measured: AtomicBool::new(true),
         ..Summary::default()
     };
     s.download.settle(9);
     let snap = s.snapshot();
     assert_eq!(snap.files_total, 7);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
-    assert_eq!(snap.check_damaged_chunks.load(Ordering::Relaxed), 3);
+    assert_eq!(snap.check_damaged_chunks(), Some(3));
     assert_eq!(snap.download.settled(), 9);
     assert_eq!(snap.flags, SummaryFlags::default());
     // Mutating the source afterwards must not touch the snapshot.
     s.files_skipped.store(5, Ordering::Relaxed);
     s.check_damaged_chunks.store(4, Ordering::Relaxed);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
-    assert_eq!(snap.check_damaged_chunks.load(Ordering::Relaxed), 3);
+    assert_eq!(snap.check_damaged_chunks(), Some(3));
+}
+
+/// A default `Summary` has not measured the check's tally, so it must not
+/// report zero as if a clean check had produced it.
+#[test]
+fn an_unmeasured_check_tally_is_not_zero() {
+    assert_eq!(Summary::default().check_damaged_chunks(), None);
+
+    let measured_zero = Summary {
+        check_damaged_chunks_measured: AtomicBool::new(true),
+        ..Summary::default()
+    };
+    assert_eq!(measured_zero.check_damaged_chunks(), Some(0));
+
+    let snapped = measured_zero.snapshot();
+    assert_eq!(
+        snapped.check_damaged_chunks(),
+        Some(0),
+        "a snapshot keeps the measured-zero distinction"
+    );
 }
 
 fn cfg_full() -> GameConfig {

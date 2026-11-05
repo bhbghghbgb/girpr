@@ -135,7 +135,9 @@ async fn check_only_scan_keeps_the_damaged_chunk_total_on_the_summary() {
         "the corrupt file is still damage"
     );
 
-    let checked = summary.check_damaged_chunks.load(Ordering::Relaxed);
+    let checked = summary
+        .check_damaged_chunks()
+        .expect("the check measured the tally");
     assert!(checked > 0, "the check carries the chunks it found wrong");
     assert_eq!(
         Some(checked),

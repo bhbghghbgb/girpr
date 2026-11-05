@@ -199,6 +199,12 @@ where
     summary
         .check_damaged_chunks
         .store(damaged_chunks, Ordering::Relaxed);
+    // Publish after the tally, so a reader that sees the flag also sees the
+    // value. This is what tells a clean check (measured, zero) apart from a
+    // check that never ran.
+    summary
+        .check_damaged_chunks_measured
+        .store(true, Ordering::Release);
     tracing::info!(
         phase = % "check",
         duration_ms = timer.elapsed_ms(),
@@ -405,7 +411,9 @@ mod tests {
             bad,
             summary.files_skipped.load(Ordering::Relaxed),
             summary.files_failed.load(Ordering::Relaxed),
-            summary.check_damaged_chunks.load(Ordering::Relaxed),
+            summary
+                .check_damaged_chunks()
+                .expect("the check measured it"),
             logs,
         )
     }
@@ -467,6 +475,26 @@ mod tests {
             one.4.contains("damaged_chunks=2"),
             "the scan's damaged-chunk total is folded once: {}",
             one.4
+        );
+    }
+
+    /// A clean pass records a measured zero, not the same "never measured"
+    /// state a default `Summary` carries.
+    #[test]
+    fn a_clean_check_measures_zero() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "clean_zero");
+        let base = &*dir;
+        std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
+        let md5 = util::md5::md5_digest(b"aaaa").to_hex();
+        let plan = Arc::new(plan_of(vec![planned("a.dat", 4, &md5)]));
+        let scan = None;
+
+        let (bad, skipped, failed, damaged_chunks, _) = run_verify(base, &plan, &scan, 2);
+
+        assert_eq!((bad, skipped, failed), (0, 1, 0));
+        assert_eq!(
+            damaged_chunks, 0,
+            "a clean check measured zero damaged chunks"
         );
     }
 
