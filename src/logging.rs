@@ -216,13 +216,14 @@ fn install_sink(sink: FileSink) {
 /// The file is the record of the run, so the caller flushes it explicitly on
 /// every path after [`init_tracing`] rather than trusting a `Drop` that an
 /// abrupt exit would skip. For a buffered file this is what pushes the last
-/// records out of the buffer; for the sink it is a no-op. Every sink an install
-/// registered is flushed, not only the first. It is safe when no file was
-/// opened and when logging was never installed, in which case there is nothing
-/// to flush.
+/// records out of the buffer; for the sink it is a no-op. It is safe when no
+/// file was opened and when logging was never installed, in which case there is
+/// nothing to flush.
 ///
 /// A flush failure is reported once on stderr and never changes the exit code:
-/// the run already earned its code before the log was written down.
+/// the run already earned its code before the log was written down. When the
+/// flush visits more than one sink, the report carries every failure rather
+/// than only the first.
 pub fn flush_log() {
     let sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(e) = flush_sinks(&sinks) {
@@ -231,18 +232,28 @@ pub fn flush_log() {
     }
 }
 
-/// Flush every sink, returning the first failure.
+/// Flush every sink, returning an error that carries every failure.
 ///
 /// Every sink is visited even after one fails: one broken file does not excuse
-/// another from being written out.
+/// another from being written out. The returned error keeps the first failure's
+/// kind and joins the messages of all failures, so a later sink's failure is not
+/// lost behind an earlier one.
 fn flush_sinks(sinks: &[FileSink]) -> Option<std::io::Error> {
-    let mut first = None;
+    let mut failures = Vec::new();
     for sink in sinks {
         if let Err(e) = flush_sink(sink) {
-            first.get_or_insert(e);
+            failures.push(e);
         }
     }
-    first
+    match failures.len() {
+        0 => None,
+        1 => failures.pop(),
+        _ => {
+            let kind = failures[0].kind();
+            let messages: Vec<String> = failures.iter().map(ToString::to_string).collect();
+            Some(std::io::Error::new(kind, messages.join("; ")))
+        }
+    }
 }
 
 fn flush_sink(sink: &FileSink) -> std::io::Result<()> {
@@ -321,8 +332,8 @@ mod tests {
         }
     }
 
-    /// A writer whose flush always fails.
-    struct FailingFlush;
+    /// A writer whose flush always fails with the given message.
+    struct FailingFlush(&'static str);
 
     impl Write for FailingFlush {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -330,7 +341,7 @@ mod tests {
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::other("disk full"))
+            Err(std::io::Error::other(self.0))
         }
     }
 
@@ -457,7 +468,7 @@ mod tests {
         let flushes = Arc::new(AtomicUsize::new(0));
         let sinks = vec![
             Arc::new(Mutex::new(
-                Box::new(FailingFlush) as Box<dyn Write + Send + Sync>
+                Box::new(FailingFlush("disk full")) as Box<dyn Write + Send + Sync>
             )),
             recording_sink(&flushes),
         ];
@@ -466,6 +477,24 @@ mod tests {
 
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
         assert_eq!(flushes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_later_flush_failure_is_not_lost_behind_an_earlier_one() {
+        let sinks = vec![
+            Arc::new(Mutex::new(
+                Box::new(FailingFlush("disk full")) as Box<dyn Write + Send + Sync>
+            )),
+            Arc::new(Mutex::new(
+                Box::new(FailingFlush("read-only file system")) as Box<dyn Write + Send + Sync>
+            )),
+        ];
+
+        let error = flush_sinks(&sinks).expect("both sinks fail");
+        let message = error.to_string();
+
+        assert!(message.contains("disk full"), "{message}");
+        assert!(message.contains("read-only file system"), "{message}");
     }
 
     #[test]
