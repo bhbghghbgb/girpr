@@ -252,8 +252,8 @@ until the main tasks and rework are done.
 | F151 | BUILD-01 review | `Cargo.toml` (members) | Only `girpr` carries `rust-version`; `tools/*` and `crates/*` have none, so the workspace MSRV error names redb. | completed |
 | F152 | BUILD-01 review | `src/repair/scan.rs` | The MD5 benchmark covers whole-file hashing but not the dominant `scan_file`/`scan_reader` read path. | completed |
 | F153 | BUILD-01 review | `src/sophon/stream.rs` | Two adjacent `use futures_util::...` lines could be one brace import. | completed |
-| F154 | BUILD-TOOLS-01 review | `tools/capture/Cargo.toml` | The realized tokio saving (`parking_lot`, `process`, `signal`, `fs`, `io-std`) could be stated in the tools' build docs. | todo |
-| F155 | BUILD-TOOLS-01 review | `tools/sync/src/hash/stream.rs` | The digest trait comes from `sha2::Digest`; importing `md5::Digest as _` would make the source explicit. | todo |
+| F154 | BUILD-TOOLS-01 review | `tools/capture/Cargo.toml` | The realized tokio saving (`parking_lot`, `process`, `signal`, `fs`, `io-std`) could be stated in the tools' build docs. | completed |
+| F155 | BUILD-TOOLS-01 review | `tools/sync/src/hash/stream.rs` | The digest trait comes from `sha2::Digest`; importing `md5::Digest as _` would make the source explicit. | completed |
 | F156 | TEST-HELPERS-01 review | `tests/common/mod.rs` | Including the whole fixture module in `artifact_server`/`peak_heap` slightly increases test build time. | todo |
 | F157 | TEST-HELPERS-01 review | `tests/peak_heap.rs`, `tests/artifact_bridge.rs` | The explicit `#[path = "common/mod.rs"]` on `mod common;` is redundant. | todo |
 | F158 | LINT-01 review | `src/lib.rs`, `clippy.toml` | A root `clippy.toml` with the two test options would let `src/lib.rs` drop its `cfg_attr(test)` allow; integration targets still need theirs. | todo |
@@ -328,6 +328,8 @@ until the main tasks and rework are done.
 | F227 | BUILD-02 review | `tests/scripts/io-profile/iot-bench` | Still pins `redb = "=4.3.0"` and claims it matches the workspace; the comment is false and it will not build on 1.89. | todo |
 | F228 | BUILD-02 review | `src/util/md5.rs` | `scan_throughput` prints `dest_ok`/`source_ok` but never asserts them, so a scan regression still prints a plausible number. | todo |
 | F229 | BUILD-02 review | repository | The declared per-member MSRVs are unenforced; no CI job builds a member with its `rust-version`. | todo |
+| F230 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | `tokio` is requested without `default-features = false`, so its empty `default` feature is enabled. | todo |
+| F231 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | The manifest comment says nothing uses `net`/`sync`, while reqwest brings them in; it could mirror the docs' precision. | todo |
 
 ## Follow-up batches
 
@@ -391,8 +393,9 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | todo | Wave D; ini refusal wording, external-race coverage and helper scope; low |
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
-| BUILD-TOOLS-02 | F154, F155 | pending_review | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3 |
+| BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | todo | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low |
+| BUILD-TOOLS-03 | F230, F231 | todo | Wave E; tokio default features and manifest comment precision; low |
 | TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
