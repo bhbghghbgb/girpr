@@ -286,9 +286,32 @@ fn field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
 mod tests {
     use super::*;
 
+    /// Removes a lock file when the case ends.
+    ///
+    /// A real run deliberately leaves an unlocked lock file behind so a racing
+    /// opener cannot be unlinked. A test is not a run another test can race, and
+    /// the shared temp directory would otherwise collect one file per case (and
+    /// a dangling symlink from the symlink case). Declare the guard before the
+    /// lock so it drops after it, while the file is no longer open on Windows.
+    struct LockFileGuard(PathBuf);
+
+    impl LockFileGuard {
+        fn new(path: PathBuf) -> Self {
+            Self(path)
+        }
+    }
+
+    impl Drop for LockFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
     #[test]
     fn a_fresh_lock_excludes_a_second_run() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "fresh");
+        let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         let lock = Lock::acquire(&dir).expect("the first run takes the lock");
         assert!(lock.path().exists());
         // The lock lives outside the install, keyed by its canonical path.
@@ -313,7 +336,6 @@ mod tests {
         );
         // The lock is released when it is dropped, and the file is left for
         // the next run to reuse rather than unlinked under a racing opener.
-        let path = lock.path().to_path_buf();
         drop(lock);
         assert!(
             path.exists(),
@@ -328,16 +350,17 @@ mod tests {
     fn a_junk_body_names_an_unknown_holder() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "body");
         let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         std::fs::write(&path, "not a pid at all").unwrap();
         let msg = format!("{:#}", held(&path));
         assert!(msg.contains("pid ?"), "an unknown holder is named: {msg}");
-        std::fs::remove_file(path).ok();
     }
 
     #[test]
     fn an_unreadable_body_says_so() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "unreadable");
         let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         let msg = format!("{:#}", held(&path));
         // The body may be hidden while the holder owns the file; the refusal
         // must say that rather than claim a pid it cannot read.
@@ -351,6 +374,8 @@ mod tests {
     fn different_game_dirs_do_not_conflict() {
         let one = girpr_tempdir::TempDir::new("girpr_test_lock", "dir_one");
         let two = girpr_tempdir::TempDir::new("girpr_test_lock", "dir_two");
+        let _clean_one = LockFileGuard::new(lock_path(&one));
+        let _clean_two = LockFileGuard::new(lock_path(&two));
         let first = Lock::acquire(&one).expect("the first install is locked");
         let second = Lock::acquire(&two).expect("another install is independent");
         assert_ne!(first.path(), second.path());
@@ -359,10 +384,12 @@ mod tests {
     #[test]
     fn dropping_releases_the_lock_and_keeps_the_file() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "release");
-        let path = {
+        let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
+        {
             let lock = Lock::acquire(&dir).expect("the lock is taken");
-            lock.path().to_path_buf()
-        };
+            assert_eq!(lock.path(), path);
+        }
         assert!(
             path.exists(),
             "the file is left behind so an opener cannot be unlinked"
@@ -376,6 +403,7 @@ mod tests {
         // A killed run leaves its body behind, but the OS has released the
         // handle: there is no mtime rule and no wall-clock wait.
         let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         std::fs::write(&path, "pid=1\nstarted=2000-01-01T00:00:00Z\n").unwrap();
         let lock = Lock::acquire(&dir).expect("an unlocked leftover is harmless");
         assert_eq!(lock.path(), path);
@@ -392,6 +420,7 @@ mod tests {
     fn a_preexisting_foreign_file_is_not_truncated() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "foreign");
         let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         std::fs::write(&path, "this is not a lock body").unwrap();
         let lock = Lock::acquire(&dir).expect("the path can still be locked");
         assert_eq!(lock.path(), path);
@@ -412,6 +441,7 @@ mod tests {
         let target = dir.join("user-written.txt");
         std::fs::write(&target, "user data").unwrap();
         let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
         symlink(&target, &path).expect("the symlink is created");
         let lock = Lock::acquire(&dir).expect("the existing target can be locked");
         assert_eq!(lock.path(), path);
