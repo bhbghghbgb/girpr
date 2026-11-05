@@ -80,15 +80,14 @@ fn main() -> ExitCode {
 /// Map a documented exit status to what the process returns.
 ///
 /// [`RunExit`] is the pipeline's only exit type; this is where it becomes the
-/// process status. Clamping keeps a future bug from wrapping a code into `259`
-/// on a platform whose exit status is narrower than an `i32`.
+/// process status. [`ExitCode`] carries a `u8`, so the conversion is fallible:
+/// a future discriminant outside that range fails loudly here rather than
+/// wrapping into an unrelated status.
 fn exit_code(status: RunExit) -> ExitCode {
-    ExitCode::from(clamp_code(status.code()))
-}
-
-/// Keep a code in the range a process exit status can carry.
-fn clamp_code(code: i32) -> u8 {
-    code.clamp(0, u8::MAX as i32) as u8
+    #[allow(clippy::expect_used)] // the variants are pinned to u8-sized discriminants by test
+    let code =
+        u8::try_from(status.code()).expect("a documented exit code fits in a process status");
+    ExitCode::from(code)
 }
 
 /// Worker threads for a run that admits `jobs` files at once.
@@ -160,7 +159,7 @@ fn parse_args() -> Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_code, exit_code, worker_threads};
+    use super::{exit_code, worker_threads};
     use girpr::RunExit;
     use std::process::ExitCode;
 
@@ -208,8 +207,23 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_code_is_clamped_instead_of_wrapping() {
-        assert_eq!(clamp_code(300), u8::MAX);
-        assert_eq!(clamp_code(-1), 0);
+    fn every_documented_exit_code_fits_in_a_process_status() {
+        // `ExitCode` carries a `u8`; a new variant outside that range must be a
+        // test failure, not a silently truncated process status.
+        let cases = [
+            RunExit::Success,
+            RunExit::Usage,
+            RunExit::Metadata,
+            RunExit::Write,
+            RunExit::CheckFailed,
+            RunExit::Limit,
+        ];
+        for status in cases {
+            assert!(
+                u8::try_from(status.code()).is_ok(),
+                "{status:?} ({}) must fit in a process exit status",
+                status.code()
+            );
+        }
     }
 }
