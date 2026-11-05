@@ -263,9 +263,9 @@ until the main tasks and rework are done.
 | F162 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | The seek-refund test drives the helper; no end-to-end `write_downloaded_chunk` case with an unseekable sink. | completed |
 | F163 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | A copy-path seek failure drops the cached source handle instead of restoring it, unlike the other fallbacks. | completed |
 | F164 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | The `drop(src_handle)` Windows share-mode rationale is defensive rather than required for std's default share mode. | completed |
-| F165 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | Five tests still spell `.girpr_tmp` literally instead of deriving it from `temp_sibling`. | todo |
-| F166 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | The fallback test could assert source-present/target-absent inside the injected copy, not only after. | todo |
-| F167 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | `copy_publish_with`'s no-file-name refusal has no direct test. | todo |
+| F165 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | Five tests still spell `.girpr_tmp` literally instead of deriving it from `temp_sibling`. | completed |
+| F166 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | The fallback test could assert source-present/target-absent inside the injected copy, not only after. | completed |
+| F167 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | `copy_publish_with`'s no-file-name refusal has no direct test. | completed |
 | F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | blocked (needs a Linux/macOS host) |
 | F169 | INPLACE-01 review | `src/repair/file/inplace.rs`, `src/repair/scan.rs` | An intact scan verdict on a coarse-mtime filesystem can still be accepted after a same-tick rewrite, so the run reports the file skipped and leaves it unrepaired until a later run. | completed |
 | F170 | INPLACE-01 review | `src/repair/file/inplace.rs` | The natural evasion window is narrower than the forced test suggests; the recorded mtime must share the coarse tick with the post-scan rewrite. | completed |
@@ -347,6 +347,8 @@ until the main tasks and rework are done.
 | F246 | METADATA-02 review | `tests/repair_offline.rs` | The non-chunk test's branch failure is retryable `500`; a terminal branch failure under a refused mode is not covered. | todo |
 | F247 | TEMP-WRITER-02 review | `src/repair/file/temp.rs` | An end-to-end unseekable-sink test would need `DownloadedChunk`/`ChunkFileSink` generic over `W: Write + Seek`. | todo |
 | F248 | TEMP-WRITER-02 review | `src/repair/file/temp.rs` | `SeekRecording` guards only the missing-source branch; the no-candidate and digest-mismatch fallbacks could be pinned too. | todo |
+| F249 | TEMP-PUBLISH-02 implementer | `src/util/path.rs` | `temp_sibling` on a path with no file name returns one still containing a trailing `..` before resolution; the doc could say so. | todo |
+| F250 | TEMP-PUBLISH-02 implementer | `src/repair/phases/post.rs` | The no-file-name guard is unreachable through `move_audio_cache_with`; the direct unit test is its only coverage. | todo |
 
 ## Follow-up batches
 
@@ -424,7 +426,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
-| TEMP-PUBLISH-02 | F165, F166, F167, F168 | in_progress | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
+| TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
+| TEMP-PUBLISH-03 | F249, F250 | todo | Wave E; temp-sibling doc edge and guard reachability note; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
