@@ -550,12 +550,23 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
         .iter()
         .enumerate()
         .map(|(index, extra)| {
+            // A manifest the build advertises but does not serve is a `404`
+            // for its body, so no plan can ever name one of its chunks. Build
+            // those chunks into a throwaway store: publishing bytes under ids
+            // no reachable manifest names would make an "absent manifest"
+            // fixture indistinguishable from a served one at the chunk route.
+            let mut extra_chunks: HashMap<String, Vec<u8>> = HashMap::new();
+            let mut extra_corrupt_chunks: HashMap<String, Vec<u8>> = HashMap::new();
             let (_, extra_pb) = build_new_side(
                 &extra.files,
                 &Lies::default(),
-                &mut chunk_store,
-                &mut corrupt_chunk_store,
+                &mut extra_chunks,
+                &mut extra_corrupt_chunks,
             );
+            if extra.served {
+                chunk_store.extend(extra_chunks);
+                corrupt_chunk_store.extend(extra_corrupt_chunks);
+            }
             let (zstd, checksum) = encode_manifest(&extra_pb);
             FixtureLatestManifest {
                 matching_field: extra.matching_field.clone(),

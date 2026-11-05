@@ -874,3 +874,47 @@ async fn an_ignored_manifest_category_is_not_planned_by_the_binary() {
 
     mock.stop();
 }
+
+#[test]
+fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
+    // A manifest that `getBuild` advertises but the origin does not serve is
+    // a `404` for its body, so nothing can ever reference its chunks. Its
+    // manifest body is still built (it is advertised), but the chunk route
+    // must not publish bytes no reachable manifest names.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 16], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "gone",
+                vec![FileSpec::new(
+                    "game/gone.dat",
+                    vec![ChunkSpec::new("chunk_gone", vec![0x47u8; 16], 0)],
+                )],
+            )
+            .not_served(),
+        )
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "kept",
+            vec![FileSpec::new(
+                "game/kept.dat",
+                vec![ChunkSpec::new("chunk_kept", vec![0x4Bu8; 16], 0)],
+            )],
+        )),
+    );
+
+    assert_eq!(
+        fx.extra_latest_manifests.len(),
+        2,
+        "both manifests are still advertised"
+    );
+    assert!(fx.chunk_store.contains_key("chunk_base"));
+    assert!(fx.chunk_store.contains_key("chunk_kept"));
+    assert!(
+        !fx.chunk_store.contains_key("chunk_gone"),
+        "an absent manifest's chunks are unreachable"
+    );
+    assert!(!fx.corrupt_chunk_store.contains_key("chunk_gone"));
+}
