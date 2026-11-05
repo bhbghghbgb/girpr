@@ -175,8 +175,8 @@ async fn repair_attempt_inner(
     f.flush()?;
     drop(f);
     // The reuse source is the same file the promote renames over. On Windows
-    // `std` opens it with `FILE_SHARE_DELETE` among its share flags (and
-    // `std::fs::OpenOptions` offers no way to narrow that), so this handle
+    // `std` opens it with `FILE_SHARE_DELETE` among its default share flags
+    // (this code never narrows them through `OpenOptionsExt`), so this handle
     // alone would not block the rename. Release it before promoting anyway:
     // it costs nothing and keeps the code independent of that default instead
     // of leaning on it.
