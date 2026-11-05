@@ -2,6 +2,8 @@
 name = "girpr-log"
 version = "0.1.0"
 edition = "2024"
+# Edition 2024 is the crate's only compiler requirement.
+rust-version = "1.85"
 description = "The log-file and log-level policy every project in the girpr workspace follows"
 
 [lib]

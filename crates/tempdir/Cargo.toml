@@ -2,6 +2,8 @@
 name = "girpr-tempdir"
 version = "0.1.0"
 edition = "2024"
+# Edition 2024 is the crate's only compiler requirement.
+rust-version = "1.85"
 description = "The scratch-directory policy every project in the girpr workspace follows: a name nothing collides with, and a tree removed when the test ends"
 
 [lib]

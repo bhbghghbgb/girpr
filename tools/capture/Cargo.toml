@@ -2,6 +2,8 @@
 name = "gircap"
 version = "0.1.0"
 edition = "2024"
+# Its dependency tree needs 1.88 (the capture code also uses `slice::as_chunks`).
+rust-version = "1.88"
 description = "Dev-only live-artifact capture tool: builds self-contained fixture bundles (real game_dir, real API bodies, real chunk blobs) plus offline ground truth, for testing the repair binary"
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
