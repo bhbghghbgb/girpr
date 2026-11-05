@@ -21,12 +21,14 @@
 //! - **Case-insensitive, with no flag.** Game paths are Windows and the live
 //!   manifests are lowercase anyway; `girsync` defaults `--case-sensitive` to
 //!   `false` and this port hardcodes that. This folding is **not**
-//!   [`crate::util::path::path_key`]: the globs go through the `glob` crate's
-//!   own per-character match, while `path_key` is the ASCII-only map key for
-//!   path identity. The rules differ deliberately. A glob is a containment
-//!   predicate over a user-written pattern, so matching broadly is the point;
-//!   `path_key` over-merges at its peril, because two keys that collapse there
-//!   silently drop or keep the wrong file.
+//!   [`crate::util::path::path_key`]: both fold ASCII case only and leave
+//!   non-ASCII bytes exact, but the glob crate applies its per-character fold
+//!   on every host as a containment predicate over a user-written pattern,
+//!   while `path_key` is the map key for path identity and folds only on
+//!   Windows. The rules differ deliberately. A glob is a containment predicate
+//!   over a user-written pattern, so matching broadly is the point; `path_key`
+//!   over-merges at its peril, because two keys that collapse there silently
+//!   drop or keep the wrong file.
 //! - **`--exclude` beats `--include`.** Last-writer-wins would be the
 //!   alternative; exclusion wins so a narrow `--include` can always be widened
 //!   down without reordering anything.

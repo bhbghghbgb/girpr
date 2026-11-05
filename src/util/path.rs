@@ -245,12 +245,13 @@ pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
 /// question.
 ///
 /// This is **not** the folding `--include` / `--exclude` matching uses. That
-/// match is case-insensitive through the `glob` crate's own per-character
-/// folding (see [`crate::repair::scope::filter`]); the two rules differ
+/// match is case-insensitive through the `glob` crate's per-character
+/// `eq_ignore_ascii_case` (see [`crate::repair::scope::filter`]), which is
+/// ASCII-only like this one but applies on every host. The two rules differ
 /// deliberately. A glob is a containment predicate over a user-written pattern,
 /// where matching broadly is the point. This function is a map key for path
 /// *identity*, where over-merging silently drops or keeps the wrong file, so it
-/// stays ASCII-only.
+/// folds only where the filesystem does (Windows) and stays ASCII-only there.
 pub(crate) fn path_key(rel: &str) -> String {
     if cfg!(windows) {
         rel.to_ascii_lowercase()
