@@ -807,6 +807,14 @@ pub struct MockOpts {
     /// still answers. Models the branch endpoint failing after the first wave
     /// has already been issued, so error precedence is testable.
     pub fail_branches: bool,
+    /// Hold the `getGameConfigs` answer until `getGameBranches` has been served.
+    ///
+    /// The first wave issues both calls concurrently, so without this the
+    /// request that is merely *issued* is not deterministic. Holding the config
+    /// answer pins the branch as the first of the two to settle, which lets a
+    /// test assert on a branch error that is already in hand rather than on
+    /// polling order.
+    pub config_after_branches: bool,
     /// Serve every chunk request as `404`. Models the blob routes' real answer
     /// to an id they do not have: the live CDN (`autopatchhk.yuanshen.com`,
     /// `Server: AliyunOSS`) answers `404` with an `application/xml` `NoSuchKey`
@@ -953,6 +961,10 @@ struct Responses {
     latest_tag: String,
     fail_chunks: bool,
     fail_branches: bool,
+    /// Hold the config answer until the branch answer has been served.
+    config_after_branches: bool,
+    /// Signalled once the branch answer has been served.
+    branches_served: tokio::sync::Notify,
     not_found_chunks: bool,
     not_found_manifests: bool,
     corrupt_first_chunks: u32,
@@ -1138,6 +1150,8 @@ fn build_responses(
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
         fail_branches: opts.fail_branches,
+        config_after_branches: opts.config_after_branches,
+        branches_served: tokio::sync::Notify::new(),
         not_found_chunks: opts.not_found_chunks,
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
@@ -1199,9 +1213,13 @@ async fn serve_one(
     let mut cut: Option<usize> = None;
     // Set when this response is the first successful chunk body.
     let mut first_chunk_body = false;
+    let is_branch = target.contains("getGameBranches");
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
+        if r.config_after_branches {
+            r.branches_served.notified().await;
+        }
         ("200 OK", "application/json", r.configs.clone())
-    } else if target.contains("getGameBranches") {
+    } else if is_branch {
         if r.fail_branches {
             (
                 "500 Internal Server Error",
@@ -1318,6 +1336,13 @@ async fn serve_one(
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())
     };
+
+    // The branch answer is chosen; let a held config answer proceed. The
+    // request itself was already logged above, so a test can assert it was
+    // issued regardless of when the client reads either response.
+    if is_branch {
+        r.branches_served.notify_one();
+    }
 
     // The plan phase is over by the time a chunk is requested, so this is the
     // deterministic seam for "the install changed between planning and

@@ -513,12 +513,17 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
     // turn the authoritative mode refusal into a metadata error: the mode
     // check runs after the config answer but before the branch result is used,
     // and a still-pending branch call is dropped, so exit 1 wins over exit 2.
+    //
+    // Holding the config answer until the branch answer is chosen pins the
+    // branch as issued and failed, rather than leaving that to which request
+    // the selector happens to poll first.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
         MockOpts {
             download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
             fail_branches: true,
+            config_after_branches: true,
             ..Default::default()
         },
     )
