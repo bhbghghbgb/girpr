@@ -27,8 +27,8 @@ default when omitted: keep currently selected, else `en-us`, see Step 1). `--aud
 matched case-insensitively, `_` is accepted for `-`, and the display names `chinese` /
 `english` / `english(us)` / `japanese` / `korean` are aliases; anything else is a usage error
 (exit 1), as is mixing `none` with a language. Unknown flags, missing/duplicate-incompatible
-values and `io_threads = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
-`io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
+values and `jobs = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
+`jobs ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
 `1` usage/config error, `2` metadata/network error (including a malformed manifest
@@ -158,7 +158,7 @@ passes share their listing: because nothing was deleted, the after pass names
 only candidates the before pass did not, so each candidate is reported once.
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
-Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
+Concurrency: semaphore of `jobs` over **files**; chunks within a file strictly sequential
 (HDD-friendly). Retries: 5× per file.
 
 Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
@@ -217,7 +217,7 @@ Per file `F`:
    | mixed re-flow | some | some | the sum over those chunks |
 
    So the common repair case stages **nothing**. The budget is **run-level**, reserved per
-   file the way `--max-write-bytes` reserves, because `io_threads` files are in flight at
+   file the way `--max-write-bytes` reserves, because `jobs` files are in flight at
    once. A file that cannot get its reservation does not fail: it is written in the ordered
    direction instead, which produces the same file with less reuse.
 3. **Patch** — the wrong chunks are written, ascending in the RAM-staged tier and in the
@@ -393,9 +393,9 @@ are already right where they belong, the temp path resumes the `*_tmp` prefix).
 - During: transient per active file = the file's **growth** under the in-place path
   (`≤ 1 × file size` under `--repair-mode temp`, where the `_tmp` grows beside the old
   file) plus pipe buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip
-  staging, no in-game manifest cache. Peak ≈ `io_threads × largest growth`, which is 0
+  staging, no in-game manifest cache. Peak ≈ `jobs × largest growth`, which is 0
   for a same-size repair. Under `--repair-mode temp` the peak is
-  `io_threads × largest_file`, and with `io_threads=1` the tool needs only
+  `jobs × largest_file`, and with `jobs=1` the tool needs only
   `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
   missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).

@@ -688,7 +688,7 @@ fn note_write(ctx: &FileCtx, writes: &mut FileWrites, n: u64) -> Result<()> {
 ///
 /// Reserving **before** the write is what makes the ceiling meaningful: the
 /// bytes land in the install as soon as `write_all` returns, so a
-/// check-then-write under `--io-threads N` would overshoot by up to N-1
+/// check-then-write under `--jobs N` would overshoot by up to N-1
 /// buffers. On refusal the file is left where it is, and whatever was
 /// already correct in it stays correct: the next run re-verifies and
 /// continues.

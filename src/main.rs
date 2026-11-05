@@ -46,7 +46,7 @@ fn main() -> ExitCode {
     // The file tasks inside the run do blocking disk I/O on the async
     // runtime's workers. One worker beyond the file window keeps timers and
     // network polling able to run while every file task is waiting on the
-    // disk, so raising `--io-threads` does not starve the runtime itself.
+    // disk, so raising `--jobs` does not starve the runtime itself.
     let available = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);

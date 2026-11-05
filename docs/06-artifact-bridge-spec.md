@@ -426,7 +426,7 @@ listeners** (§6.3 for why):
 | `--hyp-base`, `--sophon-base` | the listener's own origins | all |
 | `--include "<the `path` field of `patchmaps/<id>.json>`" | exactly one path | all |
 | `--purge-only` | the files-cleanup, without the repair loop | `removed` only |
-| `--io-threads 1` | one planned file; determinism over throughput | all |
+| `--jobs 1` | one planned file; determinism over throughput | all |
 | `--fail-fast` | a shim fault should stop the run, not spend the budget discovering the same 404 on every remaining file | all |
 | `--output json` | NDJSON, so the driver reads records by name — `report`, `plan`, `summary` — rather than scraping `key=value` | all |
 | `--repair-mode inplace` | the mode is **asked for**, so the run's path is the one the claim is about rather than the one the mode resolver happens to pick | all but `removed` |

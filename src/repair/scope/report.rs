@@ -214,7 +214,7 @@ impl PlanTotals {
             purge_bytes: purge.map_or(0, |p| p.total_bytes),
             // The largest single chunk is what bounds peak RAM (a whole chunk is
             // buffered compressed + uncompressed) and, multiplied by
-            // `io_threads`, transient disk. Worth reporting even though nothing
+            // `jobs`, transient disk. Worth reporting even though nothing
             // enforces it: it is the number a `--max-chunk-bytes` ceiling would
             // take, and it is one line to print.
             max_chunk_bytes: plan
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
-        // peak transient disk is io_threads x that.
+        // peak transient disk is jobs x that.
         let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(

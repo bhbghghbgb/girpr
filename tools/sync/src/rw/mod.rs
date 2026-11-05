@@ -19,13 +19,14 @@
 //! The claim "the limiter covers file reads and writes" means the ones the limiter
 //! can order, which is every one of them that overlaps with another.
 //!
-//! ## Why the name, given `girpr` has an `--io-threads`
+//! ## Why the name, given `girpr` has a `--jobs`
 //!
-//! The sibling binary's `--io-threads` means "this many files concurrently, with
-//! the chunks inside one file strictly sequential" — concurrency *within* one file
-//! stream, bounded per file. Nothing here chunks a stream. Different binary,
-//! different semantics, no shared code; `rw` is precisely what keeps the two from
-//! being conflated in a log line or a commit message.
+//! The sibling binary's `--jobs` (formerly `--io-threads`, now an alias) means
+//! "this many files concurrently, with the chunks inside one file strictly
+//! sequential" — concurrency *within* one file stream, bounded per file. Nothing
+//! here chunks a stream. Different binary, different semantics, no shared code;
+//! `rw` is precisely what keeps the two from being conflated in a log line or a
+//! commit message.
 //!
 //! ## What a permit costs
 //!

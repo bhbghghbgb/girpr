@@ -297,7 +297,7 @@ file fetches its correct chunks too, and only the runtime hard stop bounds it.
   run exits `5`.
 
 The reservation is a compare-and-swap taken **before** each fetch, not a
-check-then-add: under `--io-threads N` a check overshoots by up to N−1 chunks,
+check-then-add: under `--jobs N` a check overshoots by up to N−1 chunks,
 and a ceiling is not a guideline. Once the fetch ends, the reservation is
 reconciled with the bytes the attempt really delivered — a failed attempt's
 partial body is charged, not refunded — and a settle that carries the live
@@ -323,7 +323,7 @@ Bytes written are also not knowable from the plan — reuse success is decided p
 chunk at runtime, against bytes that may not be there. So this is a mid-flight
 stop and nothing else.
 
-The number that matters for capacity is *peak* disk (`io_threads × largest
+The number that matters for capacity is *peak* disk (`jobs × largest
 file`). This bounds the cumulative counterpart, which is what a runaway actually
 blows.
 

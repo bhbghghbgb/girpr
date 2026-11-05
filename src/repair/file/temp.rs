@@ -519,7 +519,7 @@ pub(super) async fn write_downloaded_chunk(chunk: DownloadedChunk<'_>) -> Result
     // Reserve before fetching, not after: the pre-flight estimate is a *lower
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
     // compare-and-swap is what actually bounds the run. Reserving the manifest's
-    // `compressed_size` keeps the stop exact under `--io-threads N` instead of
+    // `compressed_size` keeps the stop exact under `--jobs N` instead of
     // overshooting by up to N-1 chunks, and the real byte count is folded back
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;

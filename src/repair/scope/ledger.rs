@@ -376,7 +376,7 @@ impl Summary {
     /// counter — all or nothing.
     ///
     /// Reserving *before* the fetch is what bounds the run under
-    /// `--io-threads N`: with N files in flight, a check-then-add would
+    /// `--jobs N`: with N files in flight, a check-then-add would
     /// overshoot by up to N-1 chunks. Returns `false` — having added nothing —
     /// when the ceiling blocks the reservation, which is the caller's signal
     /// to stop the run.

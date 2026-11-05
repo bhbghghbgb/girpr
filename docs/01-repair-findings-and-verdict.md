@@ -182,7 +182,7 @@ Extra behavior changes recommended (beyond 1:1 port):
   dry-run lists bytes. Expected set per §3 v1 scope; keep minimal
   (`config.ini` + a legacy in-install `girpr.lock` + manifest membership +
   blacklisted paths + `audio_lang_*` / `Audio_*_pkg_version` pattern).
-- Bound file parallelism (`--io-threads`; chunks sequential within a file) for HDD vs SSD.
+- Bound file parallelism (`--jobs`; chunks sequential within a file) for HDD vs SSD.
 - Skip SDK/WPF downloads and dispatcher persistent writes in v1 (game launches without them; add
   `--with-sdk --with-wpf` later if a channel proves otherwise). Always move audio cache→res if the
   game config names distinct dirs (Starward parity, prevents stranded duplicates).
