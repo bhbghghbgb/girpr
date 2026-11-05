@@ -463,7 +463,7 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 ///
 /// The bytes go to a temp sibling in the destination directory (same volume, so
 /// the publish is a rename, not another copy), and only a complete temp file is
-/// renamed over `target`. [`util::path::temp_sibling`] names that sibling, so
+/// renamed over `target`. `util::path::temp_sibling` names that sibling, so
 /// this writer and the other atomic publishes agree on the whole-name rule. On
 /// any failure the temp sibling is removed, `target` is left exactly as it was,
 /// and the caller keeps `src`.
@@ -858,7 +858,7 @@ mod tests {
     }
 
     /// A target that has no file name is refused before a temp sibling is
-    /// named: [`util::path::temp_sibling`] would otherwise invent a name and
+    /// named: `util::path::temp_sibling` would otherwise invent a name and
     /// publish under something the caller never asked for.
     #[test]
     fn a_target_without_a_file_name_is_refused() {

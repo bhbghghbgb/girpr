@@ -12,7 +12,7 @@
 //! tickers from interleaving into the same stream.
 //!
 //! [`emit`] is the only writer. Its policy for every record: render once,
-//! mirror the rendered line to the log, write stdout through [`write_line`],
+//! mirror the rendered line to the log, write stdout through `write_line`,
 //! never panic, and never change the exit code.
 
 use std::collections::HashSet;
