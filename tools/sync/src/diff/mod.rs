@@ -142,14 +142,14 @@ pub fn pair_verdict(
     let trusted = stat.trusted_differs(s.size, s.mtime_ns, t.size, t.mtime_ns);
     if trusted.any() {
         let mut fields = trusted.fields();
-        // `trusted.any()` guarantees at least one field, and `fields()` yields size
-        // first — so the first is the one that settles the pair and `both` says
-        // whether the other does too.
-        let field = fields.next().expect("trusted.any() implies one field");
-        return Verdict::Stat {
-            field,
-            both: fields.next().is_some(),
-        };
+        // `trusted.any()` guarantees at least one field; the `if let` keeps a
+        // disagreement between the two predicates from becoming a panic.
+        if let Some(field) = fields.next() {
+            return Verdict::Stat {
+                field,
+                both: fields.next().is_some(),
+            };
+        }
     }
     let need = required.of(key);
     let differs = hashes_differ(&s.hashes, &t.hashes, need);

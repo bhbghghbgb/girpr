@@ -237,9 +237,10 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // it is not worth refusing the flag over, but it is worth the `info!` below —
     // a user who asked for two counters should be able to see what they got.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         note = "only the disk side has a filesystem; the record side draws no permit",
         "rw limits"
     );

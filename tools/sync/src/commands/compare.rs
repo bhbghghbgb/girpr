@@ -52,9 +52,10 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
     // One runtime for the whole run.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         "rw limits"
     );
     if common.dry_run {

@@ -131,9 +131,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // phase would be two limiters wearing one flag's name, and two pools would
     // each size themselves from the same number.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         "rw limits"
     );
 

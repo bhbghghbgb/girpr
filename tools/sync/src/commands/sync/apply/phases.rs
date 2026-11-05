@@ -2,7 +2,7 @@
 //! remove-unknown-dirs, and prune-dst-cache. `copy_files` delegates the
 //! per-file work to [`super::copy::copy_one`].
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::{debug, info, trace};
@@ -114,10 +114,11 @@ impl<'a> Applier<'a> {
     /// transaction), not because the writes want to be serialised: the lock is held
     /// for one `put`, never across a copy.
     pub(crate) fn copy_files(&self, plan: &Plan) -> Result<usize> {
+        let threads = self.rw.pool()?.current_num_threads();
         info!(
             files = plan.copy.len(),
             rw = %self.rw.describe(),
-            threads = self.rw.pool().current_num_threads(),
+            threads,
             "copy start"
         );
         let copy_total = plan.copy.len();
@@ -150,7 +151,8 @@ impl<'a> Applier<'a> {
         // inside `put` only makes another worker's `put` wait; that worker holds no
         // permit and needs none.
         let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
-        let results = self.rw.pool().install(|| {
+        let pool = self.rw.pool()?;
+        let results = pool.install(|| {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
@@ -186,7 +188,7 @@ impl<'a> Applier<'a> {
                     // permitted the `COPY` lines come out in completion order rather
                     // than plan order.
                     {
-                        let _guard = emit.lock().expect("emit lock is never poisoned");
+                        let _guard = emit.lock().map_err(|_| anyhow!("emit lock is poisoned"))?;
                         self.report.emit(
                             Record::path("COPY", &item.rel).put("because", item.because.as_str()),
                         );
@@ -197,7 +199,7 @@ impl<'a> Applier<'a> {
                     // thresholds after the last file is already durable.
                     cache
                         .lock()
-                        .expect("cache lock is never poisoned")
+                        .map_err(|_| anyhow!("cache lock is poisoned"))?
                         .put(&item.rel, &rec)?;
                     Ok(())
                 })
@@ -217,7 +219,7 @@ impl<'a> Applier<'a> {
         // its uncommitted rows are discarded with the transaction.
         cache
             .into_inner()
-            .expect("cache lock is never poisoned")
+            .map_err(|_| anyhow!("cache lock is poisoned"))?
             .commit()?;
         Ok(copied)
     }

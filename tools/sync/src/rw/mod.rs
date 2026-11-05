@@ -71,7 +71,7 @@ mod fixtures;
 pub use gate::{RwLimiter, RwPermit};
 pub use limits::{RwLimits, RwSide};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use tracing::warn;
@@ -121,10 +121,7 @@ impl RwRuntime {
                     builder = builder.stack_size(size);
                 }
                 let handle = builder.spawn(move || thread.run())?;
-                spawned
-                    .lock()
-                    .expect("worker handle lock is never poisoned")
-                    .push(handle);
+                worker_handles(&spawned).push(handle);
                 Ok(())
             })
             .build();
@@ -165,10 +162,10 @@ impl RwRuntime {
 
     /// The pool every parallel phase installs into. One pool for the whole run, so
     /// two phases cannot each size their own and quietly double the thread count.
-    pub fn pool(&self) -> &rayon::ThreadPool {
+    pub fn pool(&self) -> Result<&rayon::ThreadPool> {
         self.pool
             .as_ref()
-            .expect("rw pool is only taken while the runtime is dropped")
+            .ok_or_else(|| anyhow!("rw pool is only taken while the runtime is dropped"))
     }
 
     /// One permit for one side's read or write.
@@ -204,14 +201,22 @@ impl Drop for RwRuntime {
 /// from inside its own pool; a thread cannot join itself.
 fn join_workers(workers: &Arc<Mutex<Vec<JoinHandle<()>>>>) {
     let current = std::thread::current().id();
-    let mut handles = workers
-        .lock()
-        .expect("worker handle lock is never poisoned");
+    let mut handles = worker_handles(workers);
     for handle in handles.drain(..) {
         if handle.thread().id() != current {
             let _ = handle.join();
         }
     }
+}
+
+/// The worker-handle list.
+///
+/// The lock guards only the list, never user code, so a poisoned guard still
+/// holds a usable list; recover it rather than failing the run.
+fn worker_handles(
+    workers: &Mutex<Vec<JoinHandle<()>>>,
+) -> std::sync::MutexGuard<'_, Vec<JoinHandle<()>>> {
+    workers.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 #[cfg(test)]
@@ -250,7 +255,7 @@ mod tests {
         for _ in 0..4 {
             let barrier = Arc::clone(&barrier);
             let tx = tx.clone();
-            rw.pool().spawn(move || {
+            rw.pool().unwrap().spawn(move || {
                 MARK.with(|_| ());
                 barrier.wait();
                 tx.send(()).unwrap();
