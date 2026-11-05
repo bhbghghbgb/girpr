@@ -75,7 +75,6 @@
 
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
-#[path = "common/mod.rs"]
 mod common;
 #[path = "artifact_bridge/server.rs"]
 mod server;

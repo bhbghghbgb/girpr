@@ -26,7 +26,6 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "common/mod.rs"]
 mod common;
 
 use clap::Parser;

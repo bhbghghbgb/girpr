@@ -25,7 +25,6 @@
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
-#[path = "common/mod.rs"]
 mod common;
 
 use std::path::{Path, PathBuf};
