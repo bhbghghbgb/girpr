@@ -311,6 +311,50 @@ fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
 }
 
 #[test]
+fn the_io_threads_alias_validates_at_the_same_jobs_ceiling() {
+    // The ceiling is checked before `--audio`, so a bad audio value after the
+    // jobs flag shows which check the run reached. At 1024 the alias passes
+    // jobs validation and fails on the audio; at 1025 it fails on the jobs
+    // ceiling first, with the same usage error `--jobs` produces. Neither case
+    // builds the runtime or touches a game directory.
+    let (code, _, stderr) = run(&[
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1024",
+        "--audio",
+        "fr-fr",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("usage error: unknown audio lang"),
+        "the alias accepted the ceiling and reached the next check:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("--jobs must be <="),
+        "the ceiling itself must not be rejected:\n{stderr}"
+    );
+
+    let (code, _, stderr) = run(&[
+        "--game-path",
+        ".",
+        "--biz",
+        "hk4e_global",
+        "--io-threads",
+        "1025",
+        "--audio",
+        "fr-fr",
+    ]);
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("usage error: --jobs must be <= 1024"),
+        "one past the ceiling is the same usage error through the alias:\n{stderr}"
+    );
+}
+
+#[test]
 fn plan_out_help_documents_every_serialized_field() {
     // R-9: `RepairEntry` serializes `mode` and `extra_bytes` too. The help is
     // the operator-facing description of the document, so it must name the

@@ -467,28 +467,30 @@ mod tests {
     }
 
     #[test]
-    fn an_out_of_range_jobs_is_a_usage_error_naming_the_flag() {
-        let parse = |jobs: usize| {
+    fn an_out_of_range_jobs_is_a_usage_error_naming_the_flag_through_either_spelling() {
+        let parse = |flag: &str, jobs: usize| {
             Args::parse_from([
                 "girpr",
                 "--game-path",
                 ".",
                 "--biz",
                 "hk4e_global",
-                "--jobs",
+                flag,
                 &jobs.to_string(),
             ])
         };
 
-        // The largest accepted value still reaches the file window unchanged.
-        assert_eq!(parse(MAX_JOBS).into_ctx().unwrap().jobs, MAX_JOBS);
+        for flag in ["--jobs", "--io-threads"] {
+            // The largest accepted value still reaches the file window unchanged.
+            assert_eq!(parse(flag, MAX_JOBS).into_ctx().unwrap().jobs, MAX_JOBS);
 
-        for jobs in [MAX_JOBS + 1, usize::MAX] {
-            let err = parse(jobs).into_ctx().unwrap_err().to_string();
-            assert!(
-                err.contains(&format!("--jobs must be <= {MAX_JOBS}")),
-                "{jobs}: {err}"
-            );
+            for jobs in [MAX_JOBS + 1, usize::MAX] {
+                let err = parse(flag, jobs).into_ctx().unwrap_err().to_string();
+                assert!(
+                    err.contains(&format!("--jobs must be <= {MAX_JOBS}")),
+                    "{flag} {jobs}: {err}"
+                );
+            }
         }
     }
 
