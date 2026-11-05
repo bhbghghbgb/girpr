@@ -237,9 +237,9 @@ until the main tasks and rework are done.
 | F136 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | The mock `serve` spawns listener/per-connection tasks with no shutdown, relying on runtime teardown. | todo |
 | F137 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | `OrderedResults` is only unit-tested via manual `push`, not driven through an out-of-order stream. | todo |
 | F138 | MANIFEST-01 review | `src/repair/phases/manifest.rs` | `local_reuse_map` still awaits every fetch after a failure; early exit would need a different policy. | dropped (speculative future policy; shared fan-out already supports it) |
-| F139 | JOBS-01 review | `tests/cli_contract.rs`, `src/cli.rs` | No boundary case through the `--io-threads` alias; only `--jobs` is exercised at the ceiling. | todo |
-| F140 | JOBS-01 review | `src/cli.rs` | `--help` no longer prints clap's `[default: 4]` because the field is `Option<usize>`; the prose still states it. | todo |
-| F141 | JOBS-01 review | `src/cli.rs` | `MAX_JOBS = 1024` still asks for 1025 worker threads; a lower ceiling may be worth revisiting if runtime construction is the real risk. | todo |
+| F139 | JOBS-01 review | `tests/cli_contract.rs`, `src/cli.rs` | No boundary case through the `--io-threads` alias; only `--jobs` is exercised at the ceiling. | completed |
+| F140 | JOBS-01 review | `src/cli.rs` | `--help` no longer prints clap's `[default: 4]` because the field is `Option<usize>`; the prose still states it. | completed |
+| F141 | JOBS-01 review | `src/cli.rs` | `MAX_JOBS = 1024` still asks for 1025 worker threads; a lower ceiling may be worth revisiting if runtime construction is the real risk. | completed |
 | F142 | LOGGING-01 review | `src/logging.rs` | `FILE_SINKS` is append-only for the process lifetime; repeated installs retain every sink and handle. | completed |
 | F143 | LOGGING-01 review | `src/logging.rs` | No test drives `install_sink` through `flush_log`; only `flush_sinks` is pinned. | completed |
 | F144 | LOGGING-01 review | `src/logging.rs` | Only the first sink's flush error is reported; later failures are silent by design. | completed |
@@ -336,6 +336,9 @@ until the main tasks and rework are done.
 | F235 | LOGGING-02 review | `src/logging.rs` | `FILE_SINKS` could be `Mutex<Option<FileSink>>` so the one-sink invariant lives in the type. | todo |
 | F236 | LOGGING-02 review | `src/logging.rs` | No test covers the rejected-install path (a second `init_tracing` does not register a handle). | todo |
 | F237 | LOGGING-02 review | `src/logging.rs` | `flush_log`'s doc still describes visiting "more than one sink", which it can no longer reach. | todo |
+| F238 | JOBS-02 review | `tests/cli_contract.rs` | The help test searches all of stdout for `[default: 4]`; scoping it to the `--jobs` block would avoid a false pass. | todo |
+| F239 | JOBS-02 review | `src/cli.rs` | The `[default: 4]` help line is hand-maintained apart from `DEFAULT_JOBS`. | todo |
+| F240 | JOBS-02 review | `tests/cli_contract.rs` | The binary-level boundary pair is alias-only; a `--jobs` pair would mirror it at process level. | todo |
 
 ## Follow-up batches
 
@@ -393,7 +396,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | SYNC-01 | F123, F125 | todo | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | todo | Wave D; metadata classification tests, label constants and doc precision; low |
 | MANIFEST-02 | F136, F137 | todo | Wave D; manifest mock shutdown and out-of-order stream coverage; low |
-| JOBS-02 | F139, F140, F141 | pending_review | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
+| JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
+| JOBS-03 | F238, F239, F240 | todo | Wave E; help assertion scope, default literal and binary parity; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | todo | Wave E; sink registry typing, rejected-install test and flush doc; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
