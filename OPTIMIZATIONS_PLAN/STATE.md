@@ -391,7 +391,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-02 | F131, F132, F133, F134, F135 | todo | Wave D; metadata classification tests, label constants and doc precision; low |
 | MANIFEST-02 | F136, F137 | todo | Wave D; manifest mock shutdown and out-of-order stream coverage; low |
 | JOBS-02 | F139, F140, F141 | todo | Wave D; alias boundary case, help default annotation and ceiling review; low |
-| LOGGING-02 | F142, F143, F144 | in_progress | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low |
+| LOGGING-02 | F142, F143, F144 | pending_review | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
