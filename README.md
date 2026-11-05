@@ -121,10 +121,13 @@ flowchart TD
 
 **Machine contracts (do not break without updating tests + this table).**
 
-- stdout: `REPORT …` once after metadata; `PROGRESS …` every 10 s;
-  `PLAN …` with `--print-plan`; `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
-  `--output json` emits every one of those lines as an NDJSON object instead —
-  same records, same order, each carrying an `event` name.
+- stdout is a **record stream: one record per event**, and the order is fixed —
+  `REPORT …` once after metadata, then `PLAN …` when `--print-plan` asked for it,
+  then zero or more `PROGRESS …` ticks (a single ticker, every 10 s), then
+  exactly one `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`
+  last. No phase emits `SUMMARY`; only the caller does, once.  `--output json`
+  emits the same records in the same order as NDJSON objects, each carrying an
+  `event` name.
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
