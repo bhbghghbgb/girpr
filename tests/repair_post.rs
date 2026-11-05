@@ -520,6 +520,7 @@ async fn deprecated_files_call_carries_the_per_launcher_channel() {
     let mock = MockServer::start(
         fx,
         MockOpts {
+            biz: Some(Biz::Hk4eBilibili),
             deprecated_files: vec!["old/legacy.dll".to_string()],
             ..Default::default()
         },

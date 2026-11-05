@@ -66,8 +66,6 @@ pub struct GameConfig {
     pub blacklist_dir: String,
     #[serde(default)]
     pub enable_resource_blacklist: bool,
-    // Deserialized for completeness; no phase reads the game-id wrapper.
-    #[allow(dead_code)]
     #[serde(default)]
     pub game: Option<GameIdRef>,
 }
@@ -100,12 +98,50 @@ pub struct GameBranchPackage {
 pub struct ChunkBuild {
     #[serde(default)]
     pub build_id: String,
-    // Deserialized for completeness; the run compares the build id, not its tag.
-    #[allow(dead_code)]
     #[serde(default)]
     pub tag: String,
     #[serde(default)]
     pub manifests: Vec<ChunkManifestMeta>,
+}
+
+/// The identity a response declares for itself, if any.
+///
+/// An absent or empty field carries no identity, so there is nothing it can
+/// disagree with. Callers treat that as "unchecked", not as a match.
+fn declared_identity(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| !v.is_empty())
+}
+
+/// Return the declared identity when it is present and names something other
+/// than the one the request asked for.
+///
+/// `requested` is the identity the run resolved for the request. An empty
+/// `requested` is not an identity either (for example a branch tag the API
+/// omitted), so it is not checked.
+fn identity_mismatch<'a>(declared: Option<&'a str>, requested: &str) -> Option<&'a str> {
+    if requested.is_empty() {
+        return None;
+    }
+    declared_identity(declared).filter(|d| *d != requested)
+}
+
+impl GameConfig {
+    /// The `game.biz` this response declares, when it disagrees with `biz`.
+    ///
+    /// The field is optional and may be empty; either way there is no identity
+    /// to refuse.
+    pub(crate) fn biz_mismatch(&self, biz: &str) -> Option<&str> {
+        identity_mismatch(self.game.as_ref().map(|g| g.biz.as_str()), biz)
+    }
+}
+
+impl ChunkBuild {
+    /// The `tag` this response declares, when it disagrees with `tag`.
+    ///
+    /// An empty response tag carries no identity.
+    pub(crate) fn tag_mismatch(&self, tag: &str) -> Option<&str> {
+        identity_mismatch(Some(self.tag.as_str()), tag)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -769,5 +805,72 @@ mod tests {
             sophon_build_url(base, &pkg, Some("5.0.0")),
             "http://sophon.test/api/getBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword&tag=5.0.0"
         );
+    }
+
+    /// Only a present, non-empty identity that names something else is a
+    /// mismatch; absence and an empty value carry nothing to check, and an
+    /// empty request has no identity to compare against.
+    #[test]
+    fn identity_mismatch_checks_only_a_present_different_value() {
+        assert_eq!(identity_mismatch(None, "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some(""), "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some("5.1.0"), "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some("5.0.0"), "5.1.0"), Some("5.0.0"));
+        assert_eq!(identity_mismatch(Some("5.0.0"), ""), None);
+    }
+
+    fn config_with_game(game: Option<GameIdRef>) -> GameConfig {
+        GameConfig {
+            exe_file_name: String::new(),
+            audio_pkg_scan_dir: String::new(),
+            audio_pkg_res_dir: String::new(),
+            audio_pkg_cache_dir: String::new(),
+            default_download_mode: String::new(),
+            res_category_dir: String::new(),
+            blacklist_dir: String::new(),
+            enable_resource_blacklist: false,
+            game,
+        }
+    }
+
+    #[test]
+    fn game_config_biz_mismatch_is_reported_only_when_declared() {
+        let absent = config_with_game(None);
+        assert_eq!(absent.biz_mismatch("hk4e_global"), None);
+
+        let empty = config_with_game(Some(GameIdRef {
+            id: "gopR6Cufr3".into(),
+            biz: String::new(),
+        }));
+        assert_eq!(empty.biz_mismatch("hk4e_global"), None);
+
+        let matching = config_with_game(Some(GameIdRef {
+            id: "gopR6Cufr3".into(),
+            biz: "hk4e_global".into(),
+        }));
+        assert_eq!(matching.biz_mismatch("hk4e_global"), None);
+
+        let different = config_with_game(Some(GameIdRef {
+            id: "1Z8W5NHUQb".into(),
+            biz: "hk4e_cn".into(),
+        }));
+        assert_eq!(
+            different.biz_mismatch("hk4e_global"),
+            Some("hk4e_cn"),
+            "a present biz for another launcher is a mismatch"
+        );
+    }
+
+    #[test]
+    fn chunk_build_tag_mismatch_is_reported_only_when_declared() {
+        let build = |tag: &str| ChunkBuild {
+            build_id: "b".into(),
+            tag: tag.into(),
+            manifests: vec![],
+        };
+        assert_eq!(build("").tag_mismatch("5.1.0"), None);
+        assert_eq!(build("5.1.0").tag_mismatch("5.1.0"), None);
+        assert_eq!(build("5.0.0").tag_mismatch("5.1.0"), Some("5.0.0"));
+        assert_eq!(build("5.0.0").tag_mismatch(""), None);
     }
 }

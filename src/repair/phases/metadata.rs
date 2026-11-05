@@ -257,6 +257,16 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
             return Err(failure);
         }
     };
+    // The response names the game it describes; a run for another biz must not
+    // trust any of its paths or mode. An absent or empty `game.biz` has no
+    // identity to check and is accepted.
+    if let Some(declared) = config.biz_mismatch(ctx.biz.as_str()) {
+        drain(version_read).await;
+        return Err(RunFailure::metadata(anyhow::anyhow!(
+            "getGameConfigs answered biz {declared:?}, but this run requested {:?}",
+            ctx.biz.as_str()
+        )));
+    }
     let local_version = match version_read.await {
         Ok(inner) => inner?,
         Err(e) => return Err(LocalRead::Version.join_failure(e)),
@@ -374,7 +384,17 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         .context("getBuild(latest)")
         .map_err(RunFailure::metadata)
     {
-        Ok(build) => build,
+        Ok(build) => match build.tag_mismatch(&latest) {
+            Some(declared) => {
+                drain(ignore_read).await;
+                drain(blacklist_read).await;
+                drain(audio_read).await;
+                return Err(RunFailure::metadata(anyhow::anyhow!(
+                    "getBuild(latest) answered tag {declared:?}, but the branch requested {latest:?}"
+                )));
+            }
+            None => build,
+        },
         Err(failure) => {
             drain(ignore_read).await;
             drain(blacklist_read).await;
@@ -384,8 +404,18 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     };
     let local_build = match (local_version.as_deref(), local_pending.wait().await) {
         (Some(lv), Some(Ok(b))) => {
-            tracing::info!("local build manifest loaded for dedup (tag={lv})");
-            Some(b)
+            // A local build is only a reuse optimization. A response whose own
+            // tag names a different build is not the local one, so treat it
+            // like an unavailable lookup rather than failing the run.
+            if let Some(declared) = b.tag_mismatch(lv) {
+                tracing::warn!(
+                    "local build answered tag {declared:?}, not the local version {lv:?}; full-fetch fallback"
+                );
+                None
+            } else {
+                tracing::info!("local build manifest loaded for dedup (tag={lv})");
+                Some(b)
+            }
         }
         (_, Some(Err(e))) => {
             tracing::warn!("local build unavailable ({e}); full-fetch fallback");
@@ -503,6 +533,17 @@ mod tests {
     /// Serve `getGameConfigs` and `getGameBranches` on an ephemeral loopback
     /// port; any other target is a `404`.
     async fn serve(config: Reply, branch: Reply) -> String {
+        serve_metadata(config, branch, NOT_FOUND, None).await
+    }
+
+    /// Serve the metadata targets. A `getBuild` carrying a `tag` is answered by
+    /// `local` when one is given, and by `latest` otherwise.
+    async fn serve_metadata(
+        config: Reply,
+        branch: Reply,
+        latest: Reply,
+        local: Option<Reply>,
+    ) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let base = format!("http://{}", listener.local_addr().expect("addr"));
         tokio::spawn(async move {
@@ -512,6 +553,8 @@ mod tests {
                 };
                 let config = config.clone();
                 let branch = branch.clone();
+                let latest = latest.clone();
+                let local = local.clone();
                 tokio::spawn(async move {
                     let mut buf = vec![0u8; 8192];
                     let mut got = 0;
@@ -537,6 +580,11 @@ mod tests {
                         &branch
                     } else if target.contains("getGameConfigs") {
                         &config
+                    } else if target.contains("getBuild") {
+                        match (&local, target.contains("tag=")) {
+                            (Some(local), true) => local,
+                            _ => &latest,
+                        }
                     } else {
                         &NOT_FOUND
                     };
@@ -749,5 +797,156 @@ mod tests {
             !text.contains("getGameConfigs"),
             "the config call succeeded, so it must not be blamed: {text}"
         );
+    }
+
+    const CHUNK_CONFIG: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"game":{"id":"gopR6Cufr3","biz":"hk4e_global"},"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+    const BRANCH: &str = r#"{"retcode":0,"message":"OK","data":{"game_branches":[{"main":{"package_id":"pkg","branch":"main","password":"","tag":"5.1.0"}}]}}"#;
+    const LATEST_BUILD: &str =
+        r#"{"retcode":0,"message":"OK","data":{"build_id":"b","tag":"5.1.0","manifests":[]}}"#;
+
+    /// A response that names the biz and tag the run asked for is accepted, and
+    /// its identity reaches the caller unchanged.
+    #[tokio::test]
+    async fn matching_biz_and_tag_are_accepted() {
+        let base = serve_metadata(
+            Reply::Body(CHUNK_CONFIG),
+            Reply::Body(BRANCH),
+            Reply::Body(LATEST_BUILD),
+            None,
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "identity_match");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let meta = fetch(&ctx, &dir)
+            .await
+            .expect("a matching identity is accepted");
+        assert_eq!(meta.latest, "5.1.0");
+        assert_eq!(meta.latest_build.tag, "5.1.0");
+    }
+
+    /// A config response for another business is metadata, not a run to
+    /// continue with: its paths and download mode belong to a different game.
+    #[tokio::test]
+    async fn a_config_response_for_another_biz_is_refused_as_metadata() {
+        const WRONG_BIZ: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"game":{"id":"1Z8W5NHUQb","biz":"hk4e_cn"},"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+        let base = serve_metadata(
+            Reply::Body(WRONG_BIZ),
+            Reply::Body(BRANCH),
+            Reply::Body(LATEST_BUILD),
+            None,
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "wrong_biz");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let failure = fetch(&ctx, &dir)
+            .await
+            .err()
+            .expect("a response for another biz must be refused");
+        assert_eq!(failure.exit_code, RunExit::Metadata);
+        let text = format!("{:#}", failure);
+        for needle in ["getGameConfigs", "hk4e_cn", "hk4e_global"] {
+            assert!(
+                text.contains(needle),
+                "the refusal must name {needle}: {text}"
+            );
+        }
+    }
+
+    /// The latest build's own tag is a second identity check: a build served
+    /// for a different version than the branch resolved is metadata.
+    #[tokio::test]
+    async fn a_latest_build_for_another_tag_is_refused_as_metadata() {
+        const WRONG_BUILD: &str =
+            r#"{"retcode":0,"message":"OK","data":{"build_id":"b","tag":"5.0.0","manifests":[]}}"#;
+        let base = serve_metadata(
+            Reply::Body(CHUNK_CONFIG),
+            Reply::Body(BRANCH),
+            Reply::Body(WRONG_BUILD),
+            None,
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "wrong_latest_tag");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let failure = fetch(&ctx, &dir)
+            .await
+            .err()
+            .expect("a build for another tag must be refused");
+        assert_eq!(failure.exit_code, RunExit::Metadata);
+        let text = format!("{:#}", failure);
+        for needle in ["getBuild(latest)", "5.0.0", "5.1.0"] {
+            assert!(
+                text.contains(needle),
+                "the refusal must name {needle}: {text}"
+            );
+        }
+    }
+
+    /// Absent identity fields are not disagreements: a config with no `game`
+    /// and a build with no `tag` are accepted.
+    #[tokio::test]
+    async fn absent_biz_and_tag_are_tolerated() {
+        const CONFIG_WITHOUT_GAME: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_CHUNK"}]}}"#;
+        const BUILD_WITHOUT_TAG: &str =
+            r#"{"retcode":0,"message":"OK","data":{"build_id":"b","manifests":[]}}"#;
+        let base = serve_metadata(
+            Reply::Body(CONFIG_WITHOUT_GAME),
+            Reply::Body(BRANCH),
+            Reply::Body(BUILD_WITHOUT_TAG),
+            None,
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "identity_absent");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let meta = fetch(&ctx, &dir)
+            .await
+            .expect("an absent identity has nothing to check");
+        assert_eq!(meta.latest_build.tag, "");
+    }
+
+    /// The local build is only a reuse optimization, so a tag mismatch degrades
+    /// to the full-fetch fallback instead of failing the run; a matching tag is
+    /// still kept.
+    #[tokio::test]
+    async fn a_local_build_tag_mismatch_degrades_to_the_fallback() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "local_tag_mismatch");
+        std::fs::write(dir.join("config.ini"), "[General]\ngame_version=5.0.0\n")
+            .expect("write config.ini");
+
+        const LOCAL_FOR_ANOTHER_TAG: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"4.9.0","manifests":[]}}"#;
+        let base = serve_metadata(
+            Reply::Body(CHUNK_CONFIG),
+            Reply::Body(BRANCH),
+            Reply::Body(LATEST_BUILD),
+            Some(Reply::Body(LOCAL_FOR_ANOTHER_TAG)),
+        )
+        .await;
+        let ref_ctx = ctx(dir.to_path_buf(), base);
+
+        let meta = fetch(&ref_ctx, &dir)
+            .await
+            .expect("a local build mismatch is not fatal");
+        assert!(
+            meta.local_build.is_none(),
+            "a build for another tag must not be used as the local one"
+        );
+
+        const LOCAL_BUILD: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"5.0.0","manifests":[]}}"#;
+        let base = serve_metadata(
+            Reply::Body(CHUNK_CONFIG),
+            Reply::Body(BRANCH),
+            Reply::Body(LATEST_BUILD),
+            Some(Reply::Body(LOCAL_BUILD)),
+        )
+        .await;
+        let second_ctx = ctx(dir.to_path_buf(), base);
+
+        let meta = fetch(&second_ctx, &dir)
+            .await
+            .expect("a matching local build is kept");
+        assert_eq!(meta.local_build.expect("local build").tag, "5.0.0");
     }
 }

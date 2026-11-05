@@ -785,6 +785,11 @@ pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
 
 #[derive(Default)]
 pub struct MockOpts {
+    /// The launcher this fixture describes. `None` serves `hk4e_global`.
+    ///
+    /// The response's `game` object carries this biz and game id, so a run for
+    /// another launcher is not silently answered with the global identity.
+    pub biz: Option<Biz>,
     pub deprecated_files: Vec<String>,
     pub scan_dir: String,
     pub res_dir: String,
@@ -1001,6 +1006,9 @@ fn build_responses(
     manifest_prefix: &str,
     chunk_prefix: &str,
 ) -> Responses {
+    let biz = opts.biz.unwrap_or(Biz::Hk4eGlobal);
+    let (_, _, game_id) = biz.endpoints();
+    let game_biz = biz.as_str();
     let raw_manifest_len = zstd::stream::decode_all(std::io::Cursor::new(fx.manifest_zstd.clone()))
         .expect("decode fixture manifest")
         .len();
@@ -1009,7 +1017,7 @@ fn build_responses(
         "message": "OK",
         "data": {
             "launch_configs": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "exe_file_name": "GenshinImpact.exe",
                 "audio_pkg_scan_dir": opts.scan_dir,
                 "audio_pkg_res_dir": opts.res_dir,
@@ -1029,7 +1037,7 @@ fn build_responses(
         "message": "OK",
         "data": {
             "game_branches": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "main": {
                     "package_id": "pkg_test",
                     "branch": "main",
@@ -1051,7 +1059,7 @@ fn build_responses(
         "message": "OK",
         "data": {
             "deprecated_file_configs": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "deprecated_files": deprecated_files
             }]
         }
