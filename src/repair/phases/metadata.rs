@@ -556,10 +556,11 @@ mod tests {
         base
     }
 
-    /// Each local read keeps the documented exit class, and the join-failure
-    /// constructor follows it.
-    #[test]
-    fn every_local_read_keeps_its_documented_exit_class() {
+    /// Each local read's class table names the class its join failure takes,
+    /// and `join_failure` goes through that class rather than choosing one
+    /// itself.
+    #[tokio::test]
+    async fn every_local_read_join_failure_keeps_its_documented_exit_class() {
         let table = [
             (
                 LocalRead::Version,
@@ -599,6 +600,18 @@ mod tests {
             let failure = read.class().failure(anyhow::anyhow!("boom"));
             assert_eq!(failure.exit_code, exit, "{read:?}");
             assert!(format!("{failure:#}").contains("boom"), "{read:?}");
+
+            // An aborted task yields a real `JoinError`, so this exercises the
+            // same constructor `fetch` uses rather than only the table.
+            let join = {
+                let task = tokio::task::spawn(std::future::pending::<()>());
+                task.abort();
+                task.await.expect_err("an aborted task fails to join")
+            };
+            let failure = read.join_failure(join);
+            assert_eq!(failure.exit_code, exit, "{read:?}: join_failure");
+            let text = format!("{failure:#}");
+            assert!(text.contains(label), "{read:?}: {text}");
         }
     }
 
