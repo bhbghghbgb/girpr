@@ -387,7 +387,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | todo | Wave D; ini refusal wording, external-race coverage and helper scope; low |
-| BUILD-02 | F151, F152, F153, F226 | in_progress | Wave D; per-member MSRV, scan-path benchmark and import tidy; low |
+| BUILD-02 | F151, F152, F153, F226 | pending_review | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
 | BUILD-TOOLS-02 | F154, F155 | todo | Wave D; tools build-doc note and explicit digest trait import; low |
 | TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
