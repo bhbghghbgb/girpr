@@ -773,4 +773,88 @@ mod tests {
         );
         assert_eq!(digest.len(), 32, "the benchmark hashed a real file");
     }
+
+    /// Scan throughput, on the repair path that dwarfs the whole-file digest:
+    /// [`scan_file`] and [`scan_reader`], with one destination range per MiB
+    /// and a half-chunk source range in every chunk.
+    ///
+    /// This is a measurement, not a property, so it is `#[ignore]`d and is
+    /// never part of the normal suite or CI. It writes a file of
+    /// `GIRPR_SCAN_BENCH_MIB` MiB (default 64), scans it
+    /// `GIRPR_SCAN_BENCH_RUNS` times (default 5), and prints the throughput.
+    /// Run it by hand:
+    ///
+    /// ```text
+    /// cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
+    /// ```
+    #[test]
+    #[ignore = "throughput measurement, run by hand"]
+    fn scan_throughput() {
+        let mib: usize = std::env::var("GIRPR_SCAN_BENCH_MIB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(64);
+        let runs: usize = std::env::var("GIRPR_SCAN_BENCH_RUNS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
+        assert!(
+            mib > 0 && runs > 0,
+            "the benchmark needs a non-zero size and run count"
+        );
+        const MIB: usize = 1024 * 1024;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "scan_throughput");
+        let path = dir.join("scan.bin");
+        let block: Vec<u8> = (0..MIB).map(|i| (i % 251) as u8).collect();
+        let mut file = File::create(&path).expect("create the benchmark file");
+        for _ in 0..mib {
+            std::io::Write::write_all(&mut file, &block).expect("write the benchmark file");
+        }
+        file.sync_all().expect("flush the benchmark file");
+        drop(file);
+
+        let chunk_md5 = md5_digest(&block).to_hex();
+        let dest_owned: Vec<(u64, u64, String)> = (0..mib)
+            .map(|i| ((i * MIB) as u64, MIB as u64, chunk_md5.clone()))
+            .collect();
+        let half = MIB / 2;
+        let half_md5 = md5_digest(&block[half..]).to_hex();
+        let source_owned: Vec<(u64, u64, String)> = (0..mib)
+            .map(|i| ((i * MIB + half) as u64, half as u64, half_md5.clone()))
+            .collect();
+        let dest = Ranges::of(&dest_owned);
+        let source = Ranges::of(&source_owned);
+        let dest = dest.view();
+        let source = source.view();
+
+        // Warm the page cache before taking the clock, so the number is
+        // throughput and not first-touch I/O.
+        let _ = scan_file(&path, &dest, &source).expect("warm-up scan");
+        let start = std::time::Instant::now();
+        let mut dest_ok = 0;
+        for _ in 0..runs {
+            let scan = scan_file(&path, &dest, &source).expect("scan the benchmark file");
+            dest_ok = scan.dest_ok.iter().filter(|&&ok| ok).count();
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let bytes = (mib * MIB) as f64 * runs as f64;
+        println!(
+            "scan_file: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (dest_ok {dest_ok}/{mib})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
+
+        let mut handle = File::open(&path).expect("open the benchmark file");
+        let start = std::time::Instant::now();
+        let mut source_ok = 0;
+        for _ in 0..runs {
+            let scan = scan_reader(&mut handle, &dest, &source).expect("scan the benchmark handle");
+            source_ok = scan.source_ok.iter().filter(|&&ok| ok).count();
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        println!(
+            "scan_reader: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (source_ok {source_ok}/{mib})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
+    }
 }

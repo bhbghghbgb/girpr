@@ -412,16 +412,21 @@ cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06)
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 
-# the whole-file MD5 throughput measurement: #[ignore]d, prints MiB/s
+# the hash and scan throughput measurements: #[ignore]d, print MiB/s
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
+cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
 ```
 
-- **MD5 throughput is measured by hand, not asserted.** The ignored
+- **Hash and scan throughput is measured by hand, not asserted.** The ignored
   `util::md5::tests::md5_throughput` hashes a generated file through the same
-  whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`) and
-  prints MiB/s; run it with `--release`, because the debug profile measures the
-  compiler, not the hasher. `GIRPR_MD5_BENCH_MIB` (default 64) sizes the file
-  and `GIRPR_MD5_BENCH_RUNS` (default 5) the repetitions.
+  whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`). The
+  ignored `util::md5::tests::scan_throughput` reads one destination range per
+  MiB and one source range in every chunk through `scan_file` and
+  `scan_reader`, the path a repair scan takes. Both print MiB/s; run them with
+  `--release`, because the debug profile measures the compiler, not the
+  hasher. `GIRPR_MD5_BENCH_MIB`/`GIRPR_SCAN_BENCH_MIB` (default 64) size the
+  files and `GIRPR_MD5_BENCH_RUNS`/`GIRPR_SCAN_BENCH_RUNS` (default 5) the
+  repetitions.
 
 - **One lint policy for the product and its shared policy crates.** The root
   `Cargo.toml` holds `[workspace.lints]`; `girpr`, `girpr-log` and
