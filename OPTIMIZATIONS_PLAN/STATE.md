@@ -432,7 +432,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-03 | F230, F231 | todo | Wave E; tokio default features and manifest comment precision; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
-| TEST-MANIFEST-02 | F182, F183, F184 | in_progress | Wave D; multi-manifest fixture filter and served-absent cases; low |
+| TEST-MANIFEST-02 | F182, F183, F184 | pending_review | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
