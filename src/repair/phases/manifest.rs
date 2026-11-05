@@ -359,18 +359,46 @@ mod tests {
         StatusAfterHit(&'static str, Arc<AtomicUsize>),
     }
 
+    /// A running test origin. Dropping it cancels the accept loop and every
+    /// connection task it spawned, so a test never depends on runtime teardown
+    /// to stop a route that never answers.
+    struct TestServer {
+        base: String,
+        accept: tokio::task::JoinHandle<()>,
+        connections: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    }
+
+    impl TestServer {
+        fn base(&self) -> &str {
+            &self.base
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            self.accept.abort();
+            self.connections
+                .lock()
+                .expect("connection registry")
+                .abort_all();
+        }
+    }
+
     /// Serve `id -> reply` on an ephemeral loopback port.
-    async fn serve(routes: Vec<(&'static str, Reply)>) -> String {
+    async fn serve(routes: Vec<(&'static str, Reply)>) -> TestServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let base = format!("http://{}", listener.local_addr().expect("addr"));
         let routes = Arc::new(routes);
-        tokio::spawn(async move {
+        let connections = Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new()));
+        let spawned = connections.clone();
+        let accept = tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else {
                     continue;
                 };
                 let routes = routes.clone();
-                tokio::spawn(async move {
+                let mut connections = spawned.lock().expect("connection registry");
+                connections.spawn(async move {
                     let mut buf = vec![0u8; 8192];
                     let mut got = 0;
                     while got < buf.len() {
@@ -416,9 +444,16 @@ mod tests {
                     let _ = socket.write_all(&body).await;
                     let _ = socket.flush().await;
                 });
+                // Reap connections that already finished so the registry only
+                // holds tasks still worth aborting.
+                while connections.try_join_next().is_some() {}
             }
         });
-        base
+        TestServer {
+            base,
+            accept,
+            connections,
+        }
     }
 
     /// A short backoff, so a retryable failure takes longer to finish than a
@@ -472,7 +507,7 @@ mod tests {
         // settles while the hanging fetch is provably in flight: a fan-out
         // that waited for it would never return.
         let hang_hits = Arc::new(AtomicUsize::new(0));
-        let base = serve(vec![
+        let server = serve(vec![
             (
                 "down",
                 Reply::StatusAfterHit("404 Not Found", hang_hits.clone()),
@@ -481,7 +516,7 @@ mod tests {
         ])
         .await;
         let build = build(
-            &base,
+            server.base(),
             vec![meta("game", "down", ""), meta("extra", "hang", "")],
         );
         let client = Client::new();
@@ -515,14 +550,14 @@ mod tests {
     #[tokio::test]
     async fn fetch_latest_reports_the_first_failure_in_selection_order() {
         let (ok_body, ok_checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
-        let base = serve(vec![
+        let server = serve(vec![
             ("slow", Reply::Status("500 Internal Server Error")),
             ("fast", Reply::Status("404 Not Found")),
             ("ok", Reply::Body(ok_body)),
         ])
         .await;
         let build = build(
-            &base,
+            server.base(),
             vec![
                 meta("game", "slow", ""),
                 meta("res", "fast", ""),
@@ -552,14 +587,14 @@ mod tests {
     async fn local_reuse_map_keeps_the_union_and_selection_order() {
         let (first_body, first_checksum) = manifest_body(vec![file("game/foo.dat", 0)]);
         let (last_body, last_checksum) = manifest_body(vec![file("game/foo.dat", 99)]);
-        let base = serve(vec![
+        let server = serve(vec![
             ("first", Reply::Body(first_body)),
             ("gone", Reply::Status("404 Not Found")),
             ("last", Reply::Body(last_body)),
         ])
         .await;
         let build = build(
-            &base,
+            server.base(),
             vec![
                 meta("game", "first", &first_checksum),
                 meta("res", "gone", ""),
