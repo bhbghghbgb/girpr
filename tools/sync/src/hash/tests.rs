@@ -43,6 +43,33 @@ fn from_str_is_case_insensitive_without_help() {
     assert_eq!("Sha256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
 }
 
+/// Folding is ASCII-only, the same rule the path key and `HashAlg`'s parser
+/// follow. Accepted spellings keep working, but a name containing a non-ASCII
+/// character is refused as typed: `\u{212A}` is the Kelvin sign, which
+/// `to_lowercase` maps onto `k`, so a Unicode fold would rewrite
+/// `bla\u{212A}e3` to `blake3` before the error was built.
+#[test]
+fn hash_names_fold_ascii_case_only() {
+    assert_eq!(parse(&["MD5"]), vec![HashAlg::Md5]);
+    assert_eq!(parse(&["Sha256"]), vec![HashAlg::Sha256]);
+    assert_eq!(parse(&["NONE"]), Vec::<HashAlg>::new());
+
+    let err = parse_hash_list(&["bla\u{212A}e3".to_string()]).unwrap_err();
+    let err = err.to_string();
+    assert!(
+        err.contains("bla\u{212A}e3"),
+        "the refusal keeps the typed spelling: {err}"
+    );
+    assert!(
+        !err.contains("blake3"),
+        "a Unicode fold must not rewrite the name first: {err}"
+    );
+    assert!(
+        parse_any_of(&["bla\u{212A}e3".to_string()]).is_err(),
+        "and any-of inherits the same refusal"
+    );
+}
+
 /// An unknown name is refused, and the refusal names the offender rather
 /// than echoing it back bare — the caller supplies what would have been right.
 #[test]

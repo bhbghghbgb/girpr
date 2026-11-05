@@ -105,7 +105,13 @@ impl std::fmt::Debug for AlgoSet {
 /// algorithms can a row hold" and "which algorithms did the user ask for" are
 /// asked with the same vocabulary rather than two spellings of it.
 pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
-    let mut v: Vec<String> = input.iter().map(|s| s.to_lowercase()).collect();
+    // ASCII-only, like [`HashAlg`]'s own parser and the path key. An algorithm
+    // name is ASCII, so a non-ASCII character must not fold into one:
+    // `to_lowercase` maps the Kelvin sign `\u{212A}` onto `k`, which rewrites an
+    // unknown name like `bla\u{212A}e3` to `blake3` before refusing it. Only
+    // `A-Z` fold here; every other character is left exactly as typed, so the
+    // refusal names the spelling the user actually wrote.
+    let mut v: Vec<String> = input.iter().map(|s| s.to_ascii_lowercase()).collect();
     v.retain(|s| !s.is_empty());
     if v.iter().any(|s| s == "none") {
         if v.len() != 1 {
