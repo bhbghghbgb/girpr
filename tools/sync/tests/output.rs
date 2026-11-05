@@ -107,6 +107,55 @@ fn compare_json_is_one_object_per_line_with_a_single_summary() {
     );
 }
 
+/// Case folding is ASCII-only, so a non-ASCII case variant is two paths rather
+/// than a `CASE-MISMATCH`. The ASCII pair beside it still folds, which keeps
+/// this from passing merely because insensitive mode stopped pairing anything.
+#[test]
+fn compare_folds_ascii_case_but_not_non_ascii_case() {
+    let t = temp_root("out_nonascii_case");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Readme.TXT", b"same");
+    wfile(&dst, "readme.txt", b"same");
+    sync_mtime(&src.join("Readme.TXT"), &dst.join("readme.txt"));
+    wfile(&src, "Ärger.txt", b"same");
+    wfile(&dst, "ärger.txt", b"same");
+    sync_mtime(&src.join("Ärger.txt"), &dst.join("ärger.txt"));
+
+    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    assert_eq!(r.code, 4, "the differences exit 4: {}", r.show());
+    assert_eq!(
+        summary_of(&r.records),
+        serde_json::json!({"event": "summary", "missing": 1, "extra": 1, "changed": 0,
+                           "type_conflict": 0, "case_mismatch": 1, "total_diff": 2}),
+        "ASCII casing pairs, non-ASCII casing does not\n{}",
+        r.show()
+    );
+    assert!(
+        r.records.iter().any(|rec| {
+            rec["event"] == "case-mismatch"
+                && rec["src"] == "Readme.TXT"
+                && rec["dst"] == "readme.txt"
+        }),
+        "the ASCII pair is a case mismatch: {}",
+        r.show()
+    );
+    assert!(
+        r.records
+            .iter()
+            .any(|rec| rec["event"] == "missing" && rec["path"] == "Ärger.txt"),
+        "the non-ASCII src spelling is missing: {}",
+        r.show()
+    );
+    assert!(
+        r.records
+            .iter()
+            .any(|rec| rec["event"] == "extra" && rec["path"] == "ärger.txt"),
+        "the non-ASCII dst spelling is extra: {}",
+        r.show()
+    );
+}
+
 /// The report the binary printed is the report `verdict` builds.
 ///
 /// `verdict` is the single definition of a diff's records, and this is what keeps

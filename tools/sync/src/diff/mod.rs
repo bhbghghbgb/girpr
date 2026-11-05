@@ -480,6 +480,40 @@ mod tests {
         );
     }
 
+    /// The lowercase key folds ASCII case only, so a non-ASCII case variant is a
+    /// different path: each spelling is missing on one side and extra on the
+    /// other, never a `CASE-MISMATCH`. The byte-identical non-ASCII path still
+    /// pairs and compares equal, which is what tells "outside the fold" apart
+    /// from "never paired at all".
+    #[test]
+    fn a_non_ascii_case_variant_is_not_a_case_only_pair() {
+        let src = side(vec![
+            ("Ärger.txt", file(10, 100)),
+            ("Привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let dst = side(vec![
+            ("ärger.txt", file(10, 100)),
+            ("привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let d = run(&src, &dst, false, true);
+        assert_eq!(
+            d.missing,
+            vec!["Ärger.txt".to_string(), "Привет.txt".to_string()]
+        );
+        assert_eq!(
+            d.extra,
+            vec!["ärger.txt".to_string(), "привет.txt".to_string()]
+        );
+        assert!(
+            d.case_mismatch.is_empty(),
+            "the filesystem keeps these spellings apart, so there is no casing difference"
+        );
+        assert_eq!(d.identical, vec!["café.txt".to_string()]);
+        assert_eq!(d.total(), 4);
+    }
+
     /// The join is over *keys*, so a src-only path absent from dst must still be
     /// reported when dst holds other paths too — the dst-only pass has to skip
     /// exactly the keys src already covered and no others.

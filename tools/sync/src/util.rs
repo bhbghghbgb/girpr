@@ -342,6 +342,23 @@ mod tests {
         assert_ne!(path_key("\u{212A}"), path_key("k"));
     }
 
+    /// The mixed-case guard groups by the same key, so its verdict for a
+    /// non-ASCII pair is "two distinct paths" rather than a collision. The ASCII
+    /// spelling difference still collides, and an exact repeat still does not.
+    #[test]
+    fn mixed_case_check_groups_by_the_ascii_only_key() {
+        let err = check_mixed_case_keys(["Readme.TXT", "readme.txt"], "", "src").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "mixed-case collision in src: Readme.TXT vs readme.txt"
+        );
+        check_mixed_case_keys(["same.txt", "same.txt"], "", "src")
+            .expect("an exact repeat is one spelling, not a collision");
+        check_mixed_case_keys(["Ärger.txt", "ärger.txt"], "", "src")
+            .expect("a non-ASCII case variant is a distinct path");
+        check_mixed_case_keys(["\u{212A}", "k"], "", "src").expect("the Kelvin sign is not `k`");
+    }
+
     /// A name that is not valid UTF-8 has no `to_str` answer, so the comparison
     /// must fall through to the lossy Unicode fold. The unpaired surrogate is
     /// valid UTF-16 storage but not valid UTF-8, which is the only way an
