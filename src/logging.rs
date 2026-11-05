@@ -34,6 +34,12 @@
 //! that skips the flush, such as `kill -9`, can lose the tail. The console
 //! layer is not buffered, because its ordering and broken-pipe behavior are
 //! separate contracts.
+//!
+//! Because the file sink holds up to [`FILE_BUFFER_CAPACITY`] bytes before a
+//! write, an external reader such as `tail -f` sees a record only when that
+//! buffer fills or when [`flush_log`] runs. Log streaming is therefore not
+//! real time: the file can lag by up to the buffer size, and the file is the
+//! durable record of the run rather than a live feed.
 
 use std::io::{BufWriter, Write};
 use std::path::Path;
