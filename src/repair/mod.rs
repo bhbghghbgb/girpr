@@ -988,9 +988,11 @@ async fn run_check_only(
         ctx.jobs,
     )
     .await?;
-    // The phase's ticker is stopped when `verify_plan` returns, but its
-    // aborted task may not have dropped its clone yet; `snapshot` reads the
-    // same counters either way.
+    // Success path only. The ticker guard is dropped when `verify_plan`
+    // returns, but its aborted task may still hold the `Arc` clone until the
+    // runtime polls the drop; `try_unwrap` then fails and `snapshot` reads the
+    // same counters. The panic path above returned with `?` before this line,
+    // so it takes no snapshot at all.
     let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
     let code = if bad == 0 {
         RunExit::Success
