@@ -4,7 +4,8 @@
 //! three separate reasons:
 //!
 //! 1. **Cost.** `repair_one_file` runs `util::file_len` *then*
-//!    `util::md5_file` and only *then* hits `if ctx.dry_run { return DryRun }`.
+//!    `util::md5::md5_file` and only *then* hits
+//!    `if ctx.dry_run { return DryRun }`.
 //!    So `--dry-run` on a real install full-file-MD5s every planned file —
 //!    precisely the cost the limitation exists to avoid. `--print-plan` stops
 //!    before the repair loop and pays none of it.

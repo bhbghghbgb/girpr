@@ -398,7 +398,7 @@ nothing to refuse.
 **`--dry-run` does not cover this,** for three concrete reasons:
 
 1. **Cost.** `--dry-run` is not cheap. `repair_one_file` runs `util::file_len`
-   and then `util::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
+   and then `util::md5::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
    `--dry-run` on a real install **full-file MD5s every planned file** — on the
    130 GB case, exactly the cost the limitation is meant to avoid.
    `--print-plan` stops before the repair loop entirely, so it pays none of it.
