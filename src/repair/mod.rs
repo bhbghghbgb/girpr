@@ -381,15 +381,18 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
     let deprecated = load_deprecated(ctx, meta).await;
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
 
-    let estimate = estimate_download(
-        ctx,
-        summary,
-        scan.as_deref(),
-        &plan,
-        game_dir,
-        root,
-        local_map,
-    );
+    // The estimate is a pure computation; its summary values are written once,
+    // here, in the same order and under the same conditions as before.
+    let estimate = estimate_download(ctx, scan.as_deref(), &plan, game_dir, root, local_map);
+    if let Some(bytes) = estimate.reported_bytes {
+        tracing::info!("estimated download: {bytes} bytes");
+        summary.flags.plan_download_bytes = Some(bytes);
+    }
+    if let Some(damaged_chunks) = estimate.damaged_chunks {
+        summary.flags.damaged_chunks = Some(damaged_chunks);
+    }
+    summary.files_total = estimate.files_total;
+    summary.flags.limited = estimate.limited;
     if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
         return Ok(None);
     }
@@ -607,11 +610,19 @@ async fn scan_if_requested(
 struct DownloadEstimate {
     by_file: Vec<u64>,
     bytes: u64,
+    /// `Some(bytes)` when `--max-download-bytes` asked for the figure, so the
+    /// caller can log and report it without re-deriving the condition.
+    reported_bytes: Option<u64>,
+    /// The scan's damaged-chunk count, when a scan ran.
+    damaged_chunks: Option<u64>,
+    /// The plan size, for `SUMMARY plan_files`.
+    files_total: u64,
+    /// Whether any ceiling was requested, for `SUMMARY limited=1`.
+    limited: bool,
 }
 
 fn estimate_download(
     ctx: &RunCtx,
-    summary: &mut Summary,
     scan: Option<&ScanReport>,
     plan: &Arc<RepairPlan>,
     game_dir: &Path,
@@ -625,16 +636,14 @@ fn estimate_download(
     let bytes = by_file
         .iter()
         .fold(0u64, |total, n| total.saturating_add(*n));
-    if ctx.limits.download_bytes.is_some() {
-        tracing::info!("estimated download: {bytes} bytes");
-        summary.flags.plan_download_bytes = Some(bytes);
+    DownloadEstimate {
+        by_file,
+        bytes,
+        reported_bytes: ctx.limits.download_bytes.map(|_| bytes),
+        damaged_chunks: scan.map(|s| s.damaged_chunks),
+        files_total: plan.len() as u64,
+        limited: ctx.limits.is_active(),
     }
-    if let Some(s) = scan {
-        summary.flags.damaged_chunks = Some(s.damaged_chunks);
-    }
-    summary.files_total = plan.len() as u64;
-    summary.flags.limited = ctx.limits.is_active();
-    DownloadEstimate { by_file, bytes }
 }
 
 /// === assert: the ceilings, before anything is mutated ===
