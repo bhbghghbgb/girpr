@@ -256,9 +256,9 @@ until the main tasks and rework are done.
 | F155 | BUILD-TOOLS-01 review | `tools/sync/src/hash/stream.rs` | The digest trait comes from `sha2::Digest`; importing `md5::Digest as _` would make the source explicit. | completed |
 | F156 | TEST-HELPERS-01 review | `tests/common/mod.rs` | Including the whole fixture module in `artifact_server`/`peak_heap` slightly increases test build time. | completed |
 | F157 | TEST-HELPERS-01 review | `tests/peak_heap.rs`, `tests/artifact_bridge.rs` | The explicit `#[path = "common/mod.rs"]` on `mod common;` is redundant. | completed |
-| F158 | LINT-01 review | `src/lib.rs`, `clippy.toml` | A root `clippy.toml` with the two test options would let `src/lib.rs` drop its `cfg_attr(test)` allow; integration targets still need theirs. | todo |
+| F158 | LINT-01 review | `src/lib.rs`, `clippy.toml` | A root `clippy.toml` with the two test options would let `src/lib.rs` drop its `cfg_attr(test)` allow; integration targets still need theirs. | completed |
 | F159 | LINT-01 review | docs | The `cedb038` commit message still claims the clippy test options are wholly ignored; the README is now accurate. | dropped (history-only; README is now accurate and rewriting is forbidden) |
-| F160 | LINT-01 review | `tools/sync/src/commands/sync/apply/phases.rs` | Non-test `expect`s remain in the tools, blocking any future `unwrap_used`/`expect_used` opt-in. | todo |
+| F160 | LINT-01 review | `tools/sync/src/commands/sync/apply/phases.rs` | Non-test `expect`s remain in the tools, blocking any future `unwrap_used`/`expect_used` opt-in. | completed |
 | F161 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` tests | The removed-seek test infers positioning from the cursor's initial value; a sink wrapper would pin it directly. | completed |
 | F162 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | The seek-refund test drives the helper; no end-to-end `write_downloaded_chunk` case with an unseekable sink. | completed |
 | F163 | TEMP-WRITER-01 review | `src/repair/file/temp.rs` | A copy-path seek failure drops the cached source handle instead of restoring it, unlike the other fallbacks. | completed |
@@ -358,6 +358,8 @@ until the main tasks and rework are done.
 | F257 | PATHHELPERS-02 review | `tests/repair_post.rs` | The non-UTF-8 move test goes through in-process `girpr::run`; a process-spawning variant would also cover CLI-layer rewriting. | todo |
 | F258 | TEST-MANIFEST-02 review | `tests/common/mod.rs` | The unserved-manifest test uses distinct chunk ids, so it cannot catch an unserved manifest overwriting a served manifest's chunk with a shared id. | todo |
 | F259 | TEST-MANIFEST-02 review | `tests/repair_offline.rs` | The "both manifests are still advertised" assertion reads the fixture list, not the mock's `getBuild` JSON. | todo |
+| F260 | LINT-02 review | `tools/capture/src/select/mod.rs` | `enumerate()` over `REQUIRED_ORDER` assumes its index equals the `ALL` index; a reorder would silently pair classes with the wrong candidates. | todo |
+| F261 | LINT-02 review | `tools/capture/src/http/log.rs` | `to_ndjson`'s doc describes only the happy path; the `io::Result` error case is unmentioned. | todo |
 
 ## Follow-up batches
 
@@ -436,7 +438,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | todo | Wave E; shared chunk-id and direct advertisement assertions; low |
-| LINT-02 | F158, F160 | pending_review | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
+| LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
+| LINT-03 | F260, F261 | todo | Wave E; select-order coupling and to_ndjson doc; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
