@@ -44,9 +44,6 @@
 //! run config → [`run`] → print `SUMMARY` → flush the log → return the exit
 //! code.
 
-// Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-
 mod biz;
 mod cli;
 mod config;
