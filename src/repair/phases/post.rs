@@ -507,7 +507,9 @@ fn copy_publish_with(
 /// outside the scope is left alone, since moving it is a mutation of a path the
 /// scope may not have admitted.
 ///
-/// `dry_run` logs the move and does none of it.
+/// `dry_run` logs the move and does none of it. The listing spells each entry
+/// with the same `/` rel the scope keys, not the host separator, so a nested
+/// file reads `sub/a.pck` on every platform.
 ///
 /// The summary line at the end is **derived from the outcomes**, not emitted
 /// because the function was reached: `moved` counts the sources that are gone
@@ -1114,14 +1116,14 @@ mod tests {
         assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
     }
 
-    /// A dry run names each audio cache file it would move and leaves both
-    /// sides alone.
+    /// A dry run names each audio cache file it would move with the `/` rel the
+    /// scope keys — including a nested entry — and leaves both sides alone.
     #[test]
     fn a_dry_run_lists_the_audio_cache_move() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "dry_run");
         let base = &*dir;
-        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
-        std::fs::write(base.join("Audio/cache/track_1.pcm"), b"cache bytes").unwrap();
+        std::fs::create_dir_all(base.join("Audio/cache/sub")).unwrap();
+        std::fs::write(base.join("Audio/cache/sub/track_1.pcm"), b"cache bytes").unwrap();
 
         let logs = logs_of(|| {
             move_audio_cache(
@@ -1133,15 +1135,15 @@ mod tests {
         });
 
         assert!(
-            logs.contains("would move audio cache track_1.pcm -> res"),
-            "the dry run names the move: {logs}"
+            logs.contains("would move audio cache sub/track_1.pcm -> res"),
+            "the dry run names the move in the key spelling: {logs}"
         );
         assert!(
-            base.join("Audio/cache/track_1.pcm").exists(),
+            base.join("Audio/cache/sub/track_1.pcm").exists(),
             "the source stays in place"
         );
         assert!(
-            !base.join("Audio/res/track_1.pcm").exists(),
+            !base.join("Audio/res/sub/track_1.pcm").exists(),
             "nothing is published at the destination"
         );
     }
