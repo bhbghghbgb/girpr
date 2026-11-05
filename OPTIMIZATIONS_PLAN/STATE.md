@@ -436,7 +436,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | todo | Wave E; shared chunk-id and direct advertisement assertions; low |
-| LINT-02 | F158, F160 | in_progress | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
+| LINT-02 | F158, F160 | pending_review | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
