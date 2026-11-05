@@ -254,8 +254,8 @@ until the main tasks and rework are done.
 | F153 | BUILD-01 review | `src/sophon/stream.rs` | Two adjacent `use futures_util::...` lines could be one brace import. | completed |
 | F154 | BUILD-TOOLS-01 review | `tools/capture/Cargo.toml` | The realized tokio saving (`parking_lot`, `process`, `signal`, `fs`, `io-std`) could be stated in the tools' build docs. | completed |
 | F155 | BUILD-TOOLS-01 review | `tools/sync/src/hash/stream.rs` | The digest trait comes from `sha2::Digest`; importing `md5::Digest as _` would make the source explicit. | completed |
-| F156 | TEST-HELPERS-01 review | `tests/common/mod.rs` | Including the whole fixture module in `artifact_server`/`peak_heap` slightly increases test build time. | todo |
-| F157 | TEST-HELPERS-01 review | `tests/peak_heap.rs`, `tests/artifact_bridge.rs` | The explicit `#[path = "common/mod.rs"]` on `mod common;` is redundant. | todo |
+| F156 | TEST-HELPERS-01 review | `tests/common/mod.rs` | Including the whole fixture module in `artifact_server`/`peak_heap` slightly increases test build time. | completed |
+| F157 | TEST-HELPERS-01 review | `tests/peak_heap.rs`, `tests/artifact_bridge.rs` | The explicit `#[path = "common/mod.rs"]` on `mod common;` is redundant. | completed |
 | F158 | LINT-01 review | `src/lib.rs`, `clippy.toml` | A root `clippy.toml` with the two test options would let `src/lib.rs` drop its `cfg_attr(test)` allow; integration targets still need theirs. | todo |
 | F159 | LINT-01 review | docs | The `cedb038` commit message still claims the clippy test options are wholly ignored; the README is now accurate. | dropped (history-only; README is now accurate and rewriting is forbidden) |
 | F160 | LINT-01 review | `tools/sync/src/commands/sync/apply/phases.rs` | Non-test `expect`s remain in the tools, blocking any future `unwrap_used`/`expect_used` opt-in. | todo |
@@ -330,6 +330,7 @@ until the main tasks and rework are done.
 | F229 | BUILD-02 review | repository | The declared per-member MSRVs are unenforced; no CI job builds a member with its `rust-version`. | todo |
 | F230 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | `tokio` is requested without `default-features = false`, so its empty `default` feature is enabled. | todo |
 | F231 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | The manifest comment says nothing uses `net`/`sync`, while reqwest brings them in; it could mirror the docs' precision. | todo |
+| F232 | TEST-HELPERS-02 review | `tests/common/digest.rs` | The module doc says "shared by the test fixtures", but fixture-free targets include it directly. | todo |
 
 ## Follow-up batches
 
@@ -396,7 +397,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | todo | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low |
 | BUILD-TOOLS-03 | F230, F231 | todo | Wave E; tokio default features and manifest comment precision; low |
-| TEST-HELPERS-02 | F156, F157 | pending_review | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
+| TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
+| TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
 | LINT-02 | F158, F160 | todo | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
