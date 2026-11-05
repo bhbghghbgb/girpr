@@ -205,11 +205,15 @@ impl RequestLog {
     /// **For tests and small logs.** The capture path uses
     /// [`RequestLog::write_ndjson_to`], which does not build the whole document in
     /// memory; this exists because a handful of assertions want to compare a string.
-    pub fn to_ndjson(&self) -> String {
+    pub fn to_ndjson(&self) -> std::io::Result<String> {
         let mut out = Vec::new();
-        self.write_ndjson_to(&mut out)
-            .expect("writing to a Vec cannot fail");
-        String::from_utf8(out).expect("serde_json emits UTF-8")
+        self.write_ndjson_to(&mut out)?;
+        String::from_utf8(out).map_err(|e| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("the log is not UTF-8: {e}"),
+            )
+        })
     }
 
     /// Write the log to `path`, creating parent directories.

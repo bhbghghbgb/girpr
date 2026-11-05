@@ -438,14 +438,6 @@ fn candidates_by_class(pool: &[SizedCandidate]) -> [Vec<usize>; Class::ALL.len()
     out
 }
 
-/// Where a class sits in [`Class::ALL`], for indexing [`candidates_by_class`].
-fn class_idx(class: Class) -> usize {
-    Class::ALL
-        .iter()
-        .position(|c| *c == class)
-        .expect("every class is in ALL")
-}
-
 /// Cheapest first, then the field with `game` ranked first, then by path.
 ///
 /// **One definition, two call sites.** [`candidates`] sorts the pool with it and
@@ -621,8 +613,8 @@ pub fn select(
     let by_class = candidates_by_class(pool);
     let mut taken: std::collections::HashSet<&str> =
         admitted.iter().map(|a| a.path.as_str()).collect();
-    for class in Class::REQUIRED_ORDER {
-        let candidates = &by_class[class_idx(class)];
+    for (idx, class) in Class::REQUIRED_ORDER.into_iter().enumerate() {
+        let candidates = &by_class[idx];
         let considered = candidates.len() as u64;
 
         // Already answered by something captured for another reason?
