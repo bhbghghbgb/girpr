@@ -391,7 +391,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | todo | Wave D; ini refusal wording, external-race coverage and helper scope; low |
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
-| BUILD-TOOLS-02 | F154, F155 | todo | Wave D; tools build-doc note and explicit digest trait import; low |
+| BUILD-TOOLS-02 | F154, F155 | in_progress | Wave D; tools build-doc note and explicit digest trait import; low |
 | BUILD-03 | F227, F228, F229 | todo | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low |
 | TEST-HELPERS-02 | F156, F157 | todo | Wave D; shared-module build cost and redundant `#[path]`; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | todo | Wave D; multi-manifest fixture filter and served-absent cases; low |
