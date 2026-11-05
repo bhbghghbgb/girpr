@@ -183,9 +183,10 @@ impl Summary {
     /// not run.
     ///
     /// The raw `check_damaged_chunks` counter is zero both before the check
-    /// and after a clean one; this accessor tells those apart. Both values
-    /// still mean "no damage found" when the check ran, because a check that
-    /// reads the digests itself cannot locate the bad chunks.
+    /// and after a clean one; this accessor tells those apart. A measured zero
+    /// does not by itself mean the run was clean: a check that reads the
+    /// digests itself cannot locate the bad chunks, so a damaged file found
+    /// that way contributes nothing here.
     pub fn check_damaged_chunks(&self) -> Option<u64> {
         self.check_damaged_chunks_measured
             .load(Ordering::Acquire)
