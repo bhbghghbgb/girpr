@@ -397,7 +397,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | HYP-02 | F177 | todo | Wave D; validate the hyp response identity against the request; medium |
 | SYNC-01 | F123, F125 | todo | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low |
-| METADATA-02 | F131, F132, F133, F134, F135 | in_progress | Wave D; metadata classification tests, label constants and doc precision; low |
+| METADATA-02 | F131, F132, F133, F134, F135 | pending_review | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | todo | Wave E; first-error message, live-stream coverage and task reaping; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
