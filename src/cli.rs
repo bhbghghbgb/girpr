@@ -25,10 +25,13 @@ pub const DEFAULT_JOBS: usize = 4;
 
 /// Largest accepted `--jobs` value.
 ///
-/// The runtime keeps one worker beyond the file window, so a larger value only
-/// asks for more OS threads than any machine can usefully run — a value this
-/// size is a typo, not a tuning choice. Refusing it here names the flag instead
-/// of leaving the user with a runtime-construction failure that does not.
+/// The runtime keeps one worker beyond the file window, so this asks for 1025
+/// OS threads. That is a real startup and stack cost, but the cap is a typo
+/// guard, not a promise that every host can create the threads: a lower value
+/// would only reject a deliberate window sooner, and a host that cannot create
+/// the threads would still fail at runtime construction. Refusing here names
+/// the flag instead of leaving the user with a runtime-construction failure
+/// that does not.
 pub const MAX_JOBS: usize = 1024;
 
 #[derive(Parser, Debug)]
