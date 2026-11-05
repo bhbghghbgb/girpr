@@ -221,9 +221,9 @@ until the main tasks and rework are done.
 | F120 | T47 implementer | `tests/repair_offline.rs`, `tests/cli_contract.rs` | The `cli_contract` comment still points at `repair_offline.rs` for ceilings, now in `repair_limits.rs`. | todo |
 | F121 | HYP-01 review | `docs/07-panic-audit.md` | Still describes `num_from_string` as `u64 as i64` wrapping above `i64::MAX`; the visitor uses `i64::try_from`. | todo |
 | F122 | HYP-01 review | `src/hyp.rs` | `ManifestFile.compressed_size` is deserialized but never read; its doc implies an in-crate clamp that does not exist. | todo |
-| F123 | PATHKEY-01 review | `tools/sync` | No end-to-end case exercises a map-key site (`diff_maps`, `check_mixed_case_keys`, planner pairing) with a non-ASCII pair. | todo |
+| F123 | PATHKEY-01 review | `tools/sync` | No end-to-end case exercises a map-key site (`diff_maps`, `check_mixed_case_keys`, planner pairing) with a non-ASCII pair. | completed |
 | F124 | PATHKEY-01 review | `src/repair/scope/filter.rs`, `src/util/path.rs` | The docs imply the glob fold is a different width; `glob`'s fold is also ASCII-only, so the real distinction is predicate-vs-key plus Windows-only folding. | todo |
-| F125 | PATHKEY-01 review | `tools/sync/src/hash/set.rs` | `parse_hash_list` still uses Unicode `to_lowercase`, so `bla\u{212A}e3` folds onto `blake3`. | todo |
+| F125 | PATHKEY-01 review | `tools/sync/src/hash/set.rs` | `parse_hash_list` still uses Unicode `to_lowercase`, so `bla\u{212A}e3` folds onto `blake3`. | completed |
 | F126 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test's failure on the old shape is probabilistic; a test-only pause seam would make it deterministic. | completed |
 | F127 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The wrap test spawns ~16k threads (1-3 s); trim rounds if CI time matters. | completed |
 | F128 | LEDGER-01 review | `src/repair/scope/ledger.rs` | The unlimited charge/settle hot path is now a CAS loop; revisit only if profiling shows counter contention (e.g. sharding). | dropped (no profile shows counter contention; speculative) |
@@ -349,6 +349,8 @@ until the main tasks and rework are done.
 | F248 | TEMP-WRITER-02 review | `src/repair/file/temp.rs` | `SeekRecording` guards only the missing-source branch; the no-candidate and digest-mismatch fallbacks could be pinned too. | todo |
 | F249 | TEMP-PUBLISH-02 implementer | `src/util/path.rs` | `temp_sibling` on a path with no file name returns one still containing a trailing `..` before resolution; the doc could say so. | todo |
 | F250 | TEMP-PUBLISH-02 implementer | `src/repair/phases/post.rs` | The no-file-name guard is unreachable through `move_audio_cache_with`; the direct unit test is its only coverage. | todo |
+| F251 | SYNC-01 review | `tools/sync/src/commands/sync/plan/pairs.rs` | `shared_pairs` has no non-ASCII unit case of its own; a planner regression is only caught indirectly by the e2e test. | todo |
+| F252 | SYNC-01 review | `tools/sync/src/hash/set.rs` | The hash test targets an unknown name; no non-ASCII lookalike reaches an accepted algorithm today. Revisit if a name containing `k` is added. | todo |
 
 ## Follow-up batches
 
@@ -403,7 +405,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | todo | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | todo | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low |
 | HYP-02 | F177 | todo | Wave D; validate the hyp response identity against the request; medium |
-| SYNC-01 | F123, F125 | pending_review | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
+| SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
+| SYNC-02 | F251, F252 | todo | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | todo | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
