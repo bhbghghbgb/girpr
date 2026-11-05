@@ -205,9 +205,10 @@ where
 
 /// A manifest's sizes as the API reports them.
 ///
-/// Both sizes are hints, not promises. A negative one is kept as reported and
-/// clamped to zero where it is used, so a bogus field costs a skipped estimate
-/// or reallocation, not a failed build.
+/// Both sizes are hints, not promises. `uncompressed_size` is read (it sizes
+/// the decode buffer) and a negative value is clamped to zero where it is used,
+/// so a bogus field costs a skipped estimate or reallocation, not a failed
+/// build. `compressed_size` is only deserialized; no phase reads it.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ManifestFile {
     #[serde(default)]
