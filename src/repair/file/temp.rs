@@ -299,13 +299,13 @@ fn chunk_failure_after_rollback(
 /// The chunk, its manifest pair, and its validated end are per chunk; `out`,
 /// `scratch`, `src_handle`, `tmp_len`, and `writes` live across the file's
 /// chunks. Naming them keeps the copy path's inputs readable at the call site.
-struct ReuseCall<'a> {
+struct ReuseCall<'a, W: Write + Seek> {
     ctx: &'a FileCtx,
     src: &'a std::path::Path,
     c: &'a SophonChunk,
     end: u64,
     reuse_entries: Option<&'a FileReuse>,
-    out: &'a mut File,
+    out: &'a mut W,
     scratch: &'a mut Vec<u8>,
     src_handle: &'a mut Option<File>,
     tmp_len: &'a mut u64,
@@ -323,7 +323,7 @@ struct ReuseCall<'a> {
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
-fn try_reuse_slice(call: &mut ReuseCall<'_>) -> Result<ChunkOutcome> {
+fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<ChunkOutcome> {
     let c = call.c;
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
@@ -760,6 +760,40 @@ mod tests {
             .unwrap()
     }
 
+    /// A sink that records every seek it is asked for, so a test can assert
+    /// that a path did not position the file instead of inferring it from the
+    /// final cursor value.
+    struct SeekRecording<'a> {
+        file: &'a mut File,
+        seeks: Vec<SeekFrom>,
+    }
+
+    impl<'a> SeekRecording<'a> {
+        fn new(file: &'a mut File) -> Self {
+            Self {
+                file,
+                seeks: Vec::new(),
+            }
+        }
+    }
+
+    impl Write for SeekRecording<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.file.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    impl Seek for SeekRecording<'_> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks.push(pos);
+            self.file.seek(pos)
+        }
+    }
+
     /// A stat failure on the `_tmp` must name the stat and the path:
     /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
     /// and that `io::Error` must surface instead of a zero length.
@@ -894,7 +928,8 @@ mod tests {
         let md5 = "d41d8cd98f00b204e9800998ecf8427e";
         let reuse = reuse_at(md5, 4, 8);
         let c = chunk_at("c0", md5, 4, 4);
-        let mut out = temp_out(&dir.join("out.bin"));
+        let mut file = temp_out(&dir.join("out.bin"));
+        let mut out = SeekRecording::new(&mut file);
         let ctx = test_ctx();
         let mut scratch = Vec::new();
         let mut writes = FileWrites::default();
@@ -916,10 +951,9 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, ChunkOutcome::Download));
         assert!(handle.is_none(), "a failed open leaves no handle behind");
-        assert_eq!(
-            out.stream_position().unwrap(),
-            0,
-            "the download path leaves the sink unpositioned; the streaming sink places it"
+        assert!(
+            out.seeks.is_empty(),
+            "the download path must not position the sink; the streaming sink places it"
         );
     }
 
