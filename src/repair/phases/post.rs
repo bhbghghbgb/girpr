@@ -744,7 +744,7 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let err = copy_publish_with(&src, &target, |_, dst| {
@@ -773,7 +773,7 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
         std::fs::write(&target, b"old bytes").unwrap();
 
@@ -803,7 +803,7 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let logs = logs_of(|| {
@@ -845,7 +845,7 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         copy_publish_with(&src, &target, |from, to| std::fs::copy(from, to)).unwrap();
@@ -905,7 +905,7 @@ mod tests {
         std::fs::create_dir_all(base.join("Audio/res")).unwrap();
         let src = base.join("Audio/cache/a.pck");
         let target = base.join("Audio/res/a.pck");
-        let tmp = base.join("Audio/res/a.pck.girpr_tmp");
+        let tmp = util::path::temp_sibling(&target);
         std::fs::write(&src, b"cache bytes").unwrap();
 
         let logs = logs_of(|| {
