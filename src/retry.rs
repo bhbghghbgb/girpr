@@ -131,8 +131,10 @@ fn backoff(attempt: u32, salt: u64) -> Duration {
 /// The spread added to an attempt's whole seconds.
 ///
 /// The range is just under 251 ms, and the multiplier shares no factor with it,
-/// so distinct loop salts land on distinct spreads by construction (until the
-/// salt space wraps, far beyond any realistic number of concurrent loops).
+/// so distinct loop salts land on distinct spreads until the residues repeat:
+/// the first repeat is a salt difference of `RANGE` (250,000,000). The
+/// multiplier product also wraps the `u64` space near 6.9e9 salts, a looser
+/// second limit. Both are far beyond the loops a process can start.
 fn jitter(attempt: u32, salt: u64) -> Duration {
     const RANGE: u64 = 250_000_000;
     const MULTIPLIER: u64 = 0x9E37_79B1;
