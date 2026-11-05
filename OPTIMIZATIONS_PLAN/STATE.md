@@ -306,7 +306,7 @@ until the main tasks and rework are done.
 | F205 | PATHHELPERS-01 review | `src/repair/phases/post.rs` | The dry-run log for nested cache paths now prints the `/` rel instead of the platform spelling. | completed |
 | F206 | PATHHELPERS-01 review | `tests/repair_post.rs` | No end-to-end test moves a non-UTF-8-named audio cache file and asserts the destination name bytes. | completed |
 | F207 | REFACTOR-01 review | `src/repair/mod.rs` | `estimate_download` both computes and mutates `summary` flags; separating the flag writes would make it read as pure. | completed |
-| F208 | EXIT-02 review | `src/main.rs` | `clamp_code` is now unreachable via `exit_code`; remove it or document it as defense against a future discriminant change. | todo |
+| F208 | EXIT-02 review | `src/main.rs` | `clamp_code` is now unreachable via `exit_code`; remove it or document it as defense against a future discriminant change. | completed |
 | F209 | DRYRUN-02 review | `src/repair/purge.rs` | `apply_purge` still emits `0 bytes would be freed` for a dry pass with no candidates; now documented, suppression would be a behavior change. | todo |
 | F210 | DRYRUN-02 review | `tests/repair_limits.rs` | The ceiling test cannot independently distinguish the up-front check from the post-repair re-check. | todo |
 | F211 | DRYRUN-02 review | `src/repair/phases/post.rs` | A real `--purge-after --plan-out <inside install>` deletes the plan document it just wrote; document or exclude it from the keep set. | todo |
@@ -369,6 +369,10 @@ until the main tasks and rework are done.
 | F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | todo |
 | F269 | REFACTOR-02 review | `src/repair/mod.rs` | `DownloadEstimate` mixes byte figures with four summary-shaped values; a `PlanSummaryValues` split would keep it about bytes. | todo |
 | F270 | REFACTOR-02 review | `src/repair/mod.rs` | `reported_bytes`'s doc names `--max-download-bytes`, while the guard is `ctx.limits.download_bytes`; another limit source would stale it. | todo |
+| F271 | EXIT-03 review | `src/config.rs` | `RunExit` uses implicit discriminants; `#[repr(u8)]` would make the boundary conversion infallible. | todo |
+| F272 | EXIT-03 review | `src/config.rs`, `src/main.rs` | The six exit variants are listed in three separate tests; a shared exhaustive source would prevent drift. | todo |
+| F273 | EXIT-03 review | `src/main.rs` | `parse_args` bypasses `exit_code` and exits with the raw `i32`; it would not fail loudly if `RunExit` outgrew `u8`. | todo |
+| F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | todo |
 
 ## Follow-up batches
 
@@ -407,7 +411,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | REFACTOR-01 | F80, F82 | done | Wave D, after PHASE-01, INPLACE-01, PURGE-PERF-01; medium; c21fa15, 231e6bd |
 | PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
-| EXIT-03 | F208 | pending_review | Wave E; clamp helper reachability; low; 7d883da |
+| EXIT-03 | F208 | done | Wave E; clamp helper reachability; low; 7d883da, 3602837 |
+| EXIT-04 | F271, F272, F273, F274 | todo | Wave E; structural exit-code width and single source of variants; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | todo | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
