@@ -26,7 +26,7 @@ use walkdir::WalkDir;
 use crate::config::{RunCtx, RunFailure};
 use crate::report::Summary;
 use crate::util;
-use crate::util::path::{join_rel, rel_from_base};
+use crate::util::path::{join_rel, rel_from_base, rel_pair_from_base};
 
 use super::metadata::Meta;
 use crate::repair::purge;
@@ -607,12 +607,9 @@ fn move_audio_cache_with(
     let mut moved = 0u64;
     let mut kept = 0u64;
     for src in files {
-        // The scope key is the rel spelling; the filesystem operation keeps the
-        // on-disk path itself, so a name that is not UTF-8 is not rewritten.
-        let Some(rel) = rel_from_base(&src, &cache) else {
-            continue;
-        };
-        let Ok(rel_path) = src.strip_prefix(&cache) else {
+        // One strip gives both halves: the `/` scope key and the byte-exact
+        // destination path, so a name that is not UTF-8 is not rewritten.
+        let Some((rel, rel_path)) = rel_pair_from_base(&src, &cache) else {
             continue;
         };
         if !scope.is_visible(&join_rel(cache_rel, Path::new(&rel))) {

@@ -173,7 +173,24 @@ pub fn clean_rel(rel: &str) -> Result<String> {
 /// under the base, but the empty rel names no file, and the walks skip the
 /// base itself.
 pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
-    Some(lossy_slash(path.strip_prefix(base).ok()?))
+    Some(rel_pair_from_base(path, base)?.0)
+}
+
+/// Strip `base` once and return both spellings a caller needs: the lossy `/`
+/// rel for the scope key, and the byte-exact relative path for the filesystem
+/// operation.
+///
+/// [`rel_from_base`] is the key-only half. A caller that keys a path and then
+/// moves it must not strip the base twice: the second strip could only
+/// disagree, and rebuilding the destination from the lossy string would
+/// rewrite a name that is not UTF-8. The path half keeps the source's own
+/// bytes, so the move lands on the same name.
+///
+/// The contract matches [`rel_from_base`]: `None` outside `base`, and
+/// `Some(("", ""))` for `base` itself.
+pub(crate) fn rel_pair_from_base<'a>(path: &'a Path, base: &Path) -> Option<(String, &'a Path)> {
+    let rel = path.strip_prefix(base).ok()?;
+    Some((lossy_slash(rel), rel))
 }
 
 /// Spell a path as a lossy string with `/` separators.
@@ -560,6 +577,49 @@ mod tests {
         // A sibling, or an ancestor, cannot be spelled relative to the base.
         assert_eq!(rel_from_base(Path::new("Other/a.pck"), base), None);
         assert_eq!(rel_from_base(base, &base.join("sub")), None);
+    }
+
+    /// The pair helper strips the base once and returns both halves a moving
+    /// caller needs: the `/` key and the byte-exact path. A name that is not
+    /// UTF-8 is lossy in the key and untouched in the path.
+    #[test]
+    fn rel_pair_from_base_returns_the_key_and_the_byte_exact_path() {
+        let base = Path::new("Game");
+        let nested = base.join("Audio/cache/sub/a.pck");
+        let (key, rel) = rel_pair_from_base(&nested, base).unwrap();
+        assert_eq!(key, "Audio/cache/sub/a.pck");
+        assert_eq!(rel, Path::new("Audio/cache/sub/a.pck"));
+
+        // The base itself yields the empty rel in both spellings.
+        let (key, rel) = rel_pair_from_base(base, base).unwrap();
+        assert_eq!(key, "");
+        assert_eq!(rel, Path::new(""));
+
+        // Outside the base there is no pair to return.
+        assert_eq!(rel_pair_from_base(Path::new("Other/a.pck"), base), None);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"bad\xff.pck");
+            let path = base.join(name);
+            let (key, rel) = rel_pair_from_base(&path, base).unwrap();
+            assert_eq!(key, "bad\u{fffd}.pck");
+            assert_eq!(rel.as_os_str().as_bytes(), b"bad\xff.pck");
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            let name =
+                std::ffi::OsString::from_wide(&[0x62, 0x61, 0x64, 0xD800, 0x2E, 0x70, 0x63, 0x6B]);
+            let path = base.join(&name);
+            let (key, rel) = rel_pair_from_base(&path, base).unwrap();
+            assert_eq!(key, "bad\u{fffd}.pck");
+            assert_eq!(
+                rel.as_os_str().encode_wide().collect::<Vec<u16>>(),
+                name.encode_wide().collect::<Vec<u16>>()
+            );
+        }
     }
 
     /// A name that is not UTF-8 is still reported: the rel is lossy by design,
