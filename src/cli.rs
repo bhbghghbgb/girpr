@@ -53,6 +53,8 @@ pub struct Args {
     /// SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker
     /// threads; `--io-threads` is a deprecated alias. Defaults to 4 when
     /// omitted; values above 1024 are a usage error.
+    ///
+    /// [default: 4]
     #[arg(long = "jobs", visible_alias = "io-threads")]
     pub jobs: Option<usize>,
 

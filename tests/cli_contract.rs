@@ -272,6 +272,10 @@ fn help_names_jobs_and_keeps_the_compatibility_alias_discoverable() {
         stdout.contains("--io-threads"),
         "the compatibility alias stays discoverable:\n{stdout}"
     );
+    assert!(
+        stdout.contains("[default: 4]"),
+        "the documented default is visible in help:\n{stdout}"
+    );
 }
 
 #[test]
