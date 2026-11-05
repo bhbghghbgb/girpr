@@ -75,7 +75,8 @@
 
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
-mod common;
+#[path = "common/digest.rs"]
+mod digest;
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
@@ -83,7 +84,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
-use common::md5hex;
+use digest::md5hex;
 use girpr_tempdir::TempDir;
 use server::{Bridge, Bundle, Origins};
 

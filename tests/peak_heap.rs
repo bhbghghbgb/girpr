@@ -56,14 +56,15 @@
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
+#[path = "common/digest.rs"]
+mod digest;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use common::md5hex;
+use digest::md5hex;
 use girpr::test_support::{ChunkFetch, ChunkSink, RealSleep, stream_chunk_to};
 use girpr_tempdir::TempDir;
 

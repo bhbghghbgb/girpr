@@ -686,7 +686,7 @@ fn xml_escape(s: &str) -> String {
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    super::common::md5hex(key.as_bytes())
+    super::digest::md5hex(key.as_bytes())
         .to_uppercase()
         .chars()
         .take(24)
