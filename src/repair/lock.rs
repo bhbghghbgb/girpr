@@ -31,7 +31,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// The in-install lock file older runs created. Kept only so the cleanup
 /// recognizes and preserves it; this module never creates it.
@@ -77,7 +77,7 @@ impl Lock {
         // open handle and its OS lock are what exclude. A file we did not
         // create is only rewritten when its body is already one of ours; an
         // arbitrary file (or a symlink target) is never truncated.
-        if may_write_body(&path, &mut file, created) {
+        if may_write_body(&path, &mut file, created)? {
             let body = format!(
                 "pid={}\nstarted={}\n",
                 std::process::id(),
@@ -220,29 +220,131 @@ fn open_lock_file(path: &Path) -> io::Result<(File, bool)> {
 
 /// May this run rewrite the body of the lock file?
 ///
-/// A file we created is ours. An existing file is only ours if it is a regular
-/// file (not a symlink or other special file, which opening may have followed)
-/// and already carries a lock body, or is empty. Anything else is left exactly
-/// as it is: the OS lock still excludes, and a refusal can report an
-/// unreadable body without having damaged a user file.
-fn may_write_body(path: &Path, file: &mut File, created: bool) -> bool {
+/// A file we created is ours. An existing file is only ours if the *open
+/// handle* is a regular file with exactly one name, the path still names that
+/// same file, and the body already carries a lock body or is empty. Anything
+/// else is left exactly as it is, except for the two shapes that would make the
+/// check unsound: a second name for the file (a hard link, which may be a user
+/// file that merely looks like ours) and a path that changed after the handle
+/// was opened (a symlink swapped for a regular file, say). Those are refused
+/// with an error rather than guessed at, because rewriting through the handle
+/// would reach a file the path check was meant to protect.
+///
+/// The check is on the handle, not only on the path, so a path swapped between
+/// `open` and this call cannot make a different file pass. On a platform that
+/// cannot report the link count or file identity, the body is left alone.
+fn may_write_body(path: &Path, file: &mut File, created: bool) -> Result<bool> {
     if created {
-        return true;
+        return Ok(true);
     }
-    let regular = std::fs::symlink_metadata(path)
-        .map(|meta| meta.file_type().is_file())
-        .unwrap_or(false);
-    if !regular {
-        return false;
+    let open = file
+        .metadata()
+        .with_context(|| format!("inspect open lock file {}", path.display()))?;
+    if !open.is_file() {
+        return Ok(false);
     }
+    // Read the body through the handle before deciding anything about the
+    // path. A body that is already foreign is left alone even when the file is
+    // shared: no write means no reason to refuse the run.
     if file.seek(SeekFrom::Start(0)).is_err() {
-        return false;
+        return Ok(false);
     }
     let mut head = [0u8; 8];
     let Ok(read) = file.read(&mut head) else {
-        return false;
+        return Ok(false);
     };
-    read == 0 || head[..read].starts_with(b"pid=")
+    if read != 0 && !head[..read].starts_with(b"pid=") {
+        return Ok(false);
+    }
+    match link_count(file) {
+        Some(1) => {}
+        Some(names) => bail!(
+            "lock file {} has {names} names (hard links); refusing to overwrite a \
+             file that may also be one of the user's",
+            path.display()
+        ),
+        // The platform cannot tell us whether another name exists: leave the
+        // body alone rather than truncate a file that may be shared.
+        None => return Ok(false),
+    }
+    let path_meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(_) => return Ok(false),
+    };
+    if !path_meta.file_type().is_file() {
+        return Ok(false);
+    }
+    match same_file(file, path) {
+        Some(true) => {}
+        Some(false) => bail!(
+            "lock file {} no longer names the file that was opened; refusing to \
+             overwrite a file the path check was meant to protect",
+            path.display()
+        ),
+        // Same platform limitation as the link count: keep the body as it is.
+        None => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// How many names the file has, when the platform can say.
+///
+/// A count above one means a hard link: the same bytes are reachable under
+/// another path, so truncating them would change a file this check never saw.
+#[cfg(unix)]
+fn link_count(file: &File) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    file.metadata().ok().map(|meta| meta.nlink())
+}
+
+#[cfg(windows)]
+fn link_count(file: &File) -> Option<u64> {
+    winapi_util::file::information(file)
+        .ok()
+        .map(|info| info.number_of_links())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn link_count(_file: &File) -> Option<u64> {
+    None
+}
+
+/// Whether the open file and the path describe the same file, when the
+/// platform can say.
+///
+/// `None` means the platform cannot compare them, so the caller must not treat
+/// the unknown as a match.
+#[cfg(unix)]
+fn same_file(file: &File, path: &Path) -> Option<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let open = file.metadata().ok()?;
+    let other = std::fs::symlink_metadata(path).ok()?;
+    Some(open.dev() == other.dev() && open.ino() == other.ino())
+}
+
+#[cfg(windows)]
+fn same_file(file: &File, path: &Path) -> Option<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    // Ask for the reparse point itself, not what it points at: if the path was
+    // swapped for a symlink after `open`, the two identities must not match.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let open = winapi_util::file::information(file).ok()?;
+    let other = OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    let other = winapi_util::file::information(&other).ok()?;
+    Some(
+        open.volume_serial_number() == other.volume_serial_number()
+            && open.file_index() == other.file_index(),
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file(_file: &File, _path: &Path) -> Option<bool> {
+    None
 }
 
 /// The refusal for a lock that a live process holds.
@@ -446,6 +548,88 @@ mod tests {
         let lock = Lock::acquire(&dir).expect("the existing target can be locked");
         assert_eq!(lock.path(), path);
         drop(lock);
+        assert_eq!(
+            std::fs::read(&target).expect("the target is untouched"),
+            b"user data"
+        );
+    }
+
+    #[test]
+    fn a_hard_linked_lock_file_is_not_rewritten() {
+        // A second name for the file means the body is not unambiguously ours:
+        // the other name may be the user's file, and truncating through the
+        // lock path would change it too.
+        for (tag, body) in [
+            ("hardlink_empty", &b""[..]),
+            (
+                "hardlink_pid",
+                &b"pid=1\nstarted=2000-01-01T00:00:00Z\n"[..],
+            ),
+        ] {
+            let dir = girpr_tempdir::TempDir::new("girpr_test_lock", tag);
+            let target = dir.join("user-written.txt");
+            std::fs::write(&target, body).unwrap();
+            let path = lock_path(&dir);
+            let _clean = LockFileGuard::new(path.clone());
+            std::fs::hard_link(&target, &path).expect("create the second name");
+            let err = Lock::acquire(&dir).expect_err("a hard-linked file is refused");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("hard links"), "{msg}");
+            assert!(msg.contains(path.to_string_lossy().as_ref()), "{msg}");
+            assert_eq!(
+                std::fs::read(&target).expect("the other name is still there"),
+                body,
+                "the file behind the other name was not touched"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hard_link_to_a_foreign_body_is_left_alone() {
+        // The link count only matters when the body looks like ours: with a
+        // foreign body nothing would be written, so the run may still lock it.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "hardlink_foreign");
+        let target = dir.join("user-written.txt");
+        std::fs::write(&target, "this is not a lock body").unwrap();
+        let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
+        std::fs::hard_link(&target, &path).expect("create the second name");
+        let lock = Lock::acquire(&dir).expect("there is no body of ours to overwrite");
+        assert_eq!(lock.path(), path);
+        drop(lock);
+        assert_eq!(
+            std::fs::read(&target).expect("the other name is still there"),
+            b"this is not a lock body"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_swapped_after_open_is_not_written_through_the_old_handle() {
+        use std::os::unix::fs::symlink;
+
+        // `open` follows a symlink to the user's file; the path is then
+        // swapped for a regular file before the body check runs. The path-only
+        // view looks writable, but the handle still points at the target.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "swapped");
+        let target = dir.join("user-written.txt");
+        std::fs::write(&target, "user data").unwrap();
+        let path = lock_path(&dir);
+        let _clean = LockFileGuard::new(path.clone());
+        symlink(&target, &path).expect("the symlink is created");
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("open through the symlink");
+        std::fs::remove_file(&path).expect("remove the symlink");
+        std::fs::write(&path, "pid=1\nstarted=2000-01-01T00:00:00Z\n")
+            .expect("put a regular file at the lock path");
+
+        let err = may_write_body(&path, &mut file, false)
+            .expect_err("the handle and the path no longer agree");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no longer names"), "{msg}");
         assert_eq!(
             std::fs::read(&target).expect("the target is untouched"),
             b"user data"

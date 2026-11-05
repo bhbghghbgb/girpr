@@ -580,6 +580,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "walkdir",
+ "winapi-util",
  "zstd",
 ]
 

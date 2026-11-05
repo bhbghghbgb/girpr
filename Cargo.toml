@@ -67,6 +67,13 @@ glob = "0.3"
 # it carries the `StreamExt` combinators, and it pulls `slab` along with it.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
+[target.'cfg(windows)'.dependencies]
+# A safe wrapper over the Windows call that reports a file's link count and
+# stable identity. std does not expose either on Windows (`windows_by_handle`
+# is still unstable), and the lock must not rewrite a file that may have
+# another name. Already in the graph through `walkdir`.
+winapi-util = "0.1"
+
 [dev-dependencies]
 # The scratch-directory helper, shared with the two dev tools: one name, one
 # construction and one cleanup for every test in the workspace. A
