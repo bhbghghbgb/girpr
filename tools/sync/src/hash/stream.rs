@@ -1,8 +1,7 @@
 //! [`Digests`] and [`hash_file`]: streaming file digests in a single pass.
 
 use anyhow::{Context, Result};
-use md5::Md5;
-use sha2::Digest;
+use md5::{Digest as _, Md5};
 use std::io::Read;
 use std::path::Path;
 
