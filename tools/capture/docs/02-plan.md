@@ -146,9 +146,10 @@ does.
 `tokio` is requested with only `rt-multi-thread`, `macros` and `time`, which
 also brings `rt`. `reqwest` resolves tokio with `net`, `io-util` and `sync`
 whatever this crate asks for, so those and their support features (`bytes`,
-`libc`, `mio`, `socket2`) arrive transitively. The direct request therefore
-omits `fs`, `io-std`, `process`, `signal` and `parking_lot`, which nothing in
-this crate uses: those are the features the shorter list actually saves.
+`libc`, `mio`, `socket2`, `windows-sys`) arrive transitively. The direct
+request therefore omits `fs`, `io-std`, `process`, `signal` and
+`parking_lot`, which nothing in this crate uses: those are the features the
+shorter list actually saves.
 `spawn`, `spawn_blocking` and `JoinSet` come with `rt`.
 
 Deliberately **not** `twox-hash`: the manifest-id prefix is not a hash of
