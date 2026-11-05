@@ -388,7 +388,8 @@ are already right where they belong, the temp path resumes the `*_tmp` prefix).
 
 ## 3. Disk-usage argument (why minimal)
 
-- Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
+- Pre/post files-cleanup bounds "before/after" to exactly the live file set plus
+  the metadata keeps (`config.ini` and a legacy in-install lock) and the blacklist.
 - During: transient per active file = the file's **growth** under the in-place path
   (`≤ 1 × file size` under `--repair-mode temp`, where the `_tmp` grows beside the old
   file) plus pipe buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip

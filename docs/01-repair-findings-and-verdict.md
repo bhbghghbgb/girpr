@@ -180,8 +180,8 @@ Extra behavior changes recommended (beyond 1:1 port):
 - **Files-cleanup both before and after** (`--purge-before` / `--purge-after` run the
   same Collapse `GetUnusedFileInfoList`-parity cleanup; only timing differs);
   dry-run lists bytes. Expected set per §3 v1 scope; keep minimal
-  (`config.ini` + manifest membership + `audio_lang_*` / `Audio_*_pkg_version`
-  pattern).
+  (`config.ini` + a legacy in-install `girpr.lock` + manifest membership +
+  blacklisted paths + `audio_lang_*` / `Audio_*_pkg_version` pattern).
 - Bound file parallelism (`--io-threads`; chunks sequential within a file) for HDD vs SSD.
 - Skip SDK/WPF downloads and dispatcher persistent writes in v1 (game launches without them; add
   `--with-sdk --with-wpf` later if a channel proves otherwise). Always move audio cache→res if the

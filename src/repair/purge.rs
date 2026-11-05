@@ -382,11 +382,14 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 
 /// Metadata files the files-cleanup must keep.
 ///
-/// `config.ini` and the single-writer lock. `config.ini` lives inside
+/// `config.ini` and the legacy in-install lock. `config.ini` lives inside
 /// `game_dir` but NEVER appears in Sophon chunk manifests, and the tool
 /// rewrites it after patching — purging it would break the version
 /// bookkeeping. The lock is the other root-level file that is not in the
-/// manifest: a run that holds it must not lose its exclusion to the sweep.
+/// manifest: older runs wrote `girpr.lock` there, and a leftover is preserved
+/// rather than deleted behind the user's back. The run's own lock lives
+/// outside the install ([`crate::repair::lock`]), so a live run never depends
+/// on this rule; it exists only for the legacy file.
 ///
 /// Everything else in this set's sense (exe, res-category / audio-scan
 /// bookkeeping, `ScreenShot/`, logs, temps) is intentionally NOT kept:
@@ -398,8 +401,8 @@ fn remove_emptied_dirs(dirs: &[PathBuf]) {
 ///
 /// Blacklisted paths are a **separate** keep input to [`plan_purge`] (rule 3),
 /// not part of this set: they come from the launcher's `blacklist_dir`, while
-/// these two are files the tool itself owns. The doc for [`keep_set`] is not
-/// the whole expected set; [`classify_purge_path`] is.
+/// these two are metadata keeps the cleanup recognizes. The doc for [`keep_set`]
+/// is not the whole expected set; [`classify_purge_path`] is.
 ///
 /// NOTE: the game flags unknown executables inside the game folder, so the
 /// tool binary itself must never live there; the exe needs no keep rule.
@@ -415,9 +418,10 @@ pub fn keep_set() -> &'static HashSet<String> {
     KEEP.get_or_init(|| {
         HashSet::from([
             "config.ini".to_string(),
-            // The single-writer lock lives at the game dir's root and is not in
-            // the manifest. The cleanup must never eat it: a run that holds it
-            // would lose its exclusion and a second run could start beside it.
+            // Older runs kept the single-writer lock at the game dir's root and
+            // it is not in the manifest. A leftover must not be eaten by the
+            // sweep: this run's lock is outside the install, so the keep rule
+            // preserves the legacy file without carrying its exclusion.
             crate::repair::lock::LOCK_FILE.to_string(),
         ])
     })
@@ -1157,9 +1161,9 @@ mod tests {
 
     #[test]
     fn the_keep_set_is_config_and_the_lock() {
-        // The lock file lives at the game dir's root and is not in the
-        // manifest: the cleanup must not eat it, or a run that holds it
-        // would lose its exclusion.
+        // The legacy lock file lives at the game dir's root and is not in the
+        // manifest: the cleanup must not eat a leftover. This run's own lock is
+        // outside the install.
         let keep = keep_set();
         assert!(keep.contains("config.ini"));
         assert!(keep.contains(crate::repair::lock::LOCK_FILE));
