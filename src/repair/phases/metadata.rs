@@ -235,7 +235,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         let game_dir = game_dir.to_path_buf();
         tokio::task::spawn_blocking(move || {
             util::read_game_version(&game_dir)
-                .context("read local game version")
+                .context(LocalRead::Version.label())
                 .map_err(RunFailure::usage)
         })
     };
@@ -319,7 +319,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
                 .context("res_category_dir")
                 .map_err(RunFailure::metadata)?;
             Ok(util::read_ignore_categories(&p)
-                .context("read res_category ignore list")
+                .context(LocalRead::Ignore.label())
                 .map_err(RunFailure::usage)?
                 .unwrap_or_default())
         })
@@ -336,7 +336,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
                 .context("blacklist_dir")
                 .map_err(RunFailure::metadata)?;
             Ok(util::read_blacklist(&p)
-                .context("read blacklist")
+                .context(LocalRead::Blacklist.label())
                 .map_err(RunFailure::usage)?
                 .unwrap_or_default())
         })
@@ -351,7 +351,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         let explicit = ctx.audio_explicit.then(|| ctx.audio.clone());
         tokio::task::spawn_blocking(move || {
             audio::resolve_effective_audio(&game_dir, &scan_dir, explicit.as_ref())
-                .context("resolve audio selection")
+                .context(LocalRead::Audio.label())
                 .map_err(RunFailure::usage)
         })
     };
