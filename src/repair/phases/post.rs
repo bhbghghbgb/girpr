@@ -894,7 +894,9 @@ mod tests {
 
     /// A rename the caller refuses still publishes the file through the copy
     /// fallback: the destination gets the whole file, no temp survives, and the
-    /// source is removed only after the publish. The first rename is injected
+    /// source is removed only after the publish. The injected copy checks that
+    /// the source is still present and the target still absent while it runs.
+    /// The first rename is injected
     /// because a same-volume rename does not fail portably while the copy of
     /// the same pair succeeds.
     #[test]
@@ -915,7 +917,18 @@ mod tests {
                 &PathScope::default(),
                 false,
                 |_, _| Err(std::io::Error::other("injected rename refusal")),
-                |from, to| std::fs::copy(from, to),
+                |from, to| {
+                    assert!(
+                        from.exists(),
+                        "the source is still present when the fallback copies it"
+                    );
+                    assert!(
+                        !target.exists(),
+                        "the fallback copies before the target is published"
+                    );
+                    assert!(!to.exists(), "the temp sibling starts absent");
+                    std::fs::copy(from, to)
+                },
             )
         });
 
