@@ -20,8 +20,8 @@
 //! that keeps the contract passes and a reordered or duplicated record fails.
 //!
 //! NOTE: `--include` matching zero *planned* files is also exit `1`, and a
-//! tripped ceiling is exit `5`, but both are exercised in
-//! `tests/repair_offline.rs`; this file's argument cases never have a server.
+//! tripped ceiling is exit `5`, but the ceiling cases are exercised in
+//! `tests/repair_limits.rs`; this file's argument cases never have a server.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

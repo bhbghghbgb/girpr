@@ -3,38 +3,27 @@
 //! Everything runs against a local mock HoYoPlay + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
 //! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
-//! mock, so a sandbox without internet still passes. Three cases run the
+//! mock, so a sandbox without internet still passes. Three cases drive the
 //! real binary instead, over those same overrides.
 //!
-//! The first ten cases are the repair pipeline (each a full `repair::run`):
-//! 1. repair of missing + corrupt files (exit 0, bytes verified, tmp swept)
-//! 2. `--check-only` clean (exit 0) and dirty (exit 4, writes nothing)
-//! 3. `--dry-run` writes nothing
-//! 4. `--purge-after` / `--purge-before` delete orphans into one counter
-//! 5. deprecated files deleted in the post phase
-//! 6. verified local-slice reuse downloads only the bad chunk (S2)
-//! 7. partial `_tmp` prefix resumed by length, gated by final MD5
-//! 8. explicit audio selection overwrites the scan file
-//! 9. a non-chunk `default_download_mode` is refused with exit 1
-//! 10. the deprecated-files call carries the per-launcher channel
+//! This file covers the offline repair run and the run-level contract:
+//! - the end-to-end repair of missing and corrupt files, and that a failed
+//!   audio move is best-effort while the version still advances;
+//! - `--dry-run` writes nothing;
+//! - a manifest path that escapes the game dir, and a chunk range that
+//!   overflows, are refused before any write;
+//! - the per-file write counters and the `--repair-mode` group;
+//! - the single-writer lock: a second run is refused, a scoped run takes the
+//!   same lock, read-only modes skip it, and a legacy in-install lock is left
+//!   alone;
+//! - the non-chunk download mode is a usage refusal, including when the branch
+//!   call also fails;
+//! - manifest selection: no local build, build-order selection, an ignored
+//!   category, and an unserved extra manifest.
 //!
-//! The rest are grouped by the tier they cover (see
-//! [`docs/04-scope-limitation-spec.md`](../docs/04-scope-limitation-spec.md)):
-//! - **path scope** — include-only repairs exactly one file, a purge under a
-//!   scope leaves the fixture alone, deprecated files out of scope survive, an
-//!   `--include` matching nothing and `--audio` under a scope are exit `1`
-//! - **resource ceilings** — `--max-files`, `--max-delete-bytes` and
-//!   `--max-download-bytes` refuse (exit `5`) or pass on the boundary, a broken
-//!   reuse path trips the runtime stop, a refused run leaves no `game_dir`
-//! - **`--print-plan`** — reports the plan, writes nothing, `--plan-out` JSON
-//!   agrees with the plan total, a ceiling still trips it
-//! - **`--max-write-bytes`, `--fail-fast`, `--purge-only`** — the write stop, a
-//!   500 origin, and `--purge-only` alone and with `--dry-run`
-//! - **read-only discipline** — `--check-only`/`--print-plan` issue no
-//!   deprecated-list call (a dry run does, to list its deletes), `download_bytes`
-//!   counts only promoted files even after a retry
-//! - **endpoint override** — the real binary over `--hyp-base` / `--sophon-base`,
-//!   and the explicit-beats-env precedence
+//! The scope, ceiling, plan-output, write-stop, read-only, and endpoint-override
+//! cases live in their own integration files (`tests/repair_scope.rs`,
+//! `tests/repair_limits.rs`, `tests/repair_plan.rs`, and so on).
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
