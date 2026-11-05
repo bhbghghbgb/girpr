@@ -233,13 +233,28 @@ fn test_no_fsync() -> bool {
     })
 }
 
+/// The refusal for a game dir that cannot hold `config.ini`.
+///
+/// A missing path and a path that exists as something other than a directory
+/// are both errors here, but they are different mistakes: the message must name
+/// the one that happened instead of calling both "does not exist".
+fn game_dir_refusal(game_dir: &Path) -> anyhow::Error {
+    let state = if game_dir.exists() {
+        "is not a directory"
+    } else {
+        "does not exist"
+    };
+    anyhow::anyhow!("game dir {} {state}", game_dir.display())
+}
+
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
 ///
-/// The game directory must already exist; only `config.ini` itself may be
-/// missing (the fresh-install input). A missing directory is an error and is
-/// not created, even though the shared atomic writer would create a parent:
-/// this writer repairs an existing install, so a wrong path must be reported
-/// rather than turned into a stray file tree.
+/// The game directory must already exist as a directory; only `config.ini`
+/// itself may be missing (the fresh-install input). A missing directory, or a
+/// path that exists but is not a directory, is an error and is not created,
+/// even though the shared atomic writer would create a parent: this writer
+/// repairs an existing install, so a wrong path must be reported rather than
+/// turned into a stray file tree.
 ///
 /// Collapse parity (`GameVersionBase.UpdateGameVersion` /
 /// `UpdateGameChannels` and `Hi3Helper.Data.IniFile` load/save):
@@ -289,20 +304,25 @@ pub fn write_config_ini(
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             // `NotFound` covers both "no config.ini yet" (fresh install, a
-            // supported input) and "no game dir". This writer only updates an
-            // existing install, so the missing directory stays an error: the
-            // post phase runs after the game dir was scanned, and creating a
-            // tree for a wrong path would hide the mistake instead of
-            // reporting it.
+            // supported input) and a game dir that is missing or not a
+            // directory. This writer only updates an existing install, so the
+            // latter stays an error: the post phase runs after the game dir was
+            // scanned, and creating a tree for a wrong path would hide the
+            // mistake instead of reporting it.
             if !game_dir.is_dir() {
-                return Err(anyhow::anyhow!(
-                    "game dir {} does not exist",
-                    game_dir.display()
-                ));
+                return Err(game_dir_refusal(game_dir));
             }
             String::new()
         }
-        Err(e) => return Err(e.into()),
+        Err(e) => {
+            // Some platforms answer `ENOTDIR` for `<file>/config.ini` instead
+            // of `NotFound`; name the real condition there too rather than
+            // passing the nested read through as an unreadable file.
+            if !game_dir.is_dir() && game_dir.exists() {
+                return Err(game_dir_refusal(game_dir));
+            }
+            return Err(e.into());
+        }
     };
     let mut sections = parse_ini(&text);
     merge_ini(&mut sections, latest, biz, channel);
@@ -979,6 +999,33 @@ mod tests {
             "the refusal names the missing game dir: {err:#}"
         );
         assert!(!missing.exists(), "the writer must not create the game dir");
+    }
+
+    /// A path that exists as a file is a different mistake from a missing
+    /// game dir, and the refusal says which one happened; it still does not
+    /// touch the path.
+    #[test]
+    fn config_bump_refuses_a_game_path_that_is_not_a_directory() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "game_path_is_file");
+        let path = root.join("not-a-dir");
+        std::fs::write(&path, b"not a game dir").unwrap();
+
+        let err = write_config_ini(&path, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a non-directory game path must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("is not a directory") && msg.contains("not-a-dir"),
+            "the refusal names the real condition: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "a present path must not be reported as missing: {msg}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"not a game dir",
+            "the writer must not replace the path it refused"
+        );
     }
 
     /// An accepted config write and a failed one both leave no temp sibling:
