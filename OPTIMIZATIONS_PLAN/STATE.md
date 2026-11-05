@@ -271,10 +271,10 @@ until the main tasks and rework are done.
 | F170 | INPLACE-01 review | `src/repair/file/inplace.rs` | The natural evasion window is narrower than the forced test suggests; the recorded mtime must share the coarse tick with the post-scan rewrite. | completed |
 | F171 | INPLACE-01 review | `src/repair/file/inplace.rs` | `trim_is_free` uses `is_none_or`, so an overflowing `r + s` would read as inside the target if the offset type ever widens. | completed |
 | F172 | INPLACE-01 review | `src/repair/file/inplace.rs` | `reusable_verdict` stats the path instead of the open handle, so a replacement between open and stat is not detected. | completed |
-| F173 | CHECK-01 review | `src/repair/phases/check.rs` | The live-progress test observes the fold by a bounded `yield_now` spin; a oneshot/watch would remove the timing assumption. | todo |
-| F174 | CHECK-01 review | `src/report/summary.rs` | `check_damaged_chunks` is 0 both for "no damage" and "never measured"; an `Option` accessor would disambiguate. | todo |
-| F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | todo |
-| F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | todo |
+| F173 | CHECK-01 review | `src/repair/phases/check.rs` | The live-progress test observes the fold by a bounded `yield_now` spin; a oneshot/watch would remove the timing assumption. | completed |
+| F174 | CHECK-01 review | `src/report/summary.rs` | `check_damaged_chunks` is 0 both for "no damage" and "never measured"; an `Option` accessor would disambiguate. | completed |
+| F175 | CHECK-01 review | `src/repair/phases/check.rs` | After a panic, in-flight blocking checks keep reading until they finish, lengthening the post-failure tail. | completed |
+| F176 | CHECK-01 review | `src/repair/mod.rs` | The `run_check_only` comment about a dropped clone predates the panic path and is imprecise. | completed |
 | F177 | REPORT-API-01 review | `src/hyp.rs`, `src/repair/phases/metadata.rs` | `GameConfig::game`/`ChunkBuild::tag` are unread; validate them against the requested biz/tag in a hardening batch. | todo |
 | F178 | REPORT-API-01 review | `src/hyp.rs` | `ChunkBuild::tag`'s comment says the run compares the build id, but it only reports it; the `ManifestFile` size doc also overstates. | todo |
 | F179 | REPORT-API-01 review | `README.md` | The module map still names `src/report.rs`, `emit_progress` and `spawn_progress_reporter`. | todo |
@@ -320,6 +320,8 @@ until the main tasks and rework are done.
 | F219 | INPLACE-02 review | `tests/repair_machinery.rs` | The fresh-scan fixture's mtime is fresh, so the new age rule forces the re-read; the mtime-differs branch is no longer exercised. | todo |
 | F220 | INPLACE-02 review | `src/repair/file/inplace.rs` | The residual-race doc names only a store that never advances mtime; coarser-than-2 s stores and backdating writers also evade it. | todo |
 | F221 | INPLACE-02 review | `src/repair/file/inplace.rs` | The age rule assumes a forward-moving wall clock; a backwards jump is unhandled and worth a note. | todo |
+| F222 | CHECK-02 review | `src/repair/phases/check.rs` | The live-progress test blocks indefinitely if a fold is lost; a bounded `recv_timeout` would fail clearly. | todo |
+| F223 | CHECK-02 review | `src/report/summary.rs` | The raw `check_damaged_chunks` field is still `pub`; the accessor doc discourages direct use, but the field could be private. | todo |
 
 ## Follow-up batches
 
@@ -366,6 +368,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-02 | F214, F215 | todo | Wave E; coarse-mtime flake and test focus; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | todo | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low |
 | INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
+| CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | todo | Wave D; audio-move path reuse and non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | todo | Wave E; make the download estimate read as pure; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
@@ -388,7 +391,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-02 | F161, F162, F163, F164 | todo | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | todo | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
-| CHECK-02 | F173, F174, F175, F176 | pending_review | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d |
+| CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
 Merge-conflict warnings: `src/repair/phases/post.rs` is the hottest file
 (TEMP-PUBLISH-01, DRYRUN-01, PURGE-PERF-01, PATHHELPERS-01) and
