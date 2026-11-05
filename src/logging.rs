@@ -64,14 +64,15 @@ const FILE_BUFFER_CAPACITY: usize = 64 * 1024;
 /// because buffering nothing buys nothing.
 type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
 
-/// The sinks [`flush_log`] reaches, in install order, appended by
+/// The sink [`flush_log`] reaches, registered by a successful
 /// [`init_tracing`].
 ///
 /// Empty until logging is installed, which is what makes [`flush_log`] safe on
-/// a path that never got that far. Every install is kept rather than only the
-/// first: the global subscriber can be installed once, but a later call still
-/// opened a file the caller asked for, and an unflushable handle would silently
-/// drop that file's tail.
+/// a path that never got that far. It holds at most one sink even when
+/// [`init_tracing`] is called again: the global subscriber can be installed
+/// only once, so only the sink wired into that subscriber receives events. A
+/// later install is rejected and its file is dropped, so keeping the handle
+/// would retain a file that can never be written to.
 static FILE_SINKS: Mutex<Vec<FileSink>> = Mutex::new(Vec::new());
 
 /// A `MakeWriter` that hands `tracing` the shared file sink.
@@ -166,9 +167,10 @@ pub fn init_tracing(
             }
         },
     }));
-    // The subscriber owns one handle; `flush_log` owns the other, so the tail
-    // can still be written after the subscriber has no more events to render.
-    install_sink(Arc::clone(&file_writer));
+    // The subscriber owns one handle; `flush_log` gets the other once the
+    // subscriber accepts it, so the tail can still be written after the
+    // subscriber has no more events to render.
+    let flush_sink = Arc::clone(&file_writer);
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(SharedWriter(file_writer))
         .with_ansi(false)
@@ -178,13 +180,16 @@ pub fn init_tracing(
     // whole: the events would go to somebody else's subscriber and the log file
     // would stay empty, with nothing to say so. It cannot happen in this
     // binary's own `main`, and if it ever does, the run says so rather than
-    // pretending to have logged.
-    if let Err(e) = tracing_subscriber::registry()
+    // pretending to have logged. Only an accepted sink is registered: a
+    // rejected layer never receives an event, so retaining its file would keep
+    // a handle that has nothing to flush.
+    match tracing_subscriber::registry()
         .with(stderr_layer)
         .with(file_layer)
         .try_init()
     {
-        eprintln!("WARN cannot install the tracing subscriber: {e}");
+        Ok(()) => install_sink(flush_sink),
+        Err(e) => eprintln!("WARN cannot install the tracing subscriber: {e}"),
     }
 
     match plan.file_path() {
@@ -194,12 +199,16 @@ pub fn init_tracing(
     plan
 }
 
-/// Register a sink so [`flush_log`] reaches it.
+/// Register the sink the accepted subscriber writes through.
+///
+/// This replaces any previous registration. Only the first subscriber install
+/// can succeed, so a second accepted sink cannot exist; replacing is what keeps
+/// a later registration from pinning an unreachable file handle for the rest of
+/// the process's life.
 fn install_sink(sink: FileSink) {
-    FILE_SINKS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(sink);
+    let mut sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner());
+    sinks.clear();
+    sinks.push(sink);
 }
 
 /// Flush the log file on the way out.
@@ -271,6 +280,30 @@ mod tests {
     use super::*;
     use girpr_tempdir::TempDir;
     use std::sync::atomic::AtomicUsize;
+
+    /// Serializes tests that touch the process-wide sink registry.
+    static SINK_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A writer that records everything it is given and counts its flushes.
+    struct RecordingWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        flushes: Arc<AtomicUsize>,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
 
     /// A writer whose only observable act is the flush.
     struct FlushRecorder {
@@ -348,6 +381,63 @@ mod tests {
             b"the run's tail\n",
             "the flush writes the buffered tail"
         );
+    }
+
+    #[test]
+    fn flush_log_writes_the_buffered_output_of_an_installed_sink() {
+        let _guard = SINK_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let flushes = Arc::new(AtomicUsize::new(0));
+        let writer = RecordingWriter {
+            bytes: Arc::clone(&bytes),
+            flushes: Arc::clone(&flushes),
+        };
+        let sink: FileSink = Arc::new(Mutex::new(
+            Box::new(BufWriter::with_capacity(64, writer)) as Box<dyn Write + Send + Sync>
+        ));
+
+        install_sink(Arc::clone(&sink));
+        sink.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write_all(b"the run's tail\n")
+            .expect("write into the buffer");
+        assert_eq!(
+            &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
+            b"",
+            "the record is still in the buffer before the exit flush"
+        );
+
+        flush_log();
+
+        assert_eq!(
+            &*bytes.lock().unwrap_or_else(|e| e.into_inner()),
+            b"the run's tail\n",
+            "the installed sink receives the buffered tail"
+        );
+        assert_eq!(flushes.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn reinstalling_replaces_the_sink_instead_of_retaining_it() {
+        let _guard = SINK_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let first_sink = recording_sink(&first);
+
+        install_sink(Arc::clone(&first_sink));
+        install_sink(recording_sink(&second));
+        flush_log();
+
+        assert_eq!(
+            first.load(Ordering::Relaxed),
+            0,
+            "the replaced sink is no longer registered"
+        );
+        assert_eq!(second.load(Ordering::Relaxed), 1);
     }
 
     #[test]
