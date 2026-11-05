@@ -502,9 +502,10 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     let mode = resolve_mode(ctx.repair_mode, &final_path);
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
-    // mean that while the *first* file alone spends 5 × (15 s of chunk-fetch
-    // backoff + 10 s of file-level backoff) ≈ 125 s of pure sleeping before anyone
-    // else is spared. The flag is an explicit "tell me fast"; a user who wants the
+    // mean that while the *first* file alone spends 5 × 10 s of chunk-fetch
+    // backoff plus 10 s of file-level backoff ≈ 60 s of pure sleeping before
+    // anyone else is spared (one failing chunk per attempt). The flag is an
+    // explicit "tell me fast"; a user who wants the
     // full budget does not pass it. Counter semantics are unchanged: a file that
     // fails on its first attempt is still just `files_failed`.
     let max_attempts = if ctx.summary.fail_fast() {
