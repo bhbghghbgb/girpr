@@ -858,6 +858,44 @@ mod tests {
         assert!(!tmp.exists(), "no temp sibling outlives the publish");
     }
 
+    /// A target that has no file name is refused before a temp sibling is
+    /// named: [`util::path::temp_sibling`] would otherwise invent a name and
+    /// publish under something the caller never asked for.
+    #[test]
+    fn a_target_without_a_file_name_is_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "no_file_name");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        std::fs::create_dir_all(base.join("Audio/res")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        // A trailing `..` is the portable path with no file name, and its temp
+        // sibling would land beside `Audio/res`, where it can be seen.
+        let target = base.join("Audio/res").join("..");
+        assert!(target.file_name().is_none(), "the test needs no file name");
+        let tmp = util::path::temp_sibling(&target);
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        let copied = std::cell::Cell::new(false);
+        let err = copy_publish_with(&src, &target, |_, _| {
+            copied.set(true);
+            Ok(0)
+        })
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), "audio cache destination has no file name");
+        assert!(
+            !copied.get(),
+            "the refusal happens before any copy is attempted"
+        );
+        assert!(!tmp.exists(), "the refusal leaves no temp sibling");
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"cache bytes",
+            "the refused publish keeps its source"
+        );
+    }
+
     /// The other half of the same line: a relocation that did happen is
     /// reported with its counts.
     #[test]
