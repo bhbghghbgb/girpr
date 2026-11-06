@@ -48,6 +48,11 @@ fn from_str_is_case_insensitive_without_help() {
 /// character is refused as typed: `\u{212A}` is the Kelvin sign, which
 /// `to_lowercase` maps onto `k`, so a Unicode fold would rewrite
 /// `bla\u{212A}e3` to `blake3` before the error was built.
+///
+/// No supported name contains `k` today, so the lookalike cannot reach an
+/// accepted spelling. The witness is `blake3` spelled with the Kelvin sign, which
+/// is the likely first supported name containing `k`: if it is added, the same
+/// case becomes an accepted-name lookalike and this test still pins the refusal.
 #[test]
 fn hash_names_fold_ascii_case_only() {
     assert_eq!(parse(&["MD5"]), vec![HashAlg::Md5]);
@@ -67,6 +72,12 @@ fn hash_names_fold_ascii_case_only() {
     assert!(
         parse_any_of(&["bla\u{212A}e3".to_string()]).is_err(),
         "and any-of inherits the same refusal"
+    );
+    // The parser itself keeps the typed spelling too, without `parse_hash_list`
+    // having lowercased the input first.
+    assert_eq!(
+        "bla\u{212A}e3".parse::<HashAlg>().unwrap_err().to_string(),
+        "unsupported hash 'bla\u{212A}e3'"
     );
 }
 
