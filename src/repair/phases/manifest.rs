@@ -573,9 +573,16 @@ mod tests {
             ["first", "second", "third"],
             "the reader yields in selection order"
         );
-        assert!(
-            seen[0].1.is_err(),
-            "the first selection's failure is reported first even though it settled last"
+        let first_error = seen[0]
+            .1
+            .as_ref()
+            .expect_err(
+                "the first selection's failure is reported first even though it settled last",
+            )
+            .to_string();
+        assert_eq!(
+            first_error, "the first manifest is down",
+            "the first selection's own failure is reported, not a later one"
         );
         assert!(seen[1].1.is_ok() && seen[2].1.is_ok());
     }
