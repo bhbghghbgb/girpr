@@ -369,10 +369,10 @@ until the main tasks and rework are done.
 | F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | skipped (already accurate) |
 | F269 | REFACTOR-02 review | `src/repair/mod.rs` | `DownloadEstimate` mixes byte figures with four summary-shaped values; a `PlanSummaryValues` split would keep it about bytes. | completed |
 | F270 | REFACTOR-02 review | `src/repair/mod.rs` | `reported_bytes`'s doc names `--max-download-bytes`, while the guard is `ctx.limits.download_bytes`; another limit source would stale it. | completed |
-| F271 | EXIT-03 review | `src/config.rs` | `RunExit` uses implicit discriminants; `#[repr(u8)]` would make the boundary conversion infallible. | todo |
-| F272 | EXIT-03 review | `src/config.rs`, `src/main.rs` | The six exit variants are listed in three separate tests; a shared exhaustive source would prevent drift. | todo |
-| F273 | EXIT-03 review | `src/main.rs` | `parse_args` bypasses `exit_code` and exits with the raw `i32`; it would not fail loudly if `RunExit` outgrew `u8`. | todo |
-| F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | todo |
+| F271 | EXIT-03 review | `src/config.rs` | `RunExit` uses implicit discriminants; `#[repr(u8)]` would make the boundary conversion infallible. | completed |
+| F272 | EXIT-03 review | `src/config.rs`, `src/main.rs` | The six exit variants are listed in three separate tests; a shared exhaustive source would prevent drift. | completed |
+| F273 | EXIT-03 review | `src/main.rs` | `parse_args` bypasses `exit_code` and exits with the raw `i32`; it would not fail loudly if `RunExit` outgrew `u8`. | completed |
+| F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | completed |
 | F275 | DRYRUN-03 review | `tests/repair_purge.rs` | Add a companion assertion that an in-install `--plan-out` survives an exclusive `--purge-before` run. | todo |
 | F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | todo |
 | F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | todo |
@@ -399,6 +399,9 @@ until the main tasks and rework are done.
 | F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | todo |
 | F299 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The audit predates some local-invariant `expect` sites, e.g. `PlanTotals::new` in `src/repair/scope/report.rs`. | todo |
 | F300 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The method section's file list omits `src/repair/audio.rs` and `src/repair/lock.rs`. | todo |
+| F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | todo |
+| F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | todo |
+| F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | todo |
 
 ## Follow-up batches
 
@@ -438,7 +441,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PLANID-02 | F188, F189, F190, F191 | done | Wave D; plan API guardrails and fingerprint robustness; low; 32467fb, fac16a9, 012e06d, 334dc1f |
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | EXIT-03 | F208 | done | Wave E; clamp helper reachability; low; 7d883da, 3602837 |
-| EXIT-04 | F271, F272, F273, F274 | pending_review | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
+| EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
+| EXIT-05 | F301, F302, F303 | todo | Wave E; ALL completeness, tautological test and visibility; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | todo | Wave E; purge-before plan-out coverage and asymmetry decision; low |
