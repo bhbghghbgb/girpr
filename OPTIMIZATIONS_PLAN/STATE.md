@@ -317,9 +317,9 @@ until the main tasks and rework are done.
 | F216 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | The JSON-plane tests still use only `assert_golden`; reuse `assert_one_terminal_summary` there too. | skipped (golden already pins it) |
 | F217 | TEST-OUTPUT-01 review | `tests/cli_contract.rs`, `src/report/record.rs` | `text_records` splits on whitespace, so a future value containing a space would break parsing. | completed |
 | F218 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | Text-plane coverage misses `--check-only` and `--plan-out`, which stay JSON-only at integration level. | completed |
-| F219 | INPLACE-02 review | `tests/repair_machinery.rs` | The fresh-scan fixture's mtime is fresh, so the new age rule forces the re-read; the mtime-differs branch is no longer exercised. | todo |
-| F220 | INPLACE-02 review | `src/repair/file/inplace.rs` | The residual-race doc names only a store that never advances mtime; coarser-than-2 s stores and backdating writers also evade it. | todo |
-| F221 | INPLACE-02 review | `src/repair/file/inplace.rs` | The age rule assumes a forward-moving wall clock; a backwards jump is unhandled and worth a note. | todo |
+| F219 | INPLACE-02 review | `tests/repair_machinery.rs` | The fresh-scan fixture's mtime is fresh, so the new age rule forces the re-read; the mtime-differs branch is no longer exercised. | completed |
+| F220 | INPLACE-02 review | `src/repair/file/inplace.rs` | The residual-race doc names only a store that never advances mtime; coarser-than-2 s stores and backdating writers also evade it. | completed |
+| F221 | INPLACE-02 review | `src/repair/file/inplace.rs` | The age rule assumes a forward-moving wall clock; a backwards jump is unhandled and worth a note. | completed |
 | F222 | CHECK-02 review | `src/repair/phases/check.rs` | The live-progress test blocks indefinitely if a fold is lost; a bounded `recv_timeout` would fail clearly. | todo |
 | F223 | CHECK-02 review | `src/report/summary.rs` | The raw `check_damaged_chunks` field is still `pub`; the accessor doc discourages direct use, but the field could be private. | todo |
 | F224 | LOCK-02 review | `tests/repair_offline.rs`, CLI tests | Integration runs still persist `girpr-*.lock` files (123 per full suite) in the temp dir; needs test hygiene. | todo |
@@ -383,6 +383,7 @@ until the main tasks and rework are done.
 | F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | todo |
 | F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | todo |
 | F284 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The text-plane plan-out test checks `repair.len() == 2` but not that the entries are the fixture's two rels. | todo |
+| F285 | INPLACE-03 review | `tests/repair_machinery.rs` | The new age-branch test derives its stamp as `SystemTime::now() + 1h`; a fixed far-future constant would match the file's style and remove wall-clock dependence. | todo |
 
 ## Follow-up batches
 
@@ -433,7 +434,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
-| INPLACE-03 | F219, F220, F221 | pending_review | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283 |
+| INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
+| INPLACE-04 | F285 | todo | Wave E; fixed far-future stamp in the age-branch test; low |
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | todo | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low |
