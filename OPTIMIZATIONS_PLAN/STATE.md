@@ -354,8 +354,8 @@ until the main tasks and rework are done.
 | F253 | HYP-02 review | `tests/common/mod.rs` | The local build fixture tag is hardcoded as `9.9.8-test`; deriving it from the requested local version would keep reuse tests honest. | todo |
 | F254 | HYP-02 review | `src/repair/phases/metadata.rs` | The local-build mismatch warning wording is not pinned by a test; only the resulting `local_build = None` is. | todo |
 | F255 | HYP-02 review | `src/repair/phases/metadata.rs` | Biz mismatch is checked before the download-mode refusal, so a wrong-biz non-chunk response reports metadata; precedence is undocumented. | todo |
-| F256 | PATHHELPERS-02 review | `src/util/path.rs` tests | No explicit prefix-but-not-component case (`GameX/a.pck` against `Game`) pins the component-boundary contract. | todo |
-| F257 | PATHHELPERS-02 review | `tests/repair_post.rs` | The non-UTF-8 move test goes through in-process `girpr::run`; a process-spawning variant would also cover CLI-layer rewriting. | todo |
+| F256 | PATHHELPERS-02 review | `src/util/path.rs` tests | No explicit prefix-but-not-component case (`GameX/a.pck` against `Game`) pins the component-boundary contract. | completed |
+| F257 | PATHHELPERS-02 review | `tests/repair_post.rs` | The non-UTF-8 move test goes through in-process `girpr::run`; a process-spawning variant would also cover CLI-layer rewriting. | completed |
 | F258 | TEST-MANIFEST-02 review | `tests/common/mod.rs` | The unserved-manifest test uses distinct chunk ids, so it cannot catch an unserved manifest overwriting a served manifest's chunk with a shared id. | todo |
 | F259 | TEST-MANIFEST-02 review | `tests/repair_offline.rs` | The "both manifests are still advertised" assertion reads the fixture list, not the mock's `getBuild` JSON. | todo |
 | F260 | LINT-02 review | `tools/capture/src/select/mod.rs` | `enumerate()` over `REQUIRED_ORDER` assumes its index equals the `ALL` index; a reorder would silently pair classes with the wrong candidates. | todo |
@@ -386,6 +386,8 @@ until the main tasks and rework are done.
 | F285 | INPLACE-03 review | `tests/repair_machinery.rs` | The new age-branch test derives its stamp as `SystemTime::now() + 1h`; a fixed far-future constant would match the file's style and remove wall-clock dependence. | todo |
 | F286 | CHECK-03 review | `src/repair/phases/check.rs` | The live-progress test's gate wait (`while !(slow_started && fast_done)`) is still an unbounded `Condvar` wait. | todo |
 | F287 | CHECK-03 review | `src/report/summary.rs` | The now-`pub(super)` counter's doc could note that writes go through `publish_check_damaged_chunks`. | todo |
+| F288 | PATHHELPERS-03 review | `tests/repair_post.rs` | The binary test's doc implies the name can be rewritten while building the context, but it is only discovered in the post-phase walk; the added value is CLI/RunCtx wiring. | todo |
+| F289 | PATHHELPERS-03 review | `tests/repair_post.rs` | The skip-on-write-failure pattern reports a pass without exercising assertions on hosts that reject such names; consider an opt-in strict mode or CI note. | todo |
 
 ## Follow-up batches
 
@@ -441,7 +443,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
 | CHECK-04 | F286, F287 | todo | Wave E; bounded gate wait and counter doc; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
-| PATHHELPERS-03 | F256, F257 | pending_review | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
+| PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
+| PATHHELPERS-04 | F288, F289 | todo | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
 | REFACTOR-02 | F207 | done | Wave E; make the download estimate read as pure; low; 0e79367 |
 | REFACTOR-03 | F269, F270 | todo | Wave E; estimate type split and limit-source doc; low |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
