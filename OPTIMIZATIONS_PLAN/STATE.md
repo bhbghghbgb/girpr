@@ -367,8 +367,8 @@ until the main tasks and rework are done.
 | F266 | DOCS-COMMENTS-01 review | `src/repair/scope/filter.rs`, `docs/04-scope-limitation-spec.md` | `util::contained_rel` is named, but it is only `util::path::contained_rel`. | completed |
 | F267 | DOCS-COMMENTS-01 review | `docs/07-panic-audit.md` | Table line ranges are stale after the module splits. | completed |
 | F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | skipped (already accurate) |
-| F269 | REFACTOR-02 review | `src/repair/mod.rs` | `DownloadEstimate` mixes byte figures with four summary-shaped values; a `PlanSummaryValues` split would keep it about bytes. | todo |
-| F270 | REFACTOR-02 review | `src/repair/mod.rs` | `reported_bytes`'s doc names `--max-download-bytes`, while the guard is `ctx.limits.download_bytes`; another limit source would stale it. | todo |
+| F269 | REFACTOR-02 review | `src/repair/mod.rs` | `DownloadEstimate` mixes byte figures with four summary-shaped values; a `PlanSummaryValues` split would keep it about bytes. | completed |
+| F270 | REFACTOR-02 review | `src/repair/mod.rs` | `reported_bytes`'s doc names `--max-download-bytes`, while the guard is `ctx.limits.download_bytes`; another limit source would stale it. | completed |
 | F271 | EXIT-03 review | `src/config.rs` | `RunExit` uses implicit discriminants; `#[repr(u8)]` would make the boundary conversion infallible. | todo |
 | F272 | EXIT-03 review | `src/config.rs`, `src/main.rs` | The six exit variants are listed in three separate tests; a shared exhaustive source would prevent drift. | todo |
 | F273 | EXIT-03 review | `src/main.rs` | `parse_args` bypasses `exit_code` and exits with the raw `i32`; it would not fail loudly if `RunExit` outgrew `u8`. | todo |
@@ -457,7 +457,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
 | PATHHELPERS-04 | F288, F289 | todo | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
 | REFACTOR-02 | F207 | done | Wave E; make the download estimate read as pure; low; 0e79367 |
-| REFACTOR-03 | F269, F270 | pending_review | Wave E; estimate type split and limit-source doc; low; 880fd58 |
+| REFACTOR-03 | F269, F270 | done | Wave E; estimate type split and limit-source doc; low; 880fd58 |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | done | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low; e8ae20c, 3a0d207, b4b5c48, 3fc46c6, 1ddbb61 |
