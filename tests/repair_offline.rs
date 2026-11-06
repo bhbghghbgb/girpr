@@ -543,6 +543,141 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
 }
 
 #[tokio::test]
+async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
+    // The branch call can fail terminally (a refused status, not a retry
+    // schedule) and the config's mode is still the authoritative answer: the
+    // run is a usage refusal, not a metadata failure. Holding the config until
+    // the branch has answered pins the branch as issued and already failed.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+            fail_branches: true,
+            branch_failure_status: Some("404 Not Found"),
+            config_after_branches: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dlmode_branch_terminal");
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("non-chunk mode must fail");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "the mode refusal wins over a terminal branch failure: {err:#}"
+    );
+    assert!(
+        err.source.to_string().contains("not chunk mode"),
+        "the refusal is the mode one, not the branch one: {err:#}"
+    );
+    assert!(
+        !err.source.to_string().contains("getGameBranches"),
+        "the terminal branch error must not replace the mode refusal: {err:#}"
+    );
+    assert!(
+        mock.first_target_with("getGameBranches").is_some(),
+        "the branch call was issued and then discarded"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a refused mode"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
+    // Under the mode this tool implements, a branch endpoint that refuses the
+    // request outright is a metadata failure that names the branch call. The
+    // run must stop before any build or write.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            fail_branches: true,
+            branch_failure_status: Some("404 Not Found"),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_terminal_metadata");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a terminal branch failure must stop the run");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Metadata,
+        "a refused branch call is metadata: {err:#}"
+    );
+    let text = format!("{:#}", err);
+    assert!(text.contains("getGameBranches"), "{text}");
+    assert!(
+        !text.contains("getGameConfigs"),
+        "the config call succeeded, so it must not be blamed: {text}"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a failed branch call"
+    );
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the version must not be bumped for a failed metadata phase"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_retried_config_call_after_the_branch_still_answers() {
+    // The branch answer is a fact that stays true, not a one-shot permit. A
+    // config call that is retried after the branch was already served must
+    // answer instead of waiting for another branch response that never comes.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            config_after_branches: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let branch = client
+        .get(format!("{}/getGameBranches", mock.hyp_base))
+        .send()
+        .await
+        .expect("branch answers");
+    assert!(branch.status().is_success(), "{:?}", branch.status());
+
+    let config_url = format!("{}/getGameConfigs", mock.hyp_base);
+    for attempt in 0..2 {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.get(&config_url).send(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("config attempt {attempt} hung"));
+        let response = response.expect("config answers");
+        assert!(
+            response.status().is_success(),
+            "attempt {attempt}: {:?}",
+            response.status()
+        );
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn a_run_without_a_local_version_issues_only_the_latest_build() {
     // A fresh install has no `config.ini`, so there is no local tag to ask
     // for: the second build call is not merely allowed to fail, it must not

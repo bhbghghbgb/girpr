@@ -846,6 +846,10 @@ pub struct MockOpts {
     /// still answers. Models the branch endpoint failing after the first wave
     /// has already been issued, so error precedence is testable.
     pub fail_branches: bool,
+    /// The status a failing `getGameBranches` answers with when
+    /// [`Self::fail_branches`] is set. `None` serves `500`; a terminal status
+    /// such as `404` models an endpoint that refuses the request outright.
+    pub branch_failure_status: Option<&'static str>,
     /// Hold the `getGameConfigs` answer until `getGameBranches` has been served.
     ///
     /// The first wave issues both calls concurrently, so without this the
@@ -1002,6 +1006,8 @@ struct Responses {
     latest_tag: String,
     fail_chunks: bool,
     fail_branches: bool,
+    /// The status for a failing branch answer; `None` means `500`.
+    branch_failure_status: Option<&'static str>,
     /// Hold the config answer until the branch answer has been served.
     config_after_branches: bool,
     /// Signalled once the branch answer has been served.
@@ -1198,6 +1204,7 @@ fn build_responses(
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
         fail_branches: opts.fail_branches,
+        branch_failure_status: opts.branch_failure_status,
         config_after_branches: opts.config_after_branches,
         branches_served: tokio::sync::watch::channel(false).0,
         not_found_chunks: opts.not_found_chunks,
@@ -1273,7 +1280,8 @@ async fn serve_one(
     } else if is_branch {
         if r.fail_branches {
             (
-                "500 Internal Server Error",
+                r.branch_failure_status
+                    .unwrap_or("500 Internal Server Error"),
                 "text/plain",
                 b"branch endpoint unavailable".to_vec(),
             )
