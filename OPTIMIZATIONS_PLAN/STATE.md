@@ -375,8 +375,8 @@ until the main tasks and rework are done.
 | F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | completed |
 | F275 | DRYRUN-03 review | `tests/repair_purge.rs` | Add a companion assertion that an in-install `--plan-out` survives an exclusive `--purge-before` run. | completed |
 | F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | completed |
-| F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | todo |
-| F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | todo |
+| F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | completed |
+| F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | completed |
 | F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | todo |
 | F280 | TEST-REGRESSION-02 review | `tests/process.rs` | The new unscanned-phase test duplicates the fixture-write setup of the duration test; a shared local helper would reduce drift. | todo |
 | F281 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` treats any key-shaped token inside a value as a new field, so a value containing `word=…` would misparse. | todo |
@@ -403,6 +403,9 @@ until the main tasks and rework are done.
 | F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | todo |
 | F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | todo |
 | F304 | DRYRUN-04 review | `tests/repair_purge.rs` | The purge-before plan-out test only asserts the document is non-empty; parsing it and checking it describes the same repair plan would be stronger. | todo |
+| F305 | PURGE-PERF-04 review | `src/repair/mod.rs` | `fetch_deprecated`'s normalization/drop-with-warning paths have no focused test; a backslash or absolute deprecated name would pin the `retain_mut` semantics. | todo |
+| F306 | PURGE-PERF-04 review | `src/repair/mod.rs` | The "one Arc allocation" claim relies on std's in-place collect specialization; confirm with an allocator counter if it matters. | todo |
+| F307 | PURGE-PERF-04 review | `src/util/counter.rs` | The shared test pause barrier is thread-local and process-wide; a test pausing then hitting a different counter on the same thread would pause unexpectedly. | todo |
 
 ## Follow-up batches
 
@@ -449,7 +452,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | done | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
-| PURGE-PERF-04 | F277, F278 | pending_review | Wave E; shared saturating-add helper and deprecated collect allocation; low; 803dcbf, 12a4941 |
+| PURGE-PERF-04 | F277, F278 | done | Wave E; shared saturating-add helper and deprecated collect allocation; low; 803dcbf, 12a4941 |
+| PURGE-PERF-05 | F305, F306, F307 | todo | Wave E; deprecated normalization test and counter-barrier notes; low |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
