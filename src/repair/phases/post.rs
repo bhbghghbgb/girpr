@@ -465,6 +465,10 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 /// any failure the temp sibling is removed, `target` is left exactly as it was,
 /// and the caller keeps `src`.
 ///
+/// A `target` with no file name has no name to publish under, and the temp
+/// helper's no-file-name fallback would put the bytes somewhere else, so it is
+/// refused before any copy is attempted.
+///
 /// The caller creates the destination directory and removes `src` only after
 /// this returns `Ok`.
 fn copy_publish_with(
@@ -472,9 +476,16 @@ fn copy_publish_with(
     target: &Path,
     copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
 ) -> std::io::Result<()> {
-    // `temp_sibling` would name a sibling even for a path that has no file
-    // name, so keep the explicit refusal rather than publishing under a
-    // different name.
+    // `temp_sibling` still names a path with no file name (see its contract:
+    // the suffix is pushed under the path's directories, keeping a trailing
+    // `..`), so refuse rather than publish under a different name.
+    //
+    // The audio-cache walk never reaches this refusal through
+    // `move_audio_cache_with`: it collects only regular files, so `src` is a
+    // file under `cache`, `rel_path` is non-empty, and `res.join(rel_path)`
+    // names a file. A rename that fails does not change that. The check stays
+    // for this writer's own contract and is covered by its direct unit test,
+    // not by a production path.
     if target.file_name().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
