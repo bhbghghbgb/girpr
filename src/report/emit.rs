@@ -182,7 +182,10 @@ pub fn report_record(provenance: &ReportProvenance<'_>) -> Record {
         .put("diff_tags", provenance.pkg.diff_tags.join(","))
 }
 
-/// The final `SUMMARY`, ending every run.
+/// The final `SUMMARY`, ending every non-fatal run.
+///
+/// A fatal failure is the exception: the caller prints `FATAL` instead and
+/// emits no `SUMMARY`, so this record is absent from that run's stream.
 ///
 /// Trailing conditional keys (`limited`, `scoped`, `config_bumped`,
 /// `plan_files`, …) are appended only when their flag is
