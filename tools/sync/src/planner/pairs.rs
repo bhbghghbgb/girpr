@@ -76,8 +76,9 @@ pub struct PairPlan {
 /// `path_key` builds: `Ärger.txt` and `ärger.txt`, or the Kelvin sign `\u{212A}`
 /// and `k`, stay two paths. A non-ASCII name therefore pairs only with its
 /// byte-identical spelling. The fold deliberately does not reproduce a platform's
-/// Unicode case table; restricting it to ASCII means no two distinct spellings are
-/// ever merged, and the disk walk and capture both preserve names as written.
+/// Unicode case table; restricting it to ASCII means no two distinct non-ASCII
+/// spellings are ever merged, and the disk walk and capture both preserve names as
+/// written.
 ///
 /// `sync` plans with [`Lowercase`](Self::Lowercase) in insensitive mode and then
 /// diffs with [`Exact`](Self::Exact), because the rename pass has re-keyed dst
