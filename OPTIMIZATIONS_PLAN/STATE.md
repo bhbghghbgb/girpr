@@ -489,7 +489,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-03 | F247, F248 | done | Wave E; sink genericity and broader cursor pinning; low; 953db0b, 563a178 |
 | TEMP-WRITER-04 | F292, F293, F294 | todo | Wave E; reservation-order pin, generic doc and counter name; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
-| TEMP-PUBLISH-03 | F249, F250 | todo | Wave E; temp-sibling doc edge and guard reachability note; low |
+| TEMP-PUBLISH-03 | F249, F250 | in_progress | Wave E; temp-sibling doc edge and guard reachability note; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
