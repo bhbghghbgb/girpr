@@ -179,6 +179,28 @@ impl Summary {
         }
     }
 
+    /// Add the bytes a cleanup pass deleted to the unified counter.
+    ///
+    /// The total is a sum of on-disk sizes, so it can only exceed `u64::MAX` if
+    /// the volume itself could. Saturation keeps that unreachable case from
+    /// wrapping, on the same rule the per-entry sums inside the passes follow.
+    /// For every reachable input the result is the exact sum.
+    pub(crate) fn add_deleted_bytes(&self, bytes: u64) {
+        let mut current = self.deleted_extra_bytes.load(Ordering::Relaxed);
+        loop {
+            let next = current.saturating_add(bytes);
+            match self.deleted_extra_bytes.compare_exchange_weak(
+                current,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(observed) => current = observed,
+            }
+        }
+    }
+
     /// The chunks the check phase found wrong, or `None` when the check has
     /// not run.
     ///

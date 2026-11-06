@@ -965,9 +965,7 @@ async fn run_purge_before(
                 ))
             })?
             .map_err(RunFailure::write)?;
-        summary
-            .deleted_extra_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
+        summary.add_deleted_bytes(bytes);
         timer.finish();
     }
     Ok(())

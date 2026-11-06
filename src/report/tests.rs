@@ -185,6 +185,24 @@ fn summary_line_keyvalue_and_json_agree() {
 }
 
 #[test]
+fn deleted_byte_accounting_saturates_instead_of_wrapping() {
+    let s = Summary::new();
+    s.add_deleted_bytes(5);
+    s.add_deleted_bytes(7);
+    assert_eq!(s.deleted_extra_bytes.load(Ordering::Relaxed), 12);
+
+    s.deleted_extra_bytes.store(u64::MAX - 2, Ordering::Relaxed);
+    s.add_deleted_bytes(10);
+    assert_eq!(s.deleted_extra_bytes.load(Ordering::Relaxed), u64::MAX);
+    s.add_deleted_bytes(1);
+    assert_eq!(
+        s.deleted_extra_bytes.load(Ordering::Relaxed),
+        u64::MAX,
+        "a saturated total stays at the ceiling"
+    );
+}
+
+#[test]
 fn conditional_keys_appear_only_when_their_flag_is_active() {
     let mut s = Summary {
         files_total: 8,

@@ -18,7 +18,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use anyhow::{Context, Result};
 use walkdir::WalkDir;
@@ -100,9 +99,7 @@ async fn run_inner(
     let delete_list = Arc::clone(deprecated);
     let delete_scope = ctx.path_scope.clone();
     let deleted = spawn_delete_deprecated(delete_game_dir, delete_list, delete_scope, dry).await;
-    summary
-        .deleted_extra_bytes
-        .fetch_add(deleted, Ordering::Relaxed);
+    summary.add_deleted_bytes(deleted);
     // The audio move walks the cache and renames/copies its files. It is
     // best-effort, so a panicked task is logged and the phase carries on; it
     // must not stall the runtime while it runs.
@@ -243,9 +240,7 @@ async fn purge_after_pass(
     // counted as freed space. `apply_purge` returns 0 in dry-run today, and the
     // gate keeps that invariant local to the counter as well.
     if !dry {
-        summary
-            .deleted_extra_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
+        summary.add_deleted_bytes(bytes);
     }
     Ok(None)
 }
@@ -681,6 +676,8 @@ fn move_audio_cache_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+
     use crate::hyp::GameConfig;
     use crate::repair::test_support::logs_of;
 
