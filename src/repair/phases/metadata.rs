@@ -74,19 +74,26 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
 /// [`ReadClass::Metadata`]; `Version` and `Audio` use `Usage` for both. The
 /// join classes live in one table because [`Self::join_failure`] is their only
 /// reader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LocalRead {
-    Version,
-    Ignore,
-    Blacklist,
-    Audio,
+/// Define the variants and the exhaustive list together, so [`LocalRead::ALL`]
+/// cannot drift from the enum: adding a name here adds it to both.
+macro_rules! local_reads {
+    ($($variant:ident),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum LocalRead {
+            $($variant),+
+        }
+
+        impl LocalRead {
+            /// Every read, in the order the normal path reports a failure.
+            #[cfg(test)]
+            const ALL: &[Self] = &[$(Self::$variant),+];
+        }
+    };
 }
 
-impl LocalRead {
-    /// Every read, in the order the normal path reports a failure.
-    #[cfg(test)]
-    const ALL: [Self; 4] = [Self::Version, Self::Ignore, Self::Blacklist, Self::Audio];
+local_reads!(Version, Ignore, Blacklist, Audio);
 
+impl LocalRead {
     /// The label the join failure and the task's own context share.
     const fn label(self) -> &'static str {
         match self {
@@ -650,41 +657,23 @@ mod tests {
     /// Each local read's class table names the class its join failure takes,
     /// and `join_failure` goes through that class rather than choosing one
     /// itself.
+    ///
+    /// The wildcard-free `match` below is also the exhaustiveness check: a new
+    /// variant makes this test stop compiling, so it cannot silently be left
+    /// out of the coverage.
     #[tokio::test]
     async fn every_local_read_join_failure_keeps_its_documented_exit_class() {
-        let table = [
-            (
-                LocalRead::Version,
-                "read local game version",
-                ReadClass::Usage,
-                RunExit::Usage,
-            ),
-            (
-                LocalRead::Ignore,
-                "read res_category ignore list",
-                ReadClass::Metadata,
-                RunExit::Metadata,
-            ),
-            (
-                LocalRead::Blacklist,
-                "read blacklist",
-                ReadClass::Metadata,
-                RunExit::Metadata,
-            ),
-            (
-                LocalRead::Audio,
-                "resolve audio selection",
-                ReadClass::Usage,
-                RunExit::Usage,
-            ),
-        ];
-        assert_eq!(
-            LocalRead::ALL.len(),
-            table.len(),
-            "the table covers every local read"
-        );
-        for (read, label, class, exit) in table {
-            assert!(LocalRead::ALL.contains(&read), "{read:?} is in ALL");
+        for &read in LocalRead::ALL {
+            let (label, class, exit) = match read {
+                LocalRead::Version => ("read local game version", ReadClass::Usage, RunExit::Usage),
+                LocalRead::Ignore => (
+                    "read res_category ignore list",
+                    ReadClass::Metadata,
+                    RunExit::Metadata,
+                ),
+                LocalRead::Blacklist => ("read blacklist", ReadClass::Metadata, RunExit::Metadata),
+                LocalRead::Audio => ("resolve audio selection", ReadClass::Usage, RunExit::Usage),
+            };
             assert_eq!(read.label(), label, "{read:?}");
             assert_eq!(read.class(), class, "{read:?}");
             assert_eq!(read.class().exit(), exit, "{read:?}");
