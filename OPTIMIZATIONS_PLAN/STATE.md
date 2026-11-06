@@ -314,9 +314,9 @@ until the main tasks and rework are done.
 | F213 | PURGE-PERF-02 review | `src/hyp.rs` | `fetch_deprecated` still returns `Vec<String>`; returning `Arc<[String]>` would remove the one remaining conversion copy. | completed |
 | F214 | TEST-REGRESSION-01 review | `tests/repair_machinery.rs` | The fresh-scan test relies on a same-size rewrite changing mtime; coarse filesystems could make it flake. | completed |
 | F215 | TEST-REGRESSION-01 review | `tests/process.rs` | The unscanned-run assertion is appended to the duration-field test; its own test would keep that one focused. | completed |
-| F216 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | The JSON-plane tests still use only `assert_golden`; reuse `assert_one_terminal_summary` there too. | todo |
-| F217 | TEST-OUTPUT-01 review | `tests/cli_contract.rs`, `src/report/record.rs` | `text_records` splits on whitespace, so a future value containing a space would break parsing. | todo |
-| F218 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | Text-plane coverage misses `--check-only` and `--plan-out`, which stay JSON-only at integration level. | todo |
+| F216 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | The JSON-plane tests still use only `assert_golden`; reuse `assert_one_terminal_summary` there too. | skipped (golden already pins it) |
+| F217 | TEST-OUTPUT-01 review | `tests/cli_contract.rs`, `src/report/record.rs` | `text_records` splits on whitespace, so a future value containing a space would break parsing. | completed |
+| F218 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | Text-plane coverage misses `--check-only` and `--plan-out`, which stay JSON-only at integration level. | completed |
 | F219 | INPLACE-02 review | `tests/repair_machinery.rs` | The fresh-scan fixture's mtime is fresh, so the new age rule forces the re-read; the mtime-differs branch is no longer exercised. | todo |
 | F220 | INPLACE-02 review | `src/repair/file/inplace.rs` | The residual-race doc names only a store that never advances mtime; coarser-than-2 s stores and backdating writers also evade it. | todo |
 | F221 | INPLACE-02 review | `src/repair/file/inplace.rs` | The age rule assumes a forward-moving wall clock; a backwards jump is unhandled and worth a note. | todo |
@@ -379,6 +379,10 @@ until the main tasks and rework are done.
 | F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | todo |
 | F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | todo |
 | F280 | TEST-REGRESSION-02 review | `tests/process.rs` | The new unscanned-phase test duplicates the fixture-write setup of the duration test; a shared local helper would reduce drift. | todo |
+| F281 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` treats any key-shaped token inside a value as a new field, so a value containing `word=…` would misparse. | todo |
+| F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | todo |
+| F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | todo |
+| F284 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The text-plane plan-out test checks `repair.len() == 2` but not that the entries are the fixture's two rels. | todo |
 
 ## Follow-up batches
 
@@ -427,7 +431,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
-| TEST-OUTPUT-02 | F216, F217, F218 | pending_review | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
+| TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
+| TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
 | INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
