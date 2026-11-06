@@ -1211,20 +1211,30 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> RunExit 
 /// it is never followed.
 async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     match hyp.deprecated_files().await {
-        Ok(list) => list
-            .into_iter()
-            .filter_map(|name| match util::clean_rel(&name) {
-                Ok(rel) => Some(rel),
+        Ok(mut list) => {
+            // Filter in place: the fetch already allocated the `Vec`, so after
+            // the retain the only allocation left is the `Arc`'s. Collecting
+            // the `filter_map` straight into `Arc<[String]>` would build a
+            // second `Vec` first — a filter is not exact-size — and then copy
+            // it into the `Arc`. An in-place retain leaves an exact-size
+            // `vec::IntoIter`, which the collect moves into one `Arc`
+            // allocation.
+            list.retain_mut(|name| match util::clean_rel(name) {
+                Ok(rel) => {
+                    *name = rel;
+                    true
+                }
                 Err(e) => {
                     tracing::warn!(
                         path = %name,
                         error = %format!("{e:#}"),
                         "deprecated path is not a plain relative path; ignored"
                     );
-                    None
+                    false
                 }
-            })
-            .collect(),
+            });
+            list.into_iter().collect()
+        }
         Err(e) => {
             tracing::warn!("deprecated list unavailable: {e:#}");
             Vec::new().into()
