@@ -436,7 +436,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | todo | Wave E; fixed far-future stamp in the age-branch test; low |
-| CHECK-03 | F222, F223 | in_progress | Wave E; test timeout and tally field visibility; low |
+| CHECK-03 | F222, F223 | pending_review | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | todo | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low |
 | REFACTOR-02 | F207 | done | Wave E; make the download estimate read as pure; low; 0e79367 |
