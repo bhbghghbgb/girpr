@@ -433,7 +433,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
-| INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
+| INPLACE-03 | F219, F220, F221 | in_progress | Wave E; guard-test coverage and residual-race docs; low |
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | todo | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low |
