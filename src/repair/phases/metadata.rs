@@ -522,6 +522,43 @@ mod tests {
         }
     }
 
+    /// Run `f` with a debug-level subscriber whose lines are captured.
+    ///
+    /// `set_default` is thread-local; these tests run on a current-thread
+    /// runtime, so the guard covers the whole fetch across its awaits.
+    async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
+        #[derive(Clone, Default)]
+        struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for Captured {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("captured log lock")
+                    .extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buf = Captured::default();
+        let writer = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let out = f.await;
+        drop(guard);
+        let text = String::from_utf8(buf.0.lock().expect("captured log lock").clone())
+            .expect("tracing writes UTF-8");
+        (out, text)
+    }
+
     #[derive(Clone)]
     enum Reply {
         Body(&'static str),
@@ -926,12 +963,17 @@ mod tests {
         .await;
         let ref_ctx = ctx(dir.to_path_buf(), base);
 
-        let meta = fetch(&ref_ctx, &dir)
-            .await
-            .expect("a local build mismatch is not fatal");
+        let (fetched, logs) = logs_of(fetch(&ref_ctx, &dir)).await;
+        let meta = fetched.expect("a local build mismatch is not fatal");
         assert!(
             meta.local_build.is_none(),
             "a build for another tag must not be used as the local one"
+        );
+        assert!(
+            logs.contains(
+                r#"local build answered tag "4.9.0", not the local version "5.0.0"; full-fetch fallback"#
+            ),
+            "the fallback warning names both tags: {logs}"
         );
 
         const LOCAL_BUILD: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"5.0.0","manifests":[]}}"#;
