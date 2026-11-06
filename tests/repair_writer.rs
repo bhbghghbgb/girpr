@@ -7,7 +7,7 @@
 mod common;
 
 use common::{
-    LATEST_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_with_lies,
+    LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_with_lies,
     build_moved_fixture, ctx_for, field, load_counters, read_game_file, scope, temp_dir,
     write_game_file,
 };
@@ -321,7 +321,7 @@ async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
     let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
+        format!("[General]\ngame_version={LOCAL_TAG}\n"),
     )
     .unwrap();
     write_game_file(&dir, &old_rel, &old_bytes);
@@ -366,7 +366,7 @@ async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
     let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
+        format!("[General]\ngame_version={LOCAL_TAG}\n"),
     )
     .unwrap();
     write_game_file(&dir, &old_rel, &old_bytes);

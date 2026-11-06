@@ -142,7 +142,7 @@ impl Rig {
     fn at_local_version(&self) {
         std::fs::write(
             self.dir.join("config.ini"),
-            "[General]\ngame_version=9.9.8-test\n",
+            format!("[General]\ngame_version={}\n", common::LOCAL_TAG),
         )
         .expect("write config.ini");
     }

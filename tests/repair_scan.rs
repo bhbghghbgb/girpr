@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
+    ChunkSpec, FileSpec, FixtureSpec, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture,
     build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters, read_game_file,
     run_binary, temp_dir, write_game_file,
 };
@@ -202,7 +202,7 @@ async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
     let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
+        format!("[General]\ngame_version={LOCAL_TAG}\n"),
     )
     .unwrap();
     write_game_file(&dir, &old_rel, &old_bytes);

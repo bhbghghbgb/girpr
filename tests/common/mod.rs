@@ -196,6 +196,15 @@ pub struct FixtureLatestManifest {
 /// manifests are available" (i.e. chunk reuse is available).
 pub const LATEST_TAG: &str = "9.9.9-test";
 
+/// The local version a test writes into `config.ini` when its fixture has an
+/// old side.
+///
+/// The mock answers `getBuild?tag=<requested>` with the local manifest tagged
+/// with the **requested** tag, so any version a test writes resolves to a
+/// matching local build. This name is the conventional choice, not a tag the
+/// mock hardcodes.
+pub const LOCAL_TAG: &str = "9.9.8-test";
+
 mod digest;
 
 pub use digest::md5hex;
@@ -981,8 +990,10 @@ struct Responses {
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     /// The `getBuild` answer for a **local** tag, when the server serves one.
-    /// `None` = the local tag is not served, which is the default.
-    build_local: Option<Vec<u8>>,
+    /// The template's `data.tag` is replaced with the tag the request asked
+    /// for, so the served build always matches the local version. `None` = the
+    /// local tag is not served, which is the default.
+    build_local: Option<serde_json::Value>,
     /// The local manifest's body, by id.
     local_manifest: Option<(String, Vec<u8>)>,
     /// Extra latest-build manifest bodies, by id. A manifest advertised by
@@ -1144,7 +1155,7 @@ fn build_responses(
             "message": "OK",
             "data": {
                 "build_id": "build_test_old",
-                "tag": "9.9.8-test",
+                "tag": LOCAL_TAG,
                 "manifests": [{
                     "category_id": "10016",
                     "category_name": "game-test",
@@ -1177,7 +1188,7 @@ fn build_responses(
         deprecated: serde_json::to_vec(&deprecated).unwrap(),
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
-        build_local: build_local.map(|b| serde_json::to_vec(&b).unwrap()),
+        build_local,
         local_manifest,
         extra_manifests,
         latest_tag: fx.latest_tag.clone(),
@@ -1267,8 +1278,19 @@ async fn serve_one(
     } else if target.contains("getBuild") {
         match query_tag(&target) {
             Some(t) if t != r.latest_tag => match &r.build_local {
-                // The local build, when the server serves one.
-                Some(b) => ("200 OK", "application/json", b.clone()),
+                // The local build, when the server serves one. It is tagged
+                // with the version the request asked for, so a test that
+                // changes its local version gets a matching build instead of
+                // silently falling back to a full fetch.
+                Some(b) => {
+                    let mut body = b.clone();
+                    body["data"]["tag"] = serde_json::Value::String(t);
+                    (
+                        "200 OK",
+                        "application/json",
+                        serde_json::to_vec(&body).expect("serialize local build"),
+                    )
+                }
                 None => ("200 OK", "application/json", r.build_not_found.clone()),
             },
             _ => ("200 OK", "application/json", r.build_latest.clone()),
