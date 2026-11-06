@@ -601,6 +601,67 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
     );
 }
 
+/// The age half of the reuse guard, as the complement of the test above: the
+/// file changes after the plan scan while its mtime stays exactly the recorded
+/// one.
+///
+/// The target is stamped after any scan start in the run, so the age rule
+/// cannot be satisfied. The hook rewrites the bytes and restores that same
+/// stamp, leaving length and mtime equal: only the age rule can reject the
+/// plan verdict. A writer that omitted it would reuse the intact verdict and
+/// skip the damaged file.
+#[tokio::test]
+async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_change() {
+    let size = 64usize;
+    let want = lay_out(&[chunk("target", 0x42, size, 0)]);
+    let spec = FixtureSpec::new(vec![
+        FileSpec::new("game/a_first.dat", vec![chunk("first", 0x41, size, 0)]),
+        FileSpec::new("game/z_target.dat", vec![chunk("target", 0x42, size, 0)]),
+    ])
+    .with_disk("game/z_target.dat", want.clone());
+
+    let target_path = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let hook_path = std::sync::Arc::clone(&target_path);
+    let opts = MockOpts {
+        on_first_chunk: Some(std::sync::Arc::new(move || {
+            let path = hook_path
+                .lock()
+                .expect("hook path lock")
+                .clone()
+                .expect("the test sets the path before the run");
+            // The plan scan recorded this stamp; preserve it across the
+            // rewrite so only the age rule can reject the verdict.
+            let stamp = std::fs::metadata(&path)
+                .expect("stat the target before damaging it")
+                .modified()
+                .expect("the target has a modification time");
+            std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
+            set_mtime(&path, stamp);
+        })),
+        ..Default::default()
+    };
+
+    let rig = Rig::start_with(&spec, opts).await;
+    let target = rig.game().join("game/z_target.dat");
+    *target_path.lock().expect("hook path lock") = Some(target.clone());
+    // Later than the scan start, so the age rule refuses the plan verdict
+    // rather than the mtime comparison.
+    set_mtime(&target, SystemTime::now() + Duration::from_secs(3600));
+
+    let run = rig.run(&["--scan"]).await;
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.num("summary", "repaired"),
+        2,
+        "an unchanged mtime must not make the writer skip a changed file"
+    );
+    assert_eq!(
+        rig.read("game/z_target.dat"),
+        want,
+        "the changed bytes must be repaired from a fresh read"
+    );
+}
+
 /// The `chunks_*` figures from the one `repaired in place` line in a trace log.
 fn in_place_chunk_stats(log: &str) -> BTreeMap<&'static str, u64> {
     let line = log
