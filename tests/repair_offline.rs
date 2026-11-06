@@ -864,8 +864,8 @@ async fn an_ignored_manifest_category_is_not_planned_by_the_binary() {
     mock.stop();
 }
 
-#[test]
-fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
+#[tokio::test]
+async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
     // A manifest that `getBuild` advertises but the origin does not serve is
     // a `404` for its body, so nothing can ever reference its chunks. Its
     // manifest body is still built (it is advertised), but the chunk route
@@ -900,6 +900,8 @@ fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
             )],
         )),
     );
+    let gone_id = fx.extra_latest_manifests[0].id.clone();
+    let kept_id = fx.extra_latest_manifests[1].id.clone();
 
     // The store is what the mock serves: the shared id must still hold the
     // served manifest's bytes, not the absent one's, and the absent-only id
@@ -921,4 +923,40 @@ fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         "an absent manifest's chunks are unreachable"
     );
     assert!(!fx.corrupt_chunk_store.contains_key("chunk_gone"));
+
+    // The advertisement is the mock's own `getBuild` answer, not a restatement
+    // of the fixture description: both extras are present under the identities
+    // the build publishes.
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let body: serde_json::Value = reqwest::Client::new()
+        .get(format!("{}/getBuild", mock.sophon_base))
+        .send()
+        .await
+        .expect("getBuild answers")
+        .json()
+        .await
+        .expect("getBuild is JSON");
+    let advertised: Vec<(&str, &str)> = body["data"]["manifests"]
+        .as_array()
+        .expect("a manifests array")
+        .iter()
+        .map(|m| {
+            (
+                m["matching_field"]
+                    .as_str()
+                    .expect("a matching_field per manifest"),
+                m["manifest"]["id"].as_str().expect("an id per manifest"),
+            )
+        })
+        .collect();
+    assert!(
+        advertised.contains(&("gone", gone_id.as_str())),
+        "the absent manifest is still advertised: {advertised:?}"
+    );
+    assert!(
+        advertised.contains(&("kept", kept_id.as_str())),
+        "the served extra manifest is advertised: {advertised:?}"
+    );
+
+    mock.stop();
 }
