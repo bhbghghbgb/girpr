@@ -33,7 +33,7 @@ use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
 
-use common::{MockOpts, MockServer, build_fixture, temp_dir, write_game_file};
+use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -1305,6 +1305,60 @@ async fn the_text_plane_pins_plan_between_report_and_summary() {
             ("plan", PLAN_KEYS),
             ("summary", SUMMARY_KEYS),
         ],
+    );
+    mock.stop();
+}
+
+/// `--check-only` on the text plane is the same `REPORT` and single terminal
+/// `SUMMARY` as the JSON plane, with no `PLAN`; a damaged install is exit `4`.
+#[tokio::test]
+async fn the_text_plane_check_only_emits_report_then_exactly_one_summary() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("text_plane_check_only");
+    seed_one_damaged_one_clean(&dir);
+
+    let run = run_text_plane(&dir, &mock, &["--check-only"]).await;
+    assert_eq!(run.code, 4, "a damaged install is exit 4:\n{}", run.stderr);
+    assert_one_terminal_summary(&run);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+    mock.stop();
+}
+
+/// `--plan-out` alone writes its JSON document and adds nothing to the text
+/// plane: no `PLAN` record, because the flag implies nothing and only
+/// `--print-plan` asks for one. The run still executes, so the plane is the
+/// ordinary `REPORT … SUMMARY` with the same terminal shape.
+#[tokio::test]
+async fn the_text_plane_plan_out_alone_writes_the_document_without_a_plan_record() {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir("text_plane_plan_out");
+    seed_one_damaged_one_clean(&dir);
+    let reports = temp_dir("text_plane_plan_out_doc");
+    let out = reports.join("plan.json");
+    let out_arg = out.to_string_lossy().into_owned();
+
+    let run = run_text_plane(&dir, &mock, &["--plan-out", &out_arg]).await;
+    assert_eq!(run.code, 0, "--plan-out alone exits 0:\n{}", run.stderr);
+    assert!(
+        !run.stdout.lines().any(|line| line.starts_with("PLAN ")),
+        "--plan-out alone must not add a PLAN record:\n{}",
+        run.stdout
+    );
+    assert_one_terminal_summary(&run);
+    assert_golden(&run, &[("report", REPORT_KEYS), ("summary", SUMMARY_KEYS)]);
+
+    let written = std::fs::read_to_string(&out).expect("--plan-out writes its document");
+    let document: serde_json::Value = serde_json::from_str(&written).expect("valid plan JSON");
+    assert_eq!(
+        document["repair"].as_array().map(Vec::len),
+        Some(2),
+        "the document describes the run's two planned files:\n{written}"
+    );
+    let fixture = build_fixture();
+    assert_eq!(
+        read_game_file(&dir, &fixture.files[0].rel),
+        Some(fixture.files[0].data.clone()),
+        "the run still did the work it planned"
     );
     mock.stop();
 }
