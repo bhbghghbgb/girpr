@@ -481,7 +481,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-03 | F253, F254, F255 | done | Wave E; local fixture tag, warning wording and mismatch precedence; low; ec3e7aa, 64e5c56, a9e8598 |
 | HYP-04 | F308, F309 | todo | Wave E; test tag constants and multi-thread log capture; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
-| SYNC-02 | F251, F252 | todo | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low |
+| SYNC-02 | F251, F252 | in_progress | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | todo | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
