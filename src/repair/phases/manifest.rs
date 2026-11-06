@@ -292,6 +292,7 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::sync::{Notify, watch};
 
     /// A manifest body as the origin sends it: zstd over the protobuf, with
     /// the checksum of the **decompressed** bytes.
@@ -369,6 +370,61 @@ mod tests {
         /// Answer `status` only once another route has been hit, so the
         /// failure settles with that fetch demonstrably in flight.
         StatusAfterHit(&'static str, Arc<AtomicUsize>),
+        /// Serve `body` after the test releases the gate, so a test observes
+        /// how many requests the client started rather than timing it.
+        GatedBody {
+            body: Vec<u8>,
+            gate: Arc<InFlight>,
+        },
+    }
+
+    /// Requests currently being served, with a gate that holds them until the
+    /// test lets go, so a concurrency bound is observed instead of timed.
+    struct InFlight {
+        current: AtomicUsize,
+        peak: AtomicUsize,
+        arrived: Notify,
+        release: watch::Sender<bool>,
+    }
+
+    impl InFlight {
+        fn new() -> Self {
+            let (release, _) = watch::channel(false);
+            Self {
+                current: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+                arrived: Notify::new(),
+                release,
+            }
+        }
+
+        /// Count this request as in flight and wait for the release.
+        async fn enter(&self) {
+            let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(now, Ordering::SeqCst);
+            self.arrived.notify_waiters();
+            let mut release = self.release.subscribe();
+            while !*release.borrow_and_update() {
+                if release.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+
+        fn leave(&self) {
+            self.current.fetch_sub(1, Ordering::SeqCst);
+        }
+
+        /// Wait until `want` requests are in flight, without assuming when.
+        async fn wait_for(&self, want: usize) {
+            loop {
+                let arrived = self.arrived.notified();
+                if self.current.load(Ordering::SeqCst) >= want {
+                    return;
+                }
+                arrived.await;
+            }
+        }
     }
 
     /// A running test origin. Dropping it cancels the accept loop and every
@@ -432,9 +488,10 @@ mod tests {
                         .and_then(|l| l.split_whitespace().nth(1))
                         .unwrap_or("/");
                     let id = target.rsplit('/').next().unwrap_or("");
-                    let (status, body) = match routes.iter().find(|(rid, _)| *rid == id) {
-                        Some((_, Reply::Body(body))) => ("200 OK", body.clone()),
-                        Some((_, Reply::Status(status))) => (*status, Vec::new()),
+                    let (status, body, in_flight) = match routes.iter().find(|(rid, _)| *rid == id)
+                    {
+                        Some((_, Reply::Body(body))) => ("200 OK", body.clone(), None),
+                        Some((_, Reply::Status(status))) => (*status, Vec::new(), None),
                         Some((_, Reply::NeverAfterHit(hits))) => {
                             hits.fetch_add(1, Ordering::SeqCst);
                             std::future::pending::<()>().await;
@@ -444,9 +501,13 @@ mod tests {
                             while hits.load(Ordering::SeqCst) == 0 {
                                 tokio::task::yield_now().await;
                             }
-                            (*status, Vec::new())
+                            (*status, Vec::new(), None)
                         }
-                        None => ("404 Not Found", Vec::new()),
+                        Some((_, Reply::GatedBody { body, gate })) => {
+                            gate.enter().await;
+                            ("200 OK", body.clone(), Some(gate.clone()))
+                        }
+                        None => ("404 Not Found", Vec::new(), None),
                     };
                     let head = format!(
                         "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -455,6 +516,9 @@ mod tests {
                     let _ = socket.write_all(head.as_bytes()).await;
                     let _ = socket.write_all(&body).await;
                     let _ = socket.flush().await;
+                    if let Some(gate) = in_flight {
+                        gate.leave();
+                    }
                 });
                 // Reap connections that already finished so the registry only
                 // holds tasks still worth aborting.
@@ -668,6 +732,66 @@ mod tests {
         let message = failure.to_string();
         assert!(message.contains("manifest game"), "{message}");
         assert!(!message.contains("manifest res"), "{message}");
+    }
+
+    /// The real HTTP fan-out starts at most `manifest_concurrency(jobs)`
+    /// requests at once. The origin holds each request until the test releases
+    /// it, so the in-flight count is observed rather than timed; `usize::MAX`
+    /// jobs hits the manifest cap.
+    #[tokio::test]
+    async fn fetch_latest_bounds_live_http_fetches_to_manifest_concurrency() {
+        for (jobs, bound) in [(1, 1), (2, 2), (usize::MAX, MAX_MANIFEST_CONCURRENCY)] {
+            let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+            let gate = Arc::new(InFlight::new());
+            let ids = ["m0", "m1", "m2", "m3", "m4", "m5"];
+            let server = serve(
+                ids.iter()
+                    .map(|id| {
+                        (
+                            *id,
+                            Reply::GatedBody {
+                                body: body.clone(),
+                                gate: gate.clone(),
+                            },
+                        )
+                    })
+                    .collect(),
+            )
+            .await;
+            let build = build(
+                server.base(),
+                ids.iter()
+                    .map(|id| meta(id, id, &checksum))
+                    .collect::<Vec<_>>(),
+            );
+            let client = Client::new();
+            let audio_langs = HashSet::new();
+            let ignore = HashSet::new();
+
+            let fetched = fetch_latest(&client, &NoSleep, &build, &audio_langs, &ignore, jobs);
+            let observed = async {
+                tokio::time::timeout(Duration::from_secs(5), gate.wait_for(bound))
+                    .await
+                    .expect("the fan-out reaches its bound");
+                assert_eq!(
+                    gate.current.load(Ordering::SeqCst),
+                    bound,
+                    "the fan-out starts no more than {bound} fetches at once"
+                );
+                let _ = gate.release.send(true);
+            };
+            let (manifests, ()) = tokio::join!(fetched, observed);
+
+            assert_eq!(
+                manifests.expect("every gated manifest answers").len(),
+                ids.len()
+            );
+            assert_eq!(
+                gate.peak.load(Ordering::SeqCst),
+                bound,
+                "the bound holds for the whole run, not just the first burst"
+            );
+        }
     }
 
     /// A failed local manifest is skipped, and the successful ones still
