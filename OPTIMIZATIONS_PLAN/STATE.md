@@ -476,7 +476,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-02 | F265, F266, F267, F268 | done | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2, 6a2f2d8 |
 | DOCS-COMMENTS-03 | F299, F300 | todo | Wave E; audit local-invariant coverage and file list; low |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
-| HYP-03 | F253, F254, F255 | todo | Wave E; local fixture tag, warning wording and mismatch precedence; low |
+| HYP-03 | F253, F254, F255 | in_progress | Wave E; local fixture tag, warning wording and mismatch precedence; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
 | SYNC-02 | F251, F252 | todo | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
