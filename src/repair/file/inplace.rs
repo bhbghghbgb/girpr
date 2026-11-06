@@ -725,12 +725,16 @@ fn mtime_predates_scan(recorded: SystemTime, scanned_at: Option<SystemTime>) -> 
 ///
 /// The age rule assumes the wall clock moves forward between the file's last
 /// write, the plan scan, and the writer's check. A backwards jump is not
-/// detected. If the jump lands before or during the plan scan, the recorded
-/// mtime can sit at or after the scan start; [`mtime_predates_scan`] then
-/// answers `false` and the file is read again, which is the safe direction and
-/// only costs the read. If the jump happens after the scan, a post-scan
-/// rewrite can stamp a time earlier than the scan start, so "a later write is
-/// at least as new as the scan" no longer holds. Should that rewrite then
+/// detected. A jump before the scan starts leaves every recorded mtime at or
+/// after the earlier scan start; [`mtime_predates_scan`] then answers `false`
+/// and each file is read again, the safe direction at the cost of the read. A
+/// jump during the scan is per file, because the scan start is one timestamp
+/// taken before the files are read: one scanned before the jump recorded a
+/// time at or after the scan start and is read again, while one scanned after
+/// the jump recorded a lower time and the after-scan caveat below applies.
+/// If the jump happens after the scan, a post-scan rewrite can stamp a time
+/// earlier than the scan start, so "a later write is at least as new as the
+/// scan" no longer holds. Should that rewrite then
 /// present the recorded mtime exactly - naturally or because a coarse store
 /// truncates it there - the guard can accept a stale intact verdict, with the
 /// residual consequence above: skipped until a later scan, never written from
