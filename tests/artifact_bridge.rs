@@ -455,7 +455,7 @@ fn base_args(game: &Path, bundle: &Bundle, o: &Origins, log: &Path) -> Vec<Strin
         o.hyp_base.clone(),
         "--sophon-base".into(),
         o.sophon_base.clone(),
-        "--io-threads".into(),
+        "--jobs".into(),
         "1".into(),
         "--output".into(),
         "json".into(),
