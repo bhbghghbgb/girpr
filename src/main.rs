@@ -80,14 +80,10 @@ fn main() -> ExitCode {
 /// Map a documented exit status to what the process returns.
 ///
 /// [`RunExit`] is the pipeline's only exit type; this is where it becomes the
-/// process status. [`ExitCode`] carries a `u8`, so the conversion is fallible:
-/// a future discriminant outside that range fails loudly here rather than
-/// wrapping into an unrelated status.
+/// process status. `#[repr(u8)]` makes the byte conversion infallible, so a
+/// documented variant cannot wrap into an unrelated status.
 fn exit_code(status: RunExit) -> ExitCode {
-    #[allow(clippy::expect_used)] // the variants are pinned to u8-sized discriminants by test
-    let code =
-        u8::try_from(status.code()).expect("a documented exit code fits in a process status");
-    ExitCode::from(code)
+    ExitCode::from(status.process_status())
 }
 
 /// Worker threads for a run that admits `jobs` files at once.
@@ -150,10 +146,12 @@ fn parse_args() -> Args {
         Ok(a) => a,
         Err(e) => {
             let _ = e.print();
-            std::process::exit(match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => RunExit::Success.code(),
-                _ => RunExit::Usage.code(),
-            });
+            std::process::exit(i32::from(match e.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    RunExit::Success.process_status()
+                }
+                _ => RunExit::Usage.process_status(),
+            }));
         }
     }
 }
@@ -194,43 +192,25 @@ mod tests {
 
     #[test]
     fn the_documented_exit_codes_reach_the_process_unchanged() {
-        let cases = [
-            (RunExit::Success, 0),
-            (RunExit::Usage, 1),
-            (RunExit::Metadata, 2),
-            (RunExit::Write, 3),
-            (RunExit::CheckFailed, 4),
-            (RunExit::Limit, 5),
-        ];
-        for (status, number) in cases {
-            assert_eq!(exit_code(status), ExitCode::from(number), "{status:?}");
+        for (number, status) in RunExit::ALL.into_iter().enumerate() {
+            assert_eq!(
+                exit_code(status),
+                ExitCode::from(number as u8),
+                "{status:?}"
+            );
         }
-    }
-
-    /// The variants the exit-status test must cover.
-    ///
-    /// The list drives both the loop and a wildcard-free `match`, so a new
-    /// variant leaves the match non-exhaustive until it is named here.
-    macro_rules! documented_exit_codes {
-        ($($variant:ident),+ $(,)?) => {{
-            let cases = [$(RunExit::$variant),+];
-            for status in cases {
-                match status {
-                    $(RunExit::$variant => {}),+
-                }
-                assert!(
-                    u8::try_from(status.code()).is_ok(),
-                    "{status:?} ({}) must fit in a process exit status",
-                    status.code()
-                );
-            }
-        }};
     }
 
     #[test]
     fn every_documented_exit_code_fits_in_a_process_status() {
-        // `ExitCode` carries a `u8`; a new variant outside that range must be a
-        // test failure, not a silently truncated process status.
-        documented_exit_codes!(Success, Usage, Metadata, Write, CheckFailed, Limit);
+        // `ExitCode` carries a `u8`; `#[repr(u8)]` makes the conversion
+        // infallible, and this pins the round trip back to the logged `i32`.
+        for status in RunExit::ALL {
+            assert_eq!(
+                i32::from(status.process_status()),
+                status.code(),
+                "{status:?}"
+            );
+        }
     }
 }

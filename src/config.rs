@@ -69,6 +69,7 @@ impl std::fmt::Display for RepairMode {
 /// process status happens at the boundary in `main`; the `SUMMARY` and the
 /// fatal log line call [`RunExit::code`] only to describe the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub enum RunExit {
     /// The run did everything it was asked to do.
     Success = 0,
@@ -85,11 +86,56 @@ pub enum RunExit {
 }
 
 impl RunExit {
+    /// Every documented exit status, in numeric order.
+    ///
+    /// This is the single exhaustive source the tests and the compile-time
+    /// checks share, so the six-variant contract cannot drift between them.
+    pub const ALL: [RunExit; 6] = [
+        RunExit::Success,
+        RunExit::Usage,
+        RunExit::Metadata,
+        RunExit::Write,
+        RunExit::CheckFailed,
+        RunExit::Limit,
+    ];
+
     /// The numeric status the process returns.
+    ///
+    /// `SUMMARY` and the fatal log line take this as an `i32`; the process
+    /// boundary takes [`RunExit::process_status`] instead.
     pub const fn code(self) -> i32 {
         self as i32
     }
+
+    /// The byte a process exit status carries.
+    ///
+    /// Infallible: `#[repr(u8)]` makes every discriminant fit, so no runtime
+    /// range check is needed at the boundary.
+    pub const fn process_status(self) -> u8 {
+        self as u8
+    }
 }
+
+/// The exit-code contract is compile-time checked: every variant is named
+/// after its documented number (the `match` has no wildcard), and
+/// [`RunExit::ALL`] is numbered contiguously from zero. A new or renumbered
+/// variant stops the build here, before any test can drift.
+const _: () = {
+    let mut i = 0;
+    while i < RunExit::ALL.len() {
+        let documented = match RunExit::ALL[i] {
+            RunExit::Success => 0,
+            RunExit::Usage => 1,
+            RunExit::Metadata => 2,
+            RunExit::Write => 3,
+            RunExit::CheckFailed => 4,
+            RunExit::Limit => 5,
+        };
+        assert!(RunExit::ALL[i] as u8 == documented);
+        assert!(documented as usize == i);
+        i += 1;
+    }
+};
 
 impl From<RunFailure> for RunExit {
     fn from(failure: RunFailure) -> Self {
@@ -248,20 +294,13 @@ impl RunCtx {
 mod tests {
     use super::{RunExit, RunFailure};
 
-    /// The numbers are the automation contract, so pin both the named variant
-    /// and the integer it converts to.
+    /// The numbers are the automation contract, so pin the integer each named
+    /// variant converts to. [`RunExit::ALL`] is the shared exhaustive list; the
+    /// compile-time check ties its order to the discriminants.
     #[test]
     fn every_named_code_keeps_its_documented_number() {
-        let cases = [
-            (RunExit::Success, 0),
-            (RunExit::Usage, 1),
-            (RunExit::Metadata, 2),
-            (RunExit::Write, 3),
-            (RunExit::CheckFailed, 4),
-            (RunExit::Limit, 5),
-        ];
-        for (code, number) in cases {
-            assert_eq!(code.code(), number, "{code:?}");
+        for (number, status) in RunExit::ALL.into_iter().enumerate() {
+            assert_eq!(status.code(), number as i32, "{status:?}");
         }
     }
 
