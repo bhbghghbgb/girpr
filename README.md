@@ -513,13 +513,13 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - **What the tests actually drive.** `tests/repair_offline.rs` holds the offline
   integration cases, and most of them call `repair::run(ctx)` **in-process**
   with a hand-built `RunCtx` — that exercises the library, not the flag surface.
-  Six of them (the
-  endpoint-override cases, the `--output` format case, the scan estimate and the
-  scoped cleanup) spawn the real binary through `CARGO_BIN_EXE_girpr`, which is
-  how the `--hyp-base` / `--sophon-base` precedence is pinned; they still run
-  against the mock, not against real bytes.
-  `tests/cli_contract.rs` is the other file that spawns the binary, and it never
-  reaches the API at all — it is argument handling and exit codes only.
+  A few of them — the plan-print and manifest-selection cases — spawn the real
+  binary through `CARGO_BIN_EXE_girpr`; the endpoint-override, `--output`
+  format, scan-estimate and scoped-cleanup cases do the same from their own
+  integration files. Those spawns are how the `--hyp-base` / `--sophon-base`
+  precedence is pinned; they still run against the mock, not against real bytes.
+  `tests/cli_contract.rs` also spawns the binary, and it never reaches the API
+  at all — it is argument handling and exit codes only.
 - **The repair's own decisions are on crafted fixtures.**
   `tests/repair_machinery.rs` has one case per decision the repair makes
   per file — the tier, the write direction, the trim, the growth, the mode, the
