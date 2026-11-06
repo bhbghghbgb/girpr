@@ -419,6 +419,39 @@ async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
 }
 
 #[tokio::test]
+async fn a_plan_out_inside_the_install_is_an_ordinary_purge_candidate() {
+    // `--plan-out` lands before the purge runs, and the cleanup keeps only the
+    // manifest, the metadata files, the blacklist and the audio bookkeeping.
+    // An in-install plan document is therefore an unexpected file and a real
+    // purge deletes it. Writing it outside `--game-path` is the way to keep it.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_out_inside_purge");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 32]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_after = true;
+    ctx.plan_out = Some(dir.join("plan.json"));
+    let (_summary, code) = run(ctx).await.expect("the purge run succeeds");
+    assert_eq!(code, RunExit::Success);
+
+    assert!(
+        read_game_file(&dir, "plan.json").is_none(),
+        "the in-install plan document is purged like any other extra file"
+    );
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
+    for f in &fx2.files {
+        assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
+    }
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
     // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
     // rules, and neither repairs.
