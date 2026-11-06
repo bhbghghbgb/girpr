@@ -488,7 +488,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-03 | F244, F245, F246 | done | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low; 60d20de, 021568e, 4170fc9, c8c6194 |
 | METADATA-04 | F310, F311 | todo | Wave E; mock retryable branch failure mode; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
-| MANIFEST-03 | F241, F242, F243 | in_progress | Wave E; first-error message, live-stream coverage and task reaping; low |
+| MANIFEST-03 | F241, F242, F243 | pending_review | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | todo | Wave E; help assertion scope, default literal and binary parity; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
