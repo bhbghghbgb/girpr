@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use super::record::Record;
 use crate::repair::scope::ledger::Meter;
+use crate::util::counter::add_saturating;
 
 /// A byte ceiling whose "no ceiling" sentinel is `u64::MAX`.
 ///
@@ -186,19 +187,7 @@ impl Summary {
     /// wrapping, on the same rule the per-entry sums inside the passes follow.
     /// For every reachable input the result is the exact sum.
     pub(crate) fn add_deleted_bytes(&self, bytes: u64) {
-        let mut current = self.deleted_extra_bytes.load(Ordering::Relaxed);
-        loop {
-            let next = current.saturating_add(bytes);
-            match self.deleted_extra_bytes.compare_exchange_weak(
-                current,
-                next,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(observed) => current = observed,
-            }
-        }
+        add_saturating(&self.deleted_extra_bytes, bytes);
     }
 
     /// Publish the check's damaged-chunk tally, then mark it measured.

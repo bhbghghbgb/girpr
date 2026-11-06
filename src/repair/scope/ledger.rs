@@ -15,6 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::report::Summary;
+use crate::util::counter::add_saturating;
 
 /// Which runtime ceiling bound, if any.
 ///
@@ -191,29 +192,6 @@ impl Meter {
             .store(limit.unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
-    /// Add `n` without wrapping, saturating at [`u64::MAX`].
-    ///
-    /// `AtomicU64::fetch_add` wraps, and a meter that wrapped would read near
-    /// `u64::MAX` — switching a ceiling off and corrupting the reported
-    /// figures. A load followed by `fetch_add` is not enough: another thread
-    /// can push the cell past the top between the two, so the decision to add
-    /// has to be the same atomic step that performs it. The compare-and-swap
-    /// loop does that — it retries with whatever the cell holds whenever it
-    /// moved, so every value it commits is `saturating_add` applied to the
-    /// value it replaces, and no interleaving can wrap.
-    fn add_saturating(cell: &AtomicU64, n: u64) {
-        let mut cur = cell.load(Ordering::Relaxed);
-        #[cfg(test)]
-        tests::pause_before_cas();
-        loop {
-            let next = cur.saturating_add(n);
-            match cell.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
-                Ok(_) => return,
-                Err(actual) => cur = actual,
-            }
-        }
-    }
-
     /// Charge `n` bytes against the live ceiling — all or nothing.
     ///
     /// Reserving *before* the resource is consumed is what makes the stop
@@ -230,7 +208,7 @@ impl Meter {
             // this sentinel), so it cannot appear mid-run; a meter whose
             // sentinel is replaced between this load and the add would merely
             // charge one reservation it would otherwise have refused.
-            Self::add_saturating(&self.live, n);
+            add_saturating(&self.live, n);
             return true;
         }
         let mut cur = self.live.load(Ordering::Relaxed);
@@ -298,7 +276,7 @@ impl Meter {
         if delta < 0 {
             self.refund_live(delta.unsigned_abs());
         } else if delta > 0 {
-            Self::add_saturating(&self.live, delta as u64);
+            add_saturating(&self.live, delta as u64);
         }
     }
 
@@ -320,7 +298,7 @@ impl Meter {
             // compare-and-swap that fuses charge and check has nothing to
             // check. See `charge_live` for the install-once assumption and the
             // saturation note. The limited path below keeps its single CAS.
-            Self::add_saturating(&self.settled, n);
+            add_saturating(&self.settled, n);
             return true;
         }
         let mut cur = self.settled.load(Ordering::Relaxed);
@@ -609,30 +587,9 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
     use std::sync::{Arc, Barrier};
 
-    thread_local! {
-        /// A test-only pause after the load and before the compare-exchange.
-        static CAS_PAUSE: RefCell<Option<Arc<Barrier>>> = const { RefCell::new(None) };
-    }
-
-    /// Wait at the current thread's pause barrier, when one is installed.
-    ///
-    /// This is what makes the wrap race deterministic: every racing thread
-    /// loads the counter, then stops here, so all of them are guaranteed to
-    /// have seen the same value before any of them tries to commit.
-    pub(super) fn pause_before_cas() {
-        let barrier = CAS_PAUSE.with(|pause| pause.borrow().clone());
-        if let Some(barrier) = barrier {
-            barrier.wait();
-        }
-    }
-
-    /// Install (or clear) this thread's pause barrier.
-    fn set_pause_before_cas(barrier: Option<Arc<Barrier>>) {
-        CAS_PAUSE.with(|pause| *pause.borrow_mut() = barrier);
-    }
+    use crate::util::counter::test_support::set_pause_before_cas;
 
     /// The meter's two numbers, and the rule that tells them apart.
     ///
