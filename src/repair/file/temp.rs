@@ -774,6 +774,7 @@ mod tests {
     struct SeekRecording<'a> {
         file: &'a mut File,
         seeks: Vec<SeekFrom>,
+        writes: usize,
     }
 
     impl<'a> SeekRecording<'a> {
@@ -781,13 +782,16 @@ mod tests {
             Self {
                 file,
                 seeks: Vec::new(),
+                writes: 0,
             }
         }
     }
 
     impl Write for SeekRecording<'_> {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.file.write(buf)
+            let n = self.file.write(buf)?;
+            self.writes += n;
+            Ok(n)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
@@ -993,6 +997,114 @@ mod tests {
         assert!(
             out.seeks.is_empty(),
             "the download path must not position the sink; the streaming sink places it"
+        );
+        assert_eq!(
+            out.writes, 0,
+            "the download path must not write into the sink"
+        );
+    }
+
+    /// A chunk with no local reuse candidate is downloaded, and the failed
+    /// lookup must not touch the sink: the download path builds its own
+    /// streaming sink, which positions the file when it starts.
+    #[test]
+    fn a_chunk_with_no_reuse_candidate_falls_back_without_touching_the_sink() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_none");
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        // An entry for a different chunk identity: the lookup finds nothing.
+        let reuse = reuse_at("00000000000000000000000000000000", 4, 0);
+        let c = chunk_at("c0", md5, 0, 4);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut tmp_len = 0u64;
+        let mut handle = None;
+
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &dir.join("never-written.bin"),
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
+        .unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(handle.is_none(), "there is no source to hold open");
+        assert!(
+            out.seeks.is_empty(),
+            "the download path must not position the sink for a missing candidate"
+        );
+        assert_eq!(
+            out.writes, 0,
+            "the download path must not write into the sink"
+        );
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "nothing may land in the sink before the download starts"
+        );
+    }
+
+    /// A reuse candidate whose local slice does not hash to the chunk's digest
+    /// is downloaded. The mismatch is found before the sink is positioned, so
+    /// the sink must not move or receive bytes — and the verified handle is
+    /// kept for the next chunk, since the file itself is readable.
+    #[test]
+    fn a_reuse_slice_digest_mismatch_falls_back_without_touching_the_sink() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_mismatch");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        // The chunk claims the first slice's digest, but the candidate points
+        // at the fourth slice, which hashes differently.
+        let md5 = util::md5::md5_file_slice(&src, 0, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 8);
+        let c = chunk_at("c0", &md5, 0, 4);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut tmp_len = 0u64;
+        let mut handle = None;
+
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &src,
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
+        .unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            handle.is_some(),
+            "a readable source stays open for the next chunk when only the slice digest failed"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the mismatch must be found before the sink is positioned"
+        );
+        assert_eq!(out.writes, 0, "a mismatching slice must not be written");
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "nothing may land in the sink when the slice does not verify"
         );
     }
 
