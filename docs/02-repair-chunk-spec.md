@@ -383,9 +383,13 @@ optimization).
    in-`game_dir` transient is the atomic `config.ini.girpr_tmp` used by the `config.ini` bump.
    An in-install `--plan-out` document is an ordinary unexpected file: the
    `--purge-after`/`--purge-only` re-plan runs after it is written and deletes
-   it. `--purge-before` acts on the plan built before the document exists, so
-   it leaves it in place. Write it outside `game_dir` when combining it with
-   `--purge-after`/`--purge-only`.
+   it. `--purge-before` acts on the cleanup plan built before the document
+   exists, so it leaves the document in place. That order is deliberate: the
+   cleanup plan is part of the pre-flight decision, so every candidate is known
+   before the first write and the delete ceilings are asserted against exactly
+   that set. Publishing the document first would add a file the run created to
+   the delete set after the ceilings had been checked. Write it outside
+   `game_dir` when combining it with `--purge-after`/`--purge-only`.
 
 ### Step 8 — Report
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,

@@ -223,6 +223,11 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     //
     // The ceilings above still apply, and still trip here: narrowing what is
     // verified is not a licence to skip the assertion.
+    //
+    // The document is published after the purge candidates were walked, so an
+    // in-install `--plan-out` is not among them: `--purge-before` executes that
+    // exact pre-flight set and leaves the document in place, while the
+    // post-repair re-plan sees it as any other extra file.
     publish_plan(ctx, &game_dir, root.as_ref(), &work).await?;
     if ctx.print_plan {
         return Ok(PlanOutcome::Finished(RunExit::Success));

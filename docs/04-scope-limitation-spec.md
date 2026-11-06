@@ -428,8 +428,9 @@ writes the plan of the run that then does the work, before the first mutation,
 so a write failure is exit `3` with nothing changed. If the file is inside the
 install, the `--purge-after`/`--purge-only` re-plan in the same run treats it
 as an unexpected file and deletes it (`--purge-before` acts on the plan built
-before the document exists); point it outside `--game-path` when combining the
-two. JSON because
+before the document exists, which keeps the cleanup's candidates exactly the
+set the pre-flight ceilings were asserted against); point it outside
+`--game-path` when combining the two. JSON because
 `girsync --output json` and the whole artifact side of this repo (`gircap`'s
 bundle, `patchmaps/<id>.json`) are JSON, and a parser that has to read
 `SUMMARY` *and* the plan wants one reader, not two vocabularies. The
