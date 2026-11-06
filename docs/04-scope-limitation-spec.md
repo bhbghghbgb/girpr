@@ -193,7 +193,7 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
-the same string `phases::plan::build_plan` stores; `util::contained_rel` validates it
+the same string `phases::plan::build_plan` stores; `util::path::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The semantics are `girsync`'s, including
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
