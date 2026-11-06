@@ -565,10 +565,24 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
         "the post-phase did not run:\n{body}"
     );
 
-    // An unscanned run must not log a scan completion: the phase only runs
-    // when `--scan` asked for it.
-    let plain_log = dir.join("plain.log");
-    let plain_log_arg = plain_log.to_string_lossy().into_owned();
+    mock.stop();
+}
+
+/// An unscanned run must not log a scan completion: the phase only runs when
+/// `--scan` asked for it, and the repair phase still runs.
+#[tokio::test]
+async fn an_unscanned_run_does_not_log_a_scan_phase() {
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("unscanned_phase");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+
+    let log = dir.join("run.log");
+    let log_arg = log.to_string_lossy().into_owned();
     let (code, _, stderr) = run_binary(
         &[
             "--game-path",
@@ -578,7 +592,7 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
             "--io-threads",
             "1",
             "--log-file",
-            &plain_log_arg,
+            &log_arg,
             "--hyp-base",
             &mock.hyp_base,
             "--sophon-base",
@@ -588,7 +602,8 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
     )
     .await;
     assert_eq!(code, 0, "stderr: {stderr}");
-    let body = std::fs::read_to_string(&plain_log).expect("the plain log file was written");
+
+    let body = std::fs::read_to_string(&log).expect("the log file was written");
     assert!(
         !body.contains("phase=scan"),
         "an unscanned run must not log a scan phase:\n{body}"
