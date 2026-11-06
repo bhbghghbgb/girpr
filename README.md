@@ -46,7 +46,7 @@ machine rather than the code.
 | `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
+| `src/sophon/` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
@@ -284,7 +284,7 @@ flowchart TD
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
+S1 no manifest cache in `game_dir` (`sophon/`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
 legacy in-install `girpr.lock` (`purge::keep_set`); the cleaned blacklist is a separate keep input
 (`purge::plan_purge`). Version parse is last-match-wins
