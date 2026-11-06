@@ -462,7 +462,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-02 | F262, F263, F264 | done | Wave E; drifting counts, fatal-path wording and alias spelling; low; aba6aea, ef16ae7, 38047d4, b768c22 |
 | DOCS-USER-03 | F297, F298 | todo | Wave E; ignored bridge run and scan-test flag modernization; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
-| DOCS-COMMENTS-02 | F265, F266, F267, F268 | in_progress | Wave E; remaining module-map, re-export and line-range staleness; low |
+| DOCS-COMMENTS-02 | F265, F266, F267, F268 | pending_review | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2 |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | todo | Wave E; local fixture tag, warning wording and mismatch precedence; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
