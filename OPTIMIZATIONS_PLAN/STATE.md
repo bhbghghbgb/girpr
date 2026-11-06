@@ -449,7 +449,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | done | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
-| PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
+| PURGE-PERF-04 | F277, F278 | in_progress | Wave E; shared saturating-add helper and deprecated collect allocation; low |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
