@@ -414,7 +414,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-03 | F208 | done | Wave E; clamp helper reachability; low; 7d883da, 3602837 |
 | EXIT-04 | F271, F272, F273, F274 | todo | Wave E; structural exit-code width and single source of variants; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
-| DRYRUN-03 | F209, F210, F211 | in_progress | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low |
+| DRYRUN-03 | F209, F210, F211 | pending_review | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | todo | Wave E; last wrap path and deprecated-list conversion; low |
 | TEST-REGRESSION-02 | F214, F215 | todo | Wave E; coarse-mtime flake and test focus; low |
