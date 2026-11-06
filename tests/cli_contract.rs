@@ -979,12 +979,18 @@ fn json_records(stdout: &str) -> Vec<(String, Vec<String>)> {
 /// Parsing the text plane rather than matching substrings is what pins its
 /// shape: every field must carry its key, in report order, and a line must
 /// still begin with its event label.
+///
+/// The values are bare and a value may itself contain a space (`exe=Some
+/// Game.exe`). So the line is split on the plane's one separator, and a token
+/// starts a new field only when it is `key=…` with a key-shaped prefix;
+/// anything else continues the previous value. A record's label is still
+/// required, and a token before the first field is still rejected.
 fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
     stdout
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            let mut fields = line.split_whitespace();
+            let mut fields = line.split(' ');
             let label = fields
                 .next()
                 .unwrap_or_else(|| panic!("empty data-plane line: {line}"));
@@ -994,15 +1000,37 @@ fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
             );
             let mut keys = Vec::new();
             for field in fields {
-                let (key, _value) = field.split_once('=').unwrap_or_else(|| {
-                    panic!("text record field is not key=value ({field:?}): {line}")
-                });
-                assert!(!key.is_empty(), "text record field has no key: {line}");
-                keys.push(key.to_string());
+                if let Some((key, _value)) = field.split_once('=')
+                    && is_field_key(key)
+                {
+                    keys.push(key.to_string());
+                    continue;
+                }
+                assert!(
+                    !keys.is_empty(),
+                    "text record field is not key=value ({field:?}): {line}"
+                );
             }
             (label.to_ascii_lowercase(), keys)
         })
         .collect()
+}
+
+/// Whether `s` has the shape of a record field key: an ASCII identifier.
+fn is_field_key(s: &str) -> bool {
+    let mut chars = s.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// A value with a space is one field, not two: `exe=Genshin Impact.exe` must
+/// contribute `exe` and leave the continuation out of the key list.
+#[test]
+fn text_records_keeps_a_key_whose_value_contains_a_space() {
+    let records = text_records("REPORT total=0 exe=Genshin Impact.exe branch=main\n");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].0, "report");
+    assert_eq!(records[0].1, vec!["total", "exe", "branch"]);
 }
 
 /// Check a run against a golden sequence of `(event, field keys)`.
