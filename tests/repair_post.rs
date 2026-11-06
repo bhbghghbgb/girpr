@@ -521,6 +521,104 @@ async fn a_non_utf8_audio_cache_name_moves_byte_for_byte() {
     mock.stop();
 }
 
+/// The same move through the shipped binary: the CLI layer's flag parsing and
+/// `RunCtx` wiring must preserve the byte-exact name too. The in-process case
+/// injects a `RunCtx` directly, so it cannot see a name rewritten before the
+/// post-phase (for example by a lossy conversion while building the context).
+///
+/// The name is built with the platform's own byte constructor, so a host that
+/// cannot create one skips rather than failing.
+#[cfg(any(unix, windows))]
+#[tokio::test]
+async fn a_non_utf8_audio_cache_name_moves_through_the_binary() {
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            res_dir: "Audio/res".to_string(),
+            cache_dir: "Audio/cache".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_non_utf8_bin");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let cache = dir.join("Audio").join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+
+    #[cfg(unix)]
+    let name = {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(b"track_\xff.pcm").to_os_string()
+    };
+    #[cfg(windows)]
+    let name = {
+        use std::os::windows::ffi::OsStringExt;
+        // An unpaired surrogate has no UTF-8 encoding.
+        std::ffi::OsString::from_wide(&[
+            0x74, 0x72, 0x61, 0x63, 0x6B, 0x5F, 0xD800, 0x2E, 0x70, 0x63, 0x6D,
+        ])
+    };
+
+    let src = cache.join(&name);
+    if let Err(e) = std::fs::write(&src, b"non-utf8 cache bytes") {
+        eprintln!("skipping: this host cannot create a non-UTF-8 name: {e}");
+        mock.stop();
+        return;
+    }
+
+    let game_arg = dir.to_string_lossy().into_owned();
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+    assert_eq!(code, 0, "the binary run succeeds:\n{stdout}\n{stderr}");
+    assert!(!src.exists(), "the source is gone after the move");
+
+    let res = dir.join("Audio").join("res");
+    let entries: Vec<std::ffi::OsString> = std::fs::read_dir(&res)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(entries.len(), 1, "the one cache file moved: {entries:?}");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        assert_eq!(entries[0].as_bytes(), b"track_\xff.pcm");
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        assert_eq!(
+            entries[0].encode_wide().collect::<Vec<u16>>(),
+            name.encode_wide().collect::<Vec<u16>>()
+        );
+    }
+    assert_eq!(
+        std::fs::read(res.join(&entries[0])).unwrap(),
+        b"non-utf8 cache bytes",
+        "the moved file keeps its content"
+    );
+
+    mock.stop();
+}
+
 #[tokio::test]
 async fn a_game_dir_that_vanishes_before_the_config_bump_is_a_write_failure() {
     // The install can disappear between `prepare_install` and the post-phase
