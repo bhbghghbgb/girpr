@@ -373,8 +373,8 @@ until the main tasks and rework are done.
 | F272 | EXIT-03 review | `src/config.rs`, `src/main.rs` | The six exit variants are listed in three separate tests; a shared exhaustive source would prevent drift. | completed |
 | F273 | EXIT-03 review | `src/main.rs` | `parse_args` bypasses `exit_code` and exits with the raw `i32`; it would not fail loudly if `RunExit` outgrew `u8`. | completed |
 | F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | completed |
-| F275 | DRYRUN-03 review | `tests/repair_purge.rs` | Add a companion assertion that an in-install `--plan-out` survives an exclusive `--purge-before` run. | todo |
-| F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | todo |
+| F275 | DRYRUN-03 review | `tests/repair_purge.rs` | Add a companion assertion that an in-install `--plan-out` survives an exclusive `--purge-before` run. | completed |
+| F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | completed |
 | F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | todo |
 | F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | todo |
 | F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | todo |
@@ -402,6 +402,7 @@ until the main tasks and rework are done.
 | F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | todo |
 | F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | todo |
 | F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | todo |
+| F304 | DRYRUN-04 review | `tests/repair_purge.rs` | The purge-before plan-out test only asserts the document is non-empty; parsing it and checking it describes the same repair plan would be stronger. | todo |
 
 ## Follow-up batches
 
@@ -445,7 +446,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-05 | F301, F302, F303 | todo | Wave E; ALL completeness, tautological test and visibility; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
-| DRYRUN-04 | F275, F276 | pending_review | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
+| DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | done | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
 | PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
