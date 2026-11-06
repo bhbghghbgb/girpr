@@ -622,7 +622,13 @@ pub fn select(
     let mut taken: std::collections::HashSet<&str> =
         admitted.iter().map(|a| a.path.as_str()).collect();
     for class in Class::REQUIRED_ORDER {
-        let candidates = by_class.get(&class).map(Vec::as_slice).unwrap_or_default();
+        // Every class is seeded by `candidates_by_class`, so a miss means the
+        // two class lists disagree; fail loudly rather than admit an empty
+        // list and report the class as unavailable.
+        let candidates: &[usize] = by_class
+            .get(&class)
+            .map(Vec::as_slice)
+            .expect("candidates_by_class seeds every class from Class::ALL");
         let considered = candidates.len() as u64;
 
         // Already answered by something captured for another reason?
