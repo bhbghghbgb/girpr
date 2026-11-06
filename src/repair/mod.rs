@@ -381,18 +381,20 @@ async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork
     let deprecated = load_deprecated(ctx, meta).await;
     let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
 
-    // The estimate is a pure computation; its summary values are written once,
-    // here, in the same order and under the same conditions as before.
-    let estimate = estimate_download(ctx, scan.as_deref(), &plan, game_dir, root, local_map);
-    if let Some(bytes) = estimate.reported_bytes {
+    // The estimate is a pure computation; the summary values it derives are
+    // written once, here, in the same order and under the same conditions as
+    // before.
+    let (estimate, plan_summary) =
+        estimate_download(ctx, scan.as_deref(), &plan, game_dir, root, local_map);
+    if let Some(bytes) = plan_summary.reported_bytes {
         tracing::info!("estimated download: {bytes} bytes");
         summary.flags.plan_download_bytes = Some(bytes);
     }
-    if let Some(damaged_chunks) = estimate.damaged_chunks {
+    if let Some(damaged_chunks) = plan_summary.damaged_chunks {
         summary.flags.damaged_chunks = Some(damaged_chunks);
     }
-    summary.files_total = estimate.files_total;
-    summary.flags.limited = estimate.limited;
+    summary.files_total = plan_summary.files_total;
+    summary.flags.limited = plan_summary.limited;
     if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
         return Ok(None);
     }
@@ -609,8 +611,16 @@ async fn scan_if_requested(
 struct DownloadEstimate {
     by_file: Vec<u64>,
     bytes: u64,
-    /// `Some(bytes)` when `--max-download-bytes` asked for the figure, so the
-    /// caller can log and report it without re-deriving the condition.
+}
+
+/// The plan-phase values [`estimate_download`] derives for `SUMMARY`.
+///
+/// Kept apart from [`DownloadEstimate`] so that type stays about bytes: these
+/// are the report-shaped facts, not figures the write path uses.
+struct PlanSummaryValues {
+    /// `Some(bytes)` when the `ctx.limits.download_bytes` ceiling asked for the
+    /// figure, so the caller can log and report it without re-deriving the
+    /// condition.
     reported_bytes: Option<u64>,
     /// The scan's damaged-chunk count, when a scan ran.
     damaged_chunks: Option<u64>,
@@ -627,7 +637,7 @@ fn estimate_download(
     game_dir: &Path,
     root: Option<&util::PathRoot>,
     local_map: &Arc<manifest::LocalChunkMap>,
-) -> DownloadEstimate {
+) -> (DownloadEstimate, PlanSummaryValues) {
     let by_file = match scan {
         Some(s) => s.est_download_bytes_by_file(plan, game_dir, root, ctx.repair_mode, local_map),
         None => plan.est_download_bytes_by_file(local_map),
@@ -635,14 +645,15 @@ fn estimate_download(
     let bytes = by_file
         .iter()
         .fold(0u64, |total, n| total.saturating_add(*n));
-    DownloadEstimate {
-        by_file,
-        bytes,
-        reported_bytes: ctx.limits.download_bytes.map(|_| bytes),
-        damaged_chunks: scan.map(|s| s.damaged_chunks),
-        files_total: plan.len() as u64,
-        limited: ctx.limits.is_active(),
-    }
+    (
+        DownloadEstimate { by_file, bytes },
+        PlanSummaryValues {
+            reported_bytes: ctx.limits.download_bytes.map(|_| bytes),
+            damaged_chunks: scan.map(|s| s.damaged_chunks),
+            files_total: plan.len() as u64,
+            limited: ctx.limits.is_active(),
+        },
+    )
 }
 
 /// === assert: the ceilings, before anything is mutated ===
