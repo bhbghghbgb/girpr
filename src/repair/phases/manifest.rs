@@ -291,7 +291,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::{Notify, watch};
 
     /// A manifest body as the origin sends it: zstd over the protobuf, with
@@ -427,28 +427,39 @@ mod tests {
         }
     }
 
-    /// A running test origin. Dropping it cancels the accept loop and every
-    /// connection task it spawned, so a test never depends on runtime teardown
-    /// to stop a route that never answers.
+    /// A running test origin. Dropping it cancels the accept loop, and the
+    /// `JoinSet` that loop owns aborts every connection task it spawned, so a
+    /// test never depends on runtime teardown to stop a route that never
+    /// answers.
     struct TestServer {
         base: String,
-        accept: tokio::task::JoinHandle<()>,
-        connections: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+        driver: tokio::task::JoinHandle<()>,
+        live: Arc<AtomicUsize>,
+        idle: Arc<Notify>,
     }
 
     impl TestServer {
         fn base(&self) -> &str {
             &self.base
         }
+
+        /// Wait until every accepted connection has been reaped.
+        async fn wait_until_idle(&self) {
+            loop {
+                let idle = self.idle.notified();
+                if self.live.load(Ordering::SeqCst) == 0 {
+                    return;
+                }
+                idle.await;
+            }
+        }
     }
 
     impl Drop for TestServer {
         fn drop(&mut self) {
-            self.accept.abort();
-            self.connections
-                .lock()
-                .expect("connection registry")
-                .abort_all();
+            // Aborting the driver drops its `JoinSet`, which aborts the
+            // connections still in flight.
+            self.driver.abort();
         }
     }
 
@@ -457,78 +468,95 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let base = format!("http://{}", listener.local_addr().expect("addr"));
         let routes = Arc::new(routes);
-        let connections = Arc::new(std::sync::Mutex::new(tokio::task::JoinSet::new()));
-        let spawned = connections.clone();
-        let accept = tokio::spawn(async move {
+        let live = Arc::new(AtomicUsize::new(0));
+        let idle = Arc::new(Notify::new());
+        let spawned_live = live.clone();
+        let spawned_idle = idle.clone();
+        let driver = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
             loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    continue;
-                };
-                let routes = routes.clone();
-                let mut connections = spawned.lock().expect("connection registry");
-                connections.spawn(async move {
-                    let mut buf = vec![0u8; 8192];
-                    let mut got = 0;
-                    while got < buf.len() {
-                        match socket.read(&mut buf[got..]).await {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                got += n;
-                                if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
-                                    break;
-                                }
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let Ok((socket, _)) = accepted else {
+                            continue;
+                        };
+                        spawned_live.fetch_add(1, Ordering::SeqCst);
+                        let routes = routes.clone();
+                        connections.spawn(handle_connection(socket, routes));
+                    }
+                    // Reap a finished connection as soon as it completes,
+                    // instead of leaving its entry for the next accept.
+                    reaped = connections.join_next(), if !connections.is_empty() => {
+                        if reaped.is_some() {
+                            spawned_live.fetch_sub(1, Ordering::SeqCst);
+                            if spawned_live.load(Ordering::SeqCst) == 0 {
+                                spawned_idle.notify_waiters();
                             }
-                            Err(_) => return,
                         }
                     }
-                    let head = String::from_utf8_lossy(&buf[..got]).to_string();
-                    let target = head
-                        .lines()
-                        .next()
-                        .and_then(|l| l.split_whitespace().nth(1))
-                        .unwrap_or("/");
-                    let id = target.rsplit('/').next().unwrap_or("");
-                    let (status, body, in_flight) = match routes.iter().find(|(rid, _)| *rid == id)
-                    {
-                        Some((_, Reply::Body(body))) => ("200 OK", body.clone(), None),
-                        Some((_, Reply::Status(status))) => (*status, Vec::new(), None),
-                        Some((_, Reply::NeverAfterHit(hits))) => {
-                            hits.fetch_add(1, Ordering::SeqCst);
-                            std::future::pending::<()>().await;
-                            unreachable!("a never-answering route holds the socket open")
-                        }
-                        Some((_, Reply::StatusAfterHit(status, hits))) => {
-                            while hits.load(Ordering::SeqCst) == 0 {
-                                tokio::task::yield_now().await;
-                            }
-                            (*status, Vec::new(), None)
-                        }
-                        Some((_, Reply::GatedBody { body, gate })) => {
-                            gate.enter().await;
-                            ("200 OK", body.clone(), Some(gate.clone()))
-                        }
-                        None => ("404 Not Found", Vec::new(), None),
-                    };
-                    let head = format!(
-                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        body.len()
-                    );
-                    let _ = socket.write_all(head.as_bytes()).await;
-                    let _ = socket.write_all(&body).await;
-                    let _ = socket.flush().await;
-                    if let Some(gate) = in_flight {
-                        gate.leave();
-                    }
-                });
-                // Reap connections that already finished so the registry only
-                // holds tasks still worth aborting.
-                while connections.try_join_next().is_some() {}
+                }
             }
         });
         TestServer {
             base,
-            accept,
-            connections,
+            driver,
+            live,
+            idle,
+        }
+    }
+
+    /// Answer one request on `socket`.
+    async fn handle_connection(mut socket: TcpStream, routes: Arc<Vec<(&'static str, Reply)>>) {
+        let mut buf = vec![0u8; 8192];
+        let mut got = 0;
+        while got < buf.len() {
+            match socket.read(&mut buf[got..]).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    got += n;
+                    if buf[..got].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+        let head = String::from_utf8_lossy(&buf[..got]).to_string();
+        let target = head
+            .lines()
+            .next()
+            .and_then(|l| l.split_whitespace().nth(1))
+            .unwrap_or("/");
+        let id = target.rsplit('/').next().unwrap_or("");
+        let (status, body, in_flight) = match routes.iter().find(|(rid, _)| *rid == id) {
+            Some((_, Reply::Body(body))) => ("200 OK", body.clone(), None),
+            Some((_, Reply::Status(status))) => (*status, Vec::new(), None),
+            Some((_, Reply::NeverAfterHit(hits))) => {
+                hits.fetch_add(1, Ordering::SeqCst);
+                std::future::pending::<()>().await;
+                unreachable!("a never-answering route holds the socket open")
+            }
+            Some((_, Reply::StatusAfterHit(status, hits))) => {
+                while hits.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+                (*status, Vec::new(), None)
+            }
+            Some((_, Reply::GatedBody { body, gate })) => {
+                gate.enter().await;
+                ("200 OK", body.clone(), Some(gate.clone()))
+            }
+            None => ("404 Not Found", Vec::new(), None),
+        };
+        let head = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let _ = socket.write_all(head.as_bytes()).await;
+        let _ = socket.write_all(&body).await;
+        let _ = socket.flush().await;
+        if let Some(gate) = in_flight {
+            gate.leave();
         }
     }
 
@@ -792,6 +820,30 @@ mod tests {
                 "the bound holds for the whole run, not just the first burst"
             );
         }
+    }
+
+    /// The registry drops a connection as soon as it finishes: a single
+    /// request is reaped without another accept arriving to trigger it.
+    #[tokio::test]
+    async fn finished_connections_are_reaped_without_another_accept() {
+        let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let server = serve(vec![("ok", Reply::Body(body))]).await;
+        let build = build(server.base(), vec![meta("game", "ok", &checksum)]);
+        let client = Client::new();
+        let manifests = fetch_latest(
+            &client,
+            &NoSleep,
+            &build,
+            &HashSet::new(),
+            &HashSet::new(),
+            1,
+        )
+        .await
+        .expect("the manifest answers");
+        assert_eq!(manifests.len(), 1);
+        tokio::time::timeout(Duration::from_secs(5), server.wait_until_idle())
+            .await
+            .expect("the finished connection is reaped without another accept");
     }
 
     /// A failed local manifest is skipped, and the successful ones still
