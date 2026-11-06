@@ -578,6 +578,15 @@ mod tests {
         // A sibling, or an ancestor, cannot be spelled relative to the base.
         assert_eq!(rel_from_base(Path::new("Other/a.pck"), base), None);
         assert_eq!(rel_from_base(base, &base.join("sub")), None);
+        // Stripping is by path component, not by shared prefix text: `GameX`
+        // shares the letters with `Game` but is a sibling, not a descendant.
+        assert_eq!(rel_from_base(Path::new("GameX/a.pck"), base), None);
+        // A true component prefix still strips, including a nested base.
+        let nested_base = base.join("Audio");
+        assert_eq!(
+            rel_from_base(&nested_base.join("cache/a.pck"), &nested_base).as_deref(),
+            Some("cache/a.pck")
+        );
     }
 
     /// The pair helper strips the base once and returns both halves a moving
@@ -598,6 +607,14 @@ mod tests {
 
         // Outside the base there is no pair to return.
         assert_eq!(rel_pair_from_base(Path::new("Other/a.pck"), base), None);
+        // Shared prefix text is not a shared component: `GameX` is a sibling.
+        assert_eq!(rel_pair_from_base(Path::new("GameX/a.pck"), base), None);
+        // A true component prefix still yields the pair, also for a nested base.
+        let nested_base = base.join("Audio");
+        let nested_path = nested_base.join("cache/a.pck");
+        let (key, rel) = rel_pair_from_base(&nested_path, &nested_base).unwrap();
+        assert_eq!(key, "cache/a.pck");
+        assert_eq!(rel, Path::new("cache/a.pck"));
 
         #[cfg(unix)]
         {
