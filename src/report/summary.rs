@@ -133,14 +133,14 @@ pub struct Summary {
     ///
     /// Read it through the `check_damaged_chunks()` accessor: this raw counter
     /// is zero both before the check has run and after a clean one.
-    pub check_damaged_chunks: AtomicU64,
+    pub(super) check_damaged_chunks: AtomicU64,
     /// Whether the check has published its raw damaged-chunk tally.
     /// `false` on a default `Summary`, so "not measured" is not read as
     /// "measured zero".
     ///
     /// The store is `Release` and the accessor's load is `Acquire`: a reader
     /// that observes the flag also observes the tally it publishes.
-    pub check_damaged_chunks_measured: AtomicBool,
+    pub(super) check_damaged_chunks_measured: AtomicBool,
 }
 
 impl Summary {
@@ -199,6 +199,17 @@ impl Summary {
                 Err(observed) => current = observed,
             }
         }
+    }
+
+    /// Publish the check's damaged-chunk tally, then mark it measured.
+    ///
+    /// The store order is the point: a reader that observes the measured flag
+    /// through [`Summary::check_damaged_chunks`] also observes the tally it
+    /// publishes.
+    pub(crate) fn publish_check_damaged_chunks(&self, chunks: u64) {
+        self.check_damaged_chunks.store(chunks, Ordering::Relaxed);
+        self.check_damaged_chunks_measured
+            .store(true, Ordering::Release);
     }
 
     /// The chunks the check phase found wrong, or `None` when the check has

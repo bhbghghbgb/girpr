@@ -204,16 +204,9 @@ where
     // Keep the check's own damaged-chunk tally on the summary for callers that
     // need it, but leave the emitted `damaged_chunks` key alone: that key is
     // the plan-phase scan's figure and its presence is part of the output
-    // contract.
-    summary
-        .check_damaged_chunks
-        .store(damaged_chunks, Ordering::Relaxed);
-    // Publish after the tally, so a reader that sees the flag also sees the
-    // value. This is what tells a clean check (measured, zero) apart from a
-    // check that never ran.
-    summary
-        .check_damaged_chunks_measured
-        .store(true, Ordering::Release);
+    // contract. Publishing after the tally is what tells a clean check
+    // (measured, zero) apart from a check that never ran.
+    summary.publish_check_damaged_chunks(damaged_chunks);
     tracing::info!(
         phase = % "check",
         duration_ms = timer.elapsed_ms(),
