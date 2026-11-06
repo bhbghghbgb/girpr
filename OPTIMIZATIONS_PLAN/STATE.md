@@ -481,7 +481,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
 | TEST-MANIFEST-04 | F290, F291 | todo | Wave E; advertisement-to-servability and field-based id lookup; low |
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
-| LINT-03 | F260, F261 | in_progress | Wave E; select-order coupling and to_ndjson doc; low |
+| LINT-03 | F260, F261 | pending_review | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5 |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
