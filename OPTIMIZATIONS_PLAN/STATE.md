@@ -427,7 +427,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | todo | Wave E; host-clock-independent stamps and shared phase-test setup; low |
-| TEST-OUTPUT-02 | F216, F217, F218 | in_progress | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low |
+| TEST-OUTPUT-02 | F216, F217, F218 | pending_review | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
 | CHECK-03 | F222, F223 | todo | Wave E; test timeout and tally field visibility; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
