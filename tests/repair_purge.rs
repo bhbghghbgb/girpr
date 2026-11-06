@@ -452,6 +452,43 @@ async fn a_plan_out_inside_the_install_is_an_ordinary_purge_candidate() {
 }
 
 #[tokio::test]
+async fn purge_before_leaves_an_in_install_plan_out_in_place() {
+    // The before pass executes the cleanup plan built during the plan phase,
+    // before `--plan-out` writes the document. The document is therefore not
+    // one of its candidates and survives, unlike the `--purge-after` case
+    // directly above. It is still an ordinary extra file to *any* later pass.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("plan_out_inside_purge_before");
+    let fx2 = build_fixture();
+    // bar intact, foo missing, plus an orphan so the before pass really deletes.
+    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
+    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
+
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
+    ctx.purge_before = true;
+    ctx.plan_out = Some(dir.join("plan.json"));
+    let (summary, code) = run(ctx).await.expect("the purge-before run succeeds");
+    assert_eq!(code, RunExit::Success);
+    let (_, repaired, failed, _, deleted) = load_counters(&summary);
+    assert_eq!((repaired, failed), (1, 0), "the missing file is repaired");
+    assert!(deleted >= 64, "the orphan is deleted");
+    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
+    assert_eq!(
+        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
+        fx2.files[0].data
+    );
+    let doc = read_game_file(&dir, "plan.json")
+        .expect("the in-install plan document survives --purge-before");
+    assert!(
+        !doc.is_empty(),
+        "the surviving document is the written plan"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
 async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
     // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
     // rules, and neither repairs.
