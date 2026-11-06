@@ -319,6 +319,13 @@ fn mark_kept_ancestors(file: &Path, game_dir: &Path, out: &mut HashSet<PathBuf>)
 /// Execute a decided [`PurgePlan`]. Returns the number of bytes actually
 /// deleted, which is always `0` in dry-run (the candidates are only logged,
 /// and the sweep is skipped entirely).
+///
+/// A dry run always ends with the per-pass `purge dry-run: N bytes would be
+/// freed` line, **including** `N = 0` for a plan with no candidates. The zero
+/// line is the evidence that this pass reached the delete step and found
+/// nothing to list; it keeps an empty pass distinguishable from one the caller
+/// skipped or from the after pass's dedup early return, which emits no byte
+/// line at all.
 pub fn apply_purge(plan: &PurgePlan, dry_run: bool) -> Result<u64> {
     let mut deleted_bytes = 0u64;
     let mut would_be = 0u64;
@@ -813,6 +820,27 @@ mod tests {
         assert_eq!(
             classify_purge_path("login.dat", &expected, &keep, &no_blacklist(), &scoped),
             PurgeVerdict::Purge
+        );
+    }
+
+    /// A dry pass with no candidates still emits its zero-byte line: it is how
+    /// the log distinguishes "the delete step ran and found nothing" from "the
+    /// pass never reached the delete step" (the after pass's dedup return).
+    #[test]
+    fn a_dry_pass_with_no_candidates_still_emits_the_zero_byte_line() {
+        let dir = TempDir::new("girpr_test_purge", "dryrun_empty");
+        std::fs::write(dir.join("game.dat"), b"keep").unwrap();
+        let plan = plan_of("game.dat");
+        let keys = keys_for(&plan, &no_blacklist());
+        let pp = plan_purge(&dir, &keys, &PathScope::default());
+        assert!(pp.files.is_empty(), "the fixture has no delete candidate");
+
+        let logs = crate::repair::test_support::logs_of(|| {
+            assert_eq!(apply_purge(&pp, true).unwrap(), 0);
+        });
+        assert!(
+            logs.contains("purge dry-run: 0 bytes would be freed"),
+            "an empty pass that reaches the delete step still says so: {logs}"
         );
     }
 

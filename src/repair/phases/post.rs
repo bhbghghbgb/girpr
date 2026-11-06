@@ -204,12 +204,14 @@ async fn purge_after_pass(
     // The operator contract this produces: each candidate is named once per
     // run, and `apply_purge`'s "purge dry-run: N bytes would be freed" line is
     // per pass - emitted once for each pass that reaches the delete step,
-    // including a pass with no candidates (a `0`-byte line). With both flags
-    // the before line covers what was present before the repair; when every
-    // after-pass candidate was already listed, the after pass returns before
-    // `apply_purge` and emits no second byte line. Summing the per-pass byte
-    // lines therefore gives the run's listing total, while the candidate lines
-    // are the exactly-once record.
+    // including a pass with no candidates (a `0`-byte line). The zero line is
+    // deliberate, not noise: it is the only evidence that the pass reached the
+    // delete step and found nothing, as opposed to returning early like the
+    // dedup path below. With both flags the before line covers what was
+    // present before the repair; when every after-pass candidate was already
+    // listed, the after pass returns before `apply_purge` and emits no second
+    // byte line. Summing the per-pass byte lines therefore gives the run's
+    // listing total, while the candidate lines are the exactly-once record.
     let mut all_already_listed = false;
     let mut purge_plan = purge_plan;
     if dry
