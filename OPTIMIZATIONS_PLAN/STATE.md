@@ -483,7 +483,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
 | SYNC-02 | F251, F252 | done | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99, 2049582 |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
-| METADATA-03 | F244, F245, F246 | todo | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low |
+| METADATA-03 | F244, F245, F246 | in_progress | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | todo | Wave E; first-error message, live-stream coverage and task reaping; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
