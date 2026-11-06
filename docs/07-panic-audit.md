@@ -67,6 +67,7 @@ server-controlled.
 | `src/repair/file/temp.rs` `chunk_end` | chunk `offset + uncompressed_size` | server | **Guarded**: `u64::try_from` + `checked_add`; failure is a per-file error. |
 | `src/repair/file/temp.rs` `try_reuse_slice` (reuse copy) | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
 | `src/repair/file/mod.rs` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
+| `src/repair/mod.rs` `publish_plan` (`disk.as_ref().expect`) | disk plan for the report | local | **Invariant**: `disk` is `Some` exactly when `--print-plan` or `--plan-out` is set, the same condition that builds it in this function; each `expect` is reached only under that condition. |
 | `src/repair/scope/report.rs` `DiskPlan::new` | file `size`, `compressed_size` | server | **Saturating** (`est_write_bytes`, `est_extra_bytes`, `saturating_sub`). |
 | `src/repair/file/inplace.rs` `staged_payload` | chunk `uncompressed_size` | server | **Saturating**, so a corrupt sum falls back to the ordered tier instead of bypassing the RAM budget. |
 | `src/repair/mod.rs` `estimate_download` fold | per-file estimates | server-derived | **Saturating**. |
