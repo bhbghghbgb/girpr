@@ -356,8 +356,8 @@ until the main tasks and rework are done.
 | F255 | HYP-02 review | `src/repair/phases/metadata.rs` | Biz mismatch is checked before the download-mode refusal, so a wrong-biz non-chunk response reports metadata; precedence is undocumented. | todo |
 | F256 | PATHHELPERS-02 review | `src/util/path.rs` tests | No explicit prefix-but-not-component case (`GameX/a.pck` against `Game`) pins the component-boundary contract. | completed |
 | F257 | PATHHELPERS-02 review | `tests/repair_post.rs` | The non-UTF-8 move test goes through in-process `girpr::run`; a process-spawning variant would also cover CLI-layer rewriting. | completed |
-| F258 | TEST-MANIFEST-02 review | `tests/common/mod.rs` | The unserved-manifest test uses distinct chunk ids, so it cannot catch an unserved manifest overwriting a served manifest's chunk with a shared id. | todo |
-| F259 | TEST-MANIFEST-02 review | `tests/repair_offline.rs` | The "both manifests are still advertised" assertion reads the fixture list, not the mock's `getBuild` JSON. | todo |
+| F258 | TEST-MANIFEST-02 review | `tests/common/mod.rs` | The unserved-manifest test uses distinct chunk ids, so it cannot catch an unserved manifest overwriting a served manifest's chunk with a shared id. | completed |
+| F259 | TEST-MANIFEST-02 review | `tests/repair_offline.rs` | The "both manifests are still advertised" assertion reads the fixture list, not the mock's `getBuild` JSON. | completed |
 | F260 | LINT-02 review | `tools/capture/src/select/mod.rs` | `enumerate()` over `REQUIRED_ORDER` assumes its index equals the `ALL` index; a reorder would silently pair classes with the wrong candidates. | todo |
 | F261 | LINT-02 review | `tools/capture/src/http/log.rs` | `to_ndjson`'s doc describes only the happy path; the `io::Result` error case is unmentioned. | todo |
 | F262 | DOCS-USER-01 review | `README.md` | Per-file counts ("74 cases", "25 cases") drift like the removed total; soften them. | todo |
@@ -388,6 +388,8 @@ until the main tasks and rework are done.
 | F287 | CHECK-03 review | `src/report/summary.rs` | The now-`pub(super)` counter's doc could note that writes go through `publish_check_damaged_chunks`. | todo |
 | F288 | PATHHELPERS-03 review | `tests/repair_post.rs` | The binary test's doc implies the name can be rewritten while building the context, but it is only discovered in the post-phase walk; the added value is CLI/RunCtx wiring. | todo |
 | F289 | PATHHELPERS-03 review | `tests/repair_post.rs` | The skip-on-write-failure pattern reports a pass without exercising assertions on hosts that reject such names; consider an opt-in strict mode or CI note. | todo |
+| F290 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | The `getBuild` expected ids are fixture-derived; fetching the advertised bodies (`200` for `kept`, `404` for `gone`) would tie advertisement to servability. | todo |
+| F291 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | `gone_id`/`kept_id` are taken by positional index; lookup by `matching_field` would be less brittle. | todo |
 
 ## Follow-up batches
 
@@ -476,7 +478,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
-| TEST-MANIFEST-03 | F258, F259 | pending_review | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
+| TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
+| TEST-MANIFEST-04 | F290, F291 | todo | Wave E; advertisement-to-servability and field-based id lookup; low |
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | LINT-03 | F260, F261 | todo | Wave E; select-order coupling and to_ndjson doc; low |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
