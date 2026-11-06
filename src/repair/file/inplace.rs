@@ -649,6 +649,10 @@ const COARSE_MTIME_TICK: Duration = Duration::from_secs(2);
 /// tick. Requiring the scan start to be more than a tick after the recorded
 /// mtime rules that out. Missing or backwards timestamps answer `false`, so
 /// the caller reads the file again.
+///
+/// This inference assumes a forward-moving wall clock: a write at or after
+/// `scanned_at` stamps a time no earlier than `scanned_at`. A backwards jump
+/// can break it; the consequences are described on [`reusable_verdict`].
 fn mtime_predates_scan(recorded: SystemTime, scanned_at: Option<SystemTime>) -> bool {
     let Some(scanned_at) = scanned_at else {
         return false;
@@ -701,12 +705,36 @@ fn mtime_predates_scan(recorded: SystemTime, scanned_at: Option<SystemTime>) -> 
 /// - A verdict that found the file **intact** is also the skip check: its
 ///   digest matches the manifest's, so the writer reports the file skipped
 ///   without reading or writing it. The age check above rejects the same-tick
-///   rewrite; the remaining residual is a store that does not advance the
-///   mtime on a write at all, where the recorded value is preserved no matter
-///   how old it is. Such a store can still make this run report the file
-///   skipped until a later scan sees it. Nothing is ever written from a stale
-///   verdict, so this run cannot corrupt the file; it can only fail to repair
-///   it.
+///   rewrite, but it cannot cover every store or writer. The residual is a
+///   post-scan rewrite that can still present the recorded mtime even though
+///   it is older than the scan:
+///
+///   - a store that does not advance the mtime on a write at all, where the
+///     recorded value is preserved no matter how old it is;
+///   - a store whose timestamp granularity is coarser than
+///     [`COARSE_MTIME_TICK`], where a scan more than a tick after the recorded
+///     mtime can still share the truncated tick with a later rewrite;
+///   - a writer that backdates the mtime, for example by restoring the
+///     original timestamp after changing the bytes.
+///
+///   Such a store or writer can still make this run report the file skipped
+///   until a later scan sees it. Nothing is ever written from a stale verdict,
+///   so this run cannot corrupt the file; it can only fail to repair it.
+///
+/// # The clock direction
+///
+/// The age rule assumes the wall clock moves forward between the file's last
+/// write, the plan scan, and the writer's check. A backwards jump is not
+/// detected. If the jump lands before or during the plan scan, the recorded
+/// mtime can sit at or after the scan start; [`mtime_predates_scan`] then
+/// answers `false` and the file is read again, which is the safe direction and
+/// only costs the read. If the jump happens after the scan, a post-scan
+/// rewrite can stamp a time earlier than the scan start, so "a later write is
+/// at least as new as the scan" no longer holds. Should that rewrite then
+/// present the recorded mtime exactly - naturally or because a coarse store
+/// truncates it there - the guard can accept a stale intact verdict, with the
+/// residual consequence above: skipped until a later scan, never written from
+/// the stale verdict.
 ///
 /// Not paying for a second read here is the trade that makes scanning worth it.
 fn reusable_verdict<'a>(
