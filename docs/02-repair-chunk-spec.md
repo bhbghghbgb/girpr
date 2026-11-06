@@ -381,9 +381,11 @@ optimization).
    deletes above). `--purge-before` runs
    this same cleanup at Step 5. Manifests are never cached inside `game_dir`; the only
    in-`game_dir` transient is the atomic `config.ini.girpr_tmp` used by the `config.ini` bump.
-   An in-install `--plan-out` document is an ordinary unexpected file: it is
-   written before execution, so a purge in the same run deletes it. Write it
-   outside `game_dir` when combining it with `--purge-before`/`--purge-after`.
+   An in-install `--plan-out` document is an ordinary unexpected file: the
+   `--purge-after`/`--purge-only` re-plan runs after it is written and deletes
+   it. `--purge-before` acts on the plan built before the document exists, so
+   it leaves it in place. Write it outside `game_dir` when combining it with
+   `--purge-after`/`--purge-only`.
 
 ### Step 8 — Report
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,

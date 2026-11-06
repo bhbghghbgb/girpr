@@ -426,8 +426,10 @@ size}]}` — for the `--per-class`-sized cases where diffing eight lines beats
 eight `--include` flags. It works with or without `--print-plan`: on its own it
 writes the plan of the run that then does the work, before the first mutation,
 so a write failure is exit `3` with nothing changed. If the file is inside the
-install, a purge in the same run treats it as an unexpected file and deletes
-it; point it outside `--game-path` when combining the two. JSON because
+install, the `--purge-after`/`--purge-only` re-plan in the same run treats it
+as an unexpected file and deletes it (`--purge-before` acts on the plan built
+before the document exists); point it outside `--game-path` when combining the
+two. JSON because
 `girsync --output json` and the whole artifact side of this repo (`gircap`'s
 bundle, `patchmaps/<id>.json`) are JSON, and a parser that has to read
 `SUMMARY` *and* the plan wants one reader, not two vocabularies. The
