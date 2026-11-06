@@ -1005,7 +1005,11 @@ struct Responses {
     /// Hold the config answer until the branch answer has been served.
     config_after_branches: bool,
     /// Signalled once the branch answer has been served.
-    branches_served: tokio::sync::Notify,
+    ///
+    /// A watch (not a one-shot permit) so a *retried* config call still sees
+    /// that the branch was already served instead of waiting forever for a
+    /// permit that the first call consumed.
+    branches_served: tokio::sync::watch::Sender<bool>,
     not_found_chunks: bool,
     not_found_manifests: bool,
     corrupt_first_chunks: u32,
@@ -1195,7 +1199,7 @@ fn build_responses(
         fail_chunks: opts.fail_chunks,
         fail_branches: opts.fail_branches,
         config_after_branches: opts.config_after_branches,
-        branches_served: tokio::sync::Notify::new(),
+        branches_served: tokio::sync::watch::channel(false).0,
         not_found_chunks: opts.not_found_chunks,
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
@@ -1260,7 +1264,10 @@ async fn serve_one(
     let is_branch = target.contains("getGameBranches");
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
         if r.config_after_branches {
-            r.branches_served.notified().await;
+            // `wait_for` returns immediately when the retained value is
+            // already true, so a retried config call cannot hang.
+            let mut served = r.branches_served.subscribe();
+            let _ = served.wait_for(|served| *served).await;
         }
         ("200 OK", "application/json", r.configs.clone())
     } else if is_branch {
@@ -1396,7 +1403,10 @@ async fn serve_one(
     // request itself was already logged above, so a test can assert it was
     // issued regardless of when the client reads either response.
     if is_branch {
-        r.branches_served.notify_one();
+        // `send_replace` updates even when no config request is waiting yet:
+        // a one-shot `send` would fail with no receiver, leaving a later
+        // config call waiting forever.
+        r.branches_served.send_replace(true);
     }
 
     // The plan phase is over by the time a chunk is requested, so this is the
