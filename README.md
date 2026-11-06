@@ -231,7 +231,10 @@ flowchart TD
   not. The `purge dry-run: N bytes would be freed` line is per pass: it is
   emitted once for each pass that reaches the delete step, including a pass with
   no candidates (a `0`-byte line), but when the before pass already named every
-  candidate the after pass returns before it and adds no second byte line. A tripped
+  candidate the after pass returns before it and adds no second byte line. The
+  zero line is meaningful: it says the pass reached the delete step and found
+  nothing, which a missing line does not (the pass may have been skipped or
+  deduplicated instead). A tripped
   ceiling still stops a dry run, including the post-repair delete
   re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
   purge that cannot be planned is the same write-class failure (exit `3`) as in a
@@ -258,6 +261,9 @@ flowchart TD
   patterns;
   **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
   `ScreenShot/`). The whole plan is built before the first delete.
+  The `--plan-out` document is an ordinary unexpected file if it is written
+  inside the install: a purge in the same run deletes it. Point `--plan-out`
+  outside `--game-path` to keep it.
 - single-writer lock: every run that mutates the install takes an OS advisory
   lock on `{temp}/girpr-{key:016x}.lock`, keyed by a stable FNV-1a hash of the
   canonical game dir (ASCII case folded on Windows, because the filesystem is).
@@ -348,7 +354,7 @@ cargo build --release
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
 | `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
-| `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed) |
+| `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, a `--purge-before` or `--purge-after` pass in the same run deletes it as an unexpected file. Write it outside the install when combining it with a purge |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` *adds* to it — it can turn up other crates, but it cannot change this program's own level |
 | `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |

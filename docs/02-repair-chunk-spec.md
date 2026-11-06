@@ -372,12 +372,18 @@ optimization).
    set, then remove emptied dirs (dir sweep runs whenever a purge runs with writes
    enabled, i.e. both `--purge-before` and `--purge-after`; skipped in `--dry-run`).
    `--dry-run` only logs candidates + bytes and leaves `deleted_extra_bytes` at 0 by design.
+   Its final `purge dry-run: N bytes would be freed` line is per pass and is
+   emitted even when `N = 0`, so a pass that ran and found nothing stays
+   distinguishable from one that was skipped or deduplicated.
    When the before pass already ran in the same dry run, this pass lists only the
    candidates the before pass did not name.
    Counts to the single `deleted_extra_bytes` counter (shared with deprecated-file
    deletes above). `--purge-before` runs
    this same cleanup at Step 5. Manifests are never cached inside `game_dir`; the only
    in-`game_dir` transient is the atomic `config.ini.girpr_tmp` used by the `config.ini` bump.
+   An in-install `--plan-out` document is an ordinary unexpected file: it is
+   written before execution, so a purge in the same run deletes it. Write it
+   outside `game_dir` when combining it with `--purge-before`/`--purge-after`.
 
 ### Step 8 — Report
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
