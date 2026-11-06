@@ -372,6 +372,17 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 ///
 /// The result is beside `path`, which is what makes the rename that publishes
 /// it atomic.
+///
+/// A path with **no file name** still gets a name, but it is not a sibling of a
+/// file. The fallback prefix is empty, and `with_file_name` only removes a real
+/// file name before pushing the suffix; the path's directories stay as the
+/// prefix. So `Audio/res/..` becomes `Audio/res/../.girpr_tmp`, which still
+/// contains the `..` before resolution and resolves to `Audio/.girpr_tmp` —
+/// beside `res`, not inside it — and the empty path becomes `.girpr_tmp` in the
+/// current directory. A caller that must publish under the name it was given
+/// therefore refuses a target with no file name before calling this helper
+/// (`copy_publish_with` in the post-phase does); this helper keeps the simple
+/// shape instead of inventing a directory for the temp.
 pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
@@ -718,16 +729,32 @@ mod tests {
         );
     }
 
-    /// A path with no file name still names its sibling: the fallback prefix is
-    /// empty and the helper appends the same suffix, so the name is the suffix
-    /// alone.
+    /// A path with no file name still names its sibling, but the shape depends
+    /// on what the path already says: `with_file_name` only pops a real file
+    /// name, so a path that ends in `..` keeps that component and gains the
+    /// suffix after it.
+    ///
+    /// `""` gains the suffix directly (`.girpr_tmp`). `Audio/res/..` becomes
+    /// `Audio/res/../.girpr_tmp`, which resolves to `Audio/.girpr_tmp` — beside
+    /// `res`, not inside it — so the result is not "beside a name" for such a
+    /// path. The post-phase's copy writer refuses a no-file-name target before
+    /// asking for a temp for exactly that reason.
     #[test]
     fn temp_sibling_names_the_no_file_name_fallback() {
-        let path = Path::new("");
-        assert!(path.file_name().is_none());
         let mut want = std::ffi::OsString::new();
         want.push(TEMP_SUFFIX);
-        assert_eq!(temp_sibling(path).file_name(), Some(want.as_os_str()));
+        let empty = Path::new("");
+        assert!(empty.file_name().is_none());
+        assert_eq!(temp_sibling(empty).file_name(), Some(want.as_os_str()));
+        assert_eq!(temp_sibling(empty), PathBuf::from(want.as_os_str()));
+
+        // The `..` survives into the returned spelling before resolution.
+        let dotdot = Path::new("Audio/res/..");
+        assert!(dotdot.file_name().is_none());
+        assert_eq!(
+            temp_sibling(dotdot),
+            PathBuf::from("Audio/res/../.girpr_tmp")
+        );
     }
 
     /// The suffix is pushed onto the `OsString`, so a name that is not UTF-8
