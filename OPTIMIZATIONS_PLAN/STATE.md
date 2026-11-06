@@ -310,8 +310,8 @@ until the main tasks and rework are done.
 | F209 | DRYRUN-02 review | `src/repair/purge.rs` | `apply_purge` still emits `0 bytes would be freed` for a dry pass with no candidates; now documented, suppression would be a behavior change. | completed |
 | F210 | DRYRUN-02 review | `tests/repair_limits.rs` | The ceiling test cannot independently distinguish the up-front check from the post-repair re-check. | completed |
 | F211 | DRYRUN-02 review | `src/repair/phases/post.rs` | A real `--purge-after --plan-out <inside install>` deletes the plan document it just wrote; document or exclude it from the keep set. | completed |
-| F212 | PURGE-PERF-02 review | `src/report/summary.rs` | `deleted_extra_bytes.fetch_add` still uses plain atomic addition; a saturating variant would remove the last wrap path. | todo |
-| F213 | PURGE-PERF-02 review | `src/hyp.rs` | `fetch_deprecated` still returns `Vec<String>`; returning `Arc<[String]>` would remove the one remaining conversion copy. | todo |
+| F212 | PURGE-PERF-02 review | `src/report/summary.rs` | `deleted_extra_bytes.fetch_add` still uses plain atomic addition; a saturating variant would remove the last wrap path. | completed |
+| F213 | PURGE-PERF-02 review | `src/hyp.rs` | `fetch_deprecated` still returns `Vec<String>`; returning `Arc<[String]>` would remove the one remaining conversion copy. | completed |
 | F214 | TEST-REGRESSION-01 review | `tests/repair_machinery.rs` | The fresh-scan test relies on a same-size rewrite changing mtime; coarse filesystems could make it flake. | todo |
 | F215 | TEST-REGRESSION-01 review | `tests/process.rs` | The unscanned-run assertion is appended to the duration-field test; its own test would keep that one focused. | todo |
 | F216 | TEST-OUTPUT-01 review | `tests/cli_contract.rs` | The JSON-plane tests still use only `assert_golden`; reuse `assert_one_terminal_summary` there too. | todo |
@@ -375,6 +375,8 @@ until the main tasks and rework are done.
 | F274 | EXIT-03 review | `src/config.rs` | The `u8` range guarantee is runtime-only; a `const` assertion over the discriminants would catch a bad change at compile time. | todo |
 | F275 | DRYRUN-03 review | `tests/repair_purge.rs` | Add a companion assertion that an in-install `--plan-out` survives an exclusive `--purge-before` run. | todo |
 | F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | todo |
+| F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | todo |
+| F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | todo |
 
 ## Follow-up batches
 
@@ -419,7 +421,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | todo | Wave E; purge-before plan-out coverage and asymmetry decision; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
-| PURGE-PERF-03 | F212, F213 | pending_review | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
+| PURGE-PERF-03 | F212, F213 | done | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
+| PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
 | TEST-REGRESSION-02 | F214, F215 | todo | Wave E; coarse-mtime flake and test focus; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | todo | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low |
 | INPLACE-03 | F219, F220, F221 | todo | Wave E; guard-test coverage and residual-race docs; low |
