@@ -869,18 +869,25 @@ fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
     // A manifest that `getBuild` advertises but the origin does not serve is
     // a `404` for its body, so nothing can ever reference its chunks. Its
     // manifest body is still built (it is advertised), but the chunk route
-    // must not publish bytes no reachable manifest names.
+    // must not publish bytes no reachable manifest names — including when it
+    // names an id the served side already uses with different bytes.
     let fx = build_fixture_spec(
         &FixtureSpec::new(vec![FileSpec::new(
             "game/base.dat",
-            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 16], 0)],
+            vec![ChunkSpec::new("chunk_shared", vec![0x41u8; 16], 0)],
         )])
         .with_extra_manifest(
             ExtraManifestSpec::new(
                 "gone",
                 vec![FileSpec::new(
                     "game/gone.dat",
-                    vec![ChunkSpec::new("chunk_gone", vec![0x47u8; 16], 0)],
+                    vec![
+                        // The same id as the served manifest, with different
+                        // bytes: merging the absent manifest's chunks would
+                        // replace the bytes the served manifest published.
+                        ChunkSpec::new("chunk_shared", vec![0x47u8; 16], 0),
+                        ChunkSpec::new("chunk_gone", vec![0x47u8; 16], 16),
+                    ],
                 )],
             )
             .not_served(),
@@ -894,12 +901,20 @@ fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         )),
     );
 
+    // The store is what the mock serves: the shared id must still hold the
+    // served manifest's bytes, not the absent one's, and the absent-only id
+    // must not be published at all.
+    let served = fx
+        .chunk_store
+        .get("chunk_shared")
+        .expect("the served manifest publishes its chunk");
+    let served = zstd::stream::decode_all(std::io::Cursor::new(served.clone()))
+        .expect("the served chunk is a zstd frame");
     assert_eq!(
-        fx.extra_latest_manifests.len(),
-        2,
-        "both manifests are still advertised"
+        served,
+        vec![0x41u8; 16],
+        "the unserved manifest must not overwrite a served chunk"
     );
-    assert!(fx.chunk_store.contains_key("chunk_base"));
     assert!(fx.chunk_store.contains_key("chunk_kept"));
     assert!(
         !fx.chunk_store.contains_key("chunk_gone"),
