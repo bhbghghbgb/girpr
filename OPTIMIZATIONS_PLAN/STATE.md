@@ -349,8 +349,8 @@ until the main tasks and rework are done.
 | F248 | TEMP-WRITER-02 review | `src/repair/file/temp.rs` | `SeekRecording` guards only the missing-source branch; the no-candidate and digest-mismatch fallbacks could be pinned too. | completed |
 | F249 | TEMP-PUBLISH-02 implementer | `src/util/path.rs` | `temp_sibling` on a path with no file name returns one still containing a trailing `..` before resolution; the doc could say so. | completed |
 | F250 | TEMP-PUBLISH-02 implementer | `src/repair/phases/post.rs` | The no-file-name guard is unreachable through `move_audio_cache_with`; the direct unit test is its only coverage. | completed |
-| F251 | SYNC-01 review | `tools/sync/src/commands/sync/plan/pairs.rs` | `shared_pairs` has no non-ASCII unit case of its own; a planner regression is only caught indirectly by the e2e test. | todo |
-| F252 | SYNC-01 review | `tools/sync/src/hash/set.rs` | The hash test targets an unknown name; no non-ASCII lookalike reaches an accepted algorithm today. Revisit if a name containing `k` is added. | todo |
+| F251 | SYNC-01 review | `tools/sync/src/commands/sync/plan/pairs.rs` | `shared_pairs` has no non-ASCII unit case of its own; a planner regression is only caught indirectly by the e2e test. | completed |
+| F252 | SYNC-01 review | `tools/sync/src/hash/set.rs` | The hash test targets an unknown name; no non-ASCII lookalike reaches an accepted algorithm today. Revisit if a name containing `k` is added. | completed |
 | F253 | HYP-02 review | `tests/common/mod.rs` | The local build fixture tag is hardcoded as `9.9.8-test`; deriving it from the requested local version would keep reuse tests honest. | completed |
 | F254 | HYP-02 review | `src/repair/phases/metadata.rs` | The local-build mismatch warning wording is not pinned by a test; only the resulting `local_build = None` is. | completed |
 | F255 | HYP-02 review | `src/repair/phases/metadata.rs` | Biz mismatch is checked before the download-mode refusal, so a wrong-biz non-chunk response reports metadata; precedence is undocumented. | completed |
@@ -481,7 +481,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-03 | F253, F254, F255 | done | Wave E; local fixture tag, warning wording and mismatch precedence; low; ec3e7aa, 64e5c56, a9e8598 |
 | HYP-04 | F308, F309 | todo | Wave E; test tag constants and multi-thread log capture; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
-| SYNC-02 | F251, F252 | pending_review | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99 |
+| SYNC-02 | F251, F252 | done | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99, 2049582 |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | todo | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
