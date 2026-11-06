@@ -445,7 +445,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-05 | F301, F302, F303 | todo | Wave E; ALL completeness, tautological test and visibility; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
-| DRYRUN-04 | F275, F276 | todo | Wave E; purge-before plan-out coverage and asymmetry decision; low |
+| DRYRUN-04 | F275, F276 | in_progress | Wave E; purge-before plan-out coverage and asymmetry decision; low |
 | PURGE-PERF-02 | F199, F200, F201, F202 | done | Wave D; purge arithmetic hardening and blocking-helper consistency; low; 3cb5771, 62b05e2, fe8d45e |
 | PURGE-PERF-03 | F212, F213 | done | Wave E; last wrap path and deprecated-list conversion; low; 3506fdd, f6f6e4f |
 | PURGE-PERF-04 | F277, F278 | todo | Wave E; shared saturating-add helper and deprecated collect allocation; low |
