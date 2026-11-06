@@ -19,7 +19,9 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
 1. Enumerated every `.unwrap()`, `.expect()`, direct `[]` index and
    arithmetic/`as` conversion in the production regions of:
-   `src/sophon.rs`, `src/hyp.rs`, `src/util.rs`, `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
+   `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
+   `src/util/{path,ini,md5,atomic}.rs`,
+   `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
    `src/repair/{scan,reuse,purge,mod}.rs`,
    `src/repair/file/{mod,temp,inplace,mode}.rs`,
    `src/repair/scope/{report,limits,ledger,filter}.rs`.
@@ -43,35 +45,33 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
 ## 2. Sites and dispositions
 
-Line numbers are the audit tree's. "Origin" says whether the value is
+Sites are named by file and symbol rather than by line number, so the table
+survives the module splits. "Origin" says whether the value is
 server-controlled.
 
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
-| `src/sophon.rs:159-161` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: `clamp(0, 64 MiB)` before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
-| `src/sophon.rs:210-219` protobuf decode | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
-| `src/sophon.rs:296-313` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
-| `src/sophon.rs:563` compressed-body sum | network bytes | server | **Saturating**. |
-| `src/hyp.rs:120-145` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
-| `src/repair/phases/plan.rs:195-227` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
-| `src/repair/phases/plan.rs:57-102` `layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
-| `src/repair/phases/plan.rs:166-181` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
-| `src/repair/reuse.rs:114-138` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
-| `src/repair/scan.rs:128-132,159-196` estimates | chunk `compressed_size` | server | **Saturating**. |
-| `src/repair/scan.rs:167-193`; `src/repair/file/inplace.rs:167-170,239-300,349-366` | `dest_ok[i]`, `source_ok[i]`, `sources[i]`, `captured[i]`, `bad[k]` | server manifest/plan | **Invariant**: every vector is built from `file.chunks.len()` or from `dest_ranges`/`source_ranges` over the same chunk list in the same function; `bad` is a subset of valid indices. |
-| `src/util.rs:118-188` `scan_reader` | range offset/length | server (plan/source ranges) | **Guarded/invariant**: ranges are interned per chunk; `offset + len ≤ 2^64-2` because both originate as non-negative `i64`; `[a..b]` is bounded by the block read (`b ≤ n ≤ buf.len()`); `order` indices come from `0..ranges.len()`. |
-| `src/util.rs:225-230` `read_range` | chunk size | server | Allocation is sized by the chunk. It is only called for a staged source **after** the scan proved the full range intact (`source_ok`), so a merely-declared huge size cannot reach it. **Invariant by gate**. |
-| `src/repair/file/temp.rs:237-246` `try_reuse_slice` | chunk `offset + uncompressed_size` | server | **Guarded**: `u64::try_from` + `checked_add`; failure is a per-file error. |
-| `src/repair/file/temp.rs:261-295` reuse copy | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
-| `src/repair/file/mod.rs:613-652` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
-| `src/repair/file/mod.rs:215,324,341` | semaphore permit; `disk.as_ref()` | local | **Invariant**: the semaphore is never closed (`N-12`), and `disk` is `Some` exactly when the branch that expects it ran. |
-| `src/repair/scope/report.rs:95-126` | file `size`, `compressed_size` | server | **Saturating** (`est_write_bytes`, `est_extra_bytes`, `saturating_sub`). |
-| `src/repair/file/inplace.rs:478-488` `staged_payload` | chunk `uncompressed_size` | server | **Saturating**, so a corrupt sum falls back to the ordered tier instead of bypassing the RAM budget. |
-| `src/repair/mod.rs:276-278` estimate fold | per-file estimates | server-derived | **Saturating**. |
-| `src/repair/purge.rs:199` `total_bytes` | on-disk sizes | local | **Saturating**; `apply_purge` counters are local file sizes, not server values. |
-| `src/repair/scope/ledger.rs:200,254,457` | counters | local | **Saturating compare-and-swap**. |
-| `src/util.rs:410` | `.chars().next().unwrap()` | local | **Invariant**: guarded by `n.len() == 1`. |
-| `src/util.rs:500` | regex literal `.expect` | local | **Invariant**: the pattern is a compile-time literal. |
+| `src/sophon/stream.rs` `manifest_size_hint` | manifest `uncompressed_size` | server | **Guarded**: `clamp(0, 64 MiB)` before `Vec::with_capacity`, so a bogus size costs a reallocation, never an allocation panic. |
+| `src/sophon/stream.rs` `try_fetch_manifest` (protobuf decode) | manifest bytes | server | **Guarded**: `decode` returns `Result`; malformed bytes are a retry/failure, not a panic. |
+| `src/sophon/stream.rs` `HashingWriter::write` | network body length | server | `written.saturating_add`, `&buf[..n]` with `n` from the inner `Write` contract — **saturating + invariant**. |
+| `src/sophon/stream.rs` `stream_body` (compressed-body sum) | network bytes | server | **Saturating**. |
+| `src/hyp.rs` `num_from_string` | JSON number/string sizes | server | **Guarded**: `visit_u64` uses `i64::try_from`, so a value above `i64::MAX` is a deserialization error instead of a wrapped negative; the string shape parses as `i64` and rejects the same range. Negatives are refused by `validate_chunk_ranges` or clamped with `max(0)`. |
+| `src/repair/phases/plan.rs` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
+| `src/repair/phases/plan.rs` `PlannedFile::layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
+| `src/repair/phases/plan.rs` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
+| `src/repair/reuse.rs` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
+| `src/repair/scan.rs` `all_chunks_download_bytes` and `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
+| `src/repair/scan.rs` `scan_plan`; `src/repair/file/inplace.rs` `attempt_inplace_inner` and `patch_chunks` | `dest_ok[i]`, `source_ok[i]`, `sources[i]`, `captured[i]`, `bad[k]` | server manifest/plan | **Invariant**: every vector is built from `file.chunks.len()` or from `dest_ranges`/`source_ranges` over the same chunk list in the same function; `bad` is a subset of valid indices. |
+| `src/util/md5.rs` `scan_reader` | range offset/length | server (plan/source ranges) | **Guarded/invariant**: ranges are interned per chunk; `offset + len ≤ 2^64-2` because both originate as non-negative `i64`; `[a..b]` is bounded by the block read (`b ≤ n ≤ buf.len()`); `order` indices come from `0..ranges.len()`. |
+| `src/util/md5.rs` `read_range` | chunk size | server | Allocation is sized by the chunk. It is only called for a staged source **after** the scan proved the full range intact (`source_ok`), so a merely-declared huge size cannot reach it. **Invariant by gate**. |
+| `src/repair/file/temp.rs` `chunk_end` | chunk `offset + uncompressed_size` | server | **Guarded**: `u64::try_from` + `checked_add`; failure is a per-file error. |
+| `src/repair/file/temp.rs` `try_reuse_slice` (reuse copy) | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
+| `src/repair/file/mod.rs` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
+| `src/repair/scope/report.rs` `DiskPlan::new` | file `size`, `compressed_size` | server | **Saturating** (`est_write_bytes`, `est_extra_bytes`, `saturating_sub`). |
+| `src/repair/file/inplace.rs` `staged_payload` | chunk `uncompressed_size` | server | **Saturating**, so a corrupt sum falls back to the ordered tier instead of bypassing the RAM budget. |
+| `src/repair/mod.rs` `estimate_download` fold | per-file estimates | server-derived | **Saturating**. |
+| `src/repair/purge.rs` `finish_plan` (`total_bytes`) | on-disk sizes | local | **Saturating**; `apply_purge` counters are local file sizes, not server values. |
+| `src/repair/scope/ledger.rs` `Meter` counters | counters | local | **Saturating compare-and-swap**. |
 
 ---
 
@@ -90,8 +90,8 @@ rather than a wrapped negative size. Values that fit but are negative are still
 refused by the plan or clamped with `max(0)`, so the outcome remains a refused
 file or a conservative estimate, never a write outside the install.
 
-The plan-time range gate covers the temp-file overflow path, and the
-file-semaphore `unwrap` is the named `expect` above.
+The plan-time range gate covers the temp-file overflow path, and the file-task
+window is bounded by `join_file_tasks` without a semaphore permit to unwrap.
 
 ---
 
