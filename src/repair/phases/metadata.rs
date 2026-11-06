@@ -260,6 +260,11 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // The response names the game it describes; a run for another biz must not
     // trust any of its paths or mode. An absent or empty `game.biz` has no
     // identity to check and is accepted.
+    //
+    // This check deliberately precedes the download-mode refusal below: every
+    // field of a response for another game belongs to that game, so its mode is
+    // not evidence about this run. A wrong-biz answer is therefore metadata
+    // even when its mode would also be unsupported.
     if let Some(declared) = config.biz_mismatch(ctx.biz.as_str()) {
         drain(version_read).await;
         return Err(RunFailure::metadata(anyhow::anyhow!(
@@ -889,6 +894,37 @@ mod tests {
                 "the refusal must name {needle}: {text}"
             );
         }
+    }
+
+    /// A response for another game is refused as metadata even when the
+    /// download mode it names is one this tool would refuse: identity is
+    /// checked first, because none of the other game's fields — including its
+    /// mode — can be trusted.
+    #[tokio::test]
+    async fn a_wrong_biz_response_is_refused_before_its_download_mode() {
+        const WRONG_BIZ_FILE_MODE: &str = r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"game":{"id":"1Z8W5NHUQb","biz":"hk4e_cn"},"default_download_mode":"DOWNLOAD_MODE_FILE"}]}}"#;
+        let base = serve_metadata(
+            Reply::Body(WRONG_BIZ_FILE_MODE),
+            Reply::Body(BRANCH),
+            Reply::Body(LATEST_BUILD),
+            None,
+        )
+        .await;
+        let dir = girpr_tempdir::TempDir::new("girpr_test_metadata", "wrong_biz_file_mode");
+        let ctx = ctx(dir.to_path_buf(), base);
+
+        let failure = fetch(&ctx, &dir)
+            .await
+            .err()
+            .expect("a response for another biz must be refused");
+        assert_eq!(failure.exit_code, RunExit::Metadata);
+        let text = format!("{:#}", failure);
+        assert!(text.contains("hk4e_cn"), "{text}");
+        assert!(text.contains("hk4e_global"), "{text}");
+        assert!(
+            !text.contains("not chunk mode"),
+            "the identity refusal must not be replaced by the mode one: {text}"
+        );
     }
 
     /// The latest build's own tag is a second identity check: a build served
