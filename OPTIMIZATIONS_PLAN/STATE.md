@@ -363,10 +363,10 @@ until the main tasks and rework are done.
 | F262 | DOCS-USER-01 review | `README.md` | Per-file counts ("74 cases", "25 cases") drift like the removed total; soften them. | completed |
 | F263 | DOCS-USER-01 review | `src/report/emit.rs`, `src/main.rs` | `summary_record` ("ending every run") and the `main` comment ("every return path ends with exactly one") overstate the fatal path. | completed |
 | F264 | DOCS-USER-01 review | `tests/artifact_bridge.rs` | `base_args` uses the deprecated `--io-threads` spelling; switch to `--jobs` unless intentional alias coverage. | completed |
-| F265 | DOCS-COMMENTS-01 review | `README.md` | The module map still lists `src/sophon.rs` although the code is `src/sophon/`. | todo |
-| F266 | DOCS-COMMENTS-01 review | `src/repair/scope/filter.rs`, `docs/04-scope-limitation-spec.md` | `util::contained_rel` is named, but it is only `util::path::contained_rel`. | todo |
-| F267 | DOCS-COMMENTS-01 review | `docs/07-panic-audit.md` | Table line ranges are stale after the module splits. | todo |
-| F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | todo |
+| F265 | DOCS-COMMENTS-01 review | `README.md` | The module map still lists `src/sophon.rs` although the code is `src/sophon/`. | completed |
+| F266 | DOCS-COMMENTS-01 review | `src/repair/scope/filter.rs`, `docs/04-scope-limitation-spec.md` | `util::contained_rel` is named, but it is only `util::path::contained_rel`. | completed |
+| F267 | DOCS-COMMENTS-01 review | `docs/07-panic-audit.md` | Table line ranges are stale after the module splits. | completed |
+| F268 | DOCS-COMMENTS-01 review | `README.md` | `tests/repair_offline.rs` is described as "one `#[tokio::test]` per behavior"; it also has a plain `#[test]`. | skipped (already accurate) |
 | F269 | REFACTOR-02 review | `src/repair/mod.rs` | `DownloadEstimate` mixes byte figures with four summary-shaped values; a `PlanSummaryValues` split would keep it about bytes. | todo |
 | F270 | REFACTOR-02 review | `src/repair/mod.rs` | `reported_bytes`'s doc names `--max-download-bytes`, while the guard is `ctx.limits.download_bytes`; another limit source would stale it. | todo |
 | F271 | EXIT-03 review | `src/config.rs` | `RunExit` uses implicit discriminants; `#[repr(u8)]` would make the boundary conversion infallible. | todo |
@@ -397,6 +397,8 @@ until the main tasks and rework are done.
 | F296 | TEMP-PUBLISH-03 review | `src/repair/phases/post.rs` | The no-file-name guard is production-reachable only if the walk later yields symlinks/directories; add a production-path test then. | todo |
 | F297 | DOCS-USER-02 review | `tests/artifact_bridge.rs` | The six bridge tests are `#[ignore]`d and were not run; run them manually with `--run-ignored only` before a repair-spec release. | todo |
 | F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | todo |
+| F299 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The audit predates some local-invariant `expect` sites, e.g. `PlanTotals::new` in `src/repair/scope/report.rs`. | todo |
+| F300 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The method section's file list omits `src/repair/audio.rs` and `src/repair/lock.rs`. | todo |
 
 ## Follow-up batches
 
@@ -462,7 +464,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-02 | F262, F263, F264 | done | Wave E; drifting counts, fatal-path wording and alias spelling; low; aba6aea, ef16ae7, 38047d4, b768c22 |
 | DOCS-USER-03 | F297, F298 | todo | Wave E; ignored bridge run and scan-test flag modernization; low |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
-| DOCS-COMMENTS-02 | F265, F266, F267, F268 | pending_review | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2 |
+| DOCS-COMMENTS-02 | F265, F266, F267, F268 | done | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2, 6a2f2d8 |
+| DOCS-COMMENTS-03 | F299, F300 | todo | Wave E; audit local-invariant coverage and file list; low |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | todo | Wave E; local fixture tag, warning wording and mismatch precedence; low |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
