@@ -555,10 +555,9 @@ fn ensure_scope_selected_something(
 async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Arc<[String]> {
     let wants_deprecated = !ctx.print_plan && !ctx.check_only;
     if wants_deprecated {
-        // The fetch already returns an owned `Vec`; converting it once here
-        // means the post-phase can share it with its blocking task for a
-        // reference bump instead of copying every name.
-        fetch_deprecated(&meta.hyp).await.into()
+        // The fetch hands back the shared list itself, so the post-phase can
+        // share it with its blocking task for a reference bump.
+        fetch_deprecated(&meta.hyp).await
     } else {
         tracing::debug!("read-only mode: not fetching the deprecated-file list");
         Vec::new().into()
@@ -1196,7 +1195,7 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> RunExit 
 /// scope gate and the delete sink must compare the same string. A name that is
 /// not a plain relative path is dropped with a warning: it is a delete sink, so
 /// it is never followed.
-async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
+async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     match hyp.deprecated_files().await {
         Ok(list) => list
             .into_iter()
@@ -1214,7 +1213,7 @@ async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
             .collect(),
         Err(e) => {
             tracing::warn!("deprecated list unavailable: {e:#}");
-            Vec::new()
+            Vec::new().into()
         }
     }
 }
