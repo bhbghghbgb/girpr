@@ -218,6 +218,31 @@ async fn a_dry_run_post_delete_ceiling_stops_with_the_limit_class() {
         !logs.contains("would purge extra"),
         "the pass stopped before listing its candidates: {logs}"
     );
+
+    // The two stages are distinguishable without a test-only hook:
+    //
+    // - the plan document exists, and the up-front ceiling is asserted before
+    //   that document is written. Its presence therefore says the up-front
+    //   check passed rather than refused;
+    // - the document's own `purge` array is the up-front plan, and it is empty,
+    //   so the up-front plan had no delete candidate at all;
+    // - the log's `purge_bytes` is exactly the document's size, the only path
+    //   this dry run added. The up-front total was 0, so that figure can only
+    //   have been measured by the post-repair re-plan.
+    let plan_doc = read_game_file(&dir, "plan.json")
+        .expect("the up-front check passed, so --plan-out was written");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&plan_doc).expect("--plan-out writes valid JSON");
+    assert_eq!(
+        doc["purge"].as_array().map(Vec::len),
+        Some(0),
+        "the up-front plan had no delete candidates: {doc}"
+    );
+    assert!(
+        logs.contains(&format!("purge_bytes={} limit=1", plan_doc.len())),
+        "only the post-repair re-plan could measure the plan document: {logs}"
+    );
+
     let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("exit=5"), "{line}");
     assert!(line.contains("limited=1"), "{line}");
