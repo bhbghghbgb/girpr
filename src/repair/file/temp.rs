@@ -429,18 +429,18 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
 /// trips in the middle of a chunk stops the run in the middle of a chunk. The
 /// README already documents that a runtime hard stop leaves the work done in
 /// place, and the next run re-verifies and continues.
-struct ChunkFileSink<'a> {
+struct ChunkFileSink<'a, W: Write + Seek> {
     ctx: &'a FileCtx,
-    file: &'a mut File,
+    file: &'a mut W,
     offset: u64,
     written: u64,
 }
 
-impl<'a> ChunkFileSink<'a> {
+impl<'a, W: Write + Seek> ChunkFileSink<'a, W> {
     /// Position the file at the chunk's offset once. The sink then writes
     /// sequentially: it holds the only `&mut File` for the stream, so no other
     /// user can move the cursor behind it.
-    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> std::io::Result<Self> {
+    fn new(ctx: &'a FileCtx, file: &'a mut W, offset: u64) -> std::io::Result<Self> {
         file.seek(SeekFrom::Start(offset))?;
         Ok(Self {
             ctx,
@@ -456,7 +456,7 @@ impl<'a> ChunkFileSink<'a> {
     }
 }
 
-impl Write for ChunkFileSink<'_> {
+impl<W: Write + Seek> Write for ChunkFileSink<'_, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         // The write ceiling counts this piece: it goes into the install, and
         // the ceiling counts what lands there.
@@ -474,7 +474,7 @@ impl Write for ChunkFileSink<'_> {
     }
 }
 
-impl sophon::ChunkSink for ChunkFileSink<'_> {
+impl<W: Write + Seek> sophon::ChunkSink for ChunkFileSink<'_, W> {
     fn restart(&mut self) -> std::io::Result<()> {
         // A retry starts the chunk over. The failed attempt's bytes are in the
         // file, and they are about to be overwritten by the same chunk's
@@ -487,11 +487,11 @@ impl sophon::ChunkSink for ChunkFileSink<'_> {
 
 /// One chunk to download into a file: where it comes from, where its decoded
 /// bytes land, and the per-file counters the write updates.
-pub(super) struct DownloadedChunk<'a> {
+pub(super) struct DownloadedChunk<'a, W: Write + Seek> {
     pub(super) ctx: &'a FileCtx,
     pub(super) prefix: &'a str,
     pub(super) c: &'a SophonChunk,
-    pub(super) out: &'a mut File,
+    pub(super) out: &'a mut W,
     pub(super) stats: &'a mut ChunkStats,
     pub(super) writes: &'a mut FileWrites,
 }
@@ -507,7 +507,9 @@ pub(super) struct DownloadedChunk<'a> {
 /// NOTE(starward-parity): Starward writes the decompressed chunk straight into
 /// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
-pub(super) async fn write_downloaded_chunk(chunk: DownloadedChunk<'_>) -> Result<()> {
+pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
+    chunk: DownloadedChunk<'_, W>,
+) -> Result<()> {
     let DownloadedChunk {
         ctx,
         prefix,
@@ -800,6 +802,37 @@ mod tests {
         }
     }
 
+    /// A sink that can be written but not positioned: every seek is refused,
+    /// the way a stream that cannot be rewound presents itself. It records
+    /// what the writer attempted, so a test can tell a refused seek from a
+    /// path that never ran.
+    #[derive(Default)]
+    struct RefusingSeek {
+        bytes: Vec<u8>,
+        seeks: usize,
+    }
+
+    impl Write for RefusingSeek {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for RefusingSeek {
+        fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "seek refused",
+            ))
+        }
+    }
+
     /// A stat failure on the `_tmp` must name the stat and the path:
     /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
     /// and that `io::Error` must surface instead of a zero length.
@@ -1055,6 +1088,51 @@ mod tests {
         let chain = format!("{err:#}");
         assert!(
             chain.contains("seek to chunk c7 offset") && chain.contains("seek refused"),
+            "the seek failure is still named with its chunk: {chain}"
+        );
+    }
+
+    /// The whole download path over a sink that refuses to be positioned: the
+    /// reservation is taken, the seek fails, and no byte is fetched, written,
+    /// or left reserved. The seek failure is named with its chunk.
+    #[tokio::test]
+    async fn a_download_into_an_unseekable_sink_refunds_and_writes_nothing() {
+        let mut summary = Summary::new();
+        summary.set_download_limit(Some(1_000));
+        let mut ctx = test_ctx();
+        ctx.summary = Arc::new(summary);
+        let c = chunk_at("c9", "d41d8cd98f00b204e9800998ecf8427e", 8, 16);
+        let mut out = RefusingSeek::default();
+        let mut stats = ChunkStats::default();
+        let mut writes = FileWrites::default();
+
+        let err = write_downloaded_chunk(DownloadedChunk {
+            ctx: &ctx,
+            prefix: "",
+            c: &c,
+            out: &mut out,
+            stats: &mut stats,
+            writes: &mut writes,
+        })
+        .await
+        .expect_err("the sink refuses to be positioned");
+
+        assert_eq!(out.seeks, 1, "the writer asks to position the sink once");
+        assert!(
+            out.bytes.is_empty(),
+            "no byte may be written after the seek fails"
+        );
+        assert_eq!(
+            ctx.summary.download.live(),
+            0,
+            "no byte crossed the wire, so the whole reservation comes back"
+        );
+        assert_eq!(stats.chunks_downloaded, 0);
+        assert_eq!(stats.download_bytes, 0);
+        assert_eq!(writes.settled, 0);
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("seek to chunk c9 offset") && chain.contains("seek refused"),
             "the seek failure is still named with its chunk: {chain}"
         );
     }
