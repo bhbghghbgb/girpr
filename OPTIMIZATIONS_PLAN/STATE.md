@@ -483,7 +483,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | LINT-03 | F260, F261 | done | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5, fe464ad |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
-| TEMP-WRITER-03 | F247, F248 | todo | Wave E; sink genericity and broader cursor pinning; low |
+| TEMP-WRITER-03 | F247, F248 | in_progress | Wave E; sink genericity and broader cursor pinning; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | todo | Wave E; temp-sibling doc edge and guard reachability note; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
