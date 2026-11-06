@@ -847,8 +847,12 @@ pub struct MockOpts {
     /// has already been issued, so error precedence is testable.
     pub fail_branches: bool,
     /// The status a failing `getGameBranches` answers with when
-    /// [`Self::fail_branches`] is set. `None` serves `500`; a terminal status
-    /// such as `404` models an endpoint that refuses the request outright.
+    /// [`Self::fail_branches`] is set; `None` serves `500`.
+    ///
+    /// The status does not decide whether the client retries: the failing body
+    /// is not JSON, so its parse failure is fatal on the first attempt whatever
+    /// the status. A `404` therefore exercises the same fatal path as the
+    /// default `500`.
     pub branch_failure_status: Option<&'static str>,
     /// Hold the `getGameConfigs` answer until `getGameBranches` has been served.
     ///

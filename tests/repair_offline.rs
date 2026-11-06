@@ -544,10 +544,11 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
 
 #[tokio::test]
 async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
-    // The branch call can fail terminally (a refused status, not a retry
-    // schedule) and the config's mode is still the authoritative answer: the
-    // run is a usage refusal, not a metadata failure. Holding the config until
-    // the branch has answered pins the branch as issued and already failed.
+    // A failing branch answer is a non-JSON body, so the client treats it as a
+    // fatal parse error rather than a retry schedule, and the config's mode is
+    // still the authoritative answer: the run is a usage refusal, not a
+    // metadata failure. Holding the config until the branch has answered pins
+    // the branch as issued and already failed.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -591,9 +592,10 @@ async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
 
 #[tokio::test]
 async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
-    // Under the mode this tool implements, a branch endpoint that refuses the
-    // request outright is a metadata failure that names the branch call. The
-    // run must stop before any build or write.
+    // Under the mode this tool implements, a branch answer that fails on the
+    // first attempt (its non-JSON body is a fatal parse error) is a metadata
+    // failure that names the branch call. The run must stop before any build or
+    // write.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
@@ -627,6 +629,15 @@ async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
     assert!(
         mock.first_target_with("getBuild").is_none(),
         "no build call may follow a failed branch call"
+    );
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
+    assert_eq!(
+        branch_requests, 1,
+        "a non-JSON failure is fatal, so the call is not retried"
     );
     assert!(
         !dir.join("config.ini").exists(),

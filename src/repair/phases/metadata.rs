@@ -64,20 +64,20 @@ fn hyp_client_for(ctx: &RunCtx) -> Result<HypClient> {
     }
 }
 
-/// The blocking local reads, and the exit class each one's **join** failure
-/// takes.
-///
-/// The class here is the one for a task-level failure (a panic or a cancelled
-/// task on the blocking pool), not necessarily the class of the error the read
-/// itself returns. `Ignore` and `Blacklist` map an unreadable file to
-/// [`ReadClass::Usage`] inside the task, while their join failure is
-/// [`ReadClass::Metadata`]; `Version` and `Audio` use `Usage` for both. The
-/// join classes live in one table because [`Self::join_failure`] is their only
-/// reader.
 /// Define the variants and the exhaustive list together, so [`LocalRead::ALL`]
 /// cannot drift from the enum: adding a name here adds it to both.
 macro_rules! local_reads {
     ($($variant:ident),+ $(,)?) => {
+        /// The blocking local reads, and the exit class each one's **join**
+        /// failure takes.
+        ///
+        /// The class here is the one for a task-level failure (a panic or a
+        /// cancelled task on the blocking pool), not necessarily the class of
+        /// the error the read itself returns. `Ignore` and `Blacklist` map an
+        /// unreadable file to [`ReadClass::Usage`] inside the task, while their
+        /// join failure is [`ReadClass::Metadata`]; `Version` and `Audio` use
+        /// `Usage` for both. The join classes live in one table because
+        /// [`Self::join_failure`] is their only reader.
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum LocalRead {
             $($variant),+
