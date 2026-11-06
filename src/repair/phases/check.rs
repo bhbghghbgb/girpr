@@ -65,7 +65,7 @@ async fn verify_plan_with<F>(
     output: report::OutputFormat,
     scan: Option<Arc<ScanReport>>,
     jobs: usize,
-    folded: Option<tokio::sync::mpsc::UnboundedSender<usize>>,
+    folded: Option<std::sync::mpsc::Sender<usize>>,
     check: F,
 ) -> Result<u64, RunFailure>
 where
@@ -348,6 +348,7 @@ fn check_one(
 mod tests {
     use super::*;
     use crate::util::Md5;
+    use std::time::Duration;
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -571,7 +572,7 @@ mod tests {
         // The fold reports each completion on this channel. The test waits for
         // the signal instead of polling the counter, so it has no timing
         // assumption to violate on a single-core or heavily loaded host.
-        let (folded_tx, mut folded_rx) = tokio::sync::mpsc::unbounded_channel::<usize>();
+        let (folded_tx, folded_rx) = std::sync::mpsc::channel::<usize>();
 
         let thread_summary = Arc::clone(&summary);
         let thread_gate = Arc::clone(&gate);
@@ -621,11 +622,12 @@ mod tests {
         }
         drop(state);
 
-        // The first fold is the finished task. `blocking_recv` parks the test
-        // thread until the fold happens; it cannot race the runtime.
+        // The first fold is the finished task. `recv_timeout` parks the test
+        // thread until the fold happens and turns a lost fold into a clear
+        // failure instead of hanging the suite.
         assert_eq!(
-            folded_rx.blocking_recv(),
-            Some(1),
+            folded_rx.recv_timeout(Duration::from_secs(10)),
+            Ok(1),
             "the finished check was not folded while the slow task was held"
         );
         assert_eq!(
