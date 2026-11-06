@@ -48,6 +48,7 @@ mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
@@ -439,16 +440,24 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
 }
 
-/// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
-/// so a `--scan` run can still exercise the guarded plan-scan reuse.
-fn age_mtime(path: &Path) {
-    use std::time::{Duration, SystemTime};
+/// Set a fixture file's mtime explicitly, so a test never depends on how a
+/// write advances a coarse filesystem's clock.
+fn set_mtime(path: &Path, stamp: SystemTime) {
     std::fs::OpenOptions::new()
         .write(true)
         .open(path)
-        .unwrap()
-        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
-        .unwrap();
+        .expect("open to set mtime")
+        .set_modified(stamp)
+        .expect("set mtime");
+}
+
+/// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
+/// so a `--scan` run can still exercise the guarded plan-scan reuse.
+fn age_mtime(path: &Path) {
+    set_mtime(
+        path,
+        SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+    );
 }
 
 /// A `--scan` repair and an unscanned repair of the same damage are the same
@@ -535,6 +544,12 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
 /// The plan's verdict for the target said "intact", so a writer that trusted it
 /// would skip the file and leave the damage in place. The fresh read must
 /// notice the change and repair the bytes.
+///
+/// The target is aged before the run so its plan verdict is otherwise eligible
+/// for the guarded reuse. The hook then moves its mtime well away from the
+/// recorded one after the rewrite: a same-size write alone can land in the same
+/// coarse timestamp tick, which would leave the guard with only the age check
+/// to reject the verdict rather than the change itself.
 #[tokio::test]
 async fn a_file_changed_after_the_plan_scan_is_read_again() {
     let size = 64usize;
@@ -557,12 +572,20 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
                 .clone()
                 .expect("the test sets the path before the run");
             std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
+            // A stamp far from the aged one the plan scanned, so the guard sees
+            // a different file on every filesystem, including one that only
+            // advances mtimes once per coarse tick.
+            set_mtime(
+                &path,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000),
+            );
         })),
         ..Default::default()
     };
 
     let rig = Rig::start_with(&spec, opts).await;
     *target_path.lock().expect("hook path lock") = Some(rig.game().join("game/z_target.dat"));
+    age_mtime(&rig.game().join("game/z_target.dat"));
 
     let run = rig.run(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
