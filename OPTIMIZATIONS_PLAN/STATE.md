@@ -399,9 +399,9 @@ until the main tasks and rework are done.
 | F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | todo |
 | F299 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The audit predates some local-invariant `expect` sites, e.g. `PlanTotals::new` in `src/repair/scope/report.rs`. | todo |
 | F300 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The method section's file list omits `src/repair/audio.rs` and `src/repair/lock.rs`. | todo |
-| F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | todo |
-| F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | todo |
-| F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | todo |
+| F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | completed |
+| F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | completed |
+| F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | completed |
 | F304 | DRYRUN-04 review | `tests/repair_purge.rs` | The purge-before plan-out test only asserts the document is non-empty; parsing it and checking it describes the same repair plan would be stronger. | todo |
 | F305 | PURGE-PERF-04 review | `src/repair/mod.rs` | `fetch_deprecated`'s normalization/drop-with-warning paths have no focused test; a backslash or absolute deprecated name would pin the `retain_mut` semantics. | todo |
 | F306 | PURGE-PERF-04 review | `src/repair/mod.rs` | The "one Arc allocation" claim relies on std's in-place collect specialization; confirm with an allocator counter if it matters. | todo |
@@ -429,6 +429,7 @@ until the main tasks and rework are done.
 | F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | todo |
 | F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | todo |
 | F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | todo |
+| F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | todo |
 
 ## Follow-up batches
 
@@ -469,7 +470,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | EXIT-03 | F208 | done | Wave E; clamp helper reachability; low; 7d883da, 3602837 |
 | EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
-| EXIT-05 | F301, F302, F303 | pending_review | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
+| EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
