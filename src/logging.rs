@@ -73,13 +73,12 @@ type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
 /// The sink [`flush_log`] reaches, registered by a successful
 /// [`init_tracing`].
 ///
-/// Empty until logging is installed, which is what makes [`flush_log`] safe on
-/// a path that never got that far. It holds at most one sink even when
-/// [`init_tracing`] is called again: the global subscriber can be installed
-/// only once, so only the sink wired into that subscriber receives events. A
-/// later install is rejected and its file is dropped, so keeping the handle
-/// would retain a file that can never be written to.
-static FILE_SINKS: Mutex<Vec<FileSink>> = Mutex::new(Vec::new());
+/// `None` until logging is installed, which is what makes [`flush_log`] safe
+/// on a path that never got that far. The slot holds the one sink the
+/// installed subscriber writes through: the global subscriber can be installed
+/// only once, so a later [`init_tracing`] is rejected and its file is dropped
+/// rather than retained as a handle that could never be written to.
+static FILE_SINKS: Mutex<Option<FileSink>> = Mutex::new(None);
 
 /// A `MakeWriter` that hands `tracing` the shared file sink.
 struct SharedWriter(FileSink);
@@ -207,14 +206,12 @@ pub fn init_tracing(
 
 /// Register the sink the accepted subscriber writes through.
 ///
-/// This replaces any previous registration. Only the first subscriber install
-/// can succeed, so a second accepted sink cannot exist; replacing is what keeps
-/// a later registration from pinning an unreachable file handle for the rest of
-/// the process's life.
+/// Setting the slot replaces any previous registration. Only the first
+/// subscriber install can succeed, so a second accepted sink cannot exist;
+/// replacing is what keeps a later registration from pinning an unreachable
+/// file handle for the rest of the process's life.
 fn install_sink(sink: FileSink) {
-    let mut sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner());
-    sinks.clear();
-    sinks.push(sink);
+    *FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
 }
 
 /// Flush the log file on the way out.
@@ -227,38 +224,15 @@ fn install_sink(sink: FileSink) {
 /// nothing to flush.
 ///
 /// A flush failure is reported once on stderr and never changes the exit code:
-/// the run already earned its code before the log was written down. When the
-/// flush visits more than one sink, the report carries every failure rather
-/// than only the first.
+/// the run already earned its code before the log was written down. The
+/// registry holds at most one sink, so the report is that sink's failure.
 pub fn flush_log() {
-    let sinks = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    if let Some(e) = flush_sinks(&sinks) {
+    let sink = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(sink) = sink
+        && let Err(e) = flush_sink(&sink)
+    {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         report_flush_failure(&e, &REPORTED, &mut std::io::stderr());
-    }
-}
-
-/// Flush every sink, returning an error that carries every failure.
-///
-/// Every sink is visited even after one fails: one broken file does not excuse
-/// another from being written out. The returned error keeps the first failure's
-/// kind and joins the messages of all failures, so a later sink's failure is not
-/// lost behind an earlier one.
-fn flush_sinks(sinks: &[FileSink]) -> Option<std::io::Error> {
-    let mut failures = Vec::new();
-    for sink in sinks {
-        if let Err(e) = flush_sink(sink) {
-            failures.push(e);
-        }
-    }
-    match failures.len() {
-        0 => None,
-        1 => failures.pop(),
-        _ => {
-            let kind = failures[0].kind();
-            let messages: Vec<String> = failures.iter().map(ToString::to_string).collect();
-            Some(std::io::Error::new(kind, messages.join("; ")))
-        }
     }
 }
 
@@ -335,19 +309,6 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             self.flushes.fetch_add(1, Ordering::Relaxed);
             Ok(())
-        }
-    }
-
-    /// A writer whose flush always fails with the given message.
-    struct FailingFlush(&'static str);
-
-    impl Write for FailingFlush {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Err(std::io::Error::other(self.0))
         }
     }
 
@@ -455,52 +416,6 @@ mod tests {
             "the replaced sink is no longer registered"
         );
         assert_eq!(second.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn the_flush_reaches_every_sink_exactly_once() {
-        let first = Arc::new(AtomicUsize::new(0));
-        let second = Arc::new(AtomicUsize::new(0));
-        let sinks = vec![recording_sink(&first), recording_sink(&second)];
-
-        assert!(flush_sinks(&sinks).is_none());
-
-        assert_eq!(first.load(Ordering::Relaxed), 1);
-        assert_eq!(second.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn a_failed_flush_does_not_skip_the_remaining_sinks() {
-        let flushes = Arc::new(AtomicUsize::new(0));
-        let sinks = vec![
-            Arc::new(Mutex::new(
-                Box::new(FailingFlush("disk full")) as Box<dyn Write + Send + Sync>
-            )),
-            recording_sink(&flushes),
-        ];
-
-        let error = flush_sinks(&sinks).expect("the first sink fails");
-
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert_eq!(flushes.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn a_later_flush_failure_is_not_lost_behind_an_earlier_one() {
-        let sinks = vec![
-            Arc::new(Mutex::new(
-                Box::new(FailingFlush("disk full")) as Box<dyn Write + Send + Sync>
-            )),
-            Arc::new(Mutex::new(
-                Box::new(FailingFlush("read-only file system")) as Box<dyn Write + Send + Sync>
-            )),
-        ];
-
-        let error = flush_sinks(&sinks).expect("both sinks fail");
-        let message = error.to_string();
-
-        assert!(message.contains("disk full"), "{message}");
-        assert!(message.contains("read-only file system"), "{message}");
     }
 
     #[test]
