@@ -443,6 +443,10 @@ until the main tasks and rework are done.
 | F342 | LOCK-04 review | `tests/common/run_lock.rs` | `lock_key_path` retains the caller's spelling for vanished components; harmless on case-folding Windows, risky on a case-sensitive host. | todo |
 | F343 | LOCK-04 review | `tests/common/run_lock.rs` | A mutating run that fails before execution still never took the lock, yet cleanup acquires-and-deletes the path, briefly creating a file. | todo |
 | F344 | LOCK-04 review | `tests/common/run_lock.rs` | `game_path_arg` only recognizes `--game-path <value>`; an `=`-form caller would silently skip cleanup. | todo |
+| F345 | INI-04 review | `src/util/ini.rs` | No call-site regression test asserts the `inspect game dir <path>` context/kind; a seam would make that combination testable. | todo |
+| F346 | INI-04 review | `src/util/ini.rs` tests | The junction classification is documented from std behavior but not exercised; a Windows-only `mklink /J` test could pin the dangling-junction message. | todo |
+| F347 | INI-04 review | `src/util/ini.rs` tests | On non-Unix/non-Windows targets `try_symlink_dir` now panics rather than skipping; consider skipping on `Unsupported`. | todo |
+| F348 | INI-04 review | `src/util/ini.rs` | The `Err` doc says "the caller must surface it", but the `NotADirectory` caller keeps its original error; clarify. | todo |
 
 ## Follow-up batches
 
@@ -538,6 +542,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
 | INI-04 | F323, F324, F325 | done | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low; 86cc49b, a495877 |
+| INI-05 | F345, F346, F347, F348 | todo | Wave E; inspection context test and junction/skip docs; low |
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
