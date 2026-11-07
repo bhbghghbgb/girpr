@@ -432,6 +432,9 @@ until the main tasks and rework are done.
 | F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | todo |
 | F332 | PURGE-PERF-05 review | `src/util/counter.rs` tests | Add a focused regression test that pauses one cell and charges a different cell on the same thread, pinning the scoping directly. | todo |
 | F333 | PURGE-PERF-05 review | `src/repair/mod.rs` tests | The normalization test calls the helper directly; an end-to-end `fetch_deprecated` test over a stub client would also pin that the fetch path invokes it. | todo |
+| F334 | BUILD-04 review | `.github/workflows/msrv.yml` | The `iot-bench` job uses default stable, so a 1.89-specific bench regression would go unnoticed; pinning 1.89 would close that gap. | todo |
+| F335 | BUILD-04 review | `tests/scripts/io-profile/README.md` | "buildable with the workspace toolchain" is loose given the job uses default stable; say "current stable" explicitly. | todo |
+| F336 | BUILD-04 review | `.github/workflows/msrv.yml` | The path filter means docs/config-only PRs produce no `msrv` check; confirm branch protection compatibility or add an always-run companion. | todo |
 
 ## Follow-up batches
 
@@ -530,6 +533,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
 | BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
+| BUILD-05 | F334, F335, F336 | todo | Wave E; bench toolchain pin, README wording and required-check coverage; low |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | todo | Wave E; root tokio default features and comment nuance; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
