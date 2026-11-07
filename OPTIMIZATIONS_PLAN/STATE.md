@@ -328,8 +328,8 @@ until the main tasks and rework are done.
 | F227 | BUILD-02 review | `tests/scripts/io-profile/iot-bench` | Still pins `redb = "=4.3.0"` and claims it matches the workspace; the comment is false and it will not build on 1.89. | completed |
 | F228 | BUILD-02 review | `src/util/md5.rs` | `scan_throughput` prints `dest_ok`/`source_ok` but never asserts them, so a scan regression still prints a plausible number. | completed |
 | F229 | BUILD-02 review | repository | The declared per-member MSRVs are unenforced; no CI job builds a member with its `rust-version`. | completed |
-| F230 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | `tokio` is requested without `default-features = false`, so its empty `default` feature is enabled. | todo |
-| F231 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | The manifest comment says nothing uses `net`/`sync`, while reqwest brings them in; it could mirror the docs' precision. | todo |
+| F230 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | `tokio` is requested without `default-features = false`, so its empty `default` feature is enabled. | completed |
+| F231 | BUILD-TOOLS-02 review | `tools/capture/Cargo.toml` | The manifest comment says nothing uses `net`/`sync`, while reqwest brings them in; it could mirror the docs' precision. | completed |
 | F232 | TEST-HELPERS-02 review | `tests/common/digest.rs` | The module doc says "shared by the test fixtures", but fixture-free targets include it directly. | todo |
 | F233 | INI-02 review | `src/util/ini.rs` | `game_dir_refusal` uses `Path::exists()`, which follows symlinks, so a dangling symlink reads as "does not exist". | completed |
 | F234 | INI-02 review | `src/util/ini.rs` | The ENOTDIR branch treats any non-`NotFound` error under a non-directory path as "is not a directory", possibly masking parent permission errors. | completed |
@@ -427,6 +427,8 @@ until the main tasks and rework are done.
 | F326 | BUILD-03 review | `.github/workflows/msrv.yml` | The workflow triggers on every push/PR with no path filter, caching, concurrency group, or `permissions`, installing up to three toolchains each run. | todo |
 | F327 | BUILD-03 review | `tests/scripts/check-msrv.ps1` | The script checks default targets only; `--all-targets` would guard test-only code against raising a member's floor. | todo |
 | F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | todo |
+| F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | todo |
+| F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | todo |
 
 ## Follow-up batches
 
@@ -523,7 +525,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
 | BUILD-04 | F326, F327, F328 | todo | Wave E; CI cost and MSRV/bench gate coverage; low |
-| BUILD-TOOLS-03 | F230, F231 | pending_review | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
+| BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
+| BUILD-TOOLS-04 | F329, F330 | todo | Wave E; root tokio default features and comment nuance; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
