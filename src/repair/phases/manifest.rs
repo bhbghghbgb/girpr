@@ -810,7 +810,8 @@ mod tests {
     /// jobs hits the manifest cap.
     #[tokio::test]
     async fn fetch_latest_bounds_live_http_fetches_to_manifest_concurrency() {
-        for (jobs, bound) in [(1, 1), (2, 2), (usize::MAX, MAX_MANIFEST_CONCURRENCY)] {
+        for jobs in [1, 2, usize::MAX] {
+            let bound = manifest_concurrency(jobs);
             let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
             let gate = Arc::new(InFlight::new());
             let ids = ["m0", "m1", "m2", "m3", "m4", "m5"];
