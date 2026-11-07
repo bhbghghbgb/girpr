@@ -1049,6 +1049,17 @@ mod tests {
         assert!(!missing.exists(), "the writer must not create the game dir");
     }
 
+    /// An inspection failure other than `NotFound`/`NotADirectory` is returned
+    /// to the caller rather than being discarded in favour of a missing-path
+    /// answer. An embedded NUL makes the metadata call fail with
+    /// `InvalidInput` on every supported platform.
+    #[test]
+    fn game_dir_inspection_errors_are_not_reported_as_missing() {
+        let err = game_dir_refusal(Path::new("bad\0path"))
+            .expect_err("a path that cannot be inspected must be an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
+    }
+
     /// A path that exists as a file is a different mistake from a missing
     /// game dir, and the refusal says which one happened; it still does not
     /// touch the path.
@@ -1086,8 +1097,11 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_game_dir");
         let target = root.join("missing-target");
         let link = root.join("dangling-game-dir");
-        if !try_symlink_dir(&target, &link) {
-            return;
+        if let Err(e) = try_symlink_dir(&target, &link) {
+            if symlink_creation_denied(&e) {
+                return;
+            }
+            panic!("could not create the test directory symlink: {e}");
         }
 
         let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
@@ -1107,19 +1121,79 @@ mod tests {
         );
     }
 
+    /// Whether a failed directory-symlink creation is the known privilege
+    /// denial that means the test cannot run on this host. Every other error
+    /// is a broken test environment and must fail loudly instead of silently
+    /// skipping.
+    fn symlink_creation_denied(e: &std::io::Error) -> bool {
+        #[cfg(windows)]
+        {
+            // `CreateSymbolicLinkW` without the privilege (or developer mode)
+            // fails with `ERROR_PRIVILEGE_NOT_HELD` (1314). Rust maps it to
+            // `Uncategorized`, so the raw code is the reliable check.
+            e.raw_os_error() == Some(1314)
+        }
+        #[cfg(unix)]
+        {
+            // `symlink(2)` reports `EPERM` (1) or `EACCES` (13) when the
+            // caller lacks permission. Anything else (a read-only filesystem,
+            // for example) is not the privilege denial this test skips on.
+            matches!(e.raw_os_error(), Some(1) | Some(13))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = e;
+            false
+        }
+    }
+
     #[cfg(unix)]
-    fn try_symlink_dir(target: &Path, link: &Path) -> bool {
-        std::os::unix::fs::symlink(target, link).is_ok()
+    fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
     }
 
     #[cfg(windows)]
-    fn try_symlink_dir(target: &Path, link: &Path) -> bool {
-        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
     }
 
     #[cfg(not(any(unix, windows)))]
-    fn try_symlink_dir(_target: &Path, _link: &Path) -> bool {
-        false
+    fn try_symlink_dir(_target: &Path, _link: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "directory symlinks are not supported on this platform",
+        ))
+    }
+
+    /// Only the known privilege denial is a skip; other failures would hide a
+    /// broken test environment.
+    #[test]
+    fn only_symlink_creation_denial_skips_the_link_test() {
+        assert!(!symlink_creation_denied(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not a creation-denied error",
+        )));
+        #[cfg(windows)]
+        {
+            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
+                1314
+            )));
+            assert!(!symlink_creation_denied(
+                &std::io::Error::from_raw_os_error(5)
+            ));
+        }
+        #[cfg(unix)]
+        {
+            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
+                1
+            )));
+            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
+                13
+            )));
+            assert!(!symlink_creation_denied(
+                &std::io::Error::from_raw_os_error(30)
+            ));
+        }
     }
 
     /// A parent that cannot be traversed is a permission failure, not a
