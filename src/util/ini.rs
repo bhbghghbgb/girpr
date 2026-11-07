@@ -1110,7 +1110,11 @@ mod tests {
         std::fs::create_dir(&locked).unwrap();
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
         let game = locked.join("game");
-        if std::fs::read_to_string(game.join("config.ini")).is_ok() {
+        // The denial must be observable before the test can exercise it: a
+        // host that ignores the mode (root, some containers) can still read
+        // the directory, and then the game dir is merely missing rather than
+        // unreachable.
+        if std::fs::read_dir(&locked).is_ok() {
             std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
             return;
         }
