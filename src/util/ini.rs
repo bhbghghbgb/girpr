@@ -237,21 +237,32 @@ fn test_no_fsync() -> bool {
 /// The refusal for a game dir that cannot hold `config.ini`.
 ///
 /// A missing path, a path that exists as something other than a directory, and
-/// a symlink whose target is missing are different mistakes: the message must
+/// a link whose target is missing are different mistakes: the message must
 /// name the one that happened instead of calling every case "does not exist".
 ///
-/// `None` means the path could not be inspected without swallowing the real
-/// error (a permission failure, for example); the caller then surfaces the
-/// original I/O error rather than inventing a refusal.
-fn game_dir_refusal(game_dir: &Path) -> Option<anyhow::Error> {
-    // `Path::exists()` follows links, so it reads a dangling symlink as
-    // absent. `symlink_metadata` inspects the link itself and tells the two
-    // apart.
+/// `Ok(Some(_))` is that refusal. `Ok(None)` means the path could not be
+/// classified without swallowing a different error (for example the target of
+/// an existing link could not be resolved); the caller then surfaces the
+/// original I/O error rather than inventing a refusal. `Err` is a failure to
+/// inspect the path itself: the caller must surface it, because when the
+/// original read error was `NotFound`, calling an unreadable path "missing"
+/// would be a guess.
+///
+/// A Windows junction is a reparse point, but Rust's `FileType::is_symlink`
+/// reports name-surrogate reparse tags (symlinks and mount points/junctions)
+/// as links, so a dangling junction is classified here too. Other reparse
+/// points (cloud placeholders, for example) are not name surrogates and stable
+/// `std` does not expose them as links; a dangling one therefore reads as "is
+/// not a directory". Detecting those needs the Windows reparse-point APIs,
+/// which this crate deliberately does not take on.
+fn game_dir_refusal(game_dir: &Path) -> std::io::Result<Option<anyhow::Error>> {
+    // `Path::exists()` follows links, so it reads a dangling link as absent.
+    // `symlink_metadata` inspects the link itself and tells the two apart.
     let state = match std::fs::symlink_metadata(game_dir) {
         Ok(md) if md.file_type().is_symlink() => match std::fs::metadata(game_dir) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => "is a dangling symlink",
             Ok(_) => "is not a directory",
-            Err(_) => return None,
+            Err(_) => return Ok(None),
         },
         Ok(_) => "is not a directory",
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => "does not exist",
@@ -259,9 +270,12 @@ fn game_dir_refusal(game_dir: &Path) -> Option<anyhow::Error> {
         // either (the `ENOTDIR` answer some platforms give for
         // `<non-directory>/config.ini`).
         Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => "is not a directory",
-        Err(_) => return None,
+        Err(e) => return Err(e),
     };
-    Some(anyhow::anyhow!("game dir {} {state}", game_dir.display()))
+    Ok(Some(anyhow::anyhow!(
+        "game dir {} {state}",
+        game_dir.display()
+    )))
 }
 
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
@@ -327,7 +341,16 @@ pub fn write_config_ini(
             // scanned, and creating a tree for a wrong path would hide the
             // mistake instead of reporting it.
             if !game_dir.is_dir() {
-                return Err(game_dir_refusal(game_dir).unwrap_or_else(|| e.into()));
+                return match game_dir_refusal(game_dir) {
+                    Ok(Some(refusal)) => Err(refusal),
+                    Ok(None) => Err(e.into()),
+                    // The original error was `NotFound`, so an inspection
+                    // failure (a permission denial on the way to the path, for
+                    // example) is the honest answer; reporting the path as
+                    // missing would be a guess.
+                    Err(inspection) => Err(inspection)
+                        .with_context(|| format!("inspect game dir {}", game_dir.display())),
+                };
             }
             String::new()
         }
@@ -338,8 +361,11 @@ pub fn write_config_ini(
             // Only that kind means the path is not a directory: any other
             // error (a permission failure on a parent, say) keeps its own kind
             // and message instead of being relabelled.
+            // An inspection failure falls through to the original
+            // `NotADirectory`, which already names the real condition; unlike
+            // the `NotFound` arm, nothing is being guessed.
             if e.kind() == std::io::ErrorKind::NotADirectory
-                && let Some(refusal) = game_dir_refusal(game_dir)
+                && let Ok(Some(refusal)) = game_dir_refusal(game_dir)
             {
                 return Err(refusal);
             }
