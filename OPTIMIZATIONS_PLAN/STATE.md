@@ -336,9 +336,9 @@ until the main tasks and rework are done.
 | F235 | LOGGING-02 review | `src/logging.rs` | `FILE_SINKS` could be `Mutex<Option<FileSink>>` so the one-sink invariant lives in the type. | todo |
 | F236 | LOGGING-02 review | `src/logging.rs` | No test covers the rejected-install path (a second `init_tracing` does not register a handle). | todo |
 | F237 | LOGGING-02 review | `src/logging.rs` | `flush_log`'s doc still describes visiting "more than one sink", which it can no longer reach. | todo |
-| F238 | JOBS-02 review | `tests/cli_contract.rs` | The help test searches all of stdout for `[default: 4]`; scoping it to the `--jobs` block would avoid a false pass. | todo |
-| F239 | JOBS-02 review | `src/cli.rs` | The `[default: 4]` help line is hand-maintained apart from `DEFAULT_JOBS`. | todo |
-| F240 | JOBS-02 review | `tests/cli_contract.rs` | The binary-level boundary pair is alias-only; a `--jobs` pair would mirror it at process level. | todo |
+| F238 | JOBS-02 review | `tests/cli_contract.rs` | The help test searches all of stdout for `[default: 4]`; scoping it to the `--jobs` block would avoid a false pass. | completed |
+| F239 | JOBS-02 review | `src/cli.rs` | The `[default: 4]` help line is hand-maintained apart from `DEFAULT_JOBS`. | completed |
+| F240 | JOBS-02 review | `tests/cli_contract.rs` | The binary-level boundary pair is alias-only; a `--jobs` pair would mirror it at process level. | completed |
 | F241 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | The out-of-order stream test asserts only `is_err()` for the first result; a message check would pin its identity. | completed |
 | F242 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Live HTTP-stream construction and `manifest_concurrency` bounding are not exercised by the `from_stream` seam. | completed |
 | F243 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Finished connection tasks are reaped only on a new accept, so entries can briefly accumulate. | completed |
@@ -413,6 +413,9 @@ until the main tasks and rework are done.
 | F312 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | `wait_until_idle`/`wait_for` use `notify_waiters()` with a pre-check, which could miss a wakeup on a multi-thread runtime; `Notified::enable()` would harden it. | todo |
 | F313 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | The bound table hardcodes `(1,1)`/`(2,2)` instead of calling `manifest_concurrency(jobs)`; compute it to stay in lockstep. | todo |
 | F314 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | A gated connection aborted mid-wait skips `gate.leave()`, so `current` would not return to zero if a future test waited for idle after dropping a gated server. | todo |
+| F315 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` matches a flag by prefix, so `--jobs` would also match a future `--jobs-*`; require a following space/newline. | todo |
+| F316 | JOBS-03 review | `tests/cli_contract.rs` | The synthetic slicing test only covers the first-entry branch; add a case with a preceding option to cover the `\n`-marker branch. | todo |
+| F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | todo |
 
 ## Follow-up batches
 
@@ -494,7 +497,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
-| JOBS-03 | F238, F239, F240 | pending_review | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
+| JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
+| JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | todo | Wave E; sink registry typing, rejected-install test and flush doc; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
