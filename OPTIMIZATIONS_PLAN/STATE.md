@@ -427,8 +427,8 @@ until the main tasks and rework are done.
 | F326 | BUILD-03 review | `.github/workflows/msrv.yml` | The workflow triggers on every push/PR with no path filter, caching, concurrency group, or `permissions`, installing up to three toolchains each run. | completed |
 | F327 | BUILD-03 review | `tests/scripts/check-msrv.ps1` | The script checks default targets only; `--all-targets` would guard test-only code against raising a member's floor. | completed |
 | F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | completed |
-| F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | todo |
-| F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | todo |
+| F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | completed |
+| F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | completed |
 | F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | todo |
 | F332 | PURGE-PERF-05 review | `src/util/counter.rs` tests | Add a focused regression test that pauses one cell and charges a different cell on the same thread, pinning the scoping directly. | todo |
 | F333 | PURGE-PERF-05 review | `src/repair/mod.rs` tests | The normalization test calls the helper directly; an end-to-end `fetch_deprecated` test over a stub client would also pin that the fetch path invokes it. | todo |
@@ -535,7 +535,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
 | BUILD-05 | F334, F335, F336 | todo | Wave E; bench toolchain pin, README wording and required-check coverage; low |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
-| BUILD-TOOLS-04 | F329, F330 | pending_review | Wave E; root tokio default features and comment nuance; low; 1effa98, 2681403 |
+| BUILD-TOOLS-04 | F329, F330 | done | Wave E; root tokio default features and comment nuance; low; 1effa98, 2681403 |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | done | Wave E; digest helper doc wording; low; fac7264 |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
