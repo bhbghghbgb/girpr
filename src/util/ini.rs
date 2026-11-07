@@ -239,16 +239,29 @@ fn test_no_fsync() -> bool {
 /// A missing path, a path that exists as something other than a directory, and
 /// a symlink whose target is missing are different mistakes: the message must
 /// name the one that happened instead of calling every case "does not exist".
-fn game_dir_refusal(game_dir: &Path) -> anyhow::Error {
+///
+/// `None` means the path could not be inspected without swallowing the real
+/// error (a permission failure, for example); the caller then surfaces the
+/// original I/O error rather than inventing a refusal.
+fn game_dir_refusal(game_dir: &Path) -> Option<anyhow::Error> {
     // `Path::exists()` follows links, so it reads a dangling symlink as
     // absent. `symlink_metadata` inspects the link itself and tells the two
     // apart.
     let state = match std::fs::symlink_metadata(game_dir) {
-        Ok(md) if md.file_type().is_symlink() && !game_dir.exists() => "is a dangling symlink",
+        Ok(md) if md.file_type().is_symlink() => match std::fs::metadata(game_dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "is a dangling symlink",
+            Ok(_) => "is not a directory",
+            Err(_) => return None,
+        },
         Ok(_) => "is not a directory",
-        Err(_) => "does not exist",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "does not exist",
+        // A path component is not a directory, so the game dir cannot be one
+        // either (the `ENOTDIR` answer some platforms give for
+        // `<non-directory>/config.ini`).
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => "is not a directory",
+        Err(_) => return None,
     };
-    anyhow::anyhow!("game dir {} {state}", game_dir.display())
+    Some(anyhow::anyhow!("game dir {} {state}", game_dir.display()))
 }
 
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
@@ -314,16 +327,21 @@ pub fn write_config_ini(
             // scanned, and creating a tree for a wrong path would hide the
             // mistake instead of reporting it.
             if !game_dir.is_dir() {
-                return Err(game_dir_refusal(game_dir));
+                return Err(game_dir_refusal(game_dir).unwrap_or_else(|| e.into()));
             }
             String::new()
         }
         Err(e) => {
-            // Some platforms answer `ENOTDIR` for `<file>/config.ini` instead
-            // of `NotFound`; name the real condition there too rather than
-            // passing the nested read through as an unreadable file.
-            if !game_dir.is_dir() && game_dir.exists() {
-                return Err(game_dir_refusal(game_dir));
+            // Some platforms answer `ENOTDIR` for `<non-directory>/config.ini`
+            // instead of `NotFound`; name the real condition there too rather
+            // than passing the nested read through as an unreadable file.
+            // Only that kind means the path is not a directory: any other
+            // error (a permission failure on a parent, say) keeps its own kind
+            // and message instead of being relabelled.
+            if e.kind() == std::io::ErrorKind::NotADirectory
+                && let Some(refusal) = game_dir_refusal(game_dir)
+            {
+                return Err(refusal);
             }
             return Err(e.into());
         }
@@ -1076,6 +1094,39 @@ mod tests {
     #[cfg(not(any(unix, windows)))]
     fn try_symlink_dir(_target: &Path, _link: &Path) -> bool {
         false
+    }
+
+    /// A parent that cannot be traversed is a permission failure, not a
+    /// missing or non-directory game dir: the refusal must not relabel it.
+    /// Hosts that ignore the mode (root, some containers) cannot exercise the
+    /// denial, so the test skips there.
+    #[cfg(unix)]
+    #[test]
+    fn config_bump_surfaces_a_parent_permission_error_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "parent_permission");
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let game = locked.join("game");
+        if std::fs::read_to_string(game.join("config.ini")).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let err = write_config_ini(&game, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("an unreachable game dir must not be treated as a fresh install");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("the permission failure keeps its I/O error");
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied, "{err:#}");
+        assert!(
+            !format!("{err:#}").contains("is not a directory"),
+            "a permission failure must not be relabelled: {err:#}"
+        );
     }
 
     /// An accepted config write and a failed one both leave no temp sibling:
