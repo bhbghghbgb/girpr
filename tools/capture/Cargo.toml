@@ -46,8 +46,9 @@ girpr-log = { path = "../../crates/log" }
 # (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
 # Nothing here uses `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`;
 # `reqwest` enables `net` and `sync` in every build anyway, so the saving is
-# what this list does not ask for. `default-features = false` says this list is
-# the whole request (tokio's `default` feature is empty). `spawn`/
+# what this list does not ask for. `default-features = false` keeps the request
+# to exactly this list; reqwest's dependency tree still enables tokio's empty
+# `default` feature, which adds nothing. `spawn`/
 # `spawn_blocking`/`JoinSet` come with `rt`, which `rt-multi-thread` already
 # includes.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
