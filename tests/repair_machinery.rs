@@ -179,7 +179,7 @@ impl Rig {
             .output()
             .await
             .expect("spawn girpr");
-        common::remove_run_lock(&self.game());
+        common::remove_run_lock_for_args(&all);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let mut records = BTreeMap::new();

@@ -26,7 +26,7 @@ use std::sync::{
 };
 
 use girpr::test_support::{
-    Limits, Lock, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
+    Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
 };
 use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
 use prost::Message as _;
@@ -102,53 +102,11 @@ pub fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
     parent.join("not-created-yet")
 }
 
-/// The spelling whose canonical form names the run's lock key.
-///
-/// A run canonicalizes the install before locking, so a case that removes the
-/// install mid-run leaves a key for a path that no longer exists. The parent is
-/// still there, and canonicalizing it and re-joining the last component gives
-/// the spelling the run used.
-fn lock_key_path(game_dir: &std::path::Path) -> std::path::PathBuf {
-    if game_dir.exists() {
-        return game_dir.to_path_buf();
-    }
-    let (Some(parent), Some(name)) = (game_dir.parent(), game_dir.file_name()) else {
-        return game_dir.to_path_buf();
-    };
-    match parent.canonicalize() {
-        Ok(parent) => parent.join(name),
-        Err(_) => game_dir.to_path_buf(),
-    }
-}
+mod run_lock;
 
-/// Remove the unlocked lock file a run against `game_dir` leaves behind.
-///
-/// A run deliberately keeps its lock file in the shared temp directory so an
-/// opener cannot be unlinked; a test is not another run, and every case uses a
-/// unique install, so the file would otherwise accumulate one per case. The
-/// path is keyed by the canonical game dir, and [`Lock::acquire`] is the
-/// public way to learn it. Acquire after the run has returned: a lock the run
-/// failed to release makes this fail, leaving the file for the reader to see.
-pub fn remove_run_lock(game_dir: &std::path::Path) {
-    if let Ok(lock) = Lock::acquire(&lock_key_path(game_dir)) {
-        let path = lock.path().to_path_buf();
-        drop(lock);
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-/// The `--game-path` value in a binary argument list, if it has one.
-fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
-    args.windows(2)
-        .find_map(|pair| (pair[0].as_ref() == "--game-path").then(|| pair[1].as_ref()))
-}
-
-/// Remove the lock file a binary run leaves, from its own `--game-path`.
-pub fn remove_run_lock_for_args(args: &[impl AsRef<str>]) {
-    if let Some(game) = game_path_arg(args) {
-        remove_run_lock(std::path::Path::new(game));
-    }
-}
+// Each test binary uses one of the two helpers, so the other is unused here.
+#[allow(unused_imports)]
+pub use run_lock::{remove_run_lock, remove_run_lock_for_args};
 
 /// Run the library's entry point, then remove the lock file it leaves in the
 /// shared temp directory. See [`remove_run_lock`].
