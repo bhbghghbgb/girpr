@@ -438,6 +438,11 @@ until the main tasks and rework are done.
 | F337 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `[dev-dependencies]` `tokio` entry also omits `default-features = false`; align for symmetry with the normal dependency. | todo |
 | F338 | BUILD-TOOLS-04 review | `tools/capture/Cargo.toml` | The comment says nothing uses `tokio::fs`, but reqwest's `stream` feature compiles it; a tweak could avoid the same source-vs-graph misreading. | todo |
 | F339 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `tokio` comment could also state that the reqwest tree still enables the empty `default` in the resolved graph. | todo |
+| F340 | LOCK-04 review | `tests/common/run_lock.rs` | `mode_takes_lock`/`args_take_lock` lack direct tests; nothing asserts the mirror accepts `--purge-only` and rejects the three read-only flags. | todo |
+| F341 | LOCK-04 review | `tests/common/run_lock.rs` | `#![allow(dead_code)]` is module-wide; a targeted allowance would keep unexpected dead code visible. | todo |
+| F342 | LOCK-04 review | `tests/common/run_lock.rs` | `lock_key_path` retains the caller's spelling for vanished components; harmless on case-folding Windows, risky on a case-sensitive host. | todo |
+| F343 | LOCK-04 review | `tests/common/run_lock.rs` | A mutating run that fails before execution still never took the lock, yet cleanup acquires-and-deletes the path, briefly creating a file. | todo |
+| F344 | LOCK-04 review | `tests/common/run_lock.rs` | `game_path_arg` only recognizes `--game-path <value>`; an `=`-form caller would silently skip cleanup. | todo |
 
 ## Follow-up batches
 
@@ -529,6 +534,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
 | LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
+| LOCK-05 | F340, F341, F342, F343, F344 | todo | Wave E; lock-policy mirror tests and cleanup edge cases; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
 | INI-04 | F323, F324, F325 | todo | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low |
