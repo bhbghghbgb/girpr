@@ -469,7 +469,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-02 | F192, F193, F194, F195 | done | Wave D; exit-code boundary polish and prose; low; 764fbf9, 2c94a60, ad2cbb1, ff4539a |
 | EXIT-03 | F208 | done | Wave E; clamp helper reachability; low; 7d883da, 3602837 |
 | EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
-| EXIT-05 | F301, F302, F303 | in_progress | Wave E; ALL completeness, tautological test and visibility; low |
+| EXIT-05 | F301, F302, F303 | pending_review | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
