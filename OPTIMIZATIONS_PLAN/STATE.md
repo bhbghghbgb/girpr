@@ -447,6 +447,8 @@ until the main tasks and rework are done.
 | F346 | INI-04 review | `src/util/ini.rs` tests | The junction classification is documented from std behavior but not exercised; a Windows-only `mklink /J` test could pin the dangling-junction message. | todo |
 | F347 | INI-04 review | `src/util/ini.rs` tests | On non-Unix/non-Windows targets `try_symlink_dir` now panics rather than skipping; consider skipping on `Unsupported`. | todo |
 | F348 | INI-04 review | `src/util/ini.rs` | The `Err` doc says "the caller must surface it", but the `NotADirectory` caller keeps its original error; clarify. | todo |
+| F349 | METADATA-04 review | `tests/common/mod.rs` | `BranchFailure::Terminal { retcode }` does not validate that `retcode` is terminal; a debug assertion or restricted constructor would self-check the knob. | todo |
+| F350 | METADATA-04 review | `tests/repair_offline.rs` | `a_terminal_branch_failure_is_metadata_under_chunk_mode` now exercises the non-JSON fatal-parse body; its name/comment could be aligned. | todo |
 
 ## Follow-up batches
 
@@ -526,6 +528,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | done | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low; 60d20de, 021568e, 4170fc9, c8c6194 |
 | METADATA-04 | F310, F311 | done | Wave E; mock retryable branch failure mode; low; 636aa70 |
+| METADATA-05 | F349, F350 | todo | Wave E; branch-failure knob validation and test naming; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
