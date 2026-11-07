@@ -51,7 +51,7 @@ girpr-log = { path = "crates/log" }
 # `process` and `signal`. `process` is needed only by the CLI tests, which run
 # the built binary, so it stays a dev-only feature below; `test-util` is
 # dev-only for the same reason. A normal build compiles neither.
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
