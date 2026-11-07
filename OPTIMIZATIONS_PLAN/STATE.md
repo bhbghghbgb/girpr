@@ -333,9 +333,9 @@ until the main tasks and rework are done.
 | F232 | TEST-HELPERS-02 review | `tests/common/digest.rs` | The module doc says "shared by the test fixtures", but fixture-free targets include it directly. | todo |
 | F233 | INI-02 review | `src/util/ini.rs` | `game_dir_refusal` uses `Path::exists()`, which follows symlinks, so a dangling symlink reads as "does not exist". | todo |
 | F234 | INI-02 review | `src/util/ini.rs` | The ENOTDIR branch treats any non-`NotFound` error under a non-directory path as "is not a directory", possibly masking parent permission errors. | todo |
-| F235 | LOGGING-02 review | `src/logging.rs` | `FILE_SINKS` could be `Mutex<Option<FileSink>>` so the one-sink invariant lives in the type. | todo |
-| F236 | LOGGING-02 review | `src/logging.rs` | No test covers the rejected-install path (a second `init_tracing` does not register a handle). | todo |
-| F237 | LOGGING-02 review | `src/logging.rs` | `flush_log`'s doc still describes visiting "more than one sink", which it can no longer reach. | todo |
+| F235 | LOGGING-02 review | `src/logging.rs` | `FILE_SINKS` could be `Mutex<Option<FileSink>>` so the one-sink invariant lives in the type. | completed |
+| F236 | LOGGING-02 review | `src/logging.rs` | No test covers the rejected-install path (a second `init_tracing` does not register a handle). | completed |
+| F237 | LOGGING-02 review | `src/logging.rs` | `flush_log`'s doc still describes visiting "more than one sink", which it can no longer reach. | completed |
 | F238 | JOBS-02 review | `tests/cli_contract.rs` | The help test searches all of stdout for `[default: 4]`; scoping it to the `--jobs` block would avoid a false pass. | completed |
 | F239 | JOBS-02 review | `src/cli.rs` | The `[default: 4]` help line is hand-maintained apart from `DEFAULT_JOBS`. | completed |
 | F240 | JOBS-02 review | `tests/cli_contract.rs` | The binary-level boundary pair is alias-only; a `--jobs` pair would mirror it at process level. | completed |
@@ -416,6 +416,8 @@ until the main tasks and rework are done.
 | F315 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` matches a flag by prefix, so `--jobs` would also match a future `--jobs-*`; require a following space/newline. | todo |
 | F316 | JOBS-03 review | `tests/cli_contract.rs` | The synthetic slicing test only covers the first-entry branch; add a case with a preceding option to cover the `\n`-marker branch. | todo |
 | F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | todo |
+| F318 | LOGGING-03 review | `src/logging.rs` | `FILE_SINKS` is plural but now holds a single `Option`; rename to `FILE_SINK`. | todo |
+| F319 | LOGGING-03 review | `src/logging.rs` tests | The rejected-install test writes into the sink directly and does not assert the install-warning text; emitting through the subscriber and pinning the WARN would be stronger. | todo |
 
 ## Follow-up batches
 
@@ -500,7 +502,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
-| LOGGING-03 | F235, F236, F237 | pending_review | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
+| LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
+| LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
