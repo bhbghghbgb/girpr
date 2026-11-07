@@ -258,11 +258,7 @@ fn may_write_body(path: &Path, file: &mut File, created: bool) -> Result<bool> {
     }
     match link_count(file) {
         Some(1) => {}
-        Some(names) => bail!(
-            "lock file {} has {names} names (hard links); refusing to overwrite a \
-             file that may also be one of the user's",
-            path.display()
-        ),
+        Some(names) => return Err(unexpected_names(path, names)),
         // The platform cannot tell us whether another name exists: leave the
         // body alone rather than truncate a file that may be shared.
         None => return Ok(false),
@@ -285,6 +281,27 @@ fn may_write_body(path: &Path, file: &mut File, created: bool) -> Result<bool> {
         None => return Ok(false),
     }
     Ok(true)
+}
+
+/// The refusal for a lock file with an unexpected number of names.
+///
+/// One name is the only count this check can rewrite. Two or more mean a hard
+/// link, whose bytes are reachable under another path; zero means the handle
+/// names a file the path no longer reaches. Neither is safe to truncate.
+fn unexpected_names(path: &Path, names: u64) -> anyhow::Error {
+    if names == 0 {
+        anyhow::anyhow!(
+            "lock file {} has no remaining names; refusing to overwrite a file \
+             that may also be one of the user's",
+            path.display()
+        )
+    } else {
+        anyhow::anyhow!(
+            "lock file {} has {names} names (hard links); refusing to overwrite \
+             a file that may also be one of the user's",
+            path.display()
+        )
+    }
 }
 
 /// How many names the file has, when the platform can say.
@@ -582,6 +599,23 @@ mod tests {
                 "the file behind the other name was not touched"
             );
         }
+    }
+
+    #[test]
+    fn a_lock_file_with_no_remaining_names_says_so() {
+        let path = Path::new("girpr-0123456789abcdef.lock");
+        let msg = format!("{:#}", unexpected_names(path, 0));
+        assert!(msg.contains("has no remaining names"), "{msg}");
+        assert!(!msg.contains("0 names"), "{msg}");
+        assert!(msg.contains(path.to_string_lossy().as_ref()), "{msg}");
+    }
+
+    #[test]
+    fn a_lock_file_with_more_than_one_name_keeps_the_numeric_wording() {
+        let path = Path::new("girpr-0123456789abcdef.lock");
+        let msg = format!("{:#}", unexpected_names(path, 2));
+        assert!(msg.contains("has 2 names (hard links)"), "{msg}");
+        assert!(msg.contains(path.to_string_lossy().as_ref()), "{msg}");
     }
 
     #[test]
