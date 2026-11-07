@@ -494,7 +494,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
-| JOBS-03 | F238, F239, F240 | in_progress | Wave E; help assertion scope, default literal and binary parity; low |
+| JOBS-03 | F238, F239, F240 | pending_review | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | todo | Wave E; sink registry typing, rejected-install test and flush doc; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
