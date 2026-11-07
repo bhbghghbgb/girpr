@@ -92,8 +92,9 @@ macro_rules! define_run_exits {
             /// Every documented exit status, in numeric order.
             ///
             /// Generated from the same list as the variants, so the list and
-            /// the enum cannot drift apart.
-            pub const ALL: [$name; [$($name::$variant),+].len()] = [
+            /// the enum cannot drift apart. Crate-internal: only the
+            /// compile-time check and the unit tests read it.
+            pub(crate) const ALL: [$name; [$($name::$variant),+].len()] = [
                 $($name::$variant,)+
             ];
         }

@@ -192,7 +192,17 @@ mod tests {
 
     #[test]
     fn the_documented_exit_codes_reach_the_process_unchanged() {
-        for (number, status) in RunExit::ALL.into_iter().enumerate() {
+        // The library's exhaustive list is crate-internal; the binary test
+        // spells the six documented statuses out so it also pins the numbers.
+        let codes = [
+            RunExit::Success,
+            RunExit::Usage,
+            RunExit::Metadata,
+            RunExit::Write,
+            RunExit::CheckFailed,
+            RunExit::Limit,
+        ];
+        for (number, status) in codes.into_iter().enumerate() {
             assert_eq!(
                 exit_code(status),
                 ExitCode::from(number as u8),
