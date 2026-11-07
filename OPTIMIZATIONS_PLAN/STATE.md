@@ -408,8 +408,8 @@ until the main tasks and rework are done.
 | F307 | PURGE-PERF-04 review | `src/util/counter.rs` | The shared test pause barrier is thread-local and process-wide; a test pausing then hitting a different counter on the same thread would pause unexpectedly. | completed |
 | F308 | HYP-03 review | `tests/*.rs` | Several test files still hardcode `9.9.9-test`/`1.0.0-long-gone` rather than `LATEST_TAG`/a constant; a test-hygiene sweep would reduce drift. | todo |
 | F309 | HYP-03 review | `src/repair/phases/metadata.rs` tests | `logs_of` captures only the current thread; if `fetch` ever emits from a `spawn_blocking` worker, the helper would silently miss it. | todo |
-| F310 | METADATA-03 review | `tests/common/mod.rs` | The mock can only fail a branch call with a non-JSON body; a JSON `retcode` failure mode is needed to test retryable-vs-terminal branch behavior. | todo |
-| F311 | METADATA-03 review | `tests/common/mod.rs` | `branch_failure_status` is behaviourally inert for retry classification; fold it into a single failure-body knob. | todo |
+| F310 | METADATA-03 review | `tests/common/mod.rs` | The mock can only fail a branch call with a non-JSON body; a JSON `retcode` failure mode is needed to test retryable-vs-terminal branch behavior. | completed |
+| F311 | METADATA-03 review | `tests/common/mod.rs` | `branch_failure_status` is behaviourally inert for retry classification; fold it into a single failure-body knob. | completed |
 | F312 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | `wait_until_idle`/`wait_for` use `notify_waiters()` with a pre-check, which could miss a wakeup on a multi-thread runtime; `Notified::enable()` would harden it. | todo |
 | F313 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | The bound table hardcodes `(1,1)`/`(2,2)` instead of calling `manifest_concurrency(jobs)`; compute it to stay in lockstep. | todo |
 | F314 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | A gated connection aborted mid-wait skips `gate.leave()`, so `current` would not return to zero if a future test waited for idle after dropping a gated server. | todo |
@@ -525,7 +525,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | SYNC-02 | F251, F252 | done | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99, 2049582 |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | done | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low; 60d20de, 021568e, 4170fc9, c8c6194 |
-| METADATA-04 | F310, F311 | pending_review | Wave E; mock retryable branch failure mode; low; 636aa70 |
+| METADATA-04 | F310, F311 | done | Wave E; mock retryable branch failure mode; low; 636aa70 |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
