@@ -1213,11 +1213,9 @@ async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     match hyp.deprecated_files().await {
         Ok(mut list) => {
             // Filter in place: the fetch already allocated the `Vec`, and the
-            // retain reuses its buffer. A `filter_map` collected straight into
-            // `Arc<[String]>` would build a second `Vec` first — a filter is
-            // not exact-size — before the `Arc` copied the survivors. This
-            // keeps the work to the `Arc`'s own allocation and copy; the
-            // `Arc` header means its buffer cannot reuse the `Vec`'s.
+            // retain reuses its buffer instead of collecting the survivors
+            // into another one. The `Arc<[String]>` copies the survivors into
+            // its own buffer; its header means it cannot reuse the `Vec`'s.
             normalize_deprecated(&mut list);
             list.into_iter().collect()
         }
