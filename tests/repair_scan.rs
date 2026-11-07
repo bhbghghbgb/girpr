@@ -7,10 +7,10 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters, read_game_file,
+    build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters, read_game_file, run,
     run_binary, temp_dir, write_game_file,
 };
-use girpr::{RunExit, run};
+use girpr::RunExit;
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------

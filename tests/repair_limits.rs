@@ -8,10 +8,10 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
-    build_fixture_spec, ctx_for, logs_of, read_game_file, scope, temp_dir, write_game_file,
+    build_fixture_spec, ctx_for, logs_of, read_game_file, run, scope, temp_dir, write_game_file,
 };
 use girpr::test_support::summary_record;
-use girpr::{OutputFormat, RunExit, run};
+use girpr::{OutputFormat, RunExit};
 use std::sync::atomic::Ordering;
 
 /// How many times `stream_chunk_to` asks a *retryable* origin — the linear

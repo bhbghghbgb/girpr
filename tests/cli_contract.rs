@@ -33,7 +33,10 @@ use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
 
-use common::{MockOpts, MockServer, build_fixture, read_game_file, temp_dir, write_game_file};
+use common::{
+    MockOpts, MockServer, build_fixture, read_game_file, remove_run_lock_for_args, temp_dir,
+    write_game_file,
+};
 
 fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
@@ -1029,6 +1032,7 @@ async fn run_data_plane_as(
         .output()
         .await
         .expect("run girpr");
+    remove_run_lock_for_args(&args);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let records = match output {

@@ -32,11 +32,11 @@ mod common;
 
 use common::{
     ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run_binary, scope, temp_dir,
-    write_game_file,
+    build_fixture_spec, ctx_for, field, load_counters, read_game_file, remove_run_lock, run,
+    run_binary, scope, temp_dir, write_game_file,
 };
+use girpr::RunExit;
 use girpr::test_support::{Lock, RepairMode, summary_record};
-use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -420,6 +420,8 @@ async fn read_only_runs_do_not_take_the_lock() {
     let (_, code) = run(plan).await.expect("print-plan ignores the lock");
     assert_eq!(code, RunExit::Success);
 
+    drop(_lock);
+    remove_run_lock(&dir);
     mock.stop();
 }
 

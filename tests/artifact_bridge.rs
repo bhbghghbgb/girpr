@@ -414,6 +414,7 @@ async fn girpr(args: &[String]) -> Run {
         .output()
         .await
         .expect("spawn girpr");
+    remove_run_lock(args);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let mut records = BTreeMap::new();
@@ -431,6 +432,23 @@ async fn girpr(args: &[String]) -> Run {
         records,
         stdout,
         stderr,
+    }
+}
+
+/// Remove the unlocked lock file the just-finished run left in the shared temp
+/// directory. A real run keeps it so an opener cannot be unlinked; a test is
+/// not another run, and the scratch install is gone at the end of the case.
+fn remove_run_lock(args: &[String]) {
+    let Some(game) = args
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--game-path").then(|| pair[1].as_str()))
+    else {
+        return;
+    };
+    if let Ok(lock) = girpr::test_support::Lock::acquire(Path::new(game)) {
+        let path = lock.path().to_path_buf();
+        drop(lock);
+        let _ = std::fs::remove_file(path);
     }
 }
 

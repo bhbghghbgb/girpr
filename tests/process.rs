@@ -27,6 +27,7 @@ async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (
     let mut child = cmd.spawn().expect("spawn girpr");
     drop(child.stdout.take());
     let out = child.wait_with_output().await.expect("wait for girpr");
+    common::remove_run_lock_for_args(args);
     (
         out.status.code().expect("process must exit normally"),
         String::from_utf8_lossy(&out.stderr).into_owned(),

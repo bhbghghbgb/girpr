@@ -7,10 +7,11 @@
 mod common;
 
 use common::{
-    MockOpts, MockServer, build_fixture, ctx_for, read_game_file, scope, temp_dir, write_game_file,
+    MockOpts, MockServer, build_fixture, ctx_for, read_game_file, run, scope, temp_dir,
+    write_game_file,
 };
+use girpr::RunExit;
 use girpr::test_support::summary_record;
-use girpr::{RunExit, run};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 

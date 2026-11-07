@@ -8,11 +8,11 @@ mod common;
 
 use common::{
     LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_with_lies,
-    build_moved_fixture, ctx_for, field, load_counters, read_game_file, scope, temp_dir,
+    build_moved_fixture, ctx_for, field, load_counters, read_game_file, run, scope, temp_dir,
     write_game_file,
 };
+use girpr::RunExit;
 use girpr::test_support::{RepairMode, summary_record};
-use girpr::{RunExit, run};
 use std::sync::atomic::Ordering;
 
 // ---------------------------------------------------------------------------
@@ -665,7 +665,7 @@ async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() 
         let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
         ctx.limits.write_bytes = Some(live);
         ctx.limits.verified_write_bytes = Some(verified);
-        let (summary, code) = girpr::run(ctx).await.expect("a stop is not an error");
+        let (summary, code) = common::run(ctx).await.expect("a stop is not an error");
         assert_eq!(code, RunExit::Limit, "a ceiling bound");
         mock.stop();
         summary
@@ -764,7 +764,7 @@ async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
         // The key is emitted only when the flag was passed.
         ctx.repair_mode_explicit = true;
         ctx.path_scope = scope(&["game/foo.dat"], &[]);
-        let (summary, code) = girpr::run(ctx).await.expect("run");
+        let (summary, code) = common::run(ctx).await.expect("run");
         assert_eq!(
             code,
             RunExit::Success,
@@ -904,7 +904,7 @@ async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, b"not the game data");
         }
-        let (summary, code) = girpr::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        let (summary, code) = common::run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect("run");
         assert_eq!(code, RunExit::Success, "the repair recovered");

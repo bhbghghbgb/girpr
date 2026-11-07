@@ -8,10 +8,10 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
-    build_fixture_spec, ctx_for, ctx_for_biz, load_counters, read_game_file, run_binary, temp_dir,
-    write_game_file,
+    build_fixture_spec, ctx_for, ctx_for_biz, load_counters, read_game_file, run, run_binary,
+    temp_dir, write_game_file,
 };
-use girpr::{Biz, RunExit, run};
+use girpr::{Biz, RunExit};
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 

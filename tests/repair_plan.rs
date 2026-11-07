@@ -10,10 +10,10 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run_binary, temp_dir,
+    build_fixture_spec, ctx_for, field, load_counters, read_game_file, run, run_binary, temp_dir,
     write_game_file,
 };
-use girpr::{RunExit, run};
+use girpr::RunExit;
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
