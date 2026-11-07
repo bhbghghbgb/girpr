@@ -529,7 +529,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
-| BUILD-04 | F326, F327, F328 | in_progress | Wave E; CI cost and MSRV/bench gate coverage; low |
+| BUILD-04 | F326, F327, F328 | pending_review | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | todo | Wave E; root tokio default features and comment nuance; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
