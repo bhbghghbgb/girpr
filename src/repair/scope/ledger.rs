@@ -589,7 +589,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Barrier};
 
-    use crate::util::counter::test_support::set_pause_before_cas;
+    use crate::util::counter::test_support::pause_before_cas_of;
 
     /// The meter's two numbers, and the rule that tells them apart.
     ///
@@ -767,9 +767,8 @@ mod tests {
                 let s = s.clone();
                 let paused = paused.clone();
                 std::thread::spawn(move || {
-                    set_pause_before_cas(Some(paused));
+                    let _pause = pause_before_cas_of(&s.download.live, paused);
                     assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
-                    set_pause_before_cas(None);
                 })
             })
             .collect();
