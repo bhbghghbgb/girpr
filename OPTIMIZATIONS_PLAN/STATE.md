@@ -500,7 +500,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
-| LOGGING-03 | F235, F236, F237 | in_progress | Wave E; sink registry typing, rejected-install test and flush doc; low |
+| LOGGING-03 | F235, F236, F237 | pending_review | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
