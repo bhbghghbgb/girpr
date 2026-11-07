@@ -110,10 +110,16 @@ pub use run_lock::{remove_run_lock, remove_run_lock_for_args};
 
 /// Run the library's entry point, then remove the lock file it leaves in the
 /// shared temp directory. See [`remove_run_lock`].
+///
+/// A read-only run takes no lock, so cleanup is skipped for it rather than
+/// acquiring a lock just to find and delete the file that acquisition created.
 pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
     let game_dir = ctx.game_dir.clone();
+    let takes_lock = run_lock::mode_takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan);
     let result = girpr::run(ctx).await;
-    remove_run_lock(&game_dir);
+    if takes_lock {
+        run_lock::remove_run_lock(&game_dir);
+    }
     result
 }
 

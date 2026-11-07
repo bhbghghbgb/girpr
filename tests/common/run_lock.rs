@@ -40,12 +40,32 @@ fn lock_key_path(game_dir: &Path) -> PathBuf {
 /// The path is keyed by the canonical game dir, and [`Lock::acquire`] is the
 /// public way to learn it. Acquire after the run has returned: a lock the run
 /// failed to release makes this fail, leaving the file for the reader to see.
+///
+/// Prefer [`remove_run_lock_for_args`] when the run's arguments are available:
+/// a read-only run never took a lock, and acquiring to find the path would
+/// briefly create the very file this removes.
 pub fn remove_run_lock(game_dir: &Path) {
     if let Ok(lock) = Lock::acquire(&lock_key_path(game_dir)) {
         let path = lock.path().to_path_buf();
         drop(lock);
         let _ = std::fs::remove_file(path);
     }
+}
+
+/// Whether a run with these read-only flags takes the lock.
+///
+/// This mirrors the run's own rule: `--dry-run` and `--check-only` are the
+/// read-only modes (`RunCtx::readonly`), and `--print-plan` returns before the
+/// execution phase. `--purge-only` mutates and does take the lock.
+pub fn mode_takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> bool {
+    !readonly && !check_only && !print_plan
+}
+
+/// Whether a binary argument list names a mode that takes the lock.
+fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
+    !args
+        .iter()
+        .any(|arg| matches!(arg.as_ref(), "--dry-run" | "--check-only" | "--print-plan"))
 }
 
 /// The `--game-path` value in a binary argument list, if it has one.
@@ -55,7 +75,13 @@ fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
 }
 
 /// Remove the lock file a binary run leaves, from its own `--game-path`.
+///
+/// A read-only run (or a printed plan) never took a lock, so this returns
+/// without acquiring: acquiring would create a lock file just to delete it.
 pub fn remove_run_lock_for_args(args: &[impl AsRef<str>]) {
+    if !args_take_lock(args) {
+        return;
+    }
     if let Some(game) = game_path_arg(args) {
         remove_run_lock(Path::new(game));
     }
