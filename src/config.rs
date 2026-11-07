@@ -61,44 +61,87 @@ impl std::fmt::Display for RepairMode {
     }
 }
 
-/// The documented process exit codes.
+/// Define the exit-code enum, its discriminants, and the exhaustive list from
+/// one source.
 ///
-/// The numbers are the automation contract: a run's final `SUMMARY` carries
-/// one, and a fatal failure carries one through [`RunFailure`]. Named variants
-/// keep the choice at each return site explicit. Converting a variant to the
-/// process status happens at the boundary in `main`; the `SUMMARY` and the
-/// fatal log line call [`RunExit::code`] only to describe the run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum RunExit {
-    /// The run did everything it was asked to do.
-    Success = 0,
-    /// The request or the configuration is wrong.
-    Usage = 1,
-    /// Metadata, manifest, or network failure.
-    Metadata = 2,
-    /// A write or verification failure.
-    Write = 3,
-    /// `--check-only` found damage.
-    CheckFailed = 4,
-    /// A requested ceiling bound the run.
-    Limit = 5,
+/// Every item — the variant, its documented number, and its `ALL` entry — comes
+/// from the same list, so a variant cannot be added to the enum without also
+/// appearing in `ALL`. The match in the compile-time check below is generated
+/// from that list too, and has no wildcard.
+macro_rules! define_run_exits {
+    (
+        $(#[$enum_doc:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_doc:meta])*
+                $variant:ident = $code:literal,
+            )+
+        }
+    ) => {
+        $(#[$enum_doc])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum $name {
+            $(
+                $(#[$variant_doc])*
+                $variant = $code,
+            )+
+        }
+
+        impl $name {
+            /// Every documented exit status, in numeric order.
+            ///
+            /// Generated from the same list as the variants, so the list and
+            /// the enum cannot drift apart.
+            pub const ALL: [$name; [$($name::$variant),+].len()] = [
+                $($name::$variant,)+
+            ];
+        }
+
+        /// The exit-code contract is compile-time checked: every variant is
+        /// named after its documented number (the `match` has no wildcard),
+        /// and [`RunExit::ALL`] is numbered contiguously from zero. A new or
+        /// renumbered variant stops the build here, before any test can drift.
+        const _: () = {
+            let mut i = 0;
+            while i < $name::ALL.len() {
+                let documented = match $name::ALL[i] {
+                    $($name::$variant => $code,)+
+                };
+                assert!($name::ALL[i] as u8 == documented);
+                assert!(documented as usize == i);
+                i += 1;
+            }
+        };
+    };
+}
+
+define_run_exits! {
+    /// The documented process exit codes.
+    ///
+    /// The numbers are the automation contract: a run's final `SUMMARY` carries
+    /// one, and a fatal failure carries one through [`RunFailure`]. Named
+    /// variants keep the choice at each return site explicit. Converting a
+    /// variant to the process status happens at the boundary in `main`; the
+    /// `SUMMARY` and the fatal log line call [`RunExit::code`] only to describe
+    /// the run.
+    pub enum RunExit {
+        /// The run did everything it was asked to do.
+        Success = 0,
+        /// The request or the configuration is wrong.
+        Usage = 1,
+        /// Metadata, manifest, or network failure.
+        Metadata = 2,
+        /// A write or verification failure.
+        Write = 3,
+        /// `--check-only` found damage.
+        CheckFailed = 4,
+        /// A requested ceiling bound the run.
+        Limit = 5,
+    }
 }
 
 impl RunExit {
-    /// Every documented exit status, in numeric order.
-    ///
-    /// This is the single exhaustive source the tests and the compile-time
-    /// checks share, so the six-variant contract cannot drift between them.
-    pub const ALL: [RunExit; 6] = [
-        RunExit::Success,
-        RunExit::Usage,
-        RunExit::Metadata,
-        RunExit::Write,
-        RunExit::CheckFailed,
-        RunExit::Limit,
-    ];
-
     /// The numeric status the process returns.
     ///
     /// `SUMMARY` and the fatal log line take this as an `i32`; the process
@@ -115,27 +158,6 @@ impl RunExit {
         self as u8
     }
 }
-
-/// The exit-code contract is compile-time checked: every variant is named
-/// after its documented number (the `match` has no wildcard), and
-/// [`RunExit::ALL`] is numbered contiguously from zero. A new or renumbered
-/// variant stops the build here, before any test can drift.
-const _: () = {
-    let mut i = 0;
-    while i < RunExit::ALL.len() {
-        let documented = match RunExit::ALL[i] {
-            RunExit::Success => 0,
-            RunExit::Usage => 1,
-            RunExit::Metadata => 2,
-            RunExit::Write => 3,
-            RunExit::CheckFailed => 4,
-            RunExit::Limit => 5,
-        };
-        assert!(RunExit::ALL[i] as u8 == documented);
-        assert!(documented as usize == i);
-        i += 1;
-    }
-};
 
 impl From<RunFailure> for RunExit {
     fn from(failure: RunFailure) -> Self {
