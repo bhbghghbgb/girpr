@@ -418,9 +418,9 @@ until the main tasks and rework are done.
 | F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | todo |
 | F318 | LOGGING-03 review | `src/logging.rs` | `FILE_SINKS` is plural but now holds a single `Option`; rename to `FILE_SINK`. | todo |
 | F319 | LOGGING-03 review | `src/logging.rs` tests | The rejected-install test writes into the sink directly and does not assert the install-warning text; emitting through the subscriber and pinning the WARN would be stronger. | todo |
-| F320 | LOCK-03 review | `tests/artifact_bridge.rs` | The bridge test duplicates `remove_run_lock` locally; consolidating with `common::remove_run_lock_for_args` would remove the last copy. | todo |
-| F321 | LOCK-03 review | `tests/common/mod.rs` | `remove_run_lock` acquires-and-deletes even for read-only runs that never took a lock, briefly creating a file; skip when the mode cannot lock. | todo |
-| F322 | LOCK-03 review | `tests/common/mod.rs` | The vanished-install fallback assumes the caller's parent is canonical; a junction/relative-spelled install would diverge and leak the real file. | todo |
+| F320 | LOCK-03 review | `tests/artifact_bridge.rs` | The bridge test duplicates `remove_run_lock` locally; consolidating with `common::remove_run_lock_for_args` would remove the last copy. | completed |
+| F321 | LOCK-03 review | `tests/common/mod.rs` | `remove_run_lock` acquires-and-deletes even for read-only runs that never took a lock, briefly creating a file; skip when the mode cannot lock. | completed |
+| F322 | LOCK-03 review | `tests/common/mod.rs` | The vanished-install fallback assumes the caller's parent is canonical; a junction/relative-spelled install would diverge and leak the real file. | completed |
 | F323 | INI-03 review | `src/util/ini.rs` | In the `NotFound` arm, an inspection-side error is discarded and the original `NotFound` surfaced; a cleanup could surface the inspection error instead. | todo |
 | F324 | INI-03 review | `src/util/ini.rs` | Windows junctions/reparse points are not `is_symlink()`, so a dangling junction reads as `is not a directory`. | todo |
 | F325 | INI-03 review | `src/util/ini.rs` tests | `try_symlink_dir` treats every creation error as "cannot test"; tightening it to the known privilege error would avoid a false skip. | todo |
@@ -528,7 +528,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
-| LOCK-04 | F320, F321, F322 | pending_review | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
+| LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
 | INI-04 | F323, F324, F325 | todo | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low |
