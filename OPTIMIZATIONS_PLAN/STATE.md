@@ -523,7 +523,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
 | BUILD-04 | F326, F327, F328 | todo | Wave E; CI cost and MSRV/bench gate coverage; low |
-| BUILD-TOOLS-03 | F230, F231 | todo | Wave E; tokio default features and manifest comment precision; low |
+| BUILD-TOOLS-03 | F230, F231 | in_progress | Wave E; tokio default features and manifest comment precision; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | todo | Wave E; digest helper doc wording; low |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
