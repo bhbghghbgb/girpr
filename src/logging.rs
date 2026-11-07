@@ -419,6 +419,59 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_install_does_not_replace_the_registered_sink() {
+        let _guard = SINK_REGISTRY_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let first_dir = TempDir::new("girpr_logging", "first_install");
+        let second_dir = TempDir::new("girpr_logging", "rejected_install");
+        let first_path = first_dir.join("first.log");
+        let second_path = second_dir.join("second.log");
+
+        let first_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&first_path), false);
+        assert_eq!(first_plan.file_path(), Some(first_path.as_path()));
+        let registered = FILE_SINKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("the accepted install registers its sink");
+
+        // The global subscriber is already installed, so this second call is
+        // rejected: it still returns the plan it was asked for, but its sink is
+        // never registered.
+        let second_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&second_path), false);
+        assert_eq!(second_plan.file_path(), Some(second_path.as_path()));
+
+        let after = FILE_SINKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .expect("the rejected install leaves the first sink registered");
+        assert!(
+            Arc::ptr_eq(&registered, &after),
+            "the rejected install does not replace the first sink"
+        );
+
+        registered
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write_all(b"after the rejected install\n")
+            .expect("write into the first sink");
+        flush_log();
+
+        let first = std::fs::read_to_string(&first_path).expect("the first log is readable");
+        assert!(
+            first.contains("after the rejected install"),
+            "the first sink still flushes: {first:?}"
+        );
+        assert_eq!(
+            std::fs::read(&second_path).expect("the rejected file was opened"),
+            b"",
+            "the rejected sink receives no events and is not flushed"
+        );
+    }
+
+    #[test]
     fn a_flush_failure_is_reported_once() {
         let reported = AtomicBool::new(false);
         let error = std::io::Error::other("disk full");
