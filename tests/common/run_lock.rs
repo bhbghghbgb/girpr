@@ -19,19 +19,48 @@ use girpr::test_support::Lock;
 /// The spelling whose canonical form names the run's lock key.
 ///
 /// A run canonicalizes the install before locking, so a case that removes the
-/// install mid-run leaves a key for a path that no longer exists. The parent is
-/// still there, and canonicalizing it and re-joining the last component gives
-/// the spelling the run used.
+/// install mid-run leaves a key for a path that no longer exists. The lock is
+/// keyed by the canonical install, so this reconstructs that spelling by
+/// canonicalizing the longest surviving ancestor and re-joining the components
+/// that vanished.
+///
+/// This handles a relative spelling and a junction above the install. It cannot
+/// recover an install root that was itself a reparse point and was removed:
+/// once the link is gone, its target is not reachable from the spelling. Tests
+/// that model a vanished install use an ordinary directory, so the invariant is
+/// that the removed part carries no reparse point of its own.
 fn lock_key_path(game_dir: &Path) -> PathBuf {
     if game_dir.exists() {
         return game_dir.to_path_buf();
     }
-    let (Some(parent), Some(name)) = (game_dir.parent(), game_dir.file_name()) else {
-        return game_dir.to_path_buf();
-    };
-    match parent.canonicalize() {
-        Ok(parent) => parent.join(name),
-        Err(_) => game_dir.to_path_buf(),
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = game_dir;
+    loop {
+        if cursor.as_os_str().is_empty() {
+            // A relative path ends at the current directory, not at an empty
+            // path that cannot be canonicalized.
+            cursor = Path::new(".");
+        }
+        match cursor.canonicalize() {
+            Ok(mut base) => {
+                for part in missing.iter().rev() {
+                    base.push(part);
+                }
+                return base;
+            }
+            Err(_) => {
+                let Some(parent) = cursor.parent() else {
+                    return game_dir.to_path_buf();
+                };
+                // A component such as `..` has no file name: only real
+                // components are re-joined, and the parent's canonicalization
+                // carries the rest.
+                if let Some(name) = cursor.file_name() {
+                    missing.push(name.to_os_string());
+                }
+                cursor = parent;
+            }
+        }
     }
 }
 
