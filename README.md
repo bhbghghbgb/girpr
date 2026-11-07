@@ -313,6 +313,21 @@ the completed `*_tmp` prefix and continuing it.
 not default members, so a root command does not compile them; check them
 explicitly when working on them. `--workspace` is the everything command.
 
+Every member declares its own `rust-version`. To check that each one still
+builds with exactly that toolchain, rather than only with the newest compiler
+on the host:
+
+```powershell
+pwsh -File tests/scripts/check-msrv.ps1
+```
+
+The script reads the members and their minimums from `cargo metadata`, installs
+any missing toolchain through rustup, and runs
+`cargo +<rust-version> check -p <member> --locked` for each one. It needs
+rustup and network access on the first run; after that the three toolchains
+(1.85, 1.88, 1.89) and the shared target directory make a run a few minutes of
+incremental builds. The `msrv` workflow runs the same script.
+
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
 copy. Both are development-only and are not part of the shipped product. They

@@ -1,0 +1,15 @@
+name: msrv
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  msrv:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check every member at its declared rust-version
+        shell: pwsh
+        run: ./tests/scripts/check-msrv.ps1
