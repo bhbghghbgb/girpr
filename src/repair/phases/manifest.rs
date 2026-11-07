@@ -399,7 +399,17 @@ mod tests {
         }
 
         /// Count this request as in flight and wait for the release.
-        async fn enter(&self) {
+        ///
+        /// The returned guard owns the slot, so dropping the request future
+        /// (for example when its connection task is aborted mid-wait) always
+        /// releases it, even though the handler never resumes to call
+        /// `leave` itself.
+        async fn enter(self: &Arc<Self>) -> InFlightGuard {
+            // Own the slot before the first await, so an abort at any point
+            // releases it through the guard's `Drop`.
+            let guard = InFlightGuard {
+                gate: Arc::clone(self),
+            };
             let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.arrived.notify_waiters();
@@ -409,21 +419,48 @@ mod tests {
                     break;
                 }
             }
-        }
-
-        fn leave(&self) {
-            self.current.fetch_sub(1, Ordering::SeqCst);
+            guard
         }
 
         /// Wait until `want` requests are in flight, without assuming when.
         async fn wait_for(&self, want: usize) {
             loop {
                 let arrived = self.arrived.notified();
+                tokio::pin!(arrived);
+                // Register before reading the count, so a wakeup between the
+                // check and the await cannot be lost on any runtime flavor.
+                arrived.as_mut().enable();
                 if self.current.load(Ordering::SeqCst) >= want {
                     return;
                 }
-                arrived.await;
+                arrived.as_mut().await;
             }
+        }
+
+        /// Wait until every counted request has been released, without
+        /// assuming when.
+        async fn wait_until_idle(&self) {
+            loop {
+                let arrived = self.arrived.notified();
+                tokio::pin!(arrived);
+                arrived.as_mut().enable();
+                if self.current.load(Ordering::SeqCst) == 0 {
+                    return;
+                }
+                arrived.as_mut().await;
+            }
+        }
+    }
+
+    /// Owns one counted request slot; dropping it always releases the slot.
+    struct InFlightGuard {
+        gate: Arc<InFlight>,
+    }
+
+    impl Drop for InFlightGuard {
+        fn drop(&mut self) {
+            self.gate.current.fetch_sub(1, Ordering::SeqCst);
+            self.gate.arrived.notify_waiters();
         }
     }
 
@@ -447,10 +484,14 @@ mod tests {
         async fn wait_until_idle(&self) {
             loop {
                 let idle = self.idle.notified();
+                tokio::pin!(idle);
+                // Register before reading the count, so a wakeup between the
+                // check and the await cannot be lost on any runtime flavor.
+                idle.as_mut().enable();
                 if self.live.load(Ordering::SeqCst) == 0 {
                     return;
                 }
-                idle.await;
+                idle.as_mut().await;
             }
         }
     }
@@ -543,8 +584,8 @@ mod tests {
                 (*status, Vec::new(), None)
             }
             Some((_, Reply::GatedBody { body, gate })) => {
-                gate.enter().await;
-                ("200 OK", body.clone(), Some(gate.clone()))
+                let guard = gate.enter().await;
+                ("200 OK", body.clone(), Some(guard))
             }
             None => ("404 Not Found", Vec::new(), None),
         };
@@ -555,9 +596,10 @@ mod tests {
         let _ = socket.write_all(head.as_bytes()).await;
         let _ = socket.write_all(&body).await;
         let _ = socket.flush().await;
-        if let Some(gate) = in_flight {
-            gate.leave();
-        }
+        // Dropping the guard releases the slot; an aborted connection never
+        // reaches this point, but its guard still runs when the task is torn
+        // down.
+        drop(in_flight);
     }
 
     /// A short backoff, so a retryable failure takes longer to finish than a
@@ -820,6 +862,56 @@ mod tests {
                 "the bound holds for the whole run, not just the first burst"
             );
         }
+    }
+
+    /// An aborted gated connection releases its in-flight slot. Dropping the
+    /// server tears the connection task down while it waits on the gate, so
+    /// the count must return to zero even though the handler never resumes.
+    #[tokio::test]
+    async fn an_aborted_gated_connection_releases_its_in_flight_slot() {
+        let (body, checksum) = manifest_body(vec![file("game/ok.dat", 0)]);
+        let gate = Arc::new(InFlight::new());
+        let server = serve(vec![(
+            "ok",
+            Reply::GatedBody {
+                body: body.clone(),
+                gate: gate.clone(),
+            },
+        )])
+        .await;
+        let build = build(server.base(), vec![meta("game", "ok", &checksum)]);
+        let client = Client::new();
+        let audio_langs = HashSet::new();
+        let ignore = HashSet::new();
+
+        let mut fetched = Box::pin(fetch_latest(
+            &client,
+            &NoSleep,
+            &build,
+            &audio_langs,
+            &ignore,
+            1,
+        ));
+        tokio::select! {
+            () = gate.wait_for(1) => {}
+            result = &mut fetched => {
+                panic!("the fetch finished before it reached the gate: {result:?}")
+            }
+        }
+
+        // Cancelling the fetch and dropping the server aborts the connection
+        // task while it is still held at the gate.
+        drop(fetched);
+        drop(server);
+
+        tokio::time::timeout(Duration::from_secs(5), gate.wait_until_idle())
+            .await
+            .expect("the aborted gated connection releases its slot");
+        assert_eq!(
+            gate.current.load(Ordering::SeqCst),
+            0,
+            "the count returns to zero after the gated server is dropped"
+        );
     }
 
     /// The registry drops a connection as soon as it finishes: a single
