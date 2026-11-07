@@ -2,7 +2,26 @@ name: msrv
 
 on:
   push:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'tests/scripts/check-msrv.ps1'
+      - '.github/workflows/msrv.yml'
   pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'tests/scripts/check-msrv.ps1'
+      - '.github/workflows/msrv.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msrv-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   msrv:
@@ -10,6 +29,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # The script installs the older toolchains itself. The cache is keyed by
+      # the host toolchain and the manifests/lockfiles; cargo fingerprints
+      # artifacts by compiler version, so sharing the target directory across
+      # the per-member `cargo +<version>` builds is safe.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: 'true'
       - name: Check every member at its declared rust-version
         shell: pwsh
         run: ./tests/scripts/check-msrv.ps1
