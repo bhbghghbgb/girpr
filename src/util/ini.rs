@@ -236,14 +236,17 @@ fn test_no_fsync() -> bool {
 
 /// The refusal for a game dir that cannot hold `config.ini`.
 ///
-/// A missing path and a path that exists as something other than a directory
-/// are both errors here, but they are different mistakes: the message must name
-/// the one that happened instead of calling both "does not exist".
+/// A missing path, a path that exists as something other than a directory, and
+/// a symlink whose target is missing are different mistakes: the message must
+/// name the one that happened instead of calling every case "does not exist".
 fn game_dir_refusal(game_dir: &Path) -> anyhow::Error {
-    let state = if game_dir.exists() {
-        "is not a directory"
-    } else {
-        "does not exist"
+    // `Path::exists()` follows links, so it reads a dangling symlink as
+    // absent. `symlink_metadata` inspects the link itself and tells the two
+    // apart.
+    let state = match std::fs::symlink_metadata(game_dir) {
+        Ok(md) if md.file_type().is_symlink() && !game_dir.exists() => "is a dangling symlink",
+        Ok(_) => "is not a directory",
+        Err(_) => "does not exist",
     };
     anyhow::anyhow!("game dir {} {state}", game_dir.display())
 }
@@ -1027,6 +1030,52 @@ mod tests {
             b"not a game dir",
             "the writer must not replace the path it refused"
         );
+    }
+
+    /// A game path that is a symlink to a missing target exists as a link but
+    /// not as a directory. `Path::exists()` follows the link and would call it
+    /// missing; the refusal must name the dangling link instead. Symlink
+    /// creation needs a privilege or developer mode on Windows, so the test
+    /// skips where the link cannot be made.
+    #[test]
+    fn config_bump_refuses_a_dangling_symlink_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_game_dir");
+        let target = root.join("missing-target");
+        let link = root.join("dangling-game-dir");
+        if !try_symlink_dir(&target, &link) {
+            return;
+        }
+
+        let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a dangling symlink must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("dangling symlink") && msg.contains("dangling-game-dir"),
+            "the refusal names the dangling link: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "an existing link must not be reported as missing: {msg}"
+        );
+        assert!(
+            !target.exists(),
+            "the writer must not create the symlink target"
+        );
+    }
+
+    #[cfg(unix)]
+    fn try_symlink_dir(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+
+    #[cfg(windows)]
+    fn try_symlink_dir(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn try_symlink_dir(_target: &Path, _link: &Path) -> bool {
+        false
     }
 
     /// An accepted config write and a failed one both leave no temp sibling:
