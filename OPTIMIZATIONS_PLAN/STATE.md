@@ -421,9 +421,9 @@ until the main tasks and rework are done.
 | F320 | LOCK-03 review | `tests/artifact_bridge.rs` | The bridge test duplicates `remove_run_lock` locally; consolidating with `common::remove_run_lock_for_args` would remove the last copy. | completed |
 | F321 | LOCK-03 review | `tests/common/mod.rs` | `remove_run_lock` acquires-and-deletes even for read-only runs that never took a lock, briefly creating a file; skip when the mode cannot lock. | completed |
 | F322 | LOCK-03 review | `tests/common/mod.rs` | The vanished-install fallback assumes the caller's parent is canonical; a junction/relative-spelled install would diverge and leak the real file. | completed |
-| F323 | INI-03 review | `src/util/ini.rs` | In the `NotFound` arm, an inspection-side error is discarded and the original `NotFound` surfaced; a cleanup could surface the inspection error instead. | todo |
-| F324 | INI-03 review | `src/util/ini.rs` | Windows junctions/reparse points are not `is_symlink()`, so a dangling junction reads as `is not a directory`. | todo |
-| F325 | INI-03 review | `src/util/ini.rs` tests | `try_symlink_dir` treats every creation error as "cannot test"; tightening it to the known privilege error would avoid a false skip. | todo |
+| F323 | INI-03 review | `src/util/ini.rs` | In the `NotFound` arm, an inspection-side error is discarded and the original `NotFound` surfaced; a cleanup could surface the inspection error instead. | completed |
+| F324 | INI-03 review | `src/util/ini.rs` | Windows junctions/reparse points are not `is_symlink()`, so a dangling junction reads as `is not a directory`. | completed |
+| F325 | INI-03 review | `src/util/ini.rs` tests | `try_symlink_dir` treats every creation error as "cannot test"; tightening it to the known privilege error would avoid a false skip. | completed |
 | F326 | BUILD-03 review | `.github/workflows/msrv.yml` | The workflow triggers on every push/PR with no path filter, caching, concurrency group, or `permissions`, installing up to three toolchains each run. | completed |
 | F327 | BUILD-03 review | `tests/scripts/check-msrv.ps1` | The script checks default targets only; `--all-targets` would guard test-only code against raising a member's floor. | completed |
 | F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | completed |
@@ -537,7 +537,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-05 | F340, F341, F342, F343, F344 | todo | Wave E; lock-policy mirror tests and cleanup edge cases; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
-| INI-04 | F323, F324, F325 | pending_review | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low; 86cc49b, a495877 |
+| INI-04 | F323, F324, F325 | done | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low; 86cc49b, a495877 |
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
