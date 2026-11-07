@@ -34,6 +34,28 @@ pub const DEFAULT_JOBS: usize = 4;
 /// that does not.
 pub const MAX_JOBS: usize = 1024;
 
+/// The one-paragraph `--jobs` help.
+///
+/// Both numbers in it are the constants the check itself uses, so the help
+/// cannot describe a default or ceiling the run does not apply.
+fn jobs_help() -> String {
+    format!(
+        "Max concurrent FILES (chunks inside a file are sequential -> HDD friendly). \
+         SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker \
+         threads; `--io-threads` is a deprecated alias. Defaults to {DEFAULT_JOBS} \
+         when omitted; values above {MAX_JOBS} are a usage error."
+    )
+}
+
+/// The `--jobs` long help: the paragraph plus the default annotation.
+///
+/// clap annotates `default_value` flags itself, but `jobs` is an `Option` whose
+/// default is applied by [`Args::into_ctx`] — it must stay `None` when the flag
+/// is absent so the run does not mistake the default for a deliberate value.
+fn jobs_long_help() -> String {
+    format!("{}\n\n[default: {DEFAULT_JOBS}]", jobs_help())
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "girpr", about = "Genshin Impact low-disk repair patcher")]
 pub struct Args {
@@ -52,13 +74,12 @@ pub struct Args {
     #[arg(long = "audio")]
     pub audio: Vec<String>,
 
-    /// Max concurrent FILES (chunks inside a file are sequential -> HDD friendly).
-    /// SSD: 4-8, HDD: 1-2. This bounds in-flight file tasks, not tokio worker
-    /// threads; `--io-threads` is a deprecated alias. Defaults to 4 when
-    /// omitted; values above 1024 are a usage error.
-    ///
-    /// [default: 4]
-    #[arg(long = "jobs", visible_alias = "io-threads")]
+    #[arg(
+        long = "jobs",
+        visible_alias = "io-threads",
+        help = jobs_help(),
+        long_help = jobs_long_help()
+    )]
     pub jobs: Option<usize>,
 
     /// Delete files not in the live manifest after patching (Collapse files-cleanup parity).
@@ -560,6 +581,23 @@ mod tests {
         assert!(
             excessive_jobs_warning(Some(DEFAULT_JOBS), 1).is_some(),
             "explicitly asking for 4 on a 1-CPU host still warns"
+        );
+    }
+
+    #[test]
+    fn the_jobs_help_is_generated_from_the_compiled_in_default_and_ceiling() {
+        let long = jobs_long_help();
+        assert!(
+            long.contains(&format!("Defaults to {DEFAULT_JOBS} when omitted")),
+            "{long}"
+        );
+        assert!(
+            long.contains(&format!("values above {MAX_JOBS} are a usage error")),
+            "{long}"
+        );
+        assert!(
+            long.contains(&format!("[default: {DEFAULT_JOBS}]")),
+            "the default annotation names the applied default:\n{long}"
         );
     }
 
