@@ -339,9 +339,9 @@ until the main tasks and rework are done.
 | F238 | JOBS-02 review | `tests/cli_contract.rs` | The help test searches all of stdout for `[default: 4]`; scoping it to the `--jobs` block would avoid a false pass. | todo |
 | F239 | JOBS-02 review | `src/cli.rs` | The `[default: 4]` help line is hand-maintained apart from `DEFAULT_JOBS`. | todo |
 | F240 | JOBS-02 review | `tests/cli_contract.rs` | The binary-level boundary pair is alias-only; a `--jobs` pair would mirror it at process level. | todo |
-| F241 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | The out-of-order stream test asserts only `is_err()` for the first result; a message check would pin its identity. | todo |
-| F242 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Live HTTP-stream construction and `manifest_concurrency` bounding are not exercised by the `from_stream` seam. | todo |
-| F243 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Finished connection tasks are reaped only on a new accept, so entries can briefly accumulate. | todo |
+| F241 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | The out-of-order stream test asserts only `is_err()` for the first result; a message check would pin its identity. | completed |
+| F242 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Live HTTP-stream construction and `manifest_concurrency` bounding are not exercised by the `from_stream` seam. | completed |
+| F243 | MANIFEST-02 review | `src/repair/phases/manifest.rs` | Finished connection tasks are reaped only on a new accept, so entries can briefly accumulate. | completed |
 | F244 | METADATA-02 review | `src/repair/phases/metadata.rs` | `LocalRead::ALL` is a fixed four-element array, so a new variant would not break the "covers every local read" test. | completed |
 | F245 | METADATA-02 review | `tests/common/mod.rs` | `config_after_branches` relies on one `Notify` permit per branch response; a retried config call could hang. | completed |
 | F246 | METADATA-02 review | `tests/repair_offline.rs` | The non-chunk test's branch failure is retryable `500`; a terminal branch failure under a refused mode is not covered. | completed |
@@ -410,6 +410,9 @@ until the main tasks and rework are done.
 | F309 | HYP-03 review | `src/repair/phases/metadata.rs` tests | `logs_of` captures only the current thread; if `fetch` ever emits from a `spawn_blocking` worker, the helper would silently miss it. | todo |
 | F310 | METADATA-03 review | `tests/common/mod.rs` | The mock can only fail a branch call with a non-JSON body; a JSON `retcode` failure mode is needed to test retryable-vs-terminal branch behavior. | todo |
 | F311 | METADATA-03 review | `tests/common/mod.rs` | `branch_failure_status` is behaviourally inert for retry classification; fold it into a single failure-body knob. | todo |
+| F312 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | `wait_until_idle`/`wait_for` use `notify_waiters()` with a pre-check, which could miss a wakeup on a multi-thread runtime; `Notified::enable()` would harden it. | todo |
+| F313 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | The bound table hardcodes `(1,1)`/`(2,2)` instead of calling `manifest_concurrency(jobs)`; compute it to stay in lockstep. | todo |
+| F314 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | A gated connection aborted mid-wait skips `gate.leave()`, so `current` would not return to zero if a future test waited for idle after dropping a gated server. | todo |
 
 ## Follow-up batches
 
@@ -488,7 +491,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-03 | F244, F245, F246 | done | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low; 60d20de, 021568e, 4170fc9, c8c6194 |
 | METADATA-04 | F310, F311 | todo | Wave E; mock retryable branch failure mode; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
-| MANIFEST-03 | F241, F242, F243 | pending_review | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
+| MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
+| MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | todo | Wave E; help assertion scope, default literal and binary parity; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
