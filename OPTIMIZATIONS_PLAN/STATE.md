@@ -528,7 +528,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | todo | Wave E; root tokio default features and comment nuance; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
-| TEST-HELPERS-03 | F232 | in_progress | Wave E; digest helper doc wording; low |
+| TEST-HELPERS-03 | F232 | pending_review | Wave E; digest helper doc wording; low; fac7264 |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
 | TEST-MANIFEST-04 | F290, F291 | todo | Wave E; advertisement-to-servability and field-based id lookup; low |
