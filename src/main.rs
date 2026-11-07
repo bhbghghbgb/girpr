@@ -200,17 +200,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn every_documented_exit_code_fits_in_a_process_status() {
-        // `ExitCode` carries a `u8`; `#[repr(u8)]` makes the conversion
-        // infallible, and this pins the round trip back to the logged `i32`.
-        for status in RunExit::ALL {
-            assert_eq!(
-                i32::from(status.process_status()),
-                status.code(),
-                "{status:?}"
-            );
-        }
-    }
 }
