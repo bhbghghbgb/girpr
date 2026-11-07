@@ -72,6 +72,39 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// The slice of `--help` output that belongs to one option: from the option's
+/// own line to the next option's line.
+///
+/// Help is a flat text plane, so a substring search over all of it can be
+/// satisfied by another option's annotation. The block keeps an assertion about
+/// one flag about that flag.
+fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
+    let marker = format!("\n      {flag}");
+    let first = format!("      {flag}");
+    let start = help
+        .find(&marker)
+        .map(|i| i + 1)
+        .or_else(|| help.starts_with(&first).then_some(0))
+        .unwrap_or_else(|| panic!("help has no {flag} entry:\n{help}"));
+    let entry = &help[start..];
+    let end = entry
+        .match_indices("\n      --")
+        .next()
+        .map_or(entry.len(), |(i, _)| i);
+    &entry[..end]
+}
+
+#[test]
+fn help_entry_does_not_borrow_a_neighbours_annotations() {
+    let help =
+        "      --jobs <JOBS>\n          jobs text\n\n      --other\n          [default: 4]\n";
+    assert!(
+        !help_entry(help, "--jobs").contains("[default: 4]"),
+        "the block ended before the next option"
+    );
+    assert!(help_entry(help, "--other").contains("[default: 4]"));
+}
+
 #[test]
 fn help_exits_zero() {
     // `Args` declares no `version`, so only `--help` gets the conventional 0.
@@ -267,14 +300,22 @@ fn help_text_lists_every_documented_flag() {
 #[test]
 fn help_names_jobs_and_keeps_the_compatibility_alias_discoverable() {
     let (_, stdout, _) = run(&["--help"]);
-    assert!(stdout.contains("--jobs"), "{stdout}");
+    let jobs = help_entry(&stdout, "--jobs");
+    assert!(jobs.contains("--jobs"), "{jobs}");
     assert!(
-        stdout.contains("--io-threads"),
-        "the compatibility alias stays discoverable:\n{stdout}"
+        jobs.contains("--io-threads"),
+        "the compatibility alias stays discoverable:\n{jobs}"
     );
+    // The entry must show the default the run actually applies, and only the
+    // `--jobs` entry is searched: another option's `[default: …]` cannot make
+    // this pass.
+    let applied = Args::parse_from(["girpr", "--game-path", ".", "--biz", "hk4e_global"])
+        .into_ctx()
+        .expect("the defaults are a valid configuration")
+        .jobs;
     assert!(
-        stdout.contains("[default: 4]"),
-        "the documented default is visible in help:\n{stdout}"
+        jobs.contains(&format!("[default: {applied}]")),
+        "the --jobs entry does not show the applied default:\n{jobs}"
     );
 }
 
@@ -352,6 +393,54 @@ fn the_io_threads_alias_validates_at_the_same_jobs_ceiling() {
         stderr.contains("usage error: --jobs must be <= 1024"),
         "one past the ceiling is the same usage error through the alias:\n{stderr}"
     );
+}
+
+#[test]
+fn the_jobs_flag_is_validated_at_the_same_process_level_ceiling_as_the_alias() {
+    // The same boundary pair as the alias case, through the primary spelling:
+    // 1024 passes jobs validation and fails on the next check (a bad
+    // `--audio`), while 1025 fails the jobs ceiling first. Each value runs
+    // through both spellings so the pair is compared rather than only pinned.
+    let run_boundary = |flag: &str, value: &str| {
+        run(&[
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            flag,
+            value,
+            "--audio",
+            "fr-fr",
+        ])
+    };
+    let cases = [
+        ("1024", "usage error: unknown audio lang", false),
+        ("1025", "usage error: --jobs must be <= 1024", true),
+    ];
+    for (value, expected, ceiling_reported) in cases {
+        let (jobs_code, jobs_stdout, jobs_stderr) = run_boundary("--jobs", value);
+        let (alias_code, alias_stdout, alias_stderr) = run_boundary("--io-threads", value);
+        assert_eq!(jobs_code, 1, "--jobs {value}: {jobs_stderr}");
+        assert_eq!(alias_code, 1, "--io-threads {value}: {alias_stderr}");
+        assert_eq!(
+            jobs_code, alias_code,
+            "--jobs and --io-threads disagree at {value}"
+        );
+        assert_eq!(jobs_stdout, alias_stdout, "--jobs {value} changed stdout");
+        assert!(
+            jobs_stderr.contains(expected),
+            "--jobs {value} stopped at the wrong check:\n{jobs_stderr}"
+        );
+        assert!(
+            alias_stderr.contains(expected),
+            "--io-threads {value} stopped at the wrong check:\n{alias_stderr}"
+        );
+        assert_eq!(
+            jobs_stderr.contains("--jobs must be <="),
+            ceiling_reported,
+            "--jobs {value} reported the ceiling at the wrong step:\n{jobs_stderr}"
+        );
+    }
 }
 
 #[test]
