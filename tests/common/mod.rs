@@ -839,6 +839,29 @@ pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
 // mock server
 // ---------------------------------------------------------------------------
 
+/// How `getGameBranches` fails.
+///
+/// The retry classifier reads the body, not the HTTP status: a JSON wrapper
+/// with a retryable `retcode` is retried, a terminal one ends the call, and a
+/// body that is not JSON fails to parse on the first attempt. These variants
+/// are the three bodies a test can ask the mock to serve.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BranchFailure {
+    /// Answer normally.
+    #[default]
+    None,
+    /// Answer every request with a non-JSON `500` body. The wrapper parse
+    /// fails, which the client classifies as fatal: one attempt, no retry.
+    NonJson,
+    /// Answer the first `calls` requests with a JSON wrapper carrying a
+    /// retryable `retcode`, then the normal branch answer. Use a value at or
+    /// above the client's attempt count (five) to exercise exhaustion.
+    Retryable { calls: u32 },
+    /// Answer every request with a JSON wrapper carrying this terminal
+    /// `retcode`. The client ends the call after the first answer.
+    Terminal { retcode: i64 },
+}
+
 #[derive(Default)]
 pub struct MockOpts {
     /// The launcher this fixture describes. `None` serves `hk4e_global`.
@@ -864,18 +887,11 @@ pub struct MockOpts {
     /// which is what exercises the retry/backoff paths (`--fail-fast`) without
     /// a dead host and its connection timeouts.
     pub fail_chunks: bool,
-    /// Serve every `getGameBranches` request as `500` while `getGameConfigs`
-    /// still answers. Models the branch endpoint failing after the first wave
-    /// has already been issued, so error precedence is testable.
-    pub fail_branches: bool,
-    /// The status a failing `getGameBranches` answers with when
-    /// [`Self::fail_branches`] is set; `None` serves `500`.
-    ///
-    /// The status does not decide whether the client retries: the failing body
-    /// is not JSON, so its parse failure is fatal on the first attempt whatever
-    /// the status. A `404` therefore exercises the same fatal path as the
-    /// default `500`.
-    pub branch_failure_status: Option<&'static str>,
+    /// How `getGameBranches` answers, while `getGameConfigs` still answers.
+    /// Models the branch endpoint failing after the first wave has already
+    /// been issued, so error precedence and the client's retry classification
+    /// are testable.
+    pub branch_failure: BranchFailure,
     /// Hold the `getGameConfigs` answer until `getGameBranches` has been served.
     ///
     /// The first wave issues both calls concurrently, so without this the
@@ -1031,9 +1047,10 @@ struct Responses {
     extra_manifests: Vec<(String, Vec<u8>)>,
     latest_tag: String,
     fail_chunks: bool,
-    fail_branches: bool,
-    /// The status for a failing branch answer; `None` means `500`.
-    branch_failure_status: Option<&'static str>,
+    branch_failure: BranchFailure,
+    /// Branch requests served so far, so `BranchFailure::Retryable` can answer
+    /// the first `calls` of them with a retryable retcode.
+    branch_calls: AtomicU64,
     /// Hold the config answer until the branch answer has been served.
     config_after_branches: bool,
     /// Signalled once the branch answer has been served.
@@ -1229,8 +1246,8 @@ fn build_responses(
         extra_manifests,
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
-        fail_branches: opts.fail_branches,
-        branch_failure_status: opts.branch_failure_status,
+        branch_failure: opts.branch_failure,
+        branch_calls: AtomicU64::new(0),
         config_after_branches: opts.config_after_branches,
         branches_served: tokio::sync::watch::channel(false).0,
         not_found_chunks: opts.not_found_chunks,
@@ -1304,15 +1321,29 @@ async fn serve_one(
         }
         ("200 OK", "application/json", r.configs.clone())
     } else if is_branch {
-        if r.fail_branches {
-            (
-                r.branch_failure_status
-                    .unwrap_or("500 Internal Server Error"),
+        let n = r.branch_calls.fetch_add(1, Ordering::Relaxed);
+        match r.branch_failure {
+            BranchFailure::NonJson => (
+                "500 Internal Server Error",
                 "text/plain",
                 b"branch endpoint unavailable".to_vec(),
-            )
-        } else {
-            ("200 OK", "application/json", r.branches.clone())
+            ),
+            BranchFailure::Retryable { calls } if n < u64::from(calls) => (
+                "200 OK",
+                "application/json",
+                br#"{"retcode":-1,"message":"busy","data":null}"#.to_vec(),
+            ),
+            BranchFailure::Terminal { retcode } => (
+                "200 OK",
+                "application/json",
+                serde_json::to_vec(&serde_json::json!({
+                    "retcode": retcode,
+                    "message": "invalid params",
+                    "data": null
+                }))
+                .expect("serialize branch failure"),
+            ),
+            _ => ("200 OK", "application/json", r.branches.clone()),
         }
     } else if target.contains("getGameDeprecatedFileConfigs") {
         ("200 OK", "application/json", r.deprecated.clone())

@@ -31,9 +31,9 @@
 mod common;
 
 use common::{
-    ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, ctx_for, field, load_counters, read_game_file, remove_run_lock, run,
-    run_binary, scope, temp_dir, write_game_file,
+    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer,
+    build_fixture, build_fixture_spec, ctx_for, field, load_counters, read_game_file,
+    remove_run_lock, run, run_binary, scope, temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use girpr::test_support::{Lock, RepairMode, summary_record};
@@ -513,7 +513,7 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
         fx,
         MockOpts {
             download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
-            fail_branches: true,
+            branch_failure: BranchFailure::NonJson,
             config_after_branches: true,
             ..Default::default()
         },
@@ -546,18 +546,16 @@ async fn non_chunk_mode_wins_over_a_failed_branch_call() {
 
 #[tokio::test]
 async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
-    // A failing branch answer is a non-JSON body, so the client treats it as a
-    // fatal parse error rather than a retry schedule, and the config's mode is
-    // still the authoritative answer: the run is a usage refusal, not a
-    // metadata failure. Holding the config until the branch has answered pins
-    // the branch as issued and already failed.
+    // A branch answer with a terminal retcode is final on the first attempt,
+    // and the config's mode is still the authoritative answer: the run is a
+    // usage refusal, not a metadata failure. Holding the config until the
+    // branch has answered pins the branch as issued and already failed.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
         MockOpts {
             download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
-            fail_branches: true,
-            branch_failure_status: Some("404 Not Found"),
+            branch_failure: BranchFailure::Terminal { retcode: -1001 },
             config_after_branches: true,
             ..Default::default()
         },
@@ -602,8 +600,7 @@ async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
     let mock = MockServer::start(
         fx,
         MockOpts {
-            fail_branches: true,
-            branch_failure_status: Some("404 Not Found"),
+            branch_failure: BranchFailure::NonJson,
             ..Default::default()
         },
     )
@@ -640,6 +637,89 @@ async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
     assert_eq!(
         branch_requests, 1,
         "a non-JSON failure is fatal, so the call is not retried"
+    );
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the version must not be bumped for a failed metadata phase"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_retryable_branch_failure_is_retried_then_succeeds() {
+    // A JSON wrapper with a non-terminal retcode is transient: the client
+    // retries it and takes the next (successful) answer, so the run proceeds.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            branch_failure: BranchFailure::Retryable { calls: 2 },
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_retry_succeeds");
+
+    let (_, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("the third branch answer succeeds");
+    assert_eq!(code, RunExit::Success);
+
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
+    assert_eq!(
+        branch_requests, 3,
+        "two retryable answers and then the successful one"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_some(),
+        "the run must proceed once the branch answers"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_retryable_branch_failure_exhausts_the_retry_budget() {
+    // The same retryable body on every attempt: the client gives up after its
+    // five attempts and the run reports a metadata failure naming the branch
+    // call, before any build request or write.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            branch_failure: BranchFailure::Retryable { calls: 5 },
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_retry_exhausted");
+
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a persistently retryable branch answer must stop the run");
+    assert_eq!(err.exit_code, RunExit::Metadata);
+    let text = format!("{:#}", err);
+    assert!(text.contains("getGameBranches"), "{text}");
+    assert!(text.contains("after 5 attempts"), "{text}");
+    assert!(text.contains("-1"), "the last retcode is reported: {text}");
+
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
+    assert_eq!(
+        branch_requests, 5,
+        "the client's whole retry budget is used"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a failed branch call"
     );
     assert!(
         !dir.join("config.ini").exists(),
