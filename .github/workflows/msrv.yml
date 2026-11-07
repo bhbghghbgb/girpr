@@ -39,3 +39,17 @@ jobs:
       - name: Check every member at its declared rust-version
         shell: pwsh
         run: ./tests/scripts/check-msrv.ps1
+
+  iot-bench:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # The bench is a standalone workspace with its own lockfile, so this is
+      # the only job that compiles its pinned dependency.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            tests/scripts/io-profile/iot-bench -> target
+      - name: Check the standalone I/O bench
+        run: cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
