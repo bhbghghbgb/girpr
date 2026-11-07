@@ -1219,20 +1219,7 @@ async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
             // it into the `Arc`. An in-place retain leaves an exact-size
             // `vec::IntoIter`, which the collect moves into one `Arc`
             // allocation.
-            list.retain_mut(|name| match util::clean_rel(name) {
-                Ok(rel) => {
-                    *name = rel;
-                    true
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %name,
-                        error = %format!("{e:#}"),
-                        "deprecated path is not a plain relative path; ignored"
-                    );
-                    false
-                }
-            });
+            normalize_deprecated(&mut list);
             list.into_iter().collect()
         }
         Err(e) => {
@@ -1242,9 +1229,32 @@ async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     }
 }
 
+/// Normalise each deprecated name to the `/` form the post-phase compares
+/// against, dropping (with a warning) anything that is not a plain relative
+/// path. The list is a delete sink, so a name that would escape the install is
+/// never followed.
+fn normalize_deprecated(list: &mut Vec<String>) {
+    list.retain_mut(|name| match util::clean_rel(name) {
+        Ok(rel) => {
+            *name = rel;
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %name,
+                error = %format!("{e:#}"),
+                "deprecated path is not a plain relative path; ignored"
+            );
+            false
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{RunExit, Summary, finish, note_stopped, phases, spawn_blocking_traced};
+    use super::{
+        RunExit, Summary, finish, normalize_deprecated, note_stopped, phases, spawn_blocking_traced,
+    };
 
     /// A blocking task still reaches the caller's scoped subscriber: the pool
     /// thread has no thread-local dispatcher, and the cleanup passes log the
@@ -1283,6 +1293,48 @@ mod tests {
         for (outcome, expected) in cases {
             let mut summary = Summary::new();
             assert_eq!(finish(outcome, &mut summary), expected);
+        }
+    }
+
+    /// The deprecated list is normalised in place and keeps its order, while a
+    /// name that is not a plain relative path is dropped and warned about: the
+    /// list is a delete sink, so an absolute or escaping name must never reach
+    /// it.
+    #[test]
+    fn deprecated_names_are_normalised_and_unsafe_ones_dropped() {
+        let mut list = vec![
+            "old\\legacy.dll".to_string(),
+            "../victim.dll".to_string(),
+            "./kept//file.dat".to_string(),
+            "/abs/evil.dll".to_string(),
+            "other\\stale.bin".to_string(),
+            "C:/abs/evil.dll".to_string(),
+            "a//b\\c.dat".to_string(),
+        ];
+
+        let logs = crate::repair::test_support::logs_of(|| normalize_deprecated(&mut list));
+
+        assert_eq!(
+            list,
+            vec![
+                "old/legacy.dll",
+                "kept/file.dat",
+                "other/stale.bin",
+                "a/b/c.dat",
+            ],
+            "survivors keep their input order and take the / form"
+        );
+        assert_eq!(
+            logs.matches("deprecated path is not a plain relative path; ignored")
+                .count(),
+            3,
+            "each dropped name warns exactly once: {logs}"
+        );
+        for dropped in ["../victim.dll", "/abs/evil.dll", "C:/abs/evil.dll"] {
+            assert!(
+                logs.contains(dropped),
+                "the warning names the dropped path {dropped:?}: {logs}"
+            );
         }
     }
 }
