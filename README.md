@@ -323,7 +323,8 @@ pwsh -File tests/scripts/check-msrv.ps1
 
 The script reads the members and their minimums from `cargo metadata`, installs
 any missing toolchain through rustup, and runs
-`cargo +<rust-version> check -p <member> --locked` for each one. It needs
+`cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
+so tests and benches are held to the same floor. It needs
 rustup and network access on the first run; after that the three toolchains
 (1.85, 1.88, 1.89) and the shared target directory make a run a few minutes of
 incremental builds. The `msrv` workflow runs the same script.

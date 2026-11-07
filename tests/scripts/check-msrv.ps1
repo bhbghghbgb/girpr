@@ -1,7 +1,8 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Builds every workspace member with the rust-version its manifest declares.
+Checks every workspace member, with tests and benches, at the rust-version its
+manifest declares.
 
 .DESCRIPTION
 The workspace is one lockfile with members that have different minimum
@@ -11,9 +12,10 @@ would never notice a change that silently raises a lower member's floor.
 
 The members and their minimums come from `cargo metadata`, so this script
 follows the manifests instead of keeping a second list. Each member is then
-checked with `cargo +<rust-version> check -p <member> --locked`; a missing
-toolchain is installed by rustup first. The same check runs in the `msrv`
-workflow.
+checked with
+`cargo +<rust-version> check -p <member> --all-targets --locked`, so test-only
+and bench code cannot raise a member's floor unnoticed; a missing toolchain is
+installed by rustup first. The same check runs in the `msrv` workflow.
 
 Run it from anywhere; it works from the repository root:
 
@@ -57,7 +59,7 @@ try {
             }
         }
 
-        & cargo "+$ver" check -p $pkg.name --locked
+        & cargo "+$ver" check -p $pkg.name --all-targets --locked
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAIL: $($pkg.name) does not build with Rust $ver"
             $failed += "$($pkg.name) ($ver)"
