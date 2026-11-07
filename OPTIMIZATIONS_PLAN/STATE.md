@@ -531,7 +531,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-05 | F349, F350 | todo | Wave E; branch-failure knob validation and test naming; low |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
-| MANIFEST-04 | F312, F313, F314 | todo | Wave E; test-server wakeup and bound-table hardening; low |
+| MANIFEST-04 | F312, F313, F314 | in_progress | Wave E; test-server wakeup and bound-table hardening; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
