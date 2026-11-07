@@ -1,4 +1,5 @@
-//! Digests shared by the test fixtures.
+//! Digests shared by test targets, both those that build fixtures through the
+//! rest of `common` and fixture-free targets that include this module directly.
 
 /// Lowercase hex MD5 of a byte slice.
 pub fn md5hex(data: &[u8]) -> String {
