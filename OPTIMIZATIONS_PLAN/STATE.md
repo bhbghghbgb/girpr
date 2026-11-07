@@ -424,9 +424,9 @@ until the main tasks and rework are done.
 | F323 | INI-03 review | `src/util/ini.rs` | In the `NotFound` arm, an inspection-side error is discarded and the original `NotFound` surfaced; a cleanup could surface the inspection error instead. | todo |
 | F324 | INI-03 review | `src/util/ini.rs` | Windows junctions/reparse points are not `is_symlink()`, so a dangling junction reads as `is not a directory`. | todo |
 | F325 | INI-03 review | `src/util/ini.rs` tests | `try_symlink_dir` treats every creation error as "cannot test"; tightening it to the known privilege error would avoid a false skip. | todo |
-| F326 | BUILD-03 review | `.github/workflows/msrv.yml` | The workflow triggers on every push/PR with no path filter, caching, concurrency group, or `permissions`, installing up to three toolchains each run. | todo |
-| F327 | BUILD-03 review | `tests/scripts/check-msrv.ps1` | The script checks default targets only; `--all-targets` would guard test-only code against raising a member's floor. | todo |
-| F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | todo |
+| F326 | BUILD-03 review | `.github/workflows/msrv.yml` | The workflow triggers on every push/PR with no path filter, caching, concurrency group, or `permissions`, installing up to three toolchains each run. | completed |
+| F327 | BUILD-03 review | `tests/scripts/check-msrv.ps1` | The script checks default targets only; `--all-targets` would guard test-only code against raising a member's floor. | completed |
+| F328 | BUILD-03 review | `tests/scripts/io-profile/iot-bench` | The standalone bench is outside the workspace and no gate compiles it, so its pin could drift again; a CI `cargo check --locked` would catch it. | completed |
 | F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | todo |
 | F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | todo |
 | F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | todo |
@@ -529,7 +529,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
-| BUILD-04 | F326, F327, F328 | pending_review | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
+| BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | todo | Wave E; root tokio default features and comment nuance; low |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
