@@ -505,7 +505,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
 | LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
-| LOCK-03 | F224, F225 | todo | Wave E; integration lock litter and nlink wording; low |
+| LOCK-03 | F224, F225 | in_progress | Wave E; integration lock litter and nlink wording; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | todo | Wave E; dangling-symlink and masked-permission wording; low |
 | BUILD-02 | F151, F152, F153, F226 | done | Wave D; per-member MSRV, scan-path benchmark and import tidy; low; cb45eb6, 854c371, 66fd07a, db9cb80 |
