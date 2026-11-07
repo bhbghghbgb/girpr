@@ -528,7 +528,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
-| LOCK-04 | F320, F321, F322 | todo | Wave E; lock-cleanup helper consolidation and edge notes; low |
+| LOCK-04 | F320, F321, F322 | in_progress | Wave E; lock-cleanup helper consolidation and edge notes; low |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
 | INI-04 | F323, F324, F325 | todo | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low |
