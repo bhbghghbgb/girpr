@@ -535,7 +535,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
 | BUILD-05 | F334, F335, F336 | todo | Wave E; bench toolchain pin, README wording and required-check coverage; low |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
-| BUILD-TOOLS-04 | F329, F330 | in_progress | Wave E; root tokio default features and comment nuance; low |
+| BUILD-TOOLS-04 | F329, F330 | pending_review | Wave E; root tokio default features and comment nuance; low; 1effa98, 2681403 |
 | TEST-HELPERS-02 | F156, F157 | done | Wave D; shared-module build cost and redundant `#[path]`; low; 2266a18, acdf2af |
 | TEST-HELPERS-03 | F232 | done | Wave E; digest helper doc wording; low; fac7264 |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
