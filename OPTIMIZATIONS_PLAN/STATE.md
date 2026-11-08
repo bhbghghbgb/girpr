@@ -390,9 +390,9 @@ until the main tasks and rework are done.
 | F289 | PATHHELPERS-03 review | `tests/repair_post.rs` | The skip-on-write-failure pattern reports a pass without exercising assertions on hosts that reject such names; consider an opt-in strict mode or CI note. | completed |
 | F290 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | The `getBuild` expected ids are fixture-derived; fetching the advertised bodies (`200` for `kept`, `404` for `gone`) would tie advertisement to servability. | todo |
 | F291 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | `gone_id`/`kept_id` are taken by positional index; lookup by `matching_field` would be less brittle. | todo |
-| F292 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | The unseekable test cannot distinguish "reserved then refunded" from "never reserved" (`live() == 0` both ways); a ledger spy would pin reserve-before-seek. | todo |
-| F293 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` | `ChunkFileSink::new`'s doc still says it holds "the only `&mut File`" though it is now generic over `W`. | todo |
-| F294 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | `SeekRecording.writes` counts bytes, not write calls; `bytes` would read better. | todo |
+| F292 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | The unseekable test cannot distinguish "reserved then refunded" from "never reserved" (`live() == 0` both ways); a ledger spy would pin reserve-before-seek. | completed |
+| F293 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` | `ChunkFileSink::new`'s doc still says it holds "the only `&mut File`" though it is now generic over `W`. | completed |
+| F294 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | `SeekRecording.writes` counts bytes, not write calls; `bytes` would read better. | completed |
 | F295 | TEMP-PUBLISH-03 review | `src/util/path.rs` tests | If the no-file-name `temp_sibling` fallback should ever be rejected, the helper doc and both shape assertions need updating together. | todo |
 | F296 | TEMP-PUBLISH-03 review | `src/repair/phases/post.rs` | The no-file-name guard is production-reachable only if the walk later yields symlinks/directories; add a production-path test then. | todo |
 | F297 | DOCS-USER-02 review | `tests/artifact_bridge.rs` | The six bridge tests are `#[ignore]`d and were not run; run them manually with `--run-ignored only` before a repair-spec release. | completed |
@@ -602,7 +602,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LINT-03 | F260, F261 | done | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5, fe464ad |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | done | Wave E; sink genericity and broader cursor pinning; low; 953db0b, 563a178 |
-| TEMP-WRITER-04 | F292, F293, F294 | pending_review | Wave E; reservation-order pin, generic doc and counter name; low; c156617, 740f5d0, 076bbfc |
+| TEMP-WRITER-04 | F292, F293, F294 | done | Wave E; reservation-order pin, generic doc and counter name; low; c156617, 740f5d0, 076bbfc |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
 | TEMP-PUBLISH-04 | F295, F296 | todo | Wave E; fallback-decision and future walk-reachability notes; low |
