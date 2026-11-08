@@ -1289,6 +1289,28 @@ mod tests {
         assert!(logs.contains("blocking line"), "{logs}");
     }
 
+    /// `spawn_blocking_traced` spawns eagerly: the closure runs before its
+    /// handle is awaited, which is what lets a caller start a read alongside
+    /// other work and collect it later.
+    ///
+    /// The receive is the proof: a handle that only spawned on `await` would
+    /// leave it to time out. The deadline is a guard against hanging the suite,
+    /// not a timing bound, because the closure signals as soon as it runs.
+    #[tokio::test]
+    async fn a_blocking_task_starts_before_its_handle_is_awaited() {
+        const RECEIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = spawn_blocking_traced(move || {
+            tx.send(()).expect("the test receiver is alive");
+        });
+
+        // Nothing has awaited `handle` yet.
+        rx.recv_timeout(RECEIVE_WAIT)
+            .expect("the blocking closure ran before its handle was awaited");
+
+        handle.await.expect("the blocking task finishes");
+    }
+
     /// `SUMMARY`'s `stopped=` names the **first** ceiling to bind: a later
     /// phase that also hits one must not rewrite the answer.
     #[test]
