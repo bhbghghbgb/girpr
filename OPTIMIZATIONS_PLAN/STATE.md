@@ -514,6 +514,9 @@ until the main tasks and rework are done.
 | F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | todo |
 | F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | todo |
 | F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | todo |
+| F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | todo |
+| F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | todo |
+| F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | todo |
 
 ## Follow-up batches
 
@@ -579,6 +582,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-05 | F409, F410, F411 | todo | Wave E; bridge recipe alignment and profile wording; low |
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
+| METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
