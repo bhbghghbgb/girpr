@@ -551,7 +551,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-05 | F305, F306, F307 | done | Wave E; deprecated normalization test and counter-barrier notes; low; 4af6344, c6871df, a59c949, a76c901 |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | done | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
-| TEST-REGRESSION-04 | F353, F354, F355, F356, F360 | in_progress | Wave E; remaining absolute stamps and process-test setup reuse; low |
+| TEST-REGRESSION-04 | F353, F354, F355, F356, F360 | pending_review | Wave E; remaining absolute stamps and process-test setup reuse; low; 016c716, ed4a829, 93f5aed |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | TEST-OUTPUT-04 | F357, F358, F359 | todo | Wave E; text-grammar ambiguity and shared schema vocabulary; low |
