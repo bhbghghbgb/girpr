@@ -488,6 +488,10 @@ until the main tasks and rework are done.
 | F387 | TEMP-PUBLISH-04 review | `src/repair/scope/report.rs` | `atomic::publish` accepts no-file-name targets and relies on the rename failing; an early refusal would give a clearer error. | todo |
 | F388 | TEMP-PUBLISH-04 review | `src/util/path.rs` tests | The `temp_sibling` test asserts the unresolved `Audio/res/../.girpr_tmp` spelling while the doc says it lands at `Audio/.girpr_tmp`; pin the resolved location. | todo |
 | F389 | TEMP-PUBLISH-04 review | `src/repair/phases/post.rs` | If the audio-cache walk ever follows links or admits directories, the no-file-name guard becomes production-reachable and needs a production-path test. | todo |
+| F390 | TEST-MANIFEST-04 review | `src/lib.rs`, `src/sophon/stream.rs` | `join_url` is private, so the test duplicates its join formula; exposing it through `test_support` would pin production's join and prevent drift. | todo |
+| F391 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Other tests still take extra-manifest ids positionally (`several_latest_manifests_are_selected_in_build_order` and two more). | todo |
+| F392 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Production's `join_url` ignores the advertised `url_suffix`, so a non-empty suffix remains untested; may be intentional. | todo |
+| F393 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | The new assertions check status only, not that the `kept` `200` body equals the fixture bytes; optional hardening. | todo |
 
 ## Follow-up batches
 
@@ -606,6 +610,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
 | TEST-MANIFEST-04 | F290, F291 | done | Wave E; advertisement-to-servability and field-based id lookup; low; 3bb9805, 2c288c6 |
+| TEST-MANIFEST-05 | F390, F391, F392, F393 | todo | Wave E; shared join helper and remaining manifest-test hardening; low |
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | LINT-03 | F260, F261 | done | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5, fe464ad |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
