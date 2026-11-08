@@ -135,7 +135,8 @@ pub struct Summary {
     /// Read it through the `check_damaged_chunks()` accessor: this raw counter
     /// is zero both before the check has run and after a clean one. Writes go
     /// through `publish_check_damaged_chunks`, which sets the tally and then
-    /// marks it measured, so no store reaches this field without the flag.
+    /// marks it measured, so no production store reaches this field without
+    /// the flag.
     pub(super) check_damaged_chunks: AtomicU64,
     /// Whether the check has published its raw damaged-chunk tally.
     /// `false` on a default `Summary`, so "not measured" is not read as
