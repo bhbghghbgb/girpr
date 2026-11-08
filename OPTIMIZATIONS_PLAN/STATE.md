@@ -379,10 +379,10 @@ until the main tasks and rework are done.
 | F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | completed |
 | F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | completed |
 | F280 | TEST-REGRESSION-02 review | `tests/process.rs` | The new unscanned-phase test duplicates the fixture-write setup of the duration test; a shared local helper would reduce drift. | completed |
-| F281 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` treats any key-shaped token inside a value as a new field, so a value containing `word=…` would misparse. | todo |
-| F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | todo |
-| F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | todo |
-| F284 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The text-plane plan-out test checks `repair.len() == 2` but not that the entries are the fixture's two rels. | todo |
+| F281 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` treats any key-shaped token inside a value as a new field, so a value containing `word=…` would misparse. | completed |
+| F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | completed |
+| F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | completed |
+| F284 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The text-plane plan-out test checks `repair.len() == 2` but not that the entries are the fixture's two rels. | completed |
 | F285 | INPLACE-03 review | `tests/repair_machinery.rs` | The new age-branch test derives its stamp as `SystemTime::now() + 1h`; a fixed far-future constant would match the file's style and remove wall-clock dependence. | todo |
 | F286 | CHECK-03 review | `src/repair/phases/check.rs` | The live-progress test's gate wait (`while !(slow_started && fast_done)`) is still an unbounded `Condvar` wait. | todo |
 | F287 | CHECK-03 review | `src/report/summary.rs` | The now-`pub(super)` counter's doc could note that writes go through `publish_check_damaged_chunks`. | todo |
@@ -509,7 +509,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-03 | F279, F280 | done | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
 | TEST-REGRESSION-04 | F353, F354, F355, F356 | todo | Wave E; remaining absolute stamps and process-test setup reuse; low |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
-| TEST-OUTPUT-03 | F281, F282, F283, F284 | pending_review | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
+| TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | todo | Wave E; fixed far-future stamp in the age-branch test; low |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
