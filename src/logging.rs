@@ -78,7 +78,7 @@ type FileSink = Arc<Mutex<Box<dyn Write + Send + Sync>>>;
 /// installed subscriber writes through: the global subscriber can be installed
 /// only once, so a later [`init_tracing`] is rejected and its file is dropped
 /// rather than retained as a handle that could never be written to.
-static FILE_SINKS: Mutex<Option<FileSink>> = Mutex::new(None);
+static FILE_SINK: Mutex<Option<FileSink>> = Mutex::new(None);
 
 /// A `MakeWriter` that hands `tracing` the shared file sink.
 struct SharedWriter(FileSink);
@@ -211,7 +211,7 @@ pub fn init_tracing(
 /// replacing is what keeps a later registration from pinning an unreachable
 /// file handle for the rest of the process's life.
 fn install_sink(sink: FileSink) {
-    *FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
+    *FILE_SINK.lock().unwrap_or_else(|e| e.into_inner()) = Some(sink);
 }
 
 /// Flush the log file on the way out.
@@ -227,7 +227,7 @@ fn install_sink(sink: FileSink) {
 /// the run already earned its code before the log was written down. The
 /// registry holds at most one sink, so the report is that sink's failure.
 pub fn flush_log() {
-    let sink = FILE_SINKS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let sink = FILE_SINK.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(sink) = sink
         && let Err(e) = flush_sink(&sink)
     {
@@ -430,7 +430,7 @@ mod tests {
 
         let first_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&first_path), false);
         assert_eq!(first_plan.file_path(), Some(first_path.as_path()));
-        let registered = FILE_SINKS
+        let registered = FILE_SINK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
@@ -442,7 +442,7 @@ mod tests {
         let second_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&second_path), false);
         assert_eq!(second_plan.file_path(), Some(second_path.as_path()));
 
-        let after = FILE_SINKS
+        let after = FILE_SINK
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
