@@ -348,7 +348,13 @@ fn check_one(
 mod tests {
     use super::*;
     use crate::util::Md5;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    /// How long the live-progress test waits on its gate and on a fold, and how
+    /// long the injected slow check waits for its release. One value keeps the
+    /// waits in step: a release that never comes expires instead of wedging the
+    /// suite, and the test fails on the recorded expiry.
+    const GATE_WAIT: Duration = Duration::from_secs(10);
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -556,6 +562,7 @@ mod tests {
             slow_started: bool,
             fast_done: bool,
             release_slow: bool,
+            slow_wait_expired: bool,
         }
 
         let dir = girpr_tempdir::TempDir::new("girpr_test_check", "live_progress");
@@ -600,8 +607,21 @@ mod tests {
                         if f.rel == "slow.dat" {
                             state.slow_started = true;
                             cv.notify_all();
+                            // A release that never comes must fail the test
+                            // rather than wedge it. The wait is bounded by a
+                            // deadline, and the expiry is recorded for the
+                            // join below to report; the test still wakes on
+                            // the release notify, so this is a hang guard, not
+                            // a timing assertion.
+                            let deadline = Instant::now() + GATE_WAIT;
                             while !state.release_slow {
-                                state = cv.wait(state).unwrap();
+                                let remaining = deadline.saturating_duration_since(Instant::now());
+                                if remaining.is_zero() {
+                                    state.slow_wait_expired = true;
+                                    cv.notify_all();
+                                    break;
+                                }
+                                state = cv.wait_timeout(state, remaining).unwrap().0;
                             }
                         } else {
                             state.fast_done = true;
@@ -620,13 +640,13 @@ mod tests {
         let (lock, cv) = &*gate;
         let state = lock.lock().unwrap();
         let (state, _) = cv
-            .wait_timeout_while(state, Duration::from_secs(10), |state| {
+            .wait_timeout_while(state, GATE_WAIT, |state| {
                 !(state.slow_started && state.fast_done)
             })
             .unwrap();
         assert!(
             state.slow_started && state.fast_done,
-            "the checks did not reach the live-progress gate within 10s"
+            "the checks did not reach the live-progress gate within {GATE_WAIT:?}"
         );
         drop(state);
 
@@ -634,7 +654,7 @@ mod tests {
         // thread until the fold happens and turns a lost fold into a clear
         // failure instead of hanging the suite.
         assert_eq!(
-            folded_rx.recv_timeout(Duration::from_secs(10)),
+            folded_rx.recv_timeout(GATE_WAIT),
             Ok(1),
             "the finished check was not folded while the slow task was held"
         );
@@ -652,6 +672,13 @@ mod tests {
         drop(state);
 
         assert_eq!(thread.join().unwrap(), 0);
+        let (lock, _) = &*gate;
+        let state = lock.lock().unwrap();
+        assert!(
+            !state.slow_wait_expired,
+            "the slow check was not released within {GATE_WAIT:?}; its bounded wait expired"
+        );
+        drop(state);
         assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
     }
 
