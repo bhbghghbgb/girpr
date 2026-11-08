@@ -7,8 +7,8 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, GameFixture, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
+    ChunkSpec, FileSpec, FixtureSpec, GameFixture, LATEST_TAG, Lies, MockOpts, MockServer,
+    build_fixture, build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
 };
 use girpr_tempdir::TempDir;
 
@@ -106,7 +106,7 @@ async fn a_closed_stdout_does_not_change_the_exit_code_or_the_repair() {
         "the intact file is untouched"
     );
     let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
-    assert!(cfg.contains("game_version=9.9.9-test"), "{cfg}");
+    assert!(cfg.contains(&format!("game_version={LATEST_TAG}")), "{cfg}");
 
     // The log mirror is written before stdout, so the run's record survives the
     // closed pipe. The closed-stdout note also proves the test exercised the

@@ -7,9 +7,9 @@
 mod common;
 
 use common::{
-    LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_with_lies,
-    build_moved_fixture, ctx_for, field, load_counters, read_game_file, run, scope, temp_dir,
-    write_game_file,
+    LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer, UNSERVED_TAG, build_fixture,
+    build_fixture_with_lies, build_moved_fixture, ctx_for, field, load_counters, read_game_file,
+    run, scope, temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use girpr::test_support::{RepairMode, summary_record};
@@ -30,7 +30,7 @@ async fn verified_local_slice_is_reused_without_redownload() {
     let fx2 = build_fixture();
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
+        format!("[General]\ngame_version={LATEST_TAG}\n"),
     )
     .unwrap();
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
@@ -1009,7 +1009,7 @@ async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() 
     let dir = temp_dir("local_manifest_gone");
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=1.0.0-long-gone\n",
+        format!("[General]\ngame_version={UNSERVED_TAG}\n"),
     )
     .unwrap();
     let fx2 = build_fixture();

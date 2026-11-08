@@ -7,8 +7,9 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, MockOpts, MockServer, absent_game_dir, build_fixture,
-    build_fixture_spec, ctx_for, logs_of, read_game_file, run, scope, temp_dir, write_game_file,
+    ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, MockOpts, MockServer, absent_game_dir,
+    build_fixture, build_fixture_spec, ctx_for, logs_of, read_game_file, run, scope, temp_dir,
+    write_game_file,
 };
 use girpr::test_support::summary_record;
 use girpr::{OutputFormat, RunExit};
@@ -441,7 +442,7 @@ async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
     let dir = temp_dir("max_dl_runtime");
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
+        format!("[General]\ngame_version={LATEST_TAG}\n"),
     )
     .unwrap();
     let fx2 = build_fixture();

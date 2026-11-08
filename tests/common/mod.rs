@@ -227,6 +227,13 @@ pub const LATEST_TAG: &str = "9.9.9-test";
 /// mock hardcodes.
 pub const LOCAL_TAG: &str = "9.9.8-test";
 
+/// A local version the standard fixture has no build for.
+///
+/// Any tag other than [`LATEST_TAG`] resolves to the fixture's local side when
+/// it has one; the standard fixture has none, so this tag makes
+/// `getBuild(local)` answer `-202` and the run fall back to a full fetch.
+pub const UNSERVED_TAG: &str = "1.0.0-long-gone";
+
 mod digest;
 
 pub use digest::md5hex;

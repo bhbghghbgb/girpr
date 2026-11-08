@@ -6,9 +6,9 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, LOCAL_TAG, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters, read_game_file, run,
-    run_binary, temp_dir, write_game_file,
+    ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer,
+    build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters,
+    read_game_file, run, run_binary, temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use std::sync::atomic::Ordering;
@@ -370,7 +370,7 @@ async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
     let fx2 = build_fixture();
     std::fs::write(
         dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
+        format!("[General]\ngame_version={LATEST_TAG}\n"),
     )
     .unwrap();
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);

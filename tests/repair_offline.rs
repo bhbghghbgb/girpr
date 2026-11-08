@@ -31,8 +31,8 @@
 mod common;
 
 use common::{
-    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer,
-    build_fixture, build_fixture_spec, ctx_for, field, load_counters, read_game_file,
+    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, LATEST_TAG, Lies, MockOpts,
+    MockServer, build_fixture, build_fixture_spec, ctx_for, field, load_counters, read_game_file,
     remove_run_lock, run, run_binary, scope, temp_dir, write_game_file,
 };
 use girpr::RunExit;
@@ -76,7 +76,7 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
     );
     // Version bumped to the mock latest tag.
     let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
-    assert!(cfg.contains("game_version=9.9.9-test"), "{cfg}");
+    assert!(cfg.contains(&format!("game_version={LATEST_TAG}")), "{cfg}");
 
     mock.stop();
 }
@@ -121,7 +121,7 @@ async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
     );
     let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
     assert!(
-        cfg.contains("game_version=9.9.9-test"),
+        cfg.contains(&format!("game_version={LATEST_TAG}")),
         "the completed repair still advances the version: {cfg}"
     );
 
