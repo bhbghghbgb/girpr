@@ -432,9 +432,9 @@ until the main tasks and rework are done.
 | F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | completed |
 | F332 | PURGE-PERF-05 review | `src/util/counter.rs` tests | Add a focused regression test that pauses one cell and charges a different cell on the same thread, pinning the scoping directly. | completed |
 | F333 | PURGE-PERF-05 review | `src/repair/mod.rs` tests | The normalization test calls the helper directly; an end-to-end `fetch_deprecated` test over a stub client would also pin that the fetch path invokes it. | completed |
-| F334 | BUILD-04 review | `.github/workflows/msrv.yml` | The `iot-bench` job uses default stable, so a 1.89-specific bench regression would go unnoticed; pinning 1.89 would close that gap. | todo |
-| F335 | BUILD-04 review | `tests/scripts/io-profile/README.md` | "buildable with the workspace toolchain" is loose given the job uses default stable; say "current stable" explicitly. | todo |
-| F336 | BUILD-04 review | `.github/workflows/msrv.yml` | The path filter means docs/config-only PRs produce no `msrv` check; confirm branch protection compatibility or add an always-run companion. | todo |
+| F334 | BUILD-04 review | `.github/workflows/msrv.yml` | The `iot-bench` job uses default stable, so a 1.89-specific bench regression would go unnoticed; pinning 1.89 would close that gap. | completed |
+| F335 | BUILD-04 review | `tests/scripts/io-profile/README.md` | "buildable with the workspace toolchain" is loose given the job uses default stable; say "current stable" explicitly. | completed |
+| F336 | BUILD-04 review | `.github/workflows/msrv.yml` | The path filter means docs/config-only PRs produce no `msrv` check; confirm branch protection compatibility or add an always-run companion. | completed |
 | F337 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `[dev-dependencies]` `tokio` entry also omits `default-features = false`; align for symmetry with the normal dependency. | todo |
 | F338 | BUILD-TOOLS-04 review | `tools/capture/Cargo.toml` | The comment says nothing uses `tokio::fs`, but reqwest's `stream` feature compiles it; a tweak could avoid the same source-vs-graph misreading. | todo |
 | F339 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `tokio` comment could also state that the reqwest tree still enables the empty `default` in the resolved graph. | todo |
@@ -656,7 +656,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
 | BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
-| BUILD-05 | F334, F335, F336 | pending_review | Wave E; bench toolchain pin, README wording and required-check coverage; low; 71587e5, 54f1e72 |
+| BUILD-05 | F334, F335, F336 | done | Wave E; bench toolchain pin, README wording and required-check coverage; low; 71587e5, 54f1e72 |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | done | Wave E; root tokio default features and comment nuance; low; 1effa98, 2681403 |
 | BUILD-TOOLS-05 | F337, F338, F339 | todo | Wave E; tokio dev-dependency and comment precision; low |
