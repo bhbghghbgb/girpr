@@ -480,11 +480,11 @@ until the main tasks and rework are done.
 | F379 | HYP-04 review | `src/repair/mod.rs` | No test pins the eager-spawn property the refactor exists for; a narrow test would guard the overlap contract. | completed |
 | F380 | HYP-04 review | `src/repair/phases/scan.rs`, `check.rs`, `mod.rs` | Other raw `spawn_blocking` sites do not propagate a scoped dispatcher; they would need `spawn_blocking_traced` if per-file log assertions are added. | completed |
 | F381 | HYP-04 review | `tests/common/mod.rs` | `logs_of` and the metadata test's `logs_of` duplicate the same capture implementation; a shared test-support helper could remove it. | skipped (lib/integration boundary; needs a new public async helper) |
-| F382 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek` names its `Arc<Summary>` `ledger` while the rest of the file says summary/download meter; rename for consistency. | todo |
-| F383 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `SeekRecording.bytes` is only asserted to be 0; a case that writes through the recorder would verify the byte count. | todo |
-| F384 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek`'s `Option<Arc<Summary>>` + `Default` exist for one call site; a required parameter would simplify it. | todo |
-| F385 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `settle_seek_failure`'s doc justifies itself as a "test seam" in production code; reframe around the refund invariant. | todo |
-| F386 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `ChunkFileSink`'s doc cites `copy_within` as the reuse copy, but temp mode uses `try_reuse_slice`. | todo |
+| F382 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek` names its `Arc<Summary>` `ledger` while the rest of the file says summary/download meter; rename for consistency. | completed |
+| F383 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `SeekRecording.bytes` is only asserted to be 0; a case that writes through the recorder would verify the byte count. | completed |
+| F384 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek`'s `Option<Arc<Summary>>` + `Default` exist for one call site; a required parameter would simplify it. | completed |
+| F385 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `settle_seek_failure`'s doc justifies itself as a "test seam" in production code; reframe around the refund invariant. | completed |
+| F386 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `ChunkFileSink`'s doc cites `copy_within` as the reuse copy, but temp mode uses `try_reuse_slice`. | completed |
 | F387 | TEMP-PUBLISH-04 review | `src/repair/scope/report.rs` | `atomic::publish` accepts no-file-name targets and relies on the rename failing; an early refusal would give a clearer error. | todo |
 | F388 | TEMP-PUBLISH-04 review | `src/util/path.rs` tests | The `temp_sibling` test asserts the unresolved `Audio/res/../.girpr_tmp` spelling while the doc says it lands at `Audio/.girpr_tmp`; pin the resolved location. | todo |
 | F389 | TEMP-PUBLISH-04 review | `src/repair/phases/post.rs` | If the audio-cache walk ever follows links or admits directories, the no-file-name guard becomes production-reachable and needs a production-path test. | todo |
@@ -677,7 +677,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
 | TEMP-WRITER-03 | F247, F248 | done | Wave E; sink genericity and broader cursor pinning; low; 953db0b, 563a178 |
 | TEMP-WRITER-04 | F292, F293, F294 | done | Wave E; reservation-order pin, generic doc and counter name; low; c156617, 740f5d0, 076bbfc |
-| TEMP-WRITER-05 | F382, F383, F384, F385, F386 | pending_review | Wave E; recorder naming and doc precision; low; 7a3b573, b3011d4, fe59130, 5ef5c89 |
+| TEMP-WRITER-05 | F382, F383, F384, F385, F386 | done | Wave E; recorder naming and doc precision; low; 7a3b573, b3011d4, fe59130, 5ef5c89 |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
 | TEMP-PUBLISH-04 | F295, F296 | skipped | Wave E; fallback-decision and future walk-reachability notes; low |
