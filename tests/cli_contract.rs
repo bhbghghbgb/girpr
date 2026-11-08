@@ -944,8 +944,8 @@ const REPORT_KEYS: &[&str] = &[
     "diff_tags",
 ];
 
-/// The keys `PLAN` carries, in order. `scan_bytes` sits between
-/// `est_extra_bytes` and `purge_files` only when `--scan` asked for it.
+/// The keys `PLAN` always carries, in order. [`PLAN_SCAN_BYTES_KEY`] sits
+/// between `est_extra_bytes` and `purge_files` only when `--scan` asked for it.
 const PLAN_KEYS: &[&str] = &[
     "files",
     "est_download_bytes",
@@ -956,6 +956,10 @@ const PLAN_KEYS: &[&str] = &[
     "max_chunk_bytes",
     "scoped",
 ];
+
+/// The conditional `PLAN` key: present only on a `--scan` run, between
+/// `est_extra_bytes` and `purge_files`.
+const PLAN_SCAN_BYTES_KEY: &str = "scan_bytes";
 
 /// The keys `PROGRESS` carries, in order. A short run may emit none.
 const PROGRESS_KEYS: &[&str] = &[
@@ -1184,7 +1188,7 @@ fn is_record_event(event: &str) -> bool {
 fn is_record_key(event: &str, key: &str) -> bool {
     match event {
         "report" => REPORT_KEYS.contains(&key),
-        "plan" => PLAN_KEYS.contains(&key) || key == "scan_bytes",
+        "plan" => PLAN_KEYS.contains(&key) || key == PLAN_SCAN_BYTES_KEY,
         "progress" => PROGRESS_KEYS.contains(&key),
         "summary" => SUMMARY_KEYS.contains(&key) || SUMMARY_CONDITIONAL_KEYS.contains(&key),
         _ => false,
