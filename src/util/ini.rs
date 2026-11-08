@@ -1134,10 +1134,13 @@ mod tests {
         let target = root.join("missing-target");
         let link = root.join("dangling-game-dir");
         if let Err(e) = try_symlink_dir(&target, &link) {
-            if symlink_creation_denied(&e) {
-                return;
+            match symlink_skip_reason(&e) {
+                Some(why) => {
+                    eprintln!("SKIP precondition: {why}: {e}");
+                    return;
+                }
+                None => panic!("could not create the test directory symlink: {e}"),
             }
-            panic!("could not create the test directory symlink: {e}");
         }
 
         let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
@@ -1245,6 +1248,22 @@ mod tests {
         }
     }
 
+    /// Why a failed directory-symlink creation means the case cannot run on
+    /// this host, or `None` when it is a broken test environment that must
+    /// fail loudly.
+    ///
+    /// A platform without directory symlinks reports `Unsupported`; the known
+    /// privilege denial is the other untestable host.
+    fn symlink_skip_reason(e: &std::io::Error) -> Option<&'static str> {
+        if e.kind() == std::io::ErrorKind::Unsupported {
+            Some("directory symlinks are not supported on this platform")
+        } else if symlink_creation_denied(e) {
+            Some("creating a directory symlink is denied on this host")
+        } else {
+            None
+        }
+    }
+
     #[cfg(unix)]
     fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(target, link)
@@ -1263,14 +1282,27 @@ mod tests {
         ))
     }
 
-    /// Only the known privilege denial is a skip; other failures would hide a
-    /// broken test environment.
+    /// Only the known privilege denial or a platform without directory
+    /// symlinks is a skip; other failures would hide a broken test
+    /// environment.
     #[test]
-    fn only_symlink_creation_denial_skips_the_link_test() {
-        assert!(!symlink_creation_denied(&std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "not a creation-denied error",
-        )));
+    fn only_a_denied_or_unsupported_symlink_skips_the_link_test() {
+        assert!(
+            symlink_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not a creation-denied error",
+            ))
+            .is_none(),
+            "an unexpected failure must still fail the test"
+        );
+        assert_eq!(
+            symlink_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no directory symlinks",
+            )),
+            Some("directory symlinks are not supported on this platform"),
+            "an unsupported platform is a skip, not a panic"
+        );
         #[cfg(windows)]
         {
             assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
