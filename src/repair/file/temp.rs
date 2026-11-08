@@ -603,10 +603,10 @@ pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
 /// Settle a chunk whose sink could not be positioned, then report the seek
 /// failure.
 ///
-/// The reservation is taken before the seek, so this is the one failure that
-/// must give it back whole: no byte crossed the wire. Keeping the refund and
-/// the error together gives the test a seam to drive the path with a
-/// synthetic seek error; production still returns the same context chain.
+/// The reservation is taken before the seek, so a failed seek must give it
+/// back whole: no byte crossed the wire, and a reservation left behind would
+/// count against the ceiling for the rest of the run. Keeping the refund and
+/// the error together is what makes that invariant hold on this path.
 fn settle_seek_failure(
     ctx: &FileCtx,
     reserved: u64,
