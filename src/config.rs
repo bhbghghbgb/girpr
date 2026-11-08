@@ -93,7 +93,11 @@ macro_rules! define_run_exits {
             ///
             /// Generated from the same list as the variants, so the list and
             /// the enum cannot drift apart. Crate-internal: only the
-            /// compile-time check and the unit tests read it.
+            /// compile-time check and the unit tests read it. The binary
+            /// target is a separate crate, so its test cannot see this and
+            /// names the statuses itself; that duplication is deliberate,
+            /// since removing it would mean publishing the list for one test.
+            /// A new variant still fails the binary's wildcard-free match.
             pub(crate) const ALL: [$name; [$($name::$variant),+].len()] = [
                 $($name::$variant,)+
             ];
@@ -318,8 +322,8 @@ mod tests {
     use super::{RunExit, RunFailure};
 
     /// The numbers are the automation contract, so pin the integer each named
-    /// variant converts to. [`RunExit::ALL`] is the shared exhaustive list; the
-    /// compile-time check ties its order to the discriminants.
+    /// variant converts to. [`RunExit::ALL`] is the crate's exhaustive list;
+    /// the compile-time check ties its order to the discriminants.
     #[test]
     fn every_named_code_keeps_its_documented_number() {
         for (number, status) in RunExit::ALL.into_iter().enumerate() {

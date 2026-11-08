@@ -192,11 +192,19 @@ mod tests {
 
     /// The documented exit statuses, in numeric order.
     ///
-    /// `RunExit`'s exhaustive list is crate-internal, so this binary target
-    /// cannot read it and names the statuses itself. The wildcard-free `match`
-    /// is generated from the same list: a new `RunExit` variant stops the
-    /// build here until it is added, and the numeric pin in the test then
-    /// holds it to its documented number.
+    /// `RunExit`'s exhaustive list is crate-internal, so this binary target,
+    /// unlike the crate's own unit tests, cannot read it and names the
+    /// statuses itself. The wildcard-free `match` is generated from the same
+    /// list: a new `RunExit` variant stops the build here until it is added,
+    /// and the numeric pin in the test then holds it to its documented number.
+    /// That makes the duplicate list deliberate — only a `pub` item crosses
+    /// the target boundary, and widening the API for one test list is not
+    /// worth it.
+    ///
+    /// The type is spelled `RunExit` because it is the only enum with this
+    /// process-status guard. A second one would make the type a parameter
+    /// (`$ty:ident`, used as `fn($ty)` and `$ty::$variant`) so the call site
+    /// names the enum it pins.
     macro_rules! documented_exit_codes {
         ($($variant:ident),+ $(,)?) => {{
             let _: fn(RunExit) = |status| match status {
