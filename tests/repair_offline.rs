@@ -1143,6 +1143,10 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
     );
     let gone_id = extra_manifest(&fx, "gone").id.clone();
     let kept_id = extra_manifest(&fx, "kept").id.clone();
+    // The mock serves this body for the kept manifest's route, so the `200`
+    // below can be checked against the bytes the fixture published rather than
+    // against the status alone.
+    let kept_bytes = extra_manifest(&fx, "kept").zstd.clone();
 
     // The store is what the mock serves: the shared id must still hold the
     // served manifest's bytes, not the absent one's, and the absent-only id
@@ -1203,8 +1207,8 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
 
     // Servability follows the advertisement: asking the URL the build
     // publishes for each manifest gets the body the origin has, so the absent
-    // one is a `404` and the kept one is a `200`. The URL is production's join
-    // of a manifest prefix and id.
+    // one is a `404` and the kept one is a `200` carrying the fixture's bytes.
+    // The URL is production's join of a manifest prefix and id.
     let body_url = |field: &str| {
         let manifest = manifests
             .iter()
@@ -1227,6 +1231,15 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         kept_body.status(),
         reqwest::StatusCode::OK,
         "the advertised kept manifest is served"
+    );
+    let kept_body = kept_body
+        .bytes()
+        .await
+        .expect("the kept manifest body is readable");
+    assert_eq!(
+        kept_body.as_ref(),
+        kept_bytes.as_slice(),
+        "the kept route serves the fixture's manifest bytes"
     );
     let gone_body = client
         .get(body_url("gone"))
