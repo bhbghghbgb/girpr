@@ -679,7 +679,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
 | TEST-MANIFEST-04 | F290, F291 | done | Wave E; advertisement-to-servability and field-based id lookup; low; 3bb9805, 2c288c6 |
-| TEST-MANIFEST-05 | F390, F391, F392, F393 | in_progress | Wave E; shared join helper and remaining manifest-test hardening; low |
+| TEST-MANIFEST-05 | F390, F391, F392, F393 | pending_review | Wave E; shared join helper and remaining manifest-test hardening; low; 72ad074, 1a1a574, 5fe0036 |
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | LINT-03 | F260, F261 | done | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5, fe464ad |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
