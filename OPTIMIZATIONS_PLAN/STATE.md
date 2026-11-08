@@ -492,8 +492,8 @@ until the main tasks and rework are done.
 | F391 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Other tests still take extra-manifest ids positionally (`several_latest_manifests_are_selected_in_build_order` and two more). | completed |
 | F392 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Production's `join_url` ignores the advertised `url_suffix`, so a non-empty suffix remains untested; may be intentional. | skipped (unsupported/ambiguous suffix semantics; documented contract keeps prefix-only join) |
 | F393 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | The new assertions check status only, not that the `kept` `200` body equals the fixture bytes; optional hardening. | completed |
-| F394 | EXIT-06 review | `src/main.rs` tests | The macro's `fn(RunExit)` annotation and `RunExit::` paths hard-wire one type; parameterize the type path if a second enum needs the guard. | todo |
-| F395 | EXIT-06 review | `src/config.rs`, `src/main.rs` tests | The status list now exists twice (`RunExit::ALL` and the bin-test macro); a public read-only accessor would remove it but widens API. | todo |
+| F394 | EXIT-06 review | `src/main.rs` tests | The macro's `fn(RunExit)` annotation and `RunExit::` paths hard-wire one type; parameterize the type path if a second enum needs the guard. | completed |
+| F395 | EXIT-06 review | `src/config.rs`, `src/main.rs` tests | The status list now exists twice (`RunExit::ALL` and the bin-test macro); a public read-only accessor would remove it but widens API. | completed |
 | F396 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The cross-cell gate test would hang rather than fail on a broken gate; charging on a helper thread with a bounded `recv_timeout` would fail CI cleanly. | todo |
 | F397 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The resume test uses `Barrier::new(1)`, so the "pause" half is vacuous; a 2-party barrier released from a helper thread would pin suspension too. | todo |
 | F398 | PURGE-PERF-06 review | `src/repair/mod.rs` tests | The new `serve_body` helper duplicates the loopback-stub idiom in `metadata`, `manifest`, and `hyp` tests; a shared `#[cfg(test)]` fixture would remove it. | todo |
@@ -587,7 +587,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
-| EXIT-07 | F394, F395 | pending_review | Wave E; macro generality and duplicated status list; low; 3ffe754 |
+| EXIT-07 | F394, F395 | done | Wave E; macro generality and duplicated status list; low; 3ffe754 |
 | PURGE-PERF-07 | F396, F397, F398 | todo | Wave E; counter-test failure modes and shared stub; low |
 | TEST-REGRESSION-05 | F399, F400 | todo | Wave E; remaining epoch assumptions in test helpers; low |
 | PURGE-PERF-06 | F332, F333 | done | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
