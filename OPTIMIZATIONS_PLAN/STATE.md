@@ -383,7 +383,7 @@ until the main tasks and rework are done.
 | F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | completed |
 | F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | completed |
 | F284 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The text-plane plan-out test checks `repair.len() == 2` but not that the entries are the fixture's two rels. | completed |
-| F285 | INPLACE-03 review | `tests/repair_machinery.rs` | The new age-branch test derives its stamp as `SystemTime::now() + 1h`; a fixed far-future constant would match the file's style and remove wall-clock dependence. | todo |
+| F285 | INPLACE-03 review | `tests/repair_machinery.rs` | The new age-branch test derives its stamp as `SystemTime::now() + 1h`; a fixed far-future constant would match the file's style and remove wall-clock dependence. | completed |
 | F286 | CHECK-03 review | `src/repair/phases/check.rs` | The live-progress test's gate wait (`while !(slow_started && fast_done)`) is still an unbounded `Condvar` wait. | todo |
 | F287 | CHECK-03 review | `src/report/summary.rs` | The now-`pub(super)` counter's doc could note that writes go through `publish_check_damaged_chunks`. | todo |
 | F288 | PATHHELPERS-03 review | `tests/repair_post.rs` | The binary test's doc implies the name can be rewritten while building the context, but it is only discovered in the post-phase walk; the added value is CLI/RunCtx wiring. | todo |
@@ -515,7 +515,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | TEST-OUTPUT-04 | F357, F358, F359 | todo | Wave E; text-grammar ambiguity and shared schema vocabulary; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
-| INPLACE-04 | F285 | pending_review | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
+| INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
 | CHECK-04 | F286, F287 | todo | Wave E; bounded gate wait and counter doc; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
