@@ -979,6 +979,26 @@ const SUMMARY_KEYS: &[&str] = &[
     "exit",
 ];
 
+/// The conditional `SUMMARY` keys, appended after [`SUMMARY_KEYS`].
+const SUMMARY_CONDITIONAL_KEYS: &[&str] = &[
+    "limited",
+    "scoped",
+    "config_bumped",
+    "plan_files",
+    "plan_download_bytes",
+    "download_bytes_spent",
+    "write_bytes",
+    "write_bytes_spent",
+    "repair_mode",
+    "inplace",
+    "temp",
+    "kept_bytes",
+    "ram_bytes",
+    "damaged_chunks",
+    "stopped",
+    "local_manifest",
+];
+
 /// One run's data plane, already reduced to what the contract is about.
 struct DataPlaneRun {
     code: i32,
@@ -1071,59 +1091,153 @@ fn json_records(stdout: &str) -> Vec<(String, Vec<String>)> {
 ///
 /// Parsing the text plane rather than matching substrings is what pins its
 /// shape: every field must carry its key, in report order, and a line must
-/// still begin with its event label.
-///
-/// The values are bare and a value may itself contain a space (`exe=Some
-/// Game.exe`). So the line is split on the plane's one separator, and a token
-/// starts a new field only when it is `key=…` with a key-shaped prefix;
-/// anything else continues the previous value. A record's label is still
-/// required, and a token before the first field is still rejected.
+/// still begin with its event label. The values are parsed too, so a field's
+/// end is found from the grammar rather than from token shape; this projection
+/// keeps only the keys the golden compares.
 fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
     stdout
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            let mut fields = line.split(' ');
-            let label = fields
-                .next()
-                .unwrap_or_else(|| panic!("empty data-plane line: {line}"));
-            assert!(
-                label.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
-                "text record must start with its event label: {line}"
-            );
-            let mut keys = Vec::new();
-            for field in fields {
-                if let Some((key, _value)) = field.split_once('=')
-                    && is_field_key(key)
-                {
-                    keys.push(key.to_string());
-                    continue;
-                }
-                assert!(
-                    !keys.is_empty(),
-                    "text record field is not key=value ({field:?}): {line}"
-                );
-            }
-            (label.to_ascii_lowercase(), keys)
+            let (event, fields) = text_record(line);
+            let keys = fields.into_iter().map(|(key, _)| key).collect();
+            (event, keys)
         })
         .collect()
 }
 
-/// Whether `s` has the shape of a record field key: an ASCII identifier.
-fn is_field_key(s: &str) -> bool {
-    let mut chars = s.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+/// Parse one `EVENT key=value …` line into its event label and fields.
+///
+/// The grammar is the one [`girpr::Record::text`] writes: an uppercase label,
+/// then zero or more `key=value` fields separated by one space. A value is bare
+/// — the renderer never quotes or escapes it — so it may contain spaces and
+/// `=`. The only reliable boundary is therefore a key the event actually
+/// carries: `exe=Some word=.exe` keeps `word=.` in `exe` because `word` is not
+/// a `REPORT` field, and a value's spaces stay part of the value. Recognising a
+/// key by its identifier shape alone would split that value.
+///
+/// The first field must follow the label directly. A token there is not a
+/// continuation (there is no previous value to continue), so it is rejected.
+fn text_record(line: &str) -> (String, Vec<(String, String)>) {
+    let (label, rest) = line.split_once(' ').unwrap_or((line, ""));
+    assert!(
+        label.chars().all(|c| c.is_ascii_uppercase() || c == '_'),
+        "text record must start with its event label: {line}"
+    );
+    let event = label.to_ascii_lowercase();
+    assert!(
+        is_record_event(&event),
+        "text record has an unknown event label: {line}"
+    );
+    let mut fields = Vec::new();
+    if rest.is_empty() {
+        return (event, fields);
+    }
+    let mut separator = label.len();
+    loop {
+        let (key, value_start) = text_field_at(line, separator, &event)
+            .unwrap_or_else(|| panic!("text record has a token before its first field: {line}"));
+        match next_text_field(line, value_start, &event) {
+            Some(next) => {
+                fields.push((key.to_string(), line[value_start..next].to_string()));
+                separator = next;
+            }
+            None => {
+                fields.push((key.to_string(), line[value_start..].to_string()));
+                break;
+            }
+        }
+    }
+    (event, fields)
+}
+
+/// The key and the index just past its `=` for a field whose separating space
+/// is at `separator`, when the key is one the event carries.
+fn text_field_at<'a>(line: &'a str, separator: usize, event: &str) -> Option<(&'a str, usize)> {
+    if line.as_bytes().get(separator) != Some(&b' ') {
+        return None;
+    }
+    let key_start = separator + 1;
+    let rest = line.get(key_start..)?;
+    let key_len = rest.find(['=', ' '])?;
+    let key = &rest[..key_len];
+    if !is_record_key(event, key) {
+        return None;
+    }
+    let equals = key_start + key_len;
+    (line.as_bytes().get(equals) == Some(&b'=')).then_some((key, equals + 1))
+}
+
+/// The index of the next known-field separator at or after `from`.
+fn next_text_field(line: &str, from: usize, event: &str) -> Option<usize> {
+    line.match_indices(' ')
+        .map(|(index, _)| index)
+        .find(|&index| index >= from && text_field_at(line, index, event).is_some())
+}
+
+/// Whether `event` is one of the labels the data plane emits.
+fn is_record_event(event: &str) -> bool {
+    matches!(event, "report" | "plan" | "progress" | "summary")
+}
+
+/// Whether `key` is a field of `event`, including its conditional tail.
+fn is_record_key(event: &str, key: &str) -> bool {
+    match event {
+        "report" => REPORT_KEYS.contains(&key),
+        "plan" => PLAN_KEYS.contains(&key) || key == "scan_bytes",
+        "progress" => PROGRESS_KEYS.contains(&key),
+        "summary" => SUMMARY_KEYS.contains(&key) || SUMMARY_CONDITIONAL_KEYS.contains(&key),
+        _ => false,
+    }
 }
 
 /// A value with a space is one field, not two: `exe=Genshin Impact.exe` must
-/// contribute `exe` and leave the continuation out of the key list.
+/// contribute `exe` and rejoin to exactly that value, not just that key.
 #[test]
 fn text_records_keeps_a_key_whose_value_contains_a_space() {
-    let records = text_records("REPORT total=0 exe=Genshin Impact.exe branch=main\n");
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].0, "report");
-    assert_eq!(records[0].1, vec!["total", "exe", "branch"]);
+    let (event, fields) =
+        text_record("REPORT local_version=none exe=Genshin Impact.exe branch=main");
+    assert_eq!(event, "report");
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        vec![
+            ("local_version", "none"),
+            ("exe", "Genshin Impact.exe"),
+            ("branch", "main"),
+        ]
+    );
+}
+
+/// A key-shaped word inside a value is value text, not a new field: `word=.`
+/// is not a `REPORT` key, so `exe` keeps it and its spaces.
+#[test]
+fn text_records_keeps_a_key_shaped_word_inside_a_value() {
+    let (event, fields) = text_record("REPORT local_version=none exe=Some word=.exe branch=main");
+    assert_eq!(event, "report");
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        vec![
+            ("local_version", "none"),
+            ("exe", "Some word=.exe"),
+            ("branch", "main"),
+        ]
+    );
+}
+
+/// A token cannot precede the first field: there is no previous value for it to
+/// continue, so the record is rejected instead of silently gaining a field.
+#[test]
+#[should_panic(expected = "text record has a token before its first field")]
+fn text_records_rejects_a_token_before_the_first_field() {
+    let _ = text_records("REPORT junk total=0\n");
 }
 
 /// Check a run against a golden sequence of `(event, field keys)`.
