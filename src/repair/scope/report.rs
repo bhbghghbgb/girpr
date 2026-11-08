@@ -887,9 +887,9 @@ mod tests {
         );
     }
 
-    /// A target with no file name still reaches the shared temp-name fallback:
-    /// writing beside it fails, but nothing is published and no temp is left at
-    /// the fallback name.
+    /// A target with no file name is refused before the publish names its temp:
+    /// there is no name to publish under, and the fallback temp would land in a
+    /// different directory. Nothing is published and no temp is left there.
     #[test]
     fn a_target_without_a_file_name_publishes_nothing_and_leaves_no_temp() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "no_file_name");
@@ -899,12 +899,12 @@ mod tests {
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         let err = doc.write_to(&path).unwrap_err();
-        assert!(format!("{err:#}").contains("publish"), "{err:#}");
-        assert!(path.is_dir(), "the directory target is untouched");
         assert!(
-            !tmp.exists(),
-            "the fallback temp is cleaned up when the publish fails"
+            format!("{err:#}").contains("publish target has no file name"),
+            "{err:#}"
         );
+        assert!(path.is_dir(), "the directory target is untouched");
+        assert!(!tmp.exists(), "the fallback temp is never written");
     }
 
     /// The documented publish trade, pinned: a symlink at the plan path is

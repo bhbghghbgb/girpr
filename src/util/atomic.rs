@@ -36,6 +36,10 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 /// rename removes the temp and returns the original error with the temp path in
 /// its context; a rename failure removes the temp too.
 ///
+/// A `path` with no file name is refused before the parent is created or a temp
+/// is named: it has no location a file can be published to, and the temp
+/// helper's fallback would put the temp under the path's directories instead.
+///
 /// With `durable`, the temp file is `sync_all`ed before the rename and the
 /// parent directory is synced best-effort afterwards: a directory sync failure
 /// is logged, not returned, because the publish itself already succeeded.
@@ -75,6 +79,14 @@ fn publish<F>(
 where
     F: DurableFile,
 {
+    // A target that names no file cannot be replaced by one. The temp helper
+    // still names a fallback path under the target's directories (a trailing
+    // `..` survives), so the write would only fail at the rename, after the
+    // parent was created and the temp was written there. Refuse up front so the
+    // caller gets the reason instead of a rename error from another directory.
+    if path.file_name().is_none() {
+        anyhow::bail!("publish target has no file name: {}", path.display());
+    }
     // A bare file name has no directory component; there is nothing to create.
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
@@ -216,6 +228,29 @@ mod tests {
             !temp_sibling(&path).exists(),
             "a failed write must not leave the temp behind"
         );
+    }
+
+    /// A target that names no file has nothing to publish under. The refusal
+    /// comes before the parent is created or a temp is named, rather than after
+    /// writing at the helper's fallback location and failing at the rename.
+    #[test]
+    fn a_target_with_no_file_name_is_refused_before_anything_is_written() {
+        let d = dir("no_file_name");
+        let path = d.join("missing").join("..");
+        assert!(path.file_name().is_none(), "the fixture names no file");
+        let tmp = temp_sibling(&path);
+
+        let err = write_atomic(&path, b"{}", false).unwrap_err();
+
+        assert!(
+            format!("{err:#}").contains("publish target has no file name"),
+            "{err:#}"
+        );
+        assert!(
+            !d.join("missing").exists(),
+            "the refusal happens before the parent directory is created"
+        );
+        assert!(!tmp.exists(), "no temp is named or written");
     }
 
     /// A failing rename (a directory sits where the file should be) removes the
