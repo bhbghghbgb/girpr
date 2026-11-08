@@ -539,6 +539,9 @@ until the main tasks and rework are done.
 | F438 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` | `ChunkFileSink` also serves the in-place download, so its reuse-copy comparison names only the temp path; mention `copy_within` charging likewise. | todo |
 | F439 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` tests | `write_calls == 2` relies on the first regular-file read returning exactly `COPY_BUF`; a read-counting source wrapper would remove the OS-read dependence. | todo |
 | F440 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` tests | The ~12-line `ReuseCall` construction repeats across roughly nine tests; a small builder helper would reduce it. | todo |
+| F441 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` tests | The `!tmp.exists()` check uses the unresolved `missing/../.girpr_tmp`, so it is redundant beside the parent-dir assertion; assert the resolved fallback. | todo |
+| F442 | TEMP-PUBLISH-05 review | `src/util/path.rs` | `temp_sibling`'s doc names only `copy_publish_with` as the refusing caller; `atomic::publish` now refuses too. | todo |
+| F443 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` | `Path::file_name()` is `Some("dir")` for `dir/.`, so the new guard misses that spelling; the rename still fails and cleans up. | todo |
 
 ## Follow-up batches
 
@@ -613,6 +616,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-06 | F434, F435, F436 | todo | Wave E; MSRV pin derivation and cache keying; low |
 | BUILD-TOOLS-06 | F437 | todo | Wave E; capture comment wording; low |
 | TEMP-WRITER-06 | F438, F439, F440 | todo | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
+| TEMP-PUBLISH-06 | F441, F442, F443 | todo | Wave E; publish guard spelling and doc sync; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
