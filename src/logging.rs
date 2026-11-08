@@ -149,10 +149,10 @@ pub fn init_tracing(
 
 /// The body of [`init_tracing`], with the warning destination injectable.
 ///
-/// A rejected install is the one path whose warning has no event to carry it,
-/// because the subscriber that would carry it already exists. A test reads
-/// that warning through its own buffer instead of capturing the process's
-/// stderr.
+/// The install warning goes straight to stderr rather than through an event:
+/// the subscriber that rejected the install must not be able to filter the
+/// report of its own rejection. A test reads that warning through its own
+/// buffer instead of capturing the process's stderr.
 fn init_tracing_with(
     warnings: &mut dyn Write,
     console_level: Level,
