@@ -459,6 +459,9 @@ until the main tasks and rework are done.
 | F358 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | `scan_bytes` is a literal special case apart from `PLAN_KEYS`; a named constant would keep the vocabulary symmetric. | todo |
 | F359 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | The test's event/key schema duplicates the production schema; a shared exported constant would avoid drift. | todo |
 | F360 | INPLACE-04 review | `tests/repair_machinery.rs` | The future stamp uses unchecked `SystemTime + Duration`; a `stamp_ahead` helper mirroring `stamp_ago` would make the pair symmetric and the failure explicit. | todo |
+| F361 | CHECK-04 review | `src/report/summary.rs` | "no store reaches this field without the flag" is true of production paths but a test stores directly; say "no production store" for strict precision. | todo |
+| F362 | CHECK-04 review | `src/repair/phases/check.rs` | The test repeats `Duration::from_secs(10)` across the gate wait and `recv_timeout`; a module-level constant would keep them in step. | todo |
+| F363 | CHECK-04 review | `src/repair/phases/check.rs` | The injected check closure still has an unbounded `while !state.release_slow { cv.wait(state) }` inside its spawned thread. | todo |
 
 ## Follow-up batches
 
@@ -519,6 +522,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
 | CHECK-04 | F286, F287 | done | Wave E; bounded gate wait and counter doc; low; 39df01f, 0cb49b2 |
+| CHECK-05 | F361, F362, F363 | todo | Wave E; doc precision and remaining bounded waits; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
 | PATHHELPERS-04 | F288, F289 | todo | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
