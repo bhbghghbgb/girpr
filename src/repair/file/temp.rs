@@ -811,16 +811,14 @@ mod tests {
     /// what the writer attempted, so a test can tell a refused seek from a
     /// path that never ran.
     ///
-    /// When a ledger is attached, each refused seek also records the live
-    /// download figure it saw. That is the seam that pins the order: the
-    /// figure after the failure is zero whether the chunk was reserved and
-    /// then refunded or never reserved at all, so only the value *while the
-    /// seek runs* tells the two apart.
-    #[derive(Default)]
+    /// Each refused seek also records the live download figure it saw. That
+    /// pins the order: the figure after the failure is zero whether the chunk
+    /// was reserved and then refunded or never reserved at all, so only the
+    /// value *while the seek runs* tells the two apart.
     struct RefusingSeek {
         bytes: Vec<u8>,
         seeks: usize,
-        ledger: Option<Arc<Summary>>,
+        summary: Arc<Summary>,
         live_at_seek: Vec<u64>,
     }
 
@@ -828,8 +826,10 @@ mod tests {
         /// Refuse every seek while watching `summary`'s download figure.
         fn watching(summary: Arc<Summary>) -> Self {
             Self {
-                ledger: Some(summary),
-                ..Self::default()
+                bytes: Vec::new(),
+                seeks: 0,
+                summary,
+                live_at_seek: Vec::new(),
             }
         }
     }
@@ -848,9 +848,7 @@ mod tests {
     impl Seek for RefusingSeek {
         fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
             self.seeks += 1;
-            if let Some(summary) = &self.ledger {
-                self.live_at_seek.push(summary.download.live());
-            }
+            self.live_at_seek.push(self.summary.download.live());
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "seek refused",
