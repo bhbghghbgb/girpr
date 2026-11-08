@@ -1120,6 +1120,14 @@ fn text_records(stdout: &str) -> Vec<(String, Vec<String>)> {
 /// a `REPORT` field, and a value's spaces stay part of the value. Recognising a
 /// key by its identifier shape alone would split that value.
 ///
+/// **Known grammar limit.** When a value itself contains a space followed by
+/// one of its event's own keys and `=`, it is indistinguishable from the next
+/// field and is read as one: `REPORT exe=Some branch=main.exe` yields
+/// `exe=Some` and `branch=main.exe`, not a single `exe` value. The values are
+/// API-supplied strings and the text plane has no quoting or escaping to
+/// resolve that, so the limit is pinned by a test rather than assumed away;
+/// the JSON plane is the unambiguous alternative.
+///
 /// The first field must follow the label directly. A token there is not a
 /// continuation (there is no previous value to continue), so it is rejected.
 fn text_record(line: &str) -> (String, Vec<(String, String)>) {
@@ -1233,6 +1241,30 @@ fn text_records_keeps_a_key_shaped_word_inside_a_value() {
             ("exe", "Some word=.exe"),
             ("branch", "main"),
         ]
+    );
+}
+
+/// A value carrying one of its event's own key tokens is the known limit of the
+/// bare text grammar: it is read as the next field. The renderer neither quotes
+/// nor escapes values, so the text plane cannot tell the two apart; the JSON
+/// plane is the unambiguous alternative. Pinning this keeps a parser change
+/// from silently reinterpreting the same line.
+#[test]
+fn text_records_reads_an_embedded_key_token_as_the_next_field() {
+    let (event, fields) = text_record("REPORT local_version=none exe=Some branch=main.exe");
+    assert_eq!(event, "report");
+    let fields: Vec<(&str, &str)> = fields
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        vec![
+            ("local_version", "none"),
+            ("exe", "Some"),
+            ("branch", "main.exe"),
+        ],
+        "a value containing `branch=` is split at that token, not kept whole"
     );
 }
 
