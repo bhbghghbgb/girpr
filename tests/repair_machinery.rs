@@ -148,6 +148,9 @@ impl Rig {
     }
 
     /// Run the real binary against the rig's install.
+    ///
+    /// `--io-threads` is the deprecated alias for `--jobs`; this rig keeps one
+    /// run on it so the integration suite still exercises the alias.
     async fn run(&self, args: &[&str]) -> Run {
         let n = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = self.logs.join(format!("girpr-{n}.log"));
