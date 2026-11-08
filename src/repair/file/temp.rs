@@ -438,8 +438,8 @@ struct ChunkFileSink<'a, W: Write + Seek> {
 
 impl<'a, W: Write + Seek> ChunkFileSink<'a, W> {
     /// Position the file at the chunk's offset once. The sink then writes
-    /// sequentially: it holds the only `&mut File` for the stream, so no other
-    /// user can move the cursor behind it.
+    /// sequentially: it holds the only `&mut W` for the stream, so no other
+    /// writer can move the cursor behind it.
     fn new(ctx: &'a FileCtx, file: &'a mut W, offset: u64) -> std::io::Result<Self> {
         file.seek(SeekFrom::Start(offset))?;
         Ok(Self {
