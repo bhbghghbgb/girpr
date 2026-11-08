@@ -416,8 +416,8 @@ until the main tasks and rework are done.
 | F315 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` matches a flag by prefix, so `--jobs` would also match a future `--jobs-*`; require a following space/newline. | completed |
 | F316 | JOBS-03 review | `tests/cli_contract.rs` | The synthetic slicing test only covers the first-entry branch; add a case with a preceding option to cover the `\n`-marker branch. | completed |
 | F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | completed |
-| F318 | LOGGING-03 review | `src/logging.rs` | `FILE_SINKS` is plural but now holds a single `Option`; rename to `FILE_SINK`. | todo |
-| F319 | LOGGING-03 review | `src/logging.rs` tests | The rejected-install test writes into the sink directly and does not assert the install-warning text; emitting through the subscriber and pinning the WARN would be stronger. | todo |
+| F318 | LOGGING-03 review | `src/logging.rs` | `FILE_SINKS` is plural but now holds a single `Option`; rename to `FILE_SINK`. | completed |
+| F319 | LOGGING-03 review | `src/logging.rs` tests | The rejected-install test writes into the sink directly and does not assert the install-warning text; emitting through the subscriber and pinning the WARN would be stronger. | completed |
 | F320 | LOCK-03 review | `tests/artifact_bridge.rs` | The bridge test duplicates `remove_run_lock` locally; consolidating with `common::remove_run_lock_for_args` would remove the last copy. | completed |
 | F321 | LOCK-03 review | `tests/common/mod.rs` | `remove_run_lock` acquires-and-deletes even for read-only runs that never took a lock, briefly creating a file; skip when the mode cannot lock. | completed |
 | F322 | LOCK-03 review | `tests/common/mod.rs` | The vanished-install fallback assumes the caller's parent is canonical; a junction/relative-spelled install would diverge and leak the real file. | completed |
@@ -630,7 +630,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-04 | F315, F316, F317 | done | Wave E; help-entry slicing hardening; low; 388365c, 5447a8e, 190a061, 5e111b2 |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
-| LOGGING-04 | F318, F319 | pending_review | Wave E; sink naming and rejected-install test strength; low; 9b87298, a2ea354, 281878b |
+| LOGGING-04 | F318, F319 | done | Wave E; sink naming and rejected-install test strength; low; 9b87298, a2ea354, 281878b |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
 | LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
