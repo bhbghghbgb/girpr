@@ -521,10 +521,10 @@ async fn a_non_utf8_audio_cache_name_moves_byte_for_byte() {
     mock.stop();
 }
 
-/// The same move through the shipped binary: the CLI layer's flag parsing and
-/// `RunCtx` wiring must preserve the byte-exact name too. The in-process case
-/// injects a `RunCtx` directly, so it cannot see a name rewritten before the
-/// post-phase (for example by a lossy conversion while building the context).
+/// The same move through the shipped binary. The destination name comes from
+/// the post-phase walk of the cache directory, not from the `RunCtx`, so this
+/// case does not prove that context construction preserves the name; it proves
+/// the CLI layer's flag parsing and `RunCtx` wiring reach that same walk.
 ///
 /// The name is built with the platform's own byte constructor, so a host that
 /// cannot create one skips rather than failing.
