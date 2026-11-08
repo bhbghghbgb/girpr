@@ -479,10 +479,10 @@ async fn plan_work_and_purge(
         let keys_plan = Arc::clone(&plan);
         let blacklist = meta.blacklist.clone();
         let purge_scope = ctx.path_scope.clone();
-        // Raw `spawn_blocking`: the walk's only line is the best-effort
-        // "candidate list may be incomplete" warning, which nothing asserts
-        // through a scoped subscriber. A test that needed it would use
-        // `spawn_blocking_traced`.
+        // Raw `spawn_blocking`: the walk emits only best-effort diagnostics
+        // (a path it could not read, a candidate it could not stat), which
+        // nothing asserts through a scoped subscriber. A test that needed them
+        // would use `spawn_blocking_traced`.
         let (keys, plan) = tokio::task::spawn_blocking(move || {
             let keys = purge::PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
             let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
@@ -719,9 +719,10 @@ async fn publish_plan(
         let disk_plan = Arc::clone(plan);
         let repair_mode = ctx.repair_mode;
         let jobs = ctx.jobs;
-        // Raw `spawn_blocking`: `DiskPlan::new` only warns when a rel escapes
-        // the install, and nothing asserts that line through a scoped
-        // subscriber. Use `spawn_blocking_traced` if one does.
+        // Raw `spawn_blocking`: `DiskPlan::new` emits only best-effort
+        // warnings (a rel that escapes the install, a file that cannot be
+        // stat'd). No test drives them through this spawn site; a test that
+        // needed to would use `spawn_blocking_traced`.
         Some(
             tokio::task::spawn_blocking(move || {
                 scope::report::DiskPlan::new(
