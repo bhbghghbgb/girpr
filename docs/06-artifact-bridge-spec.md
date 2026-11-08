@@ -149,13 +149,17 @@ depend on the reader — so the reader is not what they use.
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
 four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
-The suite is six cases and well under a minute in release. That is worth paying
-when something has gone wrong and not worth paying on every `cargo nextest run`.
+The suite is six cases and well under a minute in release. That is a price worth
+paying **before a release that changes the repair spec** and *after something has
+gone wrong*, and not worth paying on every `cargo nextest run`.
 
 So it runs **by hand, deliberately: before any release that changes the repair
-spec, and whenever that spec is suspected to have regressed**:
+spec, and whenever that spec is suspected to have regressed**. A pre-release run
+builds the verifier first, so the `gircap verify` precondition below actually
+executes instead of skipping:
 
 ```
+cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 ```
 
@@ -197,11 +201,12 @@ capture the matrix does not mention at all is a missing prerequisite and fails.
 **Precondition.** Before any run, the bundle's own integrity is established —
 `gircap verify --artifact <dir>`, exit `0`. It makes a failing check rule the
 bundle out as the cause instead of leaving it as the first suspect. The binary is
-found next to `CARGO_BIN_EXE_girpr`, so there is no guessing and no
-`cargo build -p gircap` step to remember. When `gircap` is not built the
-precondition is **skipped with its reason printed**; the bridge does not
-re-implement `verify`. A bundle that *fails* verification is a hard failure, not
-a skip — a corrupt bundle is a real problem and must not hide behind a green run.
+found next to `CARGO_BIN_EXE_girpr`, so there is no guessing at a path. When
+`gircap` is not built the precondition is **skipped with its reason printed**;
+the bridge does not re-implement `verify`. That skip is for ordinary runs only:
+a **pre-release run builds `gircap` first** (`cargo build -p gircap`), so the
+precondition runs. A bundle that *fails* verification is a hard failure, not a
+skip — a corrupt bundle is a real problem and must not hide behind a green run.
 
 ---
 

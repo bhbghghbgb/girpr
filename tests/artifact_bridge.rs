@@ -30,8 +30,9 @@
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
 //! each run fetches four manifests — ~20 MB of real bundle bytes — before it
 //! can plan a single file. The whole suite is a handful of cases and **minutes**
-//! of wall-clock, which is a price worth paying *when something has gone wrong*
-//! and not worth paying on every `cargo nextest run`.
+//! of wall-clock. That is a price worth paying **before a release that changes
+//! the repair spec** and *after something has gone wrong*, and not worth paying
+//! on every `cargo nextest run`.
 //!
 //! So it is run **by hand, deliberately** — before any release that changes
 //! the repair spec, and whenever that spec is suspected to have regressed:
@@ -237,7 +238,8 @@ fn patchmaps(bundle: &Bundle) -> Patchmaps {
 async fn assert_bundle_verifies(bundle: &Bundle) {
     let Some(exe) = gircap_exe() else {
         println!(
-            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`",
+            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`.\n\
+             \x20 A pre-release run builds it first: cargo build -p gircap",
             girpr_exe_dir().display()
         );
         return;

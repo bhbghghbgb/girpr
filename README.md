@@ -443,8 +443,9 @@ cargo nextest run --test repair_machinery
 cargo clippy -p girpr --all-targets -- -D warnings
 cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 
-# the artifact bridge: #[ignore]d, needs a bundle (docs/06); run before a
-# repair-spec release
+# the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
+# builds gircap first so the `gircap verify` precondition executes
+cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 
 # the hash and scan throughput measurements: #[ignore]d, print MiB/s
@@ -577,6 +578,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   **pre-release gate: run it by hand before any release that changes the repair
   spec, and whenever a regression in that spec is suspected**:
   ```powershell
+  cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
   cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
   ```
   It still *compiles* under `cargo nextest run`, so a broken bridge fails to
