@@ -395,8 +395,8 @@ until the main tasks and rework are done.
 | F294 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | `SeekRecording.writes` counts bytes, not write calls; `bytes` would read better. | todo |
 | F295 | TEMP-PUBLISH-03 review | `src/util/path.rs` tests | If the no-file-name `temp_sibling` fallback should ever be rejected, the helper doc and both shape assertions need updating together. | todo |
 | F296 | TEMP-PUBLISH-03 review | `src/repair/phases/post.rs` | The no-file-name guard is production-reachable only if the walk later yields symlinks/directories; add a production-path test then. | todo |
-| F297 | DOCS-USER-02 review | `tests/artifact_bridge.rs` | The six bridge tests are `#[ignore]`d and were not run; run them manually with `--run-ignored only` before a repair-spec release. | todo |
-| F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | todo |
+| F297 | DOCS-USER-02 review | `tests/artifact_bridge.rs` | The six bridge tests are `#[ignore]`d and were not run; run them manually with `--run-ignored only` before a repair-spec release. | completed |
+| F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | completed |
 | F299 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The audit predates some local-invariant `expect` sites, e.g. `PlanTotals::new` in `src/repair/scope/report.rs`. | todo |
 | F300 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The method section's file list omits `src/repair/audio.rs` and `src/repair/lock.rs`. | todo |
 | F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | completed |
@@ -537,7 +537,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-01 | F53, F116, F119 | done | Wave D, after CHECK-01 and PHASE-01; output-plane golden tightening; medium; 93d71d5, ccdfe50 |
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | done | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low; e8ae20c, 3a0d207, b4b5c48, 3fc46c6, 1ddbb61 |
 | DOCS-USER-02 | F262, F263, F264 | done | Wave E; drifting counts, fatal-path wording and alias spelling; low; aba6aea, ef16ae7, 38047d4, b768c22 |
-| DOCS-USER-03 | F297, F298 | pending_review | Wave E; ignored bridge run and scan-test flag modernization; low; 3c38d19, 15b37c7 |
+| DOCS-USER-03 | F297, F298 | done | Wave E; ignored bridge run and scan-test flag modernization; low; 3c38d19, 15b37c7, 974e5f3 |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
 | DOCS-COMMENTS-02 | F265, F266, F267, F268 | done | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2, 6a2f2d8 |
 | DOCS-COMMENTS-03 | F299, F300 | todo | Wave E; audit local-invariant coverage and file list; low |
