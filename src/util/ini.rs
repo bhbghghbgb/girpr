@@ -278,6 +278,15 @@ fn game_dir_refusal(game_dir: &Path) -> std::io::Result<Option<anyhow::Error>> {
     )))
 }
 
+/// The `NotFound` caller's error for a game dir that could not be inspected.
+///
+/// The inspection error keeps its kind (a caller can still tell the failure
+/// apart) but gains the path context the call site adds, so the caller is not
+/// left with a bare OS error.
+fn inspect_game_dir_error(game_dir: &Path, inspection: std::io::Error) -> anyhow::Error {
+    anyhow::Error::from(inspection).context(format!("inspect game dir {}", game_dir.display()))
+}
+
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
 ///
 /// The game directory must already exist as a directory; only `config.ini`
@@ -348,8 +357,7 @@ pub fn write_config_ini(
                     // failure (a permission denial on the way to the path, for
                     // example) is the honest answer; reporting the path as
                     // missing would be a guess.
-                    Err(inspection) => Err(inspection)
-                        .with_context(|| format!("inspect game dir {}", game_dir.display())),
+                    Err(inspection) => Err(inspect_game_dir_error(game_dir, inspection)),
                 };
             }
             String::new()
@@ -1058,6 +1066,34 @@ mod tests {
         let err = game_dir_refusal(Path::new("bad\0path"))
             .expect_err("a path that cannot be inspected must be an error");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
+    }
+
+    /// The `NotFound` arm surfaces a failed game-dir inspection with the name
+    /// of the path it could not inspect, and keeps the I/O error's kind so the
+    /// caller can still tell a permission failure from a malformed path. A NUL
+    /// makes `symlink_metadata` fail with `InvalidInput` on every supported
+    /// platform, so the inspection failure comes from the real syscall
+    /// boundary; the context is applied exactly as the caller applies it.
+    #[test]
+    fn a_failed_game_dir_inspection_keeps_its_kind_and_names_the_path() {
+        let game_dir = Path::new("uninspected\0game-dir");
+        let inspection = game_dir_refusal(game_dir).expect_err("a NUL path cannot be inspected");
+        assert_eq!(
+            inspection.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{inspection}"
+        );
+
+        let err = inspect_game_dir_error(game_dir, inspection);
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("inspect game dir uninspected"),
+            "the call site names the path: {msg}"
+        );
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("the inspection error survives the context");
+        assert_eq!(io.kind(), std::io::ErrorKind::InvalidInput, "{err:#}");
     }
 
     /// A path that exists as a file is a different mistake from a missing
