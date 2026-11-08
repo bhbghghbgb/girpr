@@ -406,8 +406,8 @@ until the main tasks and rework are done.
 | F305 | PURGE-PERF-04 review | `src/repair/mod.rs` | `fetch_deprecated`'s normalization/drop-with-warning paths have no focused test; a backslash or absolute deprecated name would pin the `retain_mut` semantics. | completed |
 | F306 | PURGE-PERF-04 review | `src/repair/mod.rs` | The "one Arc allocation" claim relies on std's in-place collect specialization; confirm with an allocator counter if it matters. | completed |
 | F307 | PURGE-PERF-04 review | `src/util/counter.rs` | The shared test pause barrier is thread-local and process-wide; a test pausing then hitting a different counter on the same thread would pause unexpectedly. | completed |
-| F308 | HYP-03 review | `tests/*.rs` | Several test files still hardcode `9.9.9-test`/`1.0.0-long-gone` rather than `LATEST_TAG`/a constant; a test-hygiene sweep would reduce drift. | todo |
-| F309 | HYP-03 review | `src/repair/phases/metadata.rs` tests | `logs_of` captures only the current thread; if `fetch` ever emits from a `spawn_blocking` worker, the helper would silently miss it. | todo |
+| F308 | HYP-03 review | `tests/*.rs` | Several test files still hardcode `9.9.9-test`/`1.0.0-long-gone` rather than `LATEST_TAG`/a constant; a test-hygiene sweep would reduce drift. | completed |
+| F309 | HYP-03 review | `src/repair/phases/metadata.rs` tests | `logs_of` captures only the current thread; if `fetch` ever emits from a `spawn_blocking` worker, the helper would silently miss it. | completed |
 | F310 | METADATA-03 review | `tests/common/mod.rs` | The mock can only fail a branch call with a non-JSON body; a JSON `retcode` failure mode is needed to test retryable-vs-terminal branch behavior. | completed |
 | F311 | METADATA-03 review | `tests/common/mod.rs` | `branch_failure_status` is behaviourally inert for retry classification; fold it into a single failure-body knob. | completed |
 | F312 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | `wait_until_idle`/`wait_for` use `notify_waiters()` with a pre-check, which could miss a wakeup on a multi-thread runtime; `Notified::enable()` would harden it. | completed |
@@ -554,7 +554,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-04 | F372, F373, F374, F375, F376 | todo | Wave E; audit method/table consistency and missing section refs; low |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | done | Wave E; local fixture tag, warning wording and mismatch precedence; low; ec3e7aa, 64e5c56, a9e8598 |
-| HYP-04 | F308, F309 | pending_review | Wave E; test tag constants and multi-thread log capture; low; 5cf9315, d1bdced, 4922eec |
+| HYP-04 | F308, F309 | done | Wave E; test tag constants and multi-thread log capture; low; 5cf9315, d1bdced, 4922eec |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
 | SYNC-02 | F251, F252 | done | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99, 2049582 |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
