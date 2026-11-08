@@ -101,7 +101,7 @@ impl Lock {
 ///
 /// `check_only` is already part of `readonly`, but stating it keeps the
 /// contract explicit. `--purge-only` is not read-only and does take the lock.
-pub(crate) fn takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> bool {
+pub fn takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> bool {
     !readonly && !check_only && !print_plan
 }
 

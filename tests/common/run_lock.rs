@@ -157,6 +157,7 @@ mod tests {
     use super::*;
 
     use clap::Parser;
+    use girpr::test_support::takes_lock;
     use girpr::{Args, RunCtx};
     use girpr_tempdir::TempDir;
 
@@ -185,20 +186,13 @@ mod tests {
             .expect("test flags must parse")
     }
 
-    /// The production rule: a lock is taken unless one of the read-only modes
-    /// is selected. Reading the expected side from the parsed run context keeps
-    /// each case tied to a real CLI combination instead of a guessed bool.
-    fn run_takes_lock(ctx: &RunCtx) -> bool {
-        !ctx.readonly() && !ctx.check_only && !ctx.print_plan
-    }
-
     #[test]
     fn mode_mirror_matches_every_run_mode() {
         for flags in mode_sets() {
             let ctx = ctx_for(&flags);
             assert_eq!(
                 mode_takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
-                run_takes_lock(&ctx),
+                takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
                 "flags {flags:?}"
             );
         }
@@ -208,7 +202,11 @@ mod tests {
         let purge_only = ctx_for(&["--purge-only"]);
         assert!(purge_only.purge_only);
         assert!(!purge_only.readonly());
-        assert!(run_takes_lock(&purge_only));
+        assert!(takes_lock(
+            purge_only.readonly(),
+            purge_only.check_only,
+            purge_only.print_plan
+        ));
     }
 
     #[test]
@@ -219,7 +217,7 @@ mod tests {
             argv.extend_from_slice(&flags);
             assert_eq!(
                 args_take_lock(&argv),
-                run_takes_lock(&ctx),
+                takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan),
                 "flags {flags:?}"
             );
         }
