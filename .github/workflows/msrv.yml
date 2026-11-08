@@ -1,5 +1,9 @@
 name: msrv
 
+# Advisory: the default branch does not require these checks, so a docs-only
+# change correctly produces no `msrv` run. If this becomes a required check,
+# remove the path filters or add an always-run summary job: GitHub leaves a
+# required check that never runs pending.
 on:
   push:
     paths:
