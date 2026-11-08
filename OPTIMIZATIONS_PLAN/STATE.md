@@ -685,7 +685,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
 | TEMP-PUBLISH-04 | F295, F296 | skipped | Wave E; fallback-decision and future walk-reachability notes; low |
-| TEMP-PUBLISH-05 | F387, F388, F389 | in_progress | Wave E; no-file-name publish refusal and temp-sibling resolution pin; low |
+| TEMP-PUBLISH-05 | F387, F388, F389 | pending_review | Wave E; no-file-name publish refusal and temp-sibling resolution pin; low; 1697a35, 0d58148, f11563c |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
