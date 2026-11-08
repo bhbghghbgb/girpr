@@ -244,9 +244,10 @@ fn test_no_fsync() -> bool {
 /// classified without swallowing a different error (for example the target of
 /// an existing link could not be resolved); the caller then surfaces the
 /// original I/O error rather than inventing a refusal. `Err` is a failure to
-/// inspect the path itself: the caller must surface it, because when the
-/// original read error was `NotFound`, calling an unreadable path "missing"
-/// would be a guess.
+/// inspect the path itself: the `NotFound` caller surfaces it, with the path
+/// named, because calling an unreadable path "missing" would be a guess. The
+/// `NotADirectory` caller keeps its own error instead: that kind already names
+/// the real condition, so nothing is being guessed there.
 ///
 /// A Windows junction is a reparse point, but Rust's `FileType::is_symlink`
 /// reports name-surrogate reparse tags (symlinks and mount points/junctions)
