@@ -623,7 +623,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-05 | F351, F352 | skipped | Wave E; 404-manifest stability pass and shared coordination helpers; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
-| JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
+| JOBS-04 | F315, F316, F317 | in_progress | Wave E; help-entry slicing hardening; low |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
 | LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
