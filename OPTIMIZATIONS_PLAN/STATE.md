@@ -527,6 +527,11 @@ until the main tasks and rework are done.
 | F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | todo |
 | F427 | LOCK-05 review | `tests/common/run_lock.rs` | The `#[cfg(test)]` module in the `#[path]`-shared file runs in every including binary; a dedicated module/bin would cut duplicated executions. | todo |
 | F428 | LOCK-05 review | `tests/common/run_lock.rs` | `lock_key_path` mis-keys an empty `--game-path` (anchors at cwd while production keys `""`); note it if empty paths ever matter. | todo |
+| F429 | INI-05 review | `src/util/ini.rs` tests | The junction test's `remove_dir` runs only after every assertion; a cleanup guard would tidy failure paths that leave a dangling junction. | todo |
+| F430 | INI-05 review | `src/util/ini.rs` tests | The dangling-symlink test leaves its link for `TempDir` cleanup while the junction test removes its own; share one reparse-point cleanup strategy. | todo |
+| F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | todo |
+| F432 | INI-05 review | `src/util/ini.rs` tests | The call-site test drives the private helper directly, so a refactor could bypass it; no practical alternative exists. | todo |
+| F433 | INI-05 review | `src/util/ini.rs` | `symlink_skip_reason` treats every `Unsupported` as a host skip; intended, but the set can broaden as std maps more codes there. | todo |
 
 ## Follow-up batches
 
@@ -597,6 +602,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
+| INI-06 | F429, F430, F431, F432, F433 | todo | Wave E; junction/symlink test cleanup and platform broadenings; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
