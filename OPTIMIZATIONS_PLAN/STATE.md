@@ -430,8 +430,8 @@ until the main tasks and rework are done.
 | F329 | BUILD-TOOLS-03 review | `Cargo.toml` | The root `girpr` manifest also requests `tokio` without `default-features = false` (same empty `default`); align for consistency. | completed |
 | F330 | BUILD-TOOLS-03 review | `tools/capture/Cargo.toml` | "This list is the whole request" is true of the manifest, but reqwest-tree crates still activate tokio's empty `default` in the resolved graph; clarify if it misleads. | completed |
 | F331 | EXIT-05 review | `src/main.rs` | The binary's hand-spelled six-status list must be updated manually if a seventh `RunExit` variant is added. | completed |
-| F332 | PURGE-PERF-05 review | `src/util/counter.rs` tests | Add a focused regression test that pauses one cell and charges a different cell on the same thread, pinning the scoping directly. | todo |
-| F333 | PURGE-PERF-05 review | `src/repair/mod.rs` tests | The normalization test calls the helper directly; an end-to-end `fetch_deprecated` test over a stub client would also pin that the fetch path invokes it. | todo |
+| F332 | PURGE-PERF-05 review | `src/util/counter.rs` tests | Add a focused regression test that pauses one cell and charges a different cell on the same thread, pinning the scoping directly. | completed |
+| F333 | PURGE-PERF-05 review | `src/repair/mod.rs` tests | The normalization test calls the helper directly; an end-to-end `fetch_deprecated` test over a stub client would also pin that the fetch path invokes it. | completed |
 | F334 | BUILD-04 review | `.github/workflows/msrv.yml` | The `iot-bench` job uses default stable, so a 1.89-specific bench regression would go unnoticed; pinning 1.89 would close that gap. | todo |
 | F335 | BUILD-04 review | `tests/scripts/io-profile/README.md` | "buildable with the workspace toolchain" is loose given the job uses default stable; say "current stable" explicitly. | todo |
 | F336 | BUILD-04 review | `.github/workflows/msrv.yml` | The path filter means docs/config-only PRs produce no `msrv` check; confirm branch protection compatibility or add an always-run companion. | todo |
@@ -537,7 +537,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
 | EXIT-07 | F394, F395 | todo | Wave E; macro generality and duplicated status list; low |
-| PURGE-PERF-06 | F332, F333 | pending_review | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
+| PURGE-PERF-06 | F332, F333 | done | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
