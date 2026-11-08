@@ -462,10 +462,10 @@ until the main tasks and rework are done.
 | F361 | CHECK-04 review | `src/report/summary.rs` | "no store reaches this field without the flag" is true of production paths but a test stores directly; say "no production store" for strict precision. | completed |
 | F362 | CHECK-04 review | `src/repair/phases/check.rs` | The test repeats `Duration::from_secs(10)` across the gate wait and `recv_timeout`; a module-level constant would keep them in step. | completed |
 | F363 | CHECK-04 review | `src/repair/phases/check.rs` | The injected check closure still has an unbounded `while !state.release_slow { cv.wait(state) }` inside its spawned thread. | completed |
-| F364 | PATHHELPERS-04 review | `tests/repair_post.rs`, config | nextest's default profile captures passing-test output, so the `SKIP precondition:` line is invisible under the plain gate; a per-test `success-output` override or a README `--no-capture` note would help. | todo |
-| F365 | PATHHELPERS-04 review | `tests/repair_post.rs` | The skip branch is unexercised on both supported CI filesystems; an injected-write seam would cover both branches deterministically. | todo |
-| F366 | PATHHELPERS-04 review | `README.md` | The switch is presence-based, not value-based, so `GIRPR_TEST_REQUIRE_NON_UTF8=0` still forces failure; clarify "any value". | todo |
-| F367 | PATHHELPERS-04 review | `src/util/path.rs` | Pre-existing silent skips remain elsewhere (e.g. the junction test); the same explicit/opt-in treatment could apply. | todo |
+| F364 | PATHHELPERS-04 review | `tests/repair_post.rs`, config | nextest's default profile captures passing-test output, so the `SKIP precondition:` line is invisible under the plain gate; a per-test `success-output` override or a README `--no-capture` note would help. | completed |
+| F365 | PATHHELPERS-04 review | `tests/repair_post.rs` | The skip branch is unexercised on both supported CI filesystems; an injected-write seam would cover both branches deterministically. | completed |
+| F366 | PATHHELPERS-04 review | `README.md` | The switch is presence-based, not value-based, so `GIRPR_TEST_REQUIRE_NON_UTF8=0` still forces failure; clarify "any value". | completed |
+| F367 | PATHHELPERS-04 review | `src/util/path.rs` | Pre-existing silent skips remain elsewhere (e.g. the junction test); the same explicit/opt-in treatment could apply. | completed |
 | F368 | DOCS-USER-03 review | `tests/artifact_bridge.rs`, `docs/06-artifact-bridge-spec.md` | The cost rationale still says the suite is worth running "when something has gone wrong", understating the pre-release occasion. | todo |
 | F369 | DOCS-USER-03 review | `tests/peak_heap.rs` | Line 12 still writes the flag as `--io-threads 8` in prose; `--jobs` would be consistent. | todo |
 | F370 | DOCS-USER-03 review | `tests/artifact_bridge.rs` | The `gircap verify` precondition is skipped unless `gircap` is pre-built; a release run should build it so the precondition executes. | todo |
@@ -574,7 +574,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
 | PATHHELPERS-04 | F288, F289 | done | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low; 43e3eba, d87959e |
-| PATHHELPERS-05 | F364, F365, F366, F367 | pending_review | Wave E; skip visibility, injected-write seam and remaining silent skips; low; 8fdfce9, 63b3740, de58699 |
+| PATHHELPERS-05 | F364, F365, F366, F367 | done | Wave E; skip visibility, injected-write seam and remaining silent skips; low; 8fdfce9, 63b3740, de58699 |
 | REFACTOR-02 | F207 | done | Wave E; make the download estimate read as pure; low; 0e79367 |
 | REFACTOR-03 | F269, F270 | done | Wave E; estimate type split and limit-source doc; low; 880fd58 |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
