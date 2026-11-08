@@ -774,7 +774,7 @@ mod tests {
     struct SeekRecording<'a> {
         file: &'a mut File,
         seeks: Vec<SeekFrom>,
-        writes: usize,
+        bytes: usize,
     }
 
     impl<'a> SeekRecording<'a> {
@@ -782,7 +782,7 @@ mod tests {
             Self {
                 file,
                 seeks: Vec::new(),
-                writes: 0,
+                bytes: 0,
             }
         }
     }
@@ -790,7 +790,7 @@ mod tests {
     impl Write for SeekRecording<'_> {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             let n = self.file.write(buf)?;
-            self.writes += n;
+            self.bytes += n;
             Ok(n)
         }
 
@@ -999,7 +999,7 @@ mod tests {
             "the download path must not position the sink; the streaming sink places it"
         );
         assert_eq!(
-            out.writes, 0,
+            out.bytes, 0,
             "the download path must not write into the sink"
         );
     }
@@ -1044,7 +1044,7 @@ mod tests {
             "the download path must not position the sink for a missing candidate"
         );
         assert_eq!(
-            out.writes, 0,
+            out.bytes, 0,
             "the download path must not write into the sink"
         );
         assert_eq!(
@@ -1100,7 +1100,7 @@ mod tests {
             out.seeks.is_empty(),
             "the mismatch must be found before the sink is positioned"
         );
-        assert_eq!(out.writes, 0, "a mismatching slice must not be written");
+        assert_eq!(out.bytes, 0, "a mismatching slice must not be written");
         assert_eq!(
             std::fs::metadata(&out_path).unwrap().len(),
             0,
