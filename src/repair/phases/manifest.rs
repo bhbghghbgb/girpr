@@ -98,6 +98,10 @@ impl<T> OrderedResults<T> {
 
     /// Record a result that arrived for `index`; it is read once every earlier
     /// selection has been drained.
+    ///
+    /// `index` is the selection index from the same `enumerate` that sized
+    /// `slots`, so `slots[index]` is in bounds by local invariant; no
+    /// server-derived value reaches it.
     fn push(&mut self, index: usize, value: T) {
         self.slots[index] = Some(value);
     }
