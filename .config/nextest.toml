@@ -87,3 +87,14 @@ failure-output = "final"
 # the bundle-backed suites are legitimately slow, and a killed test is a false
 # alarm dressed up as a hang.
 slow-timeout = { period = "60s" }
+
+# These cases report a host-dependent skip on stderr and then pass. Nextest's
+# default profile discards a passing test's captured output, so the skip would
+# be invisible under the plain gate; show it for these tests only.
+[[profile.default.overrides]]
+filter = """
+    test(=a_non_utf8_audio_cache_name_moves_byte_for_byte)
+    or test(=a_non_utf8_audio_cache_name_moves_through_the_binary)
+    or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
+"""
+success-output = "immediate"
