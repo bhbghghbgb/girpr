@@ -393,8 +393,8 @@ until the main tasks and rework are done.
 | F292 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | The unseekable test cannot distinguish "reserved then refunded" from "never reserved" (`live() == 0` both ways); a ledger spy would pin reserve-before-seek. | completed |
 | F293 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` | `ChunkFileSink::new`'s doc still says it holds "the only `&mut File`" though it is now generic over `W`. | completed |
 | F294 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | `SeekRecording.writes` counts bytes, not write calls; `bytes` would read better. | completed |
-| F295 | TEMP-PUBLISH-03 review | `src/util/path.rs` tests | If the no-file-name `temp_sibling` fallback should ever be rejected, the helper doc and both shape assertions need updating together. | todo |
-| F296 | TEMP-PUBLISH-03 review | `src/repair/phases/post.rs` | The no-file-name guard is production-reachable only if the walk later yields symlinks/directories; add a production-path test then. | todo |
+| F295 | TEMP-PUBLISH-03 review | `src/util/path.rs` tests | If the no-file-name `temp_sibling` fallback should ever be rejected, the helper doc and both shape assertions need updating together. | skipped (already covered by 40b23a5, 1e96ab6, 86c6fc1, 02b346d; no change needed) |
+| F296 | TEMP-PUBLISH-03 review | `src/repair/phases/post.rs` | The no-file-name guard is production-reachable only if the walk later yields symlinks/directories; add a production-path test then. | skipped (already covered by 40b23a5, 1e96ab6, 86c6fc1, 02b346d; no change needed) |
 | F297 | DOCS-USER-02 review | `tests/artifact_bridge.rs` | The six bridge tests are `#[ignore]`d and were not run; run them manually with `--run-ignored only` before a repair-spec release. | completed |
 | F298 | DOCS-USER-02 review | `tests/process.rs`, `tests/repair_*.rs` | Many integration tests still pass `--io-threads` where `--jobs` would do; a cleanup could modernize them while keeping one alias case. | completed |
 | F299 | DOCS-COMMENTS-02 review | `docs/07-panic-audit.md` | The audit predates some local-invariant `expect` sites, e.g. `PlanTotals::new` in `src/repair/scope/report.rs`. | completed |
@@ -611,7 +611,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-05 | F382, F383, F384, F385, F386 | todo | Wave E; recorder naming and doc precision; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
-| TEMP-PUBLISH-04 | F295, F296 | in_progress | Wave E; fallback-decision and future walk-reachability notes; low |
+| TEMP-PUBLISH-04 | F295, F296 | skipped | Wave E; fallback-decision and future walk-reachability notes; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
