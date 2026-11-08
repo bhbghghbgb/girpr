@@ -525,7 +525,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-05 | F361, F362, F363 | todo | Wave E; doc precision and remaining bounded waits; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
-| PATHHELPERS-04 | F288, F289 | todo | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
+| PATHHELPERS-04 | F288, F289 | in_progress | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
 | REFACTOR-02 | F207 | done | Wave E; make the download estimate read as pure; low; 0e79367 |
 | REFACTOR-03 | F269, F270 | done | Wave E; estimate type split and limit-source doc; low; 880fd58 |
 | TEST-REGRESSION-01 | F32, F112, F113, F126, F127, F130 | done | Wave D, after INPLACE-01, DRYRUN-01, TEMP-PUBLISH-01; mutation, partial-copy and timing regressions; low; cadadd0, 0c61ffd, 11e27b1, 9a430aa, b053632 |
