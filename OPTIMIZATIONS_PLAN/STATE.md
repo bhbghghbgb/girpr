@@ -593,7 +593,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
 | DOCS-COMMENTS-02 | F265, F266, F267, F268 | done | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2, 6a2f2d8 |
 | DOCS-COMMENTS-03 | F299, F300 | done | Wave E; audit local-invariant coverage and file list; low; d7ce878 |
-| DOCS-COMMENTS-04 | F372, F373, F374, F375, F376 | todo | Wave E; audit method/table consistency and missing section refs; low |
+| DOCS-COMMENTS-04 | F372, F373, F374, F375, F376 | in_progress | Wave E; audit method/table consistency and missing section refs; low |
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | done | Wave E; local fixture tag, warning wording and mismatch precedence; low; ec3e7aa, 64e5c56, a9e8598 |
 | HYP-04 | F308, F309 | done | Wave E; test tag constants and multi-thread log capture; low; 5cf9315, d1bdced, 4922eec |
