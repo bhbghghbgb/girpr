@@ -138,9 +138,31 @@ pub fn init_tracing(
     log_file: Option<&Path>,
     no_log_file: bool,
 ) -> LogPlan {
+    init_tracing_with(
+        &mut std::io::stderr(),
+        console_level,
+        file_level,
+        log_file,
+        no_log_file,
+    )
+}
+
+/// The body of [`init_tracing`], with the warning destination injectable.
+///
+/// A rejected install is the one path whose warning has no event to carry it,
+/// because the subscriber that would carry it already exists. A test reads
+/// that warning through its own buffer instead of capturing the process's
+/// stderr.
+fn init_tracing_with(
+    warnings: &mut dyn Write,
+    console_level: Level,
+    file_level: Option<Level>,
+    log_file: Option<&Path>,
+    no_log_file: bool,
+) -> LogPlan {
     let env = girpr_log::env_options(PROJECT);
     for warning in &env.warnings {
-        eprintln!("WARN {warning}");
+        let _ = writeln!(warnings, "WARN {warning}");
     }
     let plan = LogPlan::resolve(
         PROJECT,
@@ -167,7 +189,11 @@ pub fn init_tracing(
         Some(path) => match open_log_file(path) {
             Ok(f) => Box::new(f),
             Err(e) => {
-                eprintln!("WARN disabling file logging ({}): {e}", path.display());
+                let _ = writeln!(
+                    warnings,
+                    "WARN disabling file logging ({}): {e}",
+                    path.display()
+                );
                 Box::new(std::io::sink())
             }
         },
@@ -194,7 +220,9 @@ pub fn init_tracing(
         .try_init()
     {
         Ok(()) => install_sink(flush_sink),
-        Err(e) => eprintln!("WARN cannot install the tracing subscriber: {e}"),
+        Err(e) => {
+            let _ = writeln!(warnings, "WARN cannot install the tracing subscriber: {e}");
+        }
     }
 
     match plan.file_path() {
@@ -439,8 +467,20 @@ mod tests {
         // The global subscriber is already installed, so this second call is
         // rejected: it still returns the plan it was asked for, but its sink is
         // never registered.
-        let second_plan = init_tracing(Level::Info, Some(Level::Debug), Some(&second_path), false);
+        let mut warnings = Vec::new();
+        let second_plan = init_tracing_with(
+            &mut warnings,
+            Level::Info,
+            Some(Level::Debug),
+            Some(&second_path),
+            false,
+        );
         assert_eq!(second_plan.file_path(), Some(second_path.as_path()));
+        let warnings = String::from_utf8(warnings).expect("the warnings are utf-8");
+        assert!(
+            warnings.contains("WARN cannot install the tracing subscriber"),
+            "{warnings:?}"
+        );
 
         let after = FILE_SINK
             .lock()
@@ -452,17 +492,17 @@ mod tests {
             "the rejected install does not replace the first sink"
         );
 
-        registered
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .write_all(b"after the rejected install\n")
-            .expect("write into the first sink");
+        // The surviving subscriber is still the one that renders records into
+        // the first file, so a WARN emitted now must reach it.
+        tracing::warn!("after the rejected install");
         flush_log();
 
         let first = std::fs::read_to_string(&first_path).expect("the first log is readable");
         assert!(
-            first.contains("after the rejected install"),
-            "the first sink still flushes: {first:?}"
+            first
+                .lines()
+                .any(|line| line.contains("WARN") && line.contains("after the rejected install")),
+            "the first sink still receives the WARN record: {first:?}"
         );
         assert_eq!(
             std::fs::read(&second_path).expect("the rejected file was opened"),
