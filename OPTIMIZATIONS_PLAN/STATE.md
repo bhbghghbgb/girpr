@@ -466,10 +466,10 @@ until the main tasks and rework are done.
 | F365 | PATHHELPERS-04 review | `tests/repair_post.rs` | The skip branch is unexercised on both supported CI filesystems; an injected-write seam would cover both branches deterministically. | completed |
 | F366 | PATHHELPERS-04 review | `README.md` | The switch is presence-based, not value-based, so `GIRPR_TEST_REQUIRE_NON_UTF8=0` still forces failure; clarify "any value". | completed |
 | F367 | PATHHELPERS-04 review | `src/util/path.rs` | Pre-existing silent skips remain elsewhere (e.g. the junction test); the same explicit/opt-in treatment could apply. | completed |
-| F368 | DOCS-USER-03 review | `tests/artifact_bridge.rs`, `docs/06-artifact-bridge-spec.md` | The cost rationale still says the suite is worth running "when something has gone wrong", understating the pre-release occasion. | todo |
-| F369 | DOCS-USER-03 review | `tests/peak_heap.rs` | Line 12 still writes the flag as `--io-threads 8` in prose; `--jobs` would be consistent. | todo |
-| F370 | DOCS-USER-03 review | `tests/artifact_bridge.rs` | The `gircap verify` precondition is skipped unless `gircap` is pre-built; a release run should build it so the precondition executes. | todo |
-| F371 | DOCS-USER-03 review | `tests/cli_contract.rs` | Several process-level cases still pass `--io-threads` beyond the dedicated alias tests; incidental ones could become `--jobs`. | todo |
+| F368 | DOCS-USER-03 review | `tests/artifact_bridge.rs`, `docs/06-artifact-bridge-spec.md` | The cost rationale still says the suite is worth running "when something has gone wrong", understating the pre-release occasion. | completed |
+| F369 | DOCS-USER-03 review | `tests/peak_heap.rs` | Line 12 still writes the flag as `--io-threads 8` in prose; `--jobs` would be consistent. | completed |
+| F370 | DOCS-USER-03 review | `tests/artifact_bridge.rs` | The `gircap verify` precondition is skipped unless `gircap` is pre-built; a release run should build it so the precondition executes. | completed |
+| F371 | DOCS-USER-03 review | `tests/cli_contract.rs` | Several process-level cases still pass `--io-threads` beyond the dedicated alias tests; incidental ones could become `--jobs`. | completed |
 | F372 | DOCS-COMMENTS-03 review | `docs/07-panic-audit.md` | Method step 1 names `.unwrap()`/`.expect()`/`[]` but its updated command also greps `panic!`/`unreachable!` and slices; the prose should match. | todo |
 | F373 | DOCS-COMMENTS-03 review | `docs/07-panic-audit.md` | The new `audio.rs`/`lock.rs` note continues the numbered-list sentence after its period and orders modules after `purge`; cosmetic. | todo |
 | F374 | DOCS-COMMENTS-03 review | `docs/07-panic-audit.md` | The table now mixes panic sites with non-panicking clamps (`max_chunk_bytes`); a framing sentence would clarify. | todo |
@@ -585,7 +585,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-01 | F38, F41, F95, F105, F117 | done | Wave E, after LOCK-01, JOBS-01, LOGGING-01, TEST-OUTPUT-01; low; e8ae20c, 3a0d207, b4b5c48, 3fc46c6, 1ddbb61 |
 | DOCS-USER-02 | F262, F263, F264 | done | Wave E; drifting counts, fatal-path wording and alias spelling; low; aba6aea, ef16ae7, 38047d4, b768c22 |
 | DOCS-USER-03 | F297, F298 | done | Wave E; ignored bridge run and scan-test flag modernization; low; 3c38d19, 15b37c7, 974e5f3 |
-| DOCS-USER-04 | F368, F369, F370, F371 | pending_review | Wave E; bridge rationale, prose flags and release precondition; low; a78ad3b, 18306c1 |
+| DOCS-USER-04 | F368, F369, F370, F371 | done | Wave E; bridge rationale, prose flags and release precondition; low; a78ad3b, 18306c1, 0b8d354 |
 | DOCS-COMMENTS-01 | F63, F72, F74, F77, F118, F120, F121, F122, F124, F129, F178, F179, F180, F181, F185, F186, F203 | done | Wave E, after REFACTOR-01 and PATHHELPERS-01; stale comments, module summaries, rustdoc links, and doc precision; low; 2fa0805, 07dafc0, c7080d1, d00d77b, 03e3924, 8b2ebc5, 14b1118, 394e281, 7e0f8ca, 7ac798d |
 | DOCS-COMMENTS-02 | F265, F266, F267, F268 | done | Wave E; remaining module-map, re-export and line-range staleness; low; ff2e70a, 011ce1f, 3e35cc2, 6a2f2d8 |
 | DOCS-COMMENTS-03 | F299, F300 | done | Wave E; audit local-invariant coverage and file list; low; d7ce878 |
