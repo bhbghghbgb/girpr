@@ -475,11 +475,11 @@ until the main tasks and rework are done.
 | F374 | DOCS-COMMENTS-03 review | `docs/07-panic-audit.md` | The table now mixes panic sites with non-panicking clamps (`max_chunk_bytes`); a framing sentence would clarify. | completed |
 | F375 | DOCS-COMMENTS-03 review | `docs/07-panic-audit.md` | The audit still refers to a "§6"/"§6.1" section that does not exist in this file. | completed |
 | F376 | DOCS-COMMENTS-03 review | `src/repair/phases/manifest.rs` | `OrderedResults::push`'s `slots[index]` is a local-invariant direct index not named explicitly in the new row. | completed |
-| F377 | HYP-04 review | `src/repair/phases/metadata.rs` | `logs_of`'s doc conflates thread-locality with parallelism; cite `set_default` being thread-local (and the current-thread runtime). | todo |
-| F378 | HYP-04 review | `src/repair/mod.rs` | `spawn_blocking_traced`'s doc should note that dropping the handle detaches rather than cancels the task. | todo |
-| F379 | HYP-04 review | `src/repair/mod.rs` | No test pins the eager-spawn property the refactor exists for; a narrow test would guard the overlap contract. | todo |
-| F380 | HYP-04 review | `src/repair/phases/scan.rs`, `check.rs`, `mod.rs` | Other raw `spawn_blocking` sites do not propagate a scoped dispatcher; they would need `spawn_blocking_traced` if per-file log assertions are added. | todo |
-| F381 | HYP-04 review | `tests/common/mod.rs` | `logs_of` and the metadata test's `logs_of` duplicate the same capture implementation; a shared test-support helper could remove it. | todo |
+| F377 | HYP-04 review | `src/repair/phases/metadata.rs` | `logs_of`'s doc conflates thread-locality with parallelism; cite `set_default` being thread-local (and the current-thread runtime). | completed |
+| F378 | HYP-04 review | `src/repair/mod.rs` | `spawn_blocking_traced`'s doc should note that dropping the handle detaches rather than cancels the task. | completed |
+| F379 | HYP-04 review | `src/repair/mod.rs` | No test pins the eager-spawn property the refactor exists for; a narrow test would guard the overlap contract. | completed |
+| F380 | HYP-04 review | `src/repair/phases/scan.rs`, `check.rs`, `mod.rs` | Other raw `spawn_blocking` sites do not propagate a scoped dispatcher; they would need `spawn_blocking_traced` if per-file log assertions are added. | completed |
+| F381 | HYP-04 review | `tests/common/mod.rs` | `logs_of` and the metadata test's `logs_of` duplicate the same capture implementation; a shared test-support helper could remove it. | completed |
 | F382 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek` names its `Arc<Summary>` `ledger` while the rest of the file says summary/download meter; rename for consistency. | todo |
 | F383 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `SeekRecording.bytes` is only asserted to be 0; a case that writes through the recorder would verify the byte count. | todo |
 | F384 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek`'s `Option<Arc<Summary>>` + `Default` exist for one call site; a required parameter would simplify it. | todo |
@@ -600,7 +600,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-02 | F177 | done | Wave D; validate the hyp response identity against the request; medium; 9e7d77d |
 | HYP-03 | F253, F254, F255 | done | Wave E; local fixture tag, warning wording and mismatch precedence; low; ec3e7aa, 64e5c56, a9e8598 |
 | HYP-04 | F308, F309 | done | Wave E; test tag constants and multi-thread log capture; low; 5cf9315, d1bdced, 4922eec |
-| HYP-05 | F377, F378, F379, F380, F381 | pending_review | Wave E; traced-spawn docs/tests and log-helper consolidation; low; 2eba4c5, 0d9bbe0, 2e1b83e |
+| HYP-05 | F377, F378, F379, F380, F381 | done | Wave E; traced-spawn docs/tests and log-helper consolidation; low; 2eba4c5, 0d9bbe0, 2e1b83e, ccf01a6 |
 | SYNC-01 | F123, F125 | done | Wave A; girsync map-key call-site coverage and ASCII hash-name folding; low; a467632, 8daccfb |
 | SYNC-02 | F251, F252 | done | Wave E; planner-side non-ASCII pairing and hash-name revisit note; low; fcf94f1, 39d3e99, 2049582 |
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
