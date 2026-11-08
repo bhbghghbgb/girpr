@@ -630,7 +630,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-04 | F315, F316, F317 | done | Wave E; help-entry slicing hardening; low; 388365c, 5447a8e, 190a061, 5e111b2 |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
-| LOGGING-04 | F318, F319 | in_progress | Wave E; sink naming and rejected-install test strength; low |
+| LOGGING-04 | F318, F319 | pending_review | Wave E; sink naming and rejected-install test strength; low; 9b87298, a2ea354, 281878b |
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
 | LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
