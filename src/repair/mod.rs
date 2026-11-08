@@ -943,13 +943,16 @@ fn write_explicit_audio(
 /// Production installs a global one, so its lines are unaffected; this keeps a
 /// caller that scoped a subscriber (a test, or any explicit `with_default`)
 /// seeing the step's log lines, which are part of the operator contract.
-async fn spawn_blocking_traced<F, R>(f: F) -> Result<R, tokio::task::JoinError>
+///
+/// The task is spawned before the handle is returned, so a caller can start a
+/// read alongside other work and await it later.
+fn spawn_blocking_traced<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
     let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
-    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f)).await
+    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f))
 }
 
 /// Step 5.2: the up-front files-cleanup.
@@ -1263,8 +1266,11 @@ mod tests {
                 .enable_all()
                 .build()
                 .unwrap();
-            rt.block_on(spawn_blocking_traced(|| tracing::info!("blocking line")))
-                .unwrap();
+            rt.block_on(async {
+                spawn_blocking_traced(|| tracing::info!("blocking line"))
+                    .await
+                    .unwrap();
+            });
         });
         assert!(logs.contains("blocking line"), "{logs}");
     }
