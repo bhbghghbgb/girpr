@@ -17,17 +17,15 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
 ## 1. Method
 
-1. Enumerated every `.unwrap()`, `.expect()`, direct `[]` index and
-   arithmetic/`as` conversion in the production regions of:
+1. Enumerated every `.unwrap()`, `.expect()`, `panic!`, `unreachable!`, direct
+   `[]` index or slice, and arithmetic/`as` conversion in the production
+   regions of:
    `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
    `src/util/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
-   `src/repair/{scan,reuse,purge,audio,lock,mod}.rs`,
+   `src/repair/{scan,reuse,purge,mod}.rs`,
    `src/repair/file/{mod,temp,inplace,mode}.rs`,
    `src/repair/scope/{report,limits,ledger,filter}.rs`.
-   `audio.rs` and `lock.rs` are on the plan/write paths: the former has no
-   production `unwrap`/`expect`/`panic!`, and the latter's only direct index
-   is the bounded `head[..read]` in `may_write_body` (listed below).
 2. For each site, traced where the value comes from:
    - **server** — a protobuf field, a `getBuild`/`getGameConfigs` JSON field, a
      URL/prefix, or a path in a manifest;
@@ -45,13 +43,20 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
    followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
 
+`audio.rs` and `lock.rs` are on the plan/write paths and were swept the same
+way: the former has no production `unwrap`/`expect`/`panic!`, and the latter's
+only direct index is the bounded `head[..read]` in `may_write_body` (listed
+below).
+
 ---
 
 ## 2. Sites and dispositions
 
 Sites are named by file and symbol rather than by line number, so the table
 survives the module splits. "Origin" says whether the value is
-server-controlled.
+server-controlled. A row is either a panic-capable site or a non-panicking
+clamp the same sweep surfaced (`max_chunk_bytes`, for example); "Disposition"
+says which.
 
 | Site | Value | Origin | Disposition |
 |---|---|---|---|
