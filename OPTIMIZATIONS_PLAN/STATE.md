@@ -587,7 +587,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
-| EXIT-07 | F394, F395 | todo | Wave E; macro generality and duplicated status list; low |
+| EXIT-07 | F394, F395 | in_progress | Wave E; macro generality and duplicated status list; low |
 | PURGE-PERF-07 | F396, F397, F398 | todo | Wave E; counter-test failure modes and shared stub; low |
 | TEST-REGRESSION-05 | F399, F400 | todo | Wave E; remaining epoch assumptions in test helpers; low |
 | PURGE-PERF-06 | F332, F333 | done | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
