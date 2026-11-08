@@ -480,12 +480,17 @@ fn copy_publish_with(
     // the suffix is pushed under the path's directories, keeping a trailing
     // `..`), so refuse rather than publish under a different name.
     //
-    // The audio-cache walk never reaches this refusal through
-    // `move_audio_cache_with`: it collects only regular files, so `src` is a
-    // file under `cache`, `rel_path` is non-empty, and `res.join(rel_path)`
-    // names a file. A rename that fails does not change that. The check stays
-    // for this writer's own contract and is covered by its direct unit test,
-    // not by a production path.
+    // No audio-cache walk change makes this production-reachable. `WalkDir`
+    // does not follow links by default and `is_file()` admits only regular
+    // files, so a link or a directory is filtered out; enabling `follow_links`
+    // would admit a link only under the link's own name, and admitting
+    // directories would still leave `res.join(rel_path)` named (the cache root
+    // strips to an empty rel, and `res.join("")` is `res`). The guard is
+    // reached only when a caller builds `target` without a file name, as a
+    // path ending in `..` does. When such a production caller appears, add a
+    // test that drives it through `move_audio_cache_with` (or that caller) and
+    // asserts the refusal before the copy and the temp; until then this
+    // writer's direct unit test is the whole coverage.
     if target.file_name().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
