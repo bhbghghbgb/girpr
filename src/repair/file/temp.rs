@@ -810,10 +810,28 @@ mod tests {
     /// the way a stream that cannot be rewound presents itself. It records
     /// what the writer attempted, so a test can tell a refused seek from a
     /// path that never ran.
+    ///
+    /// When a ledger is attached, each refused seek also records the live
+    /// download figure it saw. That is the seam that pins the order: the
+    /// figure after the failure is zero whether the chunk was reserved and
+    /// then refunded or never reserved at all, so only the value *while the
+    /// seek runs* tells the two apart.
     #[derive(Default)]
     struct RefusingSeek {
         bytes: Vec<u8>,
         seeks: usize,
+        ledger: Option<Arc<Summary>>,
+        live_at_seek: Vec<u64>,
+    }
+
+    impl RefusingSeek {
+        /// Refuse every seek while watching `summary`'s download figure.
+        fn watching(summary: Arc<Summary>) -> Self {
+            Self {
+                ledger: Some(summary),
+                ..Self::default()
+            }
+        }
     }
 
     impl Write for RefusingSeek {
@@ -830,6 +848,9 @@ mod tests {
     impl Seek for RefusingSeek {
         fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
             self.seeks += 1;
+            if let Some(summary) = &self.ledger {
+                self.live_at_seek.push(summary.download.live());
+            }
             Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
                 "seek refused",
@@ -1206,7 +1227,10 @@ mod tests {
 
     /// The whole download path over a sink that refuses to be positioned: the
     /// reservation is taken, the seek fails, and no byte is fetched, written,
-    /// or left reserved. The seek failure is named with its chunk.
+    /// or left reserved. The sink reads the ledger at seek time, so the test
+    /// asserts the reservation was live *before* the seek and gone after it —
+    /// a final figure of zero alone would also fit a path that never reserved.
+    /// The seek failure is named with its chunk.
     #[tokio::test]
     async fn a_download_into_an_unseekable_sink_refunds_and_writes_nothing() {
         let mut summary = Summary::new();
@@ -1214,7 +1238,7 @@ mod tests {
         let mut ctx = test_ctx();
         ctx.summary = Arc::new(summary);
         let c = chunk_at("c9", "d41d8cd98f00b204e9800998ecf8427e", 8, 16);
-        let mut out = RefusingSeek::default();
+        let mut out = RefusingSeek::watching(Arc::clone(&ctx.summary));
         let mut stats = ChunkStats::default();
         let mut writes = FileWrites::default();
 
@@ -1230,6 +1254,11 @@ mod tests {
         .expect_err("the sink refuses to be positioned");
 
         assert_eq!(out.seeks, 1, "the writer asks to position the sink once");
+        assert_eq!(
+            out.live_at_seek,
+            vec![c.compressed_size as u64],
+            "the chunk's reservation is live before the seek is attempted"
+        );
         assert!(
             out.bytes.is_empty(),
             "no byte may be written after the seek fails"
@@ -1237,7 +1266,7 @@ mod tests {
         assert_eq!(
             ctx.summary.download.live(),
             0,
-            "no byte crossed the wire, so the whole reservation comes back"
+            "the reservation is given back after the seek fails, with no byte fetched"
         );
         assert_eq!(stats.chunks_downloaded, 0);
         assert_eq!(stats.download_bytes, 0);
