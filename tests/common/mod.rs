@@ -869,6 +869,32 @@ pub enum BranchFailure {
     Terminal { retcode: i64 },
 }
 
+/// Whether `retcode` is one the production client treats as terminal
+/// (`invalid params` / `not found`), and so one that an identical retry cannot
+/// fix.
+///
+/// Mirrors the crate's private classifier: a test that says "terminal" has to
+/// carry a code the client really will not retry, or the fixture asserts the
+/// opposite of what its name says.
+fn is_terminal_retcode(retcode: i64) -> bool {
+    matches!(retcode, -201 | -202 | -1001)
+}
+
+impl BranchFailure {
+    /// A terminal failure carrying a `retcode` the client classifies as
+    /// terminal.
+    ///
+    /// Panics on any other code: such a fixture would be a retryable failure
+    /// wearing the terminal name.
+    pub fn terminal(retcode: i64) -> Self {
+        assert!(
+            is_terminal_retcode(retcode),
+            "retcode {retcode} is not terminal; expected -201, -202 or -1001"
+        );
+        Self::Terminal { retcode }
+    }
+}
+
 #[derive(Default)]
 pub struct MockOpts {
     /// The launcher this fixture describes. `None` serves `hk4e_global`.
@@ -1102,6 +1128,16 @@ fn build_responses(
     manifest_prefix: &str,
     chunk_prefix: &str,
 ) -> Responses {
+    // The variant stays constructible directly, so check the knob here as well
+    // as in `BranchFailure::terminal`: a debug build must not silently serve a
+    // "terminal" failure the client would retry. Release keeps the fixture
+    // usable because this is only a self-check.
+    if let BranchFailure::Terminal { retcode } = opts.branch_failure {
+        debug_assert!(
+            is_terminal_retcode(retcode),
+            "retcode {retcode} is not terminal; expected -201, -202 or -1001"
+        );
+    }
     let biz = opts.biz.unwrap_or(Biz::Hk4eGlobal);
     let (_, _, game_id) = biz.endpoints();
     let game_biz = biz.as_str();
