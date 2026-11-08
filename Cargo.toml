@@ -51,6 +51,9 @@ girpr-log = { path = "crates/log" }
 # `process` and `signal`. `process` is needed only by the CLI tests, which run
 # the built binary, so it stays a dev-only feature below; `test-util` is
 # dev-only for the same reason. A normal build compiles neither.
+# `default-features = false` withholds nothing on its own: tokio's `default`
+# set is empty. `reqwest`'s tree enables it anyway, so the resolved graph still
+# lists `default`, but it adds no feature or crate.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
@@ -88,8 +91,10 @@ girpr-tempdir = { path = "crates/tempdir" }
 # `process`: the CLI tests run the built binary.
 # `net` and `io-util`: the fake artifact servers accept connections and read
 # requests. (`reqwest` already enables `net` in a normal build; naming it here
-# keeps the tests' own requirement explicit.)
-tokio = { version = "1", features = ["test-util", "process", "net", "io-util"] }
+# keeps the tests' own requirement explicit.) `default-features = false` mirrors
+# the normal dependency above; tokio's `default` set is empty, so this withholds
+# no test feature.
+tokio = { version = "1", default-features = false, features = ["test-util", "process", "net", "io-util"] }
 
 # The shipped artifact is a single CLI binary, so trade build time for a
 # smaller, slightly faster one: thin LTO and one codegen unit, and no debug
