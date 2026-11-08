@@ -35,9 +35,12 @@
 //! on every `cargo nextest run`.
 //!
 //! So it is run **by hand, deliberately** — before any release that changes
-//! the repair spec, and whenever that spec is suspected to have regressed:
+//! the repair spec, and whenever that spec is suspected to have regressed. A
+//! pre-release run builds the verifier first, so the `gircap verify`
+//! precondition actually executes instead of skipping:
 //!
 //! ```text
+//! cargo build -p gircap
 //! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 //! ```
 //!
