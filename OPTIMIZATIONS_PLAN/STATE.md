@@ -617,7 +617,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | done | Wave E; test-server wakeup and bound-table hardening; low; 300900d, 6a886b6 |
-| MANIFEST-05 | F351, F352 | todo | Wave E; 404-manifest stability pass and shared coordination helpers; low |
+| MANIFEST-05 | F351, F352 | in_progress | Wave E; 404-manifest stability pass and shared coordination helpers; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
