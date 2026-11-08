@@ -7,7 +7,7 @@
 //! slot (docs/02 §1).
 //!
 //! The argument cases fail *during* argument handling, so no game directory is
-//! ever touched. The post-parse cases (`--io-threads 0`, bad `--audio`, a bad
+//! ever touched. The post-parse cases (`--jobs 0`, bad `--audio`, a bad
 //! `--include` glob) do reach `logging::init_tracing`, so they leave a
 //! `logs/girpr_<ts>.log` beside the built binary — inside the gitignored
 //! `target/` tree. The two `--log-file` cases are the exception: they name
@@ -132,22 +132,8 @@ fn argument_errors_exit_one_not_two() {
         ], // unknown --output variant
         vec!["--game-path", ".", "--biz", "hk4e_global", "-x"], // unknown flag
         vec!["--game-path", ".", "--biz"],          // missing enum value
-        vec![
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "0",
-        ],
-        vec![
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "abc",
-        ],
+        vec!["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"],
+        vec!["--game-path", ".", "--biz", "hk4e_global", "--jobs", "abc"],
         vec![
             "--game-path",
             ".",
@@ -466,7 +452,7 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     // because of where it was asked to log. If that ever stops holding, this
     // fails — which is the point of pinning it here.
     //
-    // `--io-threads 0` is the cheapest way to reach a *decided* exit code after
+    // `--jobs 0` is the cheapest way to reach a *decided* exit code after
     // the file layer is installed: validation rejects it (exit 1) before any
     // game directory or network is touched, so the expected code is exact and
     // the case needs no server.
@@ -477,14 +463,7 @@ fn an_unopenable_log_file_warns_and_changes_nothing_about_the_exit_code() {
     std::fs::write(&blocker, b"x").expect("blocker file");
     let bad_log = blocker.join("run.log");
 
-    let base: &[&str] = &[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "0",
-    ];
+    let base: &[&str] = &["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"];
     let mut flagged: Vec<&str> = base.to_vec();
     flagged.extend_from_slice(&["--log-file", bad_log.to_str().unwrap()]);
 
@@ -523,7 +502,7 @@ fn an_explicit_log_file_is_echoed_to_stderr_and_created() {
         ".",
         "--biz",
         "hk4e_global",
-        "--io-threads",
+        "--jobs",
         "0", // stops before any game directory or network is touched
         "--log-level",
         "warn",
@@ -560,14 +539,7 @@ fn the_default_log_file_follows_the_build_it_was_built_from() {
     let logs = exe_dir().join("logs");
     let existed = logs.exists();
 
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "0",
-    ]);
+    let (code, _, stderr) = run(&["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"]);
     assert_eq!(code, 1, "{stderr}");
 
     if cfg!(debug_assertions) {
@@ -607,7 +579,7 @@ fn no_log_file_turns_the_file_off_even_when_the_environment_names_one() {
             ".",
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "0",
             "--no-log-file",
         ])
@@ -635,7 +607,7 @@ fn no_log_file_and_log_file_together_are_a_usage_error() {
         ".",
         "--biz",
         "hk4e_global",
-        "--io-threads",
+        "--jobs",
         "0",
         "--no-log-file",
         "--log-file",
@@ -660,14 +632,7 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
     let log = scratch.join("from-env.log");
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "0",
-        ])
+        .args(["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"])
         .env("GIRPR_LOG_FILE", &log)
         .output()
         .expect("run girpr");
@@ -700,7 +665,7 @@ fn the_flag_wins_over_the_environment() {
             ".",
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "0",
             "--log-file",
             from_flag.to_str().unwrap(),
@@ -732,7 +697,7 @@ fn the_file_keeps_what_a_quiet_console_drops() {
         ".",
         "--biz",
         "hk4e_global",
-        "--io-threads",
+        "--jobs",
         "0",
         "--log-level",
         "error",
@@ -775,7 +740,7 @@ fn the_environment_sets_the_log_files_level() {
             ".",
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "0",
             "--log-file",
             log.to_str().unwrap(),
@@ -809,7 +774,7 @@ fn the_log_file_level_flag_beats_the_environment() {
             ".",
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "0",
             "--log-file",
             log.to_str().unwrap(),
@@ -834,14 +799,7 @@ fn the_log_file_level_flag_beats_the_environment() {
 #[test]
 fn an_unrelated_rust_log_does_not_silence_the_program() {
     let out = Command::new(env!("CARGO_BIN_EXE_girpr"))
-        .args([
-            "--game-path",
-            ".",
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "0",
-        ])
+        .args(["--game-path", ".", "--biz", "hk4e_global", "--jobs", "0"])
         .env("RUST_LOG", "reqwest=debug")
         .output()
         .expect("run girpr");
