@@ -518,7 +518,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
-| CHECK-04 | F286, F287 | todo | Wave E; bounded gate wait and counter doc; low |
+| CHECK-04 | F286, F287 | in_progress | Wave E; bounded gate wait and counter doc; low |
 | PATHHELPERS-02 | F204, F205, F206 | done | Wave D; audio-move path reuse and non-UTF-8 coverage; low; e17247f, e30f620, e3128e5 |
 | PATHHELPERS-03 | F256, F257 | done | Wave E; component-boundary case and CLI-layer non-UTF-8 coverage; low; a8fa982, 7625d90 |
 | PATHHELPERS-04 | F288, F289 | todo | Wave E; test doc accuracy and strict non-UTF-8 skip mode; low |
