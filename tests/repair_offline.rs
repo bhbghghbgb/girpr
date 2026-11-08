@@ -31,13 +31,26 @@
 mod common;
 
 use common::{
-    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureSpec, LATEST_TAG, Lies, MockOpts,
-    MockServer, build_fixture, build_fixture_spec, ctx_for, field, load_counters, read_game_file,
-    remove_run_lock, run, run_binary, scope, temp_dir, write_game_file,
+    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureLatestManifest, FixtureSpec,
+    GameFixture, LATEST_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_spec,
+    ctx_for, field, load_counters, read_game_file, remove_run_lock, run, run_binary, scope,
+    temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use girpr::test_support::{Lock, RepairMode, join_url, summary_record};
 use std::sync::atomic::Ordering;
+
+/// The extra latest-build manifest the fixture advertises under `field`.
+///
+/// Selection is by the field `getBuild` advertises, never by position: a
+/// fixture that reorders its extra manifests must not swap the identities a
+/// test asserts on.
+fn extra_manifest<'a>(fx: &'a GameFixture, field: &str) -> &'a FixtureLatestManifest {
+    fx.extra_latest_manifests
+        .iter()
+        .find(|m| m.matching_field == field)
+        .unwrap_or_else(|| panic!("the fixture describes the {field} manifest"))
+}
 
 #[tokio::test]
 async fn repairs_missing_and_corrupt_files_end_to_end() {
@@ -844,9 +857,9 @@ async fn several_latest_manifests_are_selected_in_build_order() {
             ],
         )),
     );
-    let en_id = fx.extra_latest_manifests[0].id.clone();
-    let alpha_id = fx.extra_latest_manifests[1].id.clone();
-    let beta_id = fx.extra_latest_manifests[2].id.clone();
+    let en_id = extra_manifest(&fx, "en-us").id.clone();
+    let alpha_id = extra_manifest(&fx, "alpha").id.clone();
+    let beta_id = extra_manifest(&fx, "beta").id.clone();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("multi_manifest_order");
 
@@ -929,7 +942,7 @@ async fn a_failed_selected_manifest_fails_the_binary_without_a_fallback() {
         ),
     );
     let game_id = fx.manifest_id.clone();
-    let extra_id = fx.extra_latest_manifests[0].id.clone();
+    let extra_id = extra_manifest(&fx, "extra").id.clone();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("manifest_fallback");
     let game = dir.join("install");
@@ -1020,7 +1033,7 @@ async fn an_ignored_manifest_category_is_not_planned_by_the_binary() {
             .with_category_id("10302"),
         ),
     );
-    let extra_id = fx.extra_latest_manifests[0].id.clone();
+    let extra_id = extra_manifest(&fx, "extra").id.clone();
     let mock = MockServer::start(
         fx,
         MockOpts {
@@ -1128,22 +1141,8 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
             )],
         )),
     );
-    // Selected by the field the build advertises, not by position: reordering
-    // the fixture must not swap the served and absent manifests.
-    let gone_id = fx
-        .extra_latest_manifests
-        .iter()
-        .find(|m| m.matching_field == "gone")
-        .expect("the fixture describes the absent manifest")
-        .id
-        .clone();
-    let kept_id = fx
-        .extra_latest_manifests
-        .iter()
-        .find(|m| m.matching_field == "kept")
-        .expect("the fixture describes the served manifest")
-        .id
-        .clone();
+    let gone_id = extra_manifest(&fx, "gone").id.clone();
+    let kept_id = extra_manifest(&fx, "kept").id.clone();
 
     // The store is what the mock serves: the shared id must still hold the
     // served manifest's bytes, not the absent one's, and the absent-only id
