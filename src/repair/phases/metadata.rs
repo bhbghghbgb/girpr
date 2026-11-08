@@ -24,7 +24,7 @@ use crate::config::{RunCtx, RunFailure};
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig, HypClient, production_bases};
 use crate::util;
 
-use crate::repair::audio;
+use crate::repair::{audio, spawn_blocking_traced};
 
 /// Everything steps 3+ need from steps 1–2.
 pub struct Meta {
@@ -241,7 +241,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     // together with the first network wave rather than before it.
     let version_read = {
         let game_dir = game_dir.to_path_buf();
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking_traced(move || {
             util::read_game_version(&game_dir)
                 .context(LocalRead::Version.label())
                 .map_err(RunFailure::usage)
@@ -334,7 +334,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
     let ignore_read = {
         let game_dir = game_dir.to_path_buf();
         let dir = config.res_category_dir.clone();
-        tokio::task::spawn_blocking(move || -> Result<HashSet<String>, RunFailure> {
+        spawn_blocking_traced(move || -> Result<HashSet<String>, RunFailure> {
             if dir.is_empty() {
                 return Ok(HashSet::new());
             }
@@ -351,7 +351,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         let game_dir = game_dir.to_path_buf();
         let enabled = config.enable_resource_blacklist && !config.blacklist_dir.is_empty();
         let dir = config.blacklist_dir.clone();
-        tokio::task::spawn_blocking(move || -> Result<HashSet<String>, RunFailure> {
+        spawn_blocking_traced(move || -> Result<HashSet<String>, RunFailure> {
             if !enabled {
                 return Ok(HashSet::new());
             }
@@ -372,7 +372,7 @@ pub async fn fetch(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
         let game_dir = game_dir.to_path_buf();
         let scan_dir = config.audio_pkg_scan_dir.clone();
         let explicit = ctx.audio_explicit.then(|| ctx.audio.clone());
-        tokio::task::spawn_blocking(move || {
+        spawn_blocking_traced(move || {
             audio::resolve_effective_audio(&game_dir, &scan_dir, explicit.as_ref())
                 .context(LocalRead::Audio.label())
                 .map_err(RunFailure::usage)
@@ -536,8 +536,10 @@ mod tests {
 
     /// Run `f` with a debug-level subscriber whose lines are captured.
     ///
-    /// `set_default` is thread-local; these tests run on a current-thread
-    /// runtime, so the guard covers the whole fetch across its awaits.
+    /// `set_default` is thread-local and the tests run in parallel, so the
+    /// subscriber cannot leak into another test. The phase's blocking reads use
+    /// `spawn_blocking_traced`, which installs the same dispatcher on the pool
+    /// thread, so their lines are captured too.
     async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
         #[derive(Clone, Default)]
         struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
@@ -999,6 +1001,10 @@ mod tests {
                 r#"local build answered tag "4.9.0", not the local version "5.0.0"; full-fetch fallback"#
             ),
             "the fallback warning names both tags: {logs}"
+        );
+        assert!(
+            logs.contains("no audio scan file; defaulting to"),
+            "a line emitted by the blocking audio read is captured: {logs}"
         );
 
         const LOCAL_BUILD: &str = r#"{"retcode":0,"message":"OK","data":{"build_id":"old","tag":"5.0.0","manifests":[]}}"#;
