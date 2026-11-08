@@ -524,6 +524,9 @@ until the main tasks and rework are done.
 | F423 | JOBS-04 review | `tests/cli_contract.rs` | The boundary set omits `\r`; harmless for clap's `\n` output but would break on a Windows-console capture. | todo |
 | F424 | LOGGING-04 review | `src/logging.rs` tests | `SINK_REGISTRY_TEST_LOCK`'s doc should note the reliance on no other test installing a global subscriber first (nextest process-per-test). | todo |
 | F425 | LOGGING-04 review | `src/logging.rs` tests | The warning assertion pins the prefix but not the upstream `SetGlobalDefaultError` reason (`already been set`); optional. | todo |
+| F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | todo |
+| F427 | LOCK-05 review | `tests/common/run_lock.rs` | The `#[cfg(test)]` module in the `#[path]`-shared file runs in every including binary; a dedicated module/bin would cut duplicated executions. | todo |
+| F428 | LOCK-05 review | `tests/common/run_lock.rs` | `lock_key_path` mis-keys an empty `--game-path` (anchors at cwd while production keys `""`); note it if empty paths ever matter. | todo |
 
 ## Follow-up batches
 
@@ -593,6 +596,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
+| LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
