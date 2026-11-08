@@ -609,7 +609,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-02 | F131, F132, F133, F134, F135 | done | Wave D; metadata classification tests, label constants and doc precision; low; d07d6d5, 37f4c8f, 3864bb9, 490dd06, 89763ec, 38e3f93 |
 | METADATA-03 | F244, F245, F246 | done | Wave E; variant exhaustiveness, notify safety and terminal branch failure; low; 60d20de, 021568e, 4170fc9, c8c6194 |
 | METADATA-04 | F310, F311 | done | Wave E; mock retryable branch failure mode; low; 636aa70 |
-| METADATA-05 | F349, F350 | in_progress | Wave E; branch-failure knob validation and test naming; low |
+| METADATA-05 | F349, F350 | pending_review | Wave E; branch-failure knob validation and test naming; low; 912a57e, d7d206f |
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | done | Wave E; test-server wakeup and bound-table hardening; low; 300900d, 6a886b6 |
