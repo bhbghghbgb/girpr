@@ -388,8 +388,8 @@ until the main tasks and rework are done.
 | F287 | CHECK-03 review | `src/report/summary.rs` | The now-`pub(super)` counter's doc could note that writes go through `publish_check_damaged_chunks`. | completed |
 | F288 | PATHHELPERS-03 review | `tests/repair_post.rs` | The binary test's doc implies the name can be rewritten while building the context, but it is only discovered in the post-phase walk; the added value is CLI/RunCtx wiring. | completed |
 | F289 | PATHHELPERS-03 review | `tests/repair_post.rs` | The skip-on-write-failure pattern reports a pass without exercising assertions on hosts that reject such names; consider an opt-in strict mode or CI note. | completed |
-| F290 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | The `getBuild` expected ids are fixture-derived; fetching the advertised bodies (`200` for `kept`, `404` for `gone`) would tie advertisement to servability. | todo |
-| F291 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | `gone_id`/`kept_id` are taken by positional index; lookup by `matching_field` would be less brittle. | todo |
+| F290 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | The `getBuild` expected ids are fixture-derived; fetching the advertised bodies (`200` for `kept`, `404` for `gone`) would tie advertisement to servability. | completed |
+| F291 | TEST-MANIFEST-03 review | `tests/repair_offline.rs` | `gone_id`/`kept_id` are taken by positional index; lookup by `matching_field` would be less brittle. | completed |
 | F292 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | The unseekable test cannot distinguish "reserved then refunded" from "never reserved" (`live() == 0` both ways); a ledger spy would pin reserve-before-seek. | completed |
 | F293 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` | `ChunkFileSink::new`'s doc still says it holds "the only `&mut File`" though it is now generic over `W`. | completed |
 | F294 | TEMP-WRITER-03 review | `src/repair/file/temp.rs` tests | `SeekRecording.writes` counts bytes, not write calls; `bytes` would read better. | completed |
@@ -605,7 +605,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-HELPERS-03 | F232 | done | Wave E; digest helper doc wording; low; fac7264 |
 | TEST-MANIFEST-02 | F182, F183, F184 | done | Wave D; multi-manifest fixture filter and served-absent cases; low; 08e2a6f, 1087905 |
 | TEST-MANIFEST-03 | F258, F259 | done | Wave E; shared chunk-id and direct advertisement assertions; low; c611c7d, 41a7b28 |
-| TEST-MANIFEST-04 | F290, F291 | pending_review | Wave E; advertisement-to-servability and field-based id lookup; low; 3bb9805, 2c288c6 |
+| TEST-MANIFEST-04 | F290, F291 | done | Wave E; advertisement-to-servability and field-based id lookup; low; 3bb9805, 2c288c6 |
 | LINT-02 | F158, F160 | done | Wave D; clippy.toml for unit-test allows and tools expect cleanup; low; 9de1581, 1ce9966, cb410fa |
 | LINT-03 | F260, F261 | done | Wave E; select-order coupling and to_ndjson doc; low; 0758f03, 5e0aae5, fe464ad |
 | TEMP-WRITER-02 | F161, F162, F163, F164 | done | Wave D; temp writer positioning seam, end-to-end refund and comment accuracy; low; 412739a, c0721b3, 686c4b5, 049009b |
