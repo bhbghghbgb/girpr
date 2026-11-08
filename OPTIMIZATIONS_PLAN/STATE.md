@@ -492,6 +492,8 @@ until the main tasks and rework are done.
 | F391 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Other tests still take extra-manifest ids positionally (`several_latest_manifests_are_selected_in_build_order` and two more). | todo |
 | F392 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | Production's `join_url` ignores the advertised `url_suffix`, so a non-empty suffix remains untested; may be intentional. | todo |
 | F393 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | The new assertions check status only, not that the `kept` `200` body equals the fixture bytes; optional hardening. | todo |
+| F394 | EXIT-06 review | `src/main.rs` tests | The macro's `fn(RunExit)` annotation and `RunExit::` paths hard-wire one type; parameterize the type path if a second enum needs the guard. | todo |
+| F395 | EXIT-06 review | `src/config.rs`, `src/main.rs` tests | The status list now exists twice (`RunExit::ALL` and the bin-test macro); a public read-only accessor would remove it but widens API. | todo |
 
 ## Follow-up batches
 
@@ -534,6 +536,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-04 | F271, F272, F273, F274 | done | Wave E; structural exit-code width and single source of variants; low; 3c50fde |
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
+| EXIT-07 | F394, F395 | todo | Wave E; macro generality and duplicated status list; low |
 | PURGE-PERF-06 | F332, F333 | todo | Wave E; counter scoping and fetch-path coverage; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
