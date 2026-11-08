@@ -413,9 +413,9 @@ until the main tasks and rework are done.
 | F312 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | `wait_until_idle`/`wait_for` use `notify_waiters()` with a pre-check, which could miss a wakeup on a multi-thread runtime; `Notified::enable()` would harden it. | completed |
 | F313 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | The bound table hardcodes `(1,1)`/`(2,2)` instead of calling `manifest_concurrency(jobs)`; compute it to stay in lockstep. | completed |
 | F314 | MANIFEST-03 review | `src/repair/phases/manifest.rs` tests | A gated connection aborted mid-wait skips `gate.leave()`, so `current` would not return to zero if a future test waited for idle after dropping a gated server. | completed |
-| F315 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` matches a flag by prefix, so `--jobs` would also match a future `--jobs-*`; require a following space/newline. | todo |
-| F316 | JOBS-03 review | `tests/cli_contract.rs` | The synthetic slicing test only covers the first-entry branch; add a case with a preceding option to cover the `\n`-marker branch. | todo |
-| F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | todo |
+| F315 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` matches a flag by prefix, so `--jobs` would also match a future `--jobs-*`; require a following space/newline. | completed |
+| F316 | JOBS-03 review | `tests/cli_contract.rs` | The synthetic slicing test only covers the first-entry branch; add a case with a preceding option to cover the `\n`-marker branch. | completed |
+| F317 | JOBS-03 review | `tests/cli_contract.rs` | `help_entry` hardcodes clap's six-space indent; a comment or derived-indent check would document that coupling. | completed |
 | F318 | LOGGING-03 review | `src/logging.rs` | `FILE_SINKS` is plural but now holds a single `Option`; rename to `FILE_SINK`. | todo |
 | F319 | LOGGING-03 review | `src/logging.rs` tests | The rejected-install test writes into the sink directly and does not assert the install-warning text; emitting through the subscriber and pinning the WARN would be stronger. | todo |
 | F320 | LOCK-03 review | `tests/artifact_bridge.rs` | The bridge test duplicates `remove_run_lock` locally; consolidating with `common::remove_run_lock_for_args` would remove the last copy. | completed |
@@ -623,7 +623,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-05 | F351, F352 | skipped | Wave E; 404-manifest stability pass and shared coordination helpers; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
-| JOBS-04 | F315, F316, F317 | pending_review | Wave E; help-entry slicing hardening; low; 388365c, 5447a8e, 190a061 |
+| JOBS-04 | F315, F316, F317 | done | Wave E; help-entry slicing hardening; low; 388365c, 5447a8e, 190a061, 5e111b2 |
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
 | LOGGING-04 | F318, F319 | todo | Wave E; sink naming and rejected-install test strength; low |
