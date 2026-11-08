@@ -517,6 +517,8 @@ until the main tasks and rework are done.
 | F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | todo |
 | F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | todo |
 | F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | todo |
+| F419 | MANIFEST-05 review | `tests/repair_scan.rs` | `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` took 11.0 s in a full-suite run; may merit a look if it recurs. | todo |
+| F420 | MANIFEST-05 review | `src/repair/phases/metadata.rs`, `src/sophon/stream.rs`, `src/hyp.rs`, `tests/common` | Plain test HTTP servers remain duplicated; consolidation is worthwhile only once a second gated-origin user exists. | todo |
 
 ## Follow-up batches
 
@@ -583,6 +585,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
 | METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
+| MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
