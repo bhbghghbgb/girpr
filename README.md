@@ -443,13 +443,20 @@ cargo nextest run --test repair_machinery
 cargo clippy -p girpr --all-targets -- -D warnings
 cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 
-# the artifact bridge: #[ignore]d, needs a bundle (docs/06)
+# the artifact bridge: #[ignore]d, needs a bundle (docs/06); run before a
+# repair-spec release
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
 
 # the hash and scan throughput measurements: #[ignore]d, print MiB/s
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
 ```
+
+- **The artifact bridge is a pre-release gate, not part of the default suite.**
+  The six `tests/artifact_bridge.rs` cases are `#[ignore]`d because each drives
+  real `girpr` runs over ~20 MB of bundle bytes. `cargo nextest run` compiles
+  them, so they cannot rot, but does not run them; run the ignored command
+  above against a captured bundle before releasing a change to the repair spec.
 
 - **Hash and scan throughput is measured by hand, not asserted.** The ignored
   `util::md5::tests::md5_throughput` hashes a generated file through the same

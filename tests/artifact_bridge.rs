@@ -33,8 +33,8 @@
 //! of wall-clock, which is a price worth paying *when something has gone wrong*
 //! and not worth paying on every `cargo nextest run`.
 //!
-//! So it is run **by hand, deliberately**, and only when the repair spec is
-//! suspected to have regressed:
+//! So it is run **by hand, deliberately** — before any release that changes
+//! the repair spec, and whenever that spec is suspected to have regressed:
 //!
 //! ```text
 //! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
