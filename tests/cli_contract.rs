@@ -130,6 +130,19 @@ fn help_entry_requires_a_boundary_after_the_flag() {
 }
 
 #[test]
+fn help_entry_finds_an_entry_after_a_preceding_option() {
+    // The desired entry is not the first line of the help, so this reaches the
+    // newline-marked branch rather than the start-of-text branch.
+    let help = "      --first\n          first text\n\n      --jobs <JOBS>\n          jobs text\n\n      --last\n          last text\n";
+    assert!(!help.starts_with("      --jobs"));
+    assert_eq!(
+        help_entry(help, "--jobs"),
+        "      --jobs <JOBS>\n          jobs text\n",
+        "the block runs from --jobs to the next option"
+    );
+}
+
+#[test]
 fn help_exits_zero() {
     // `Args` declares no `version`, so only `--help` gets the conventional 0.
     let (code, stdout, _) = run(&["--help"]);
