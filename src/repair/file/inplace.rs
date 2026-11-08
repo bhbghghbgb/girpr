@@ -1281,6 +1281,22 @@ mod tests {
             .unwrap();
     }
 
+    /// A stamp a given age before the current clock.
+    ///
+    /// Relative to "now" rather than an absolute epoch, so the age rule holds
+    /// on a host whose clock is set to any date. When the clock is too close
+    /// to the platform's minimum representable time for the full age, the
+    /// subtraction saturates at the Unix epoch instead of panicking.
+    fn stamp_ago(age: Duration) -> SystemTime {
+        let now = SystemTime::now();
+        // The Unix epoch is representable on every supported platform, so it
+        // is a safe floor for a stamp that only needs to be old.
+        let reachable = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        now.checked_sub(age.min(reachable)).unwrap_or(now)
+    }
+
     /// The natural coarse-timestamp window: the recorded mtime must share a
     /// tick with the scan, and a same-length rewrite right after the scan can
     /// then present the same recorded mtime. When the plan scan found the file
@@ -1363,7 +1379,7 @@ mod tests {
         let mut damaged = good.clone();
         damaged[5] ^= 0xff;
         std::fs::write(&path, &damaged).unwrap();
-        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
         set_modified(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
         let scanned_at = SystemTime::now();
@@ -1430,13 +1446,11 @@ mod tests {
     /// either.
     #[test]
     fn the_guard_rejects_a_verdict_that_does_not_describe_the_file() {
-        use std::time::{Duration, SystemTime};
-
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "guard_shape");
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -1516,7 +1530,7 @@ mod tests {
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -1602,7 +1616,7 @@ mod tests {
     /// and the exact boundary all mean "read it again".
     #[test]
     fn the_reuse_age_rule_requires_more_than_one_coarse_tick() {
-        let recorded = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let recorded = stamp_ago(Duration::from_secs(24 * 60 * 60));
         assert!(
             !mtime_predates_scan(recorded, None),
             "a report with no scan time cannot prove the window is closed"
