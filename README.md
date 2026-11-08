@@ -508,11 +508,16 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
     `crates/tempdir/src/lib.rs` — are mirrored by unit tests beside them, and
     `cargo nextest run` alone covers everything the suite covers.
 
-- **The two non-UTF-8 audio-cache cases can skip.** A host whose filesystem
-  cannot create a name with an unpaired surrogate (or a non-UTF-8 byte) skips
-  them rather than failing. Set `GIRPR_TEST_REQUIRE_NON_UTF8=1` to turn that
-  skip into a failure, so a run meant to prove the byte-exact move cannot pass
-  having checked nothing.
+- **The non-UTF-8 audio-cache cases and the Windows junction case can skip.**
+  A host whose filesystem cannot create a name with an unpaired surrogate (or a
+  non-UTF-8 byte), or a Windows host that refuses `mklink /J`, skips those
+  cases rather than failing. Set `GIRPR_TEST_REQUIRE_NON_UTF8` or
+  `GIRPR_TEST_REQUIRE_JUNCTION` to turn the corresponding skip into a failure,
+  so a run meant to prove the byte-exact move or the junction escape cannot
+  pass having checked nothing. Both switches are **presence-based**: any value,
+  including `0`, requires the case; unset is the only way to allow a skip.
+  Nextest's default profile shows these tests' output even when they pass
+  (`.config/nextest.toml`), so a skip is visible under the plain gate.
 
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
