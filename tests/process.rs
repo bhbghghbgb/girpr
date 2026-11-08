@@ -128,14 +128,7 @@ async fn a_closed_stdout_does_not_change_the_exit_code_or_the_repair() {
 
 #[tokio::test]
 async fn a_successful_run_flushes_its_summary_to_the_log_file() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("success_log_tail");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, dir, _, game) = start_standard_install("success_log_tail").await;
     let log = dir.join("run.log");
     let log_arg = log.to_string_lossy().into_owned();
 
@@ -294,16 +287,8 @@ async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
     // This is `gircap`'s `removed` capture class verbatim: one `--include` for a
     // path that is on disk and absent from the new manifest, `--purge-only`, and
     // an assertion that the path is gone and nothing was downloaded.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("binary_removed");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
+    let (mock, dir, fx, game) = start_standard_install("binary_removed").await;
     write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
-    let game = dir.to_string_lossy().into_owned();
-
     let (code, stdout, stderr) = run_binary(
         &[
             "--game-path",
@@ -326,7 +311,7 @@ async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
         read_game_file(&dir, "game/removed.dat").is_none(),
         "the removed path is gone"
     );
-    for f in &fx2.files {
+    for f in &fx.files {
         assert_eq!(
             read_game_file(&dir, &f.rel).unwrap(),
             f.data,
@@ -355,14 +340,7 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
     // `--print-plan` is here deliberately: `--print-plan --output json` must
     // still be pure NDJSON, so the plan record is exercised on the JSON plane
     // too. One record per line is what keeps that true.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("output_json");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, _dir, fx, game) = start_standard_install("output_json").await;
     let base: Vec<&str> = vec![
         "--game-path",
         &game,
@@ -403,10 +381,10 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
     );
     // And the counts are still there, by name, as numbers.
     let last: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
-    assert_eq!(last["total"], fx2.files.len() as u64);
+    assert_eq!(last["total"], fx.files.len() as u64);
     assert_eq!(last["exit"], 0);
     let plan: serde_json::Value = serde_json::from_str(stdout.lines().nth(1).unwrap()).unwrap();
-    assert_eq!(plan["files"], fx2.files.len() as u64);
+    assert_eq!(plan["files"], fx.files.len() as u64);
     assert_eq!(plan["scoped"], 0);
 
     // The default is the text plane, and it is unchanged by any of this.
@@ -416,7 +394,7 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
     assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
         stdout.starts_with("REPORT local_version=")
-            && stdout.contains(&format!("PLAN files={}", fx2.files.len())),
+            && stdout.contains(&format!("PLAN files={}", fx.files.len())),
         "{stdout}"
     );
     assert!(stdout.trim_end().ends_with("exit=0"), "{stdout}");
@@ -428,14 +406,7 @@ async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
 async fn an_explicit_base_beats_the_env_var() {
     // The env seams are pointed at a **dead** port, so if the env won the run
     // would fail with exit 2 instead of exiting 0.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_precedence");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, _dir, _, game) = start_standard_install("base_precedence").await;
     let (code, _, stderr) = run_binary(
         &[
             "--game-path",
@@ -461,14 +432,7 @@ async fn an_explicit_base_beats_the_env_var() {
 #[tokio::test]
 async fn the_env_seam_still_works_without_the_flags() {
     // The env seam every offline e2e run already uses must keep working.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_env");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, _dir, _, game) = start_standard_install("base_env").await;
     let (code, _, stderr) = run_binary(
         &["--game-path", &game, "--biz", "hk4e_global", "--check-only"],
         &[
@@ -626,14 +590,7 @@ async fn an_unscanned_run_does_not_log_a_scan_phase() {
 /// left untimed.
 #[tokio::test]
 async fn the_publish_and_pre_purge_steps_are_timed() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("phase_extra_steps");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, _dir, _, game) = start_standard_install("phase_extra_steps").await;
     // The log lives outside the install: `--purge-before` treats the game tree
     // as its candidate set.
     let log_dir = temp_dir("phase_extra_steps_log");
