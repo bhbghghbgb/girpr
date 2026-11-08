@@ -522,6 +522,8 @@ until the main tasks and rework are done.
 | F421 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry`'s synthetic fixtures spell the six-space indent literally instead of using `HELP_OPTION_INDENT`. | todo |
 | F422 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry` cannot find an option rendered with a short-alias prefix (`-j, --jobs`); it would panic rather than return a wrong slice. | todo |
 | F423 | JOBS-04 review | `tests/cli_contract.rs` | The boundary set omits `\r`; harmless for clap's `\n` output but would break on a Windows-console capture. | todo |
+| F424 | LOGGING-04 review | `src/logging.rs` tests | `SINK_REGISTRY_TEST_LOCK`'s doc should note the reliance on no other test installing a global subscriber first (nextest process-per-test). | todo |
+| F425 | LOGGING-04 review | `src/logging.rs` tests | The warning assertion pins the prefix but not the upstream `SetGlobalDefaultError` reason (`already been set`); optional. | todo |
 
 ## Follow-up batches
 
@@ -590,6 +592,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
+| LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
