@@ -502,6 +502,9 @@ until the main tasks and rework are done.
 | F401 | TEST-OUTPUT-04 review | `tests/repair_scan.rs` | The emitted `scan_bytes=` value is still spelled literally; a shared spelling could be used if a test-support location exists. | todo |
 | F402 | TEST-OUTPUT-04 review | `README.md` | The bare-text limitation is documented only beside the test parser; the `--output` guidance could point users to JSON when values may contain `key=` tokens. | todo |
 | F403 | TEST-OUTPUT-04 review | `tests/cli_contract.rs` | If production later exposes a key/schema manifest, the golden key lists could be derived from it instead of duplicated. | todo |
+| F404 | CHECK-05 review | `src/repair/phases/check.rs` tests | On expiry the injected closure returns `CheckOutcome::clean()` so counters still read 2; a distinct outcome or comment would read clearer. | todo |
+| F405 | CHECK-05 review | `src/repair/phases/check.rs` tests | Three waits each get a full `GATE_WAIT` from their own start; one absolute test deadline shared by all would make failure ordering unambiguous. | todo |
+| F406 | CHECK-05 review | `src/repair/phases/check.rs` tests | The shared 10 s constant conflates "how long the test waits" with "how long release may take"; splitting the two is a cleanup if touched again. | todo |
 
 ## Follow-up batches
 
@@ -562,6 +565,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | TEST-OUTPUT-04 | F357, F358, F359 | done | Wave E; text-grammar ambiguity and shared schema vocabulary; low; f38bf2b, e5d1a3d |
 | TEST-OUTPUT-05 | F401, F402, F403 | todo | Wave E; remaining text-plane vocabulary notes; low |
+| CHECK-06 | F404, F405, F406 | todo | Wave E; gate-test failure reporting and deadline unification; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
