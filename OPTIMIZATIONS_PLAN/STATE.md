@@ -532,6 +532,9 @@ until the main tasks and rework are done.
 | F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | todo |
 | F432 | INI-05 review | `src/util/ini.rs` tests | The call-site test drives the private helper directly, so a refactor could bypass it; no practical alternative exists. | todo |
 | F433 | INI-05 review | `src/util/ini.rs` | `symlink_skip_reason` treats every `Unsupported` as a host skip; intended, but the set can broaden as std maps more codes there. | todo |
+| F434 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | `1.89` is hardcoded in the workflow and README while `check-msrv.ps1` derives versions; the bench pin could lag when MSRV moves. | todo |
+| F435 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The `iot-bench` install step reimplements the script's toolchain install; factor out only if more toolchain jobs appear. | todo |
+| F436 | BUILD-05 review | `.github/workflows/msrv.yml` | rust-cache hashes every runner toolchain, so the bench cache key churns as images add toolchains; optional narrower keying. | todo |
 
 ## Follow-up batches
 
@@ -603,6 +606,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
 | INI-06 | F429, F430, F431, F432, F433 | todo | Wave E; junction/symlink test cleanup and platform broadenings; low |
+| BUILD-06 | F434, F435, F436 | todo | Wave E; MSRV pin derivation and cache keying; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
