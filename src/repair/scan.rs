@@ -317,6 +317,12 @@ pub async fn scan_plan(
             let local_map = Arc::clone(&local_map);
             let root = root.clone();
             async move {
+                // Raw `spawn_blocking` on purpose: `scan_one`'s per-file lines
+                // are best-effort diagnostics, and no test asserts them through
+                // a scoped subscriber. A production run has the global
+                // dispatcher anyway. A per-file log assertion would have to use
+                // `spawn_blocking_traced` to carry the caller's dispatcher onto
+                // this pool thread.
                 let result = tokio::task::spawn_blocking(move || {
                     scan_one(&game_dir, root.as_deref(), &plan.files()[idx], &local_map)
                 })

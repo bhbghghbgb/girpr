@@ -479,6 +479,10 @@ async fn plan_work_and_purge(
         let keys_plan = Arc::clone(&plan);
         let blacklist = meta.blacklist.clone();
         let purge_scope = ctx.path_scope.clone();
+        // Raw `spawn_blocking`: the walk's only line is the best-effort
+        // "candidate list may be incomplete" warning, which nothing asserts
+        // through a scoped subscriber. A test that needed it would use
+        // `spawn_blocking_traced`.
         let (keys, plan) = tokio::task::spawn_blocking(move || {
             let keys = purge::PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
             let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
@@ -715,6 +719,9 @@ async fn publish_plan(
         let disk_plan = Arc::clone(plan);
         let repair_mode = ctx.repair_mode;
         let jobs = ctx.jobs;
+        // Raw `spawn_blocking`: `DiskPlan::new` only warns when a rel escapes
+        // the install, and nothing asserts that line through a scoped
+        // subscriber. Use `spawn_blocking_traced` if one does.
         Some(
             tokio::task::spawn_blocking(move || {
                 scope::report::DiskPlan::new(
@@ -945,7 +952,9 @@ fn write_explicit_audio(
 /// seeing the step's log lines, which are part of the operator contract.
 ///
 /// The task is spawned before the handle is returned, so a caller can start a
-/// read alongside other work and await it later.
+/// read alongside other work and await it later. Dropping the handle detaches
+/// the task rather than cancelling it: it still runs to completion on the
+/// blocking pool.
 fn spawn_blocking_traced<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
     F: FnOnce() -> R + Send + 'static,

@@ -93,6 +93,11 @@ where
             let scan = scan.clone();
             let check = Arc::clone(&check);
             async move {
+                // Raw `spawn_blocking` is enough here: the closure only reads
+                // and returns a `CheckOutcome`, and every `CHECK fail` line is
+                // emitted by the ordered fold below, on the caller's thread. A
+                // closure that logged per file would need
+                // `spawn_blocking_traced` to carry a scoped dispatcher.
                 let result = tokio::task::spawn_blocking(move || {
                     let f = &plan.files()[idx];
                     // Resolve once. A containment failure is a *diagnostic*:
