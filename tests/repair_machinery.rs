@@ -651,7 +651,9 @@ async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_chang
     let target = rig.game().join("game/z_target.dat");
     *target_path.lock().expect("hook path lock") = Some(target.clone());
     // Later than the scan start, so the age rule refuses the plan verdict
-    // rather than the mtime comparison.
+    // rather than the mtime comparison. Relative to the clock, like
+    // `stamp_ago`: a fixed future epoch stops being future once a host's
+    // clock passes it, and the age rule would then accept the verdict.
     set_mtime(&target, SystemTime::now() + Duration::from_secs(3600));
 
     let run = rig.run(&["--scan"]).await;
