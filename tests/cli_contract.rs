@@ -82,12 +82,20 @@ fn strip_ansi(s: &str) -> String {
 /// satisfied by another option's annotation. The block keeps an assertion about
 /// one flag about that flag.
 fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
-    let marker = format!("\n      {flag}");
-    let first = format!("      {flag}");
-    let start = help
-        .find(&marker)
-        .map(|i| i + 1)
-        .or_else(|| help.starts_with(&first).then_some(0))
+    let entry_line = format!("      {flag}");
+    // A flag is a whole token: `--jobs` must not match a `--jobs-<something>`
+    // option line. clap follows the flag with a space when it takes a value and
+    // with a newline when it does not; the end of the text is also a boundary.
+    let at_entry_line = |line: usize| {
+        help[line..].starts_with(&entry_line)
+            && matches!(
+                help.as_bytes().get(line + entry_line.len()),
+                Some(b' ' | b'\n') | None
+            )
+    };
+    let start = std::iter::once(0)
+        .chain(help.match_indices('\n').map(|(i, _)| i + 1))
+        .find(|&line| at_entry_line(line))
         .unwrap_or_else(|| panic!("help has no {flag} entry:\n{help}"));
     let entry = &help[start..];
     let end = entry
@@ -106,6 +114,19 @@ fn help_entry_does_not_borrow_a_neighbours_annotations() {
         "the block ended before the next option"
     );
     assert!(help_entry(help, "--other").contains("[default: 4]"));
+}
+
+#[test]
+fn help_entry_requires_a_boundary_after_the_flag() {
+    // `--jobs` is a prefix of `--jobs-extra`, but they are different options.
+    // Matching the long option first would return its block for `--jobs`.
+    let help = "      --jobs-extra <N>\n          different option\n\n      --jobs <JOBS>\n          jobs text\n";
+    let jobs = help_entry(help, "--jobs");
+    assert_eq!(
+        jobs, "      --jobs <JOBS>\n          jobs text\n",
+        "the block belongs to --jobs, not the option whose name it prefixes"
+    );
+    assert!(!jobs.contains("different option"));
 }
 
 #[test]
