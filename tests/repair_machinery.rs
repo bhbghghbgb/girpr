@@ -458,11 +458,27 @@ fn set_mtime(path: &Path, stamp: SystemTime) {
 /// A stamp a given age before the current clock.
 ///
 /// Relative to "now" rather than an absolute epoch, so the reuse guard's age
-/// rule holds on a host whose clock is set to any date.
+/// rule holds on a host whose clock is set to any date. When the clock is too
+/// close to the platform's minimum representable time for the full age, the
+/// subtraction saturates at the Unix epoch instead of panicking.
 fn stamp_ago(age: Duration) -> SystemTime {
-    SystemTime::now()
-        .checked_sub(age)
-        .expect("the host clock can represent the stamp")
+    let now = SystemTime::now();
+    // The Unix epoch is representable on every supported platform, so it is a
+    // safe floor for a stamp that only needs to be old.
+    let reachable = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
+    now.checked_sub(age.min(reachable)).unwrap_or(now)
+}
+
+/// A stamp a given age after the current clock.
+///
+/// The mirror of [`stamp_ago`]: relative to "now", and saturating at the
+/// current clock rather than panicking when the platform cannot represent the
+/// full offset.
+fn stamp_ahead(age: Duration) -> SystemTime {
+    let now = SystemTime::now();
+    now.checked_add(age).unwrap_or(now)
 }
 
 /// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
@@ -655,9 +671,10 @@ async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_chang
     *target_path.lock().expect("hook path lock") = Some(target.clone());
     // Later than the scan start, so the age rule refuses the plan verdict
     // rather than the mtime comparison. Relative to the clock, like
-    // `stamp_ago`: a fixed future epoch stops being future once a host's
-    // clock passes it, and the age rule would then accept the verdict.
-    set_mtime(&target, SystemTime::now() + Duration::from_secs(3600));
+    // `stamp_ago` and `stamp_ahead`: a fixed future epoch stops being future
+    // once a host's clock passes it, and the age rule would then accept the
+    // verdict.
+    set_mtime(&target, stamp_ahead(Duration::from_secs(3600)));
 
     let run = rig.run(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
