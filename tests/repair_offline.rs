@@ -1128,8 +1128,22 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
             )],
         )),
     );
-    let gone_id = fx.extra_latest_manifests[0].id.clone();
-    let kept_id = fx.extra_latest_manifests[1].id.clone();
+    // Selected by the field the build advertises, not by position: reordering
+    // the fixture must not swap the served and absent manifests.
+    let gone_id = fx
+        .extra_latest_manifests
+        .iter()
+        .find(|m| m.matching_field == "gone")
+        .expect("the fixture describes the absent manifest")
+        .id
+        .clone();
+    let kept_id = fx
+        .extra_latest_manifests
+        .iter()
+        .find(|m| m.matching_field == "kept")
+        .expect("the fixture describes the served manifest")
+        .id
+        .clone();
 
     // The store is what the mock serves: the shared id must still hold the
     // served manifest's bytes, not the absent one's, and the absent-only id
