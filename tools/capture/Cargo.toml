@@ -44,13 +44,17 @@ clap = { version = "4", features = ["derive"] }
 girpr-log = { path = "../../crates/log" }
 # The runtime (`#[tokio::main]` runs the multi-threaded one), its macros
 # (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
-# Nothing here uses `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`;
-# `reqwest` enables `net` and `sync` in every build anyway, so the saving is
-# what this list does not ask for. `default-features = false` keeps the request
-# to exactly this list; reqwest's dependency tree still enables tokio's empty
-# `default` feature, which adds nothing. `spawn`/
-# `spawn_blocking`/`JoinSet` come with `rt`, which `rt-multi-thread` already
-# includes.
+# No source here calls `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`.
+# The graph still receives `net` and `sync` because `reqwest` enables them in
+# every build, and `io-util` through reqwest's h2/hyper tree, so the saving is
+# what this list does not ask for. `fs` is not in this package's own graph:
+# `reqwest`'s `stream` feature is what pulls `tokio/fs`, and this manifest does
+# not enable it. A `--workspace` build unifies the repair binary's
+# `reqwest/stream` into the same tokio, and then it is.
+# `default-features = false` keeps the request to exactly this list; reqwest's
+# dependency tree still enables tokio's empty `default` feature, which adds
+# nothing. `spawn`/`spawn_blocking`/`JoinSet` come with `rt`, which
+# `rt-multi-thread` already includes.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
 # or handed on as raw bytes, and nothing reads a streaming body. The `stream`
