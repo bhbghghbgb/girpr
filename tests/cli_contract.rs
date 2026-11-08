@@ -134,20 +134,33 @@ fn help_entry_does_not_borrow_a_neighbours_annotations() {
 #[test]
 fn help_entry_requires_a_boundary_after_the_flag() {
     // `--jobs` is a prefix of `--jobs-extra`, but they are different options.
-    // Matching the long option first would return its block for `--jobs`.
-    let help = "      --jobs-extra <N>\n          different option\n\n      --jobs <JOBS>\n          jobs text\n";
+    // `--jobs` is the first entry, so the first line that carries a newline
+    // before it is `--jobs-extra`: a search for the newline-marked form of
+    // `--jobs` lands there, and only the space after the flag tells them apart.
+    let help = "      --jobs <JOBS>\n          jobs text\n\n      --jobs-extra <N>\n          different option\n";
     let jobs = help_entry(help, "--jobs");
     assert_eq!(
         jobs, "      --jobs <JOBS>\n          jobs text\n",
         "the block belongs to --jobs, not the option whose name it prefixes"
     );
     assert!(!jobs.contains("different option"));
+    // The boundary is also a newline (a flag with no value) or the end of the
+    // text, not only the space before a value.
+    let boolean = "      --dry-run\n          no value\n";
+    assert_eq!(
+        help_entry(boolean, "--dry-run"),
+        "      --dry-run\n          no value\n"
+    );
+    assert_eq!(
+        help_entry("      --dry-run", "--dry-run"),
+        "      --dry-run"
+    );
 }
 
 #[test]
 fn help_entry_finds_an_entry_after_a_preceding_option() {
-    // The desired entry is not the first line of the help, so this reaches the
-    // newline-marked branch rather than the start-of-text branch.
+    // The desired entry is not the first line of the help, so its start comes
+    // from the newline before it rather than from the start of the text.
     let help = "      --first\n          first text\n\n      --jobs <JOBS>\n          jobs text\n\n      --last\n          last text\n";
     assert!(!help.starts_with("      --jobs"));
     assert_eq!(
