@@ -124,17 +124,17 @@ fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
 
 /// The `--game-path` value in a binary argument list, in either spelling.
 fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
+    let mut found = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
         if arg == "--game-path" {
-            return args.next().map(|value| value.as_ref());
-        }
-        if let Some(value) = arg.strip_prefix("--game-path=") {
-            return Some(value);
+            found = args.next().map(|value| value.as_ref());
+        } else if let Some(value) = arg.strip_prefix("--game-path=") {
+            found = Some(value);
         }
     }
-    None
+    found
 }
 
 /// Remove the lock file a binary run leaves, from its own `--game-path`.
@@ -247,11 +247,14 @@ mod tests {
             game_path_arg(&["--game-path=/games/a=b"]),
             Some("/games/a=b")
         );
-        // The first spelling wins, exactly as clap's last-wins rule would not
-        // be relevant to a cleanup that only needs one path.
+        // A later spelling wins, as it does for clap's own value parsing.
         assert_eq!(
             game_path_arg(&["--game-path", "/games/a", "--game-path=/games/b"]),
-            Some("/games/a")
+            Some("/games/b")
+        );
+        assert_eq!(
+            game_path_arg(&["--game-path=/games/a", "--game-path", "/games/b"]),
+            Some("/games/b")
         );
         assert_eq!(game_path_arg(&["--game-path"]), None);
         assert_eq!(game_path_arg(&["--other", "/games/a"]), None);
