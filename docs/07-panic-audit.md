@@ -1,7 +1,7 @@
 # Panic-site audit for `girpr`
 
 **Status: complete (2026-10-30, re-swept 2026-11-08).** Audit of the tree at
-`1f4c3b2` plus the §6 changes in this branch.
+`1f4c3b2` plus the changes in this branch.
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
 value chosen by the server (or by a hostile local manifest) reaches arithmetic,
@@ -111,7 +111,7 @@ window is bounded by `join_file_tasks` without a semaphore permit to unwrap.
 
 ## 4. Tests that pin the refusals
 
-Hostile-manifest and saturation evidence already in the suite, plus the §6.1
+Hostile-manifest and saturation evidence already in the suite, plus the
 zero-length cases added with this audit:
 
 - `repair::phases::plan::tests::malformed_chunk_ranges_are_refused_at_plan_time`
@@ -127,7 +127,7 @@ zero-length cases added with this audit:
 - Integration: `a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs`
   and `a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking` in
   `tests/repair_offline.rs`.
-- §6.1 zero-length probes:
+- Zero-length probes:
   `a_legitimate_empty_file_passes_every_mode_untouched` and
   `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate`.
 
