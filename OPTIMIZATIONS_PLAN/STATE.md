@@ -377,8 +377,8 @@ until the main tasks and rework are done.
 | F276 | DRYRUN-03 review | `src/repair/mod.rs`, `src/repair/phases/post.rs` | The `--purge-before`/`--purge-after` plan-out asymmetry is now documented; revisit whether `--purge-before` should plan after publishing the document. | completed |
 | F277 | PURGE-PERF-03 review | `src/repair/scope/ledger.rs`, `src/report/summary.rs` | The saturating CAS idiom is duplicated; a shared helper would remove it. | completed |
 | F278 | PURGE-PERF-03 review | `src/repair/mod.rs` | `fetch_deprecated`'s collect still pays the `Vec + Arc` double allocation; an exact-size buffer would avoid it. | completed |
-| F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | todo |
-| F280 | TEST-REGRESSION-02 review | `tests/process.rs` | The new unscanned-phase test duplicates the fixture-write setup of the duration test; a shared local helper would reduce drift. | todo |
+| F279 | TEST-REGRESSION-02 review | `tests/repair_machinery.rs` | The aged/fresh stamps are absolute epochs; on a host clock before 2023 the age-eligibility would silently not hold. | completed |
+| F280 | TEST-REGRESSION-02 review | `tests/process.rs` | The new unscanned-phase test duplicates the fixture-write setup of the duration test; a shared local helper would reduce drift. | completed |
 | F281 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` treats any key-shaped token inside a value as a new field, so a value containing `word=…` would misparse. | todo |
 | F282 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | `text_records` drops values, so the space test can only assert keys; a value-bearing parser would allow asserting the reconstructed `exe` value. | todo |
 | F283 | TEST-OUTPUT-02 review | `tests/cli_contract.rs` | The still-rejected "token before the first field" path has no explicit negative test. | todo |
@@ -502,7 +502,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-04 | F277, F278 | done | Wave E; shared saturating-add helper and deprecated collect allocation; low; 803dcbf, 12a4941 |
 | PURGE-PERF-05 | F305, F306, F307 | done | Wave E; deprecated normalization test and counter-barrier notes; low; 4af6344, c6871df, a59c949, a76c901 |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
-| TEST-REGRESSION-03 | F279, F280 | pending_review | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
+| TEST-REGRESSION-03 | F279, F280 | done | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
