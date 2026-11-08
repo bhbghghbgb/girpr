@@ -438,11 +438,11 @@ until the main tasks and rework are done.
 | F337 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `[dev-dependencies]` `tokio` entry also omits `default-features = false`; align for symmetry with the normal dependency. | todo |
 | F338 | BUILD-TOOLS-04 review | `tools/capture/Cargo.toml` | The comment says nothing uses `tokio::fs`, but reqwest's `stream` feature compiles it; a tweak could avoid the same source-vs-graph misreading. | todo |
 | F339 | BUILD-TOOLS-04 review | `Cargo.toml` | The root `tokio` comment could also state that the reqwest tree still enables the empty `default` in the resolved graph. | todo |
-| F340 | LOCK-04 review | `tests/common/run_lock.rs` | `mode_takes_lock`/`args_take_lock` lack direct tests; nothing asserts the mirror accepts `--purge-only` and rejects the three read-only flags. | todo |
-| F341 | LOCK-04 review | `tests/common/run_lock.rs` | `#![allow(dead_code)]` is module-wide; a targeted allowance would keep unexpected dead code visible. | todo |
-| F342 | LOCK-04 review | `tests/common/run_lock.rs` | `lock_key_path` retains the caller's spelling for vanished components; harmless on case-folding Windows, risky on a case-sensitive host. | todo |
-| F343 | LOCK-04 review | `tests/common/run_lock.rs` | A mutating run that fails before execution still never took the lock, yet cleanup acquires-and-deletes the path, briefly creating a file. | todo |
-| F344 | LOCK-04 review | `tests/common/run_lock.rs` | `game_path_arg` only recognizes `--game-path <value>`; an `=`-form caller would silently skip cleanup. | todo |
+| F340 | LOCK-04 review | `tests/common/run_lock.rs` | `mode_takes_lock`/`args_take_lock` lack direct tests; nothing asserts the mirror accepts `--purge-only` and rejects the three read-only flags. | completed |
+| F341 | LOCK-04 review | `tests/common/run_lock.rs` | `#![allow(dead_code)]` is module-wide; a targeted allowance would keep unexpected dead code visible. | completed |
+| F342 | LOCK-04 review | `tests/common/run_lock.rs` | `lock_key_path` retains the caller's spelling for vanished components; harmless on case-folding Windows, risky on a case-sensitive host. | completed |
+| F343 | LOCK-04 review | `tests/common/run_lock.rs` | A mutating run that fails before execution still never took the lock, yet cleanup acquires-and-deletes the path, briefly creating a file. | completed |
+| F344 | LOCK-04 review | `tests/common/run_lock.rs` | `game_path_arg` only recognizes `--game-path <value>`; an `=`-form caller would silently skip cleanup. | completed |
 | F345 | INI-04 review | `src/util/ini.rs` | No call-site regression test asserts the `inspect game dir <path>` context/kind; a seam would make that combination testable. | todo |
 | F346 | INI-04 review | `src/util/ini.rs` tests | The junction classification is documented from std behavior but not exercised; a Windows-only `mklink /J` test could pin the dangling-junction message. | todo |
 | F347 | INI-04 review | `src/util/ini.rs` tests | On non-Unix/non-Windows targets `try_symlink_dir` now panics rather than skipping; consider skipping on `Unsupported`. | todo |
@@ -637,7 +637,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
 | LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
-| LOCK-05 | F340, F341, F342, F343, F344 | pending_review | Wave E; lock-policy mirror tests and cleanup edge cases; low; 78b827c, 3a64ea9, a3690de, 7a0a7a4, 6dc6a34 |
+| LOCK-05 | F340, F341, F342, F343, F344 | done | Wave E; lock-policy mirror tests and cleanup edge cases; low; 78b827c, 3a64ea9, a3690de, 7a0a7a4, 6dc6a34, 145fcc0 |
 | INI-02 | F148, F149, F150 | done | Wave D; ini refusal wording, external-race coverage and helper scope; low; a21ba8e, 4e01a1d, e8829e4 |
 | INI-03 | F233, F234 | done | Wave E; dangling-symlink and masked-permission wording; low; 133d1d0, eb9c78f, 285ff2d |
 | INI-04 | F323, F324, F325 | done | Wave E; inspection-error surfacing, junction wording and symlink-skip precision; low; 86cc49b, a495877 |
