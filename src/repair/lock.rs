@@ -107,7 +107,7 @@ pub(crate) fn takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> 
 
 /// Where the lock for `game_dir` lives: the temp directory, keyed by the
 /// canonical path so every spelling of the same install agrees.
-fn lock_path(game_dir: &Path) -> PathBuf {
+pub fn lock_path(game_dir: &Path) -> PathBuf {
     let canonical = game_dir
         .canonicalize()
         .unwrap_or_else(|_| game_dir.to_path_buf());

@@ -80,8 +80,9 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 ///
 /// The list is deliberately explicit:
 ///
-/// - `RepairMode`, `Lock`, `Limits` and `PathScope` let a test build a
-///   [`RunCtx`] and drive the real pipeline;
+/// - `RepairMode`, `Lock`, `lock_path`, `Limits` and `PathScope` let a test
+///   build a [`RunCtx`], drive the real pipeline, and inspect the lock file a
+///   run leaves behind;
 /// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
 ///   for real;
 /// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile`,
@@ -95,7 +96,7 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::config::RepairMode;
-    pub use crate::repair::lock::Lock;
+    pub use crate::repair::lock::{Lock, lock_path};
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
     pub use crate::sleep::{NoSleep, RealSleep};
