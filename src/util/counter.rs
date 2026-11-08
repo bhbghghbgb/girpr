@@ -91,3 +91,56 @@ pub(crate) mod test_support {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::add_saturating;
+    use super::test_support::pause_before_cas_of;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    /// A pause installed for one cell does not hold a charge to a different
+    /// cell on the same thread: the scope gate is the cell identity, not "this
+    /// thread has some pause installed".
+    #[test]
+    fn a_paused_cell_does_not_hold_a_charge_to_another_cell() {
+        let paused = AtomicU64::new(0);
+        let other = AtomicU64::new(0);
+
+        // A charge that wrongly consulted this pause would wait at the barrier
+        // instead of reaching its compare-exchange.
+        let _pause = pause_before_cas_of(&paused, Arc::new(Barrier::new(2)));
+
+        add_saturating(&other, 5);
+        assert_eq!(
+            other.load(Ordering::Relaxed),
+            5,
+            "the other cell charges while a pause is installed for a different one"
+        );
+    }
+
+    /// A pause is per charge, not a permanent block: once the barrier releases
+    /// (here a one-party barrier releases immediately), the paused cell's own
+    /// charge commits. Clearing the pause then leaves the cell charging
+    /// normally.
+    #[test]
+    fn a_paused_cell_resumes_after_its_barrier() {
+        let cell = AtomicU64::new(0);
+        let guard = pause_before_cas_of(&cell, Arc::new(Barrier::new(1)));
+
+        add_saturating(&cell, 7);
+        assert_eq!(
+            cell.load(Ordering::Relaxed),
+            7,
+            "the paused cell charges once its barrier releases"
+        );
+
+        drop(guard);
+        add_saturating(&cell, 1);
+        assert_eq!(
+            cell.load(Ordering::Relaxed),
+            8,
+            "clearing the pause leaves the cell charging normally"
+        );
+    }
+}
