@@ -247,7 +247,9 @@ mod tests {
             game_path_arg(&["--game-path=/games/a=b"]),
             Some("/games/a=b")
         );
-        // A later spelling wins, as it does for clap's own value parsing.
+        // A later spelling wins, so a repeated flag keeps the last value.
+        // Cleanup only reaches this with a failed invocation: the parser
+        // refuses a repeated `--game-path` before a run can take a lock.
         assert_eq!(
             game_path_arg(&["--game-path", "/games/a", "--game-path=/games/b"]),
             Some("/games/b")
