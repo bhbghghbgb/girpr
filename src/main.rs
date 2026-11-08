@@ -190,18 +190,25 @@ mod tests {
         }
     }
 
+    /// The documented exit statuses, in numeric order.
+    ///
+    /// `RunExit`'s exhaustive list is crate-internal, so this binary target
+    /// cannot read it and names the statuses itself. The wildcard-free `match`
+    /// is generated from the same list: a new `RunExit` variant stops the
+    /// build here until it is added, and the numeric pin in the test then
+    /// holds it to its documented number.
+    macro_rules! documented_exit_codes {
+        ($($variant:ident),+ $(,)?) => {{
+            let _: fn(RunExit) = |status| match status {
+                $(RunExit::$variant => {}),+
+            };
+            [$(RunExit::$variant),+]
+        }};
+    }
+
     #[test]
     fn the_documented_exit_codes_reach_the_process_unchanged() {
-        // The library's exhaustive list is crate-internal; the binary test
-        // spells the six documented statuses out so it also pins the numbers.
-        let codes = [
-            RunExit::Success,
-            RunExit::Usage,
-            RunExit::Metadata,
-            RunExit::Write,
-            RunExit::CheckFailed,
-            RunExit::Limit,
-        ];
+        let codes = documented_exit_codes!(Success, Usage, Metadata, Write, CheckFailed, Limit,);
         for (number, status) in codes.into_iter().enumerate() {
             assert_eq!(
                 exit_code(status),
