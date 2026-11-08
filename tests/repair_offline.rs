@@ -555,7 +555,7 @@ async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
         fx,
         MockOpts {
             download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
-            branch_failure: BranchFailure::Terminal { retcode: -1001 },
+            branch_failure: BranchFailure::terminal(-1001),
             config_after_branches: true,
             ..Default::default()
         },
@@ -591,11 +591,11 @@ async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
 }
 
 #[tokio::test]
-async fn a_terminal_branch_failure_is_metadata_under_chunk_mode() {
-    // Under the mode this tool implements, a branch answer that fails on the
-    // first attempt (its non-JSON body is a fatal parse error) is a metadata
-    // failure that names the branch call. The run must stop before any build or
-    // write.
+async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
+    // Under the mode this tool implements, a branch answer whose body is not
+    // JSON fails to parse on the first attempt, and that fatal parse error is a
+    // metadata failure that names the branch call. The run must stop before any
+    // build or write.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
