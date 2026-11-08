@@ -439,31 +439,66 @@ async fn dry_run_lists_the_post_phase_and_changes_nothing() {
     mock.stop();
 }
 
-/// Create the non-UTF-8 cache file, or report that this host cannot.
+/// The switch is presence-based: any value, including `0`, requires the case.
+#[cfg(any(unix, windows))]
+fn require_non_utf8() -> bool {
+    std::env::var_os("GIRPR_TEST_REQUIRE_NON_UTF8").is_some()
+}
+
+/// Decide what a host's refusal to create the non-UTF-8 name means.
 ///
 /// The default suite skips the case when the host refuses the name, so it stays
 /// green on a filesystem that cannot represent one. Setting
 /// `GIRPR_TEST_REQUIRE_NON_UTF8` turns that refusal into a failure: a run that
 /// is meant to prove the byte-exact move must not pass having checked nothing.
 ///
+/// Split from the write so both branches are reachable on a host that can
+/// create the name. Always returns `false` (the case did not run).
+#[cfg(any(unix, windows))]
+fn skip_non_utf8_source(e: &std::io::Error, required: bool) -> bool {
+    assert!(
+        !required,
+        "GIRPR_TEST_REQUIRE_NON_UTF8 is set, but this host cannot create a \
+         non-UTF-8 name: {e}"
+    );
+    eprintln!(
+        "SKIP precondition: this host cannot create a non-UTF-8 name: {e}; \
+         set GIRPR_TEST_REQUIRE_NON_UTF8 (to any value) to fail instead"
+    );
+    false
+}
+
+/// Create the non-UTF-8 cache file, or report that this host cannot.
+///
 /// Returns whether the file was created.
 #[cfg(any(unix, windows))]
 fn write_non_utf8_source(src: &std::path::Path) -> bool {
     match std::fs::write(src, b"non-utf8 cache bytes") {
         Ok(()) => true,
-        Err(e) => {
-            assert!(
-                std::env::var_os("GIRPR_TEST_REQUIRE_NON_UTF8").is_none(),
-                "GIRPR_TEST_REQUIRE_NON_UTF8 is set, but this host cannot create a \
-                 non-UTF-8 name: {e}"
-            );
-            eprintln!(
-                "SKIP precondition: this host cannot create a non-UTF-8 name: {e}; \
-                 set GIRPR_TEST_REQUIRE_NON_UTF8=1 to fail instead"
-            );
-            false
-        }
+        Err(e) => skip_non_utf8_source(&e, require_non_utf8()),
     }
+}
+
+/// The skip branch must run even on a host that can create the name: a write
+/// that reports "unsupported" stands in for the filesystem's refusal.
+#[cfg(any(unix, windows))]
+#[test]
+fn a_non_utf8_write_failure_skips_without_the_switch() {
+    let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
+    assert!(
+        !skip_non_utf8_source(&err, false),
+        "without the switch a refused name skips the case"
+    );
+}
+
+/// The same refusal is a failure when the switch is present, whatever its
+/// value.
+#[cfg(any(unix, windows))]
+#[test]
+#[should_panic(expected = "GIRPR_TEST_REQUIRE_NON_UTF8 is set")]
+fn a_non_utf8_write_failure_fails_with_the_switch() {
+    let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
+    skip_non_utf8_source(&err, true);
 }
 
 /// A cache file whose name is not UTF-8 moves under its own bytes: the scope

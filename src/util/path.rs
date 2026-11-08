@@ -908,13 +908,40 @@ mod tests {
         }
     }
 
+    /// The switch is presence-based: any value, including `0`, requires the
+    /// junction cases.
+    #[cfg(windows)]
+    fn require_junction() -> bool {
+        std::env::var_os("GIRPR_TEST_REQUIRE_JUNCTION").is_some()
+    }
+
+    /// Report that this host refused to create a junction, or fail when
+    /// `GIRPR_TEST_REQUIRE_JUNCTION` says the case must not be skipped. A run
+    /// meant to prove the escape must not pass having checked nothing.
+    ///
+    /// Split from `mklink` so both branches are reachable on a host that can
+    /// create a junction.
+    #[cfg(windows)]
+    fn skip_junction(why: &str, required: bool) {
+        assert!(
+            !required,
+            "GIRPR_TEST_REQUIRE_JUNCTION is set, but this host cannot create a \
+             directory junction: {why}"
+        );
+        eprintln!(
+            "SKIP precondition: this host cannot create a directory junction: \
+             {why}; set GIRPR_TEST_REQUIRE_JUNCTION (to any value) to fail instead"
+        );
+    }
+
     /// A directory junction inside the install that points out of it is an
     /// escape, exactly like a Unix symlink, so the resolution path needs a
     /// test on the platform whose reparse points it will meet.
     ///
     /// Junctions need no privilege (unlike symlinks), but a host that refuses
     /// to create one cannot confirm the escape here, so the case is skipped
-    /// rather than failed. Link support is host-dependent — see
+    /// rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION` is present.
+    /// Link support is host-dependent — see
     /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
     /// only, exFAT has no hard links).
     #[cfg(windows)]
@@ -928,9 +955,8 @@ mod tests {
             .arg(&link)
             .arg(&*outside)
             .status();
-        let made = matches!(status, Ok(s) if s.success()) && link.exists();
-        if !made {
-            eprintln!("skipping: this host cannot create a directory junction");
+        if let Some(why) = junction_refusal(&status, &link) {
+            skip_junction(&why, require_junction());
             return;
         }
         let got = contained_join(&dir, "game/evil.dat");
@@ -946,9 +972,45 @@ mod tests {
             .arg(&alias)
             .arg(dir.join("real"))
             .status();
-        if matches!(status, Ok(s) if s.success()) {
-            assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+        if let Some(why) = junction_refusal(&status, &alias) {
+            skip_junction(&why, require_junction());
+            return;
         }
+        assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// Describe why a `mklink /J` attempt did not leave a usable link, or
+    /// `None` when it did.
+    #[cfg(windows)]
+    fn junction_refusal(
+        status: &std::io::Result<std::process::ExitStatus>,
+        link: &Path,
+    ) -> Option<String> {
+        match status {
+            Ok(s) if s.success() && link.exists() => None,
+            Ok(s) if s.success() => Some(format!(
+                "mklink /J reported success but {} is missing",
+                link.display()
+            )),
+            Ok(s) => Some(format!("mklink /J exited with {s}")),
+            Err(e) => Some(format!("mklink /J could not run: {e}")),
+        }
+    }
+
+    /// Both junction branches are reachable without a host that refuses one.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_failure_skips_without_the_switch() {
+        skip_junction("injected refusal", false);
+    }
+
+    /// The same refusal is a failure when the switch is present, whatever its
+    /// value.
+    #[cfg(windows)]
+    #[test]
+    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
+    fn a_junction_failure_fails_with_the_switch() {
+        skip_junction("injected refusal", true);
     }
 
     /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.
