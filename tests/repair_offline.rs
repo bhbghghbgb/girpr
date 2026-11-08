@@ -1170,7 +1170,8 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
     // of the fixture description: both extras are present under the identities
     // the build publishes.
     let mock = MockServer::start(fx, MockOpts::default()).await;
-    let body: serde_json::Value = reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let body: serde_json::Value = client
         .get(format!("{}/getBuild", mock.sophon_base))
         .send()
         .await
@@ -1178,9 +1179,10 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         .json()
         .await
         .expect("getBuild is JSON");
-    let advertised: Vec<(&str, &str)> = body["data"]["manifests"]
+    let manifests = body["data"]["manifests"]
         .as_array()
-        .expect("a manifests array")
+        .expect("a manifests array");
+    let advertised: Vec<(&str, &str)> = manifests
         .iter()
         .map(|m| {
             (
@@ -1198,6 +1200,44 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
     assert!(
         advertised.contains(&("kept", kept_id.as_str())),
         "the served extra manifest is advertised: {advertised:?}"
+    );
+
+    // Servability follows the advertisement: asking the URL the build
+    // publishes for each manifest gets the body the origin has, so the absent
+    // one is a `404` and the kept one is a `200`. The URL is joined the way the
+    // client joins a manifest prefix and id.
+    let body_url = |field: &str| {
+        let manifest = manifests
+            .iter()
+            .find(|m| m["matching_field"].as_str() == Some(field))
+            .unwrap_or_else(|| panic!("the build advertises {field}: {advertised:?}"));
+        let prefix = manifest["manifest_download"]["url_prefix"]
+            .as_str()
+            .expect("a manifest url_prefix per manifest");
+        let id = manifest["manifest"]["id"]
+            .as_str()
+            .expect("an id per manifest");
+        format!("{}/{}", prefix.trim_end_matches('/'), id)
+    };
+    let kept_body = client
+        .get(body_url("kept"))
+        .send()
+        .await
+        .expect("the kept manifest route answers");
+    assert_eq!(
+        kept_body.status(),
+        reqwest::StatusCode::OK,
+        "the advertised kept manifest is served"
+    );
+    let gone_body = client
+        .get(body_url("gone"))
+        .send()
+        .await
+        .expect("the gone manifest route answers");
+    assert_eq!(
+        gone_body.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "the advertised gone manifest is not served"
     );
 
     mock.stop();
