@@ -611,7 +611,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-05 | F382, F383, F384, F385, F386 | todo | Wave E; recorder naming and doc precision; low |
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
-| TEMP-PUBLISH-04 | F295, F296 | todo | Wave E; fallback-decision and future walk-reachability notes; low |
+| TEMP-PUBLISH-04 | F295, F296 | in_progress | Wave E; fallback-decision and future walk-reachability notes; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
