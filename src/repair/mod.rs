@@ -1253,8 +1253,13 @@ fn normalize_deprecated(list: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        RunExit, Summary, finish, normalize_deprecated, note_stopped, phases, spawn_blocking_traced,
+        RunExit, Summary, fetch_deprecated, finish, normalize_deprecated, note_stopped, phases,
+        spawn_blocking_traced,
     };
+    use crate::Biz;
+    use crate::hyp::HypClient;
+    use crate::sleep::NoSleep;
+    use std::sync::Arc;
 
     /// A blocking task still reaches the caller's scoped subscriber: the pool
     /// thread has no thread-local dispatcher, and the cleanup passes log the
@@ -1339,5 +1344,56 @@ mod tests {
                 "the warning names the dropped path {dropped:?}: {logs}"
             );
         }
+    }
+
+    /// A loopback origin that answers every request with `body`.
+    async fn serve_body(body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind the test server");
+        let addr = listener.local_addr().expect("the test server address");
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.flush().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// The fetch path normalises the server's names before they reach the
+    /// post-phase: unsafe entries never enter the delete list, and the
+    /// survivors are in `/` form. Calling the helper directly would not catch
+    /// a fetch that skipped it.
+    #[tokio::test]
+    async fn fetch_deprecated_normalises_the_server_list() {
+        let base = serve_body(
+            r#"{"retcode":0,"message":"OK","data":{"deprecated_file_configs":[{"deprecated_files":[{"name":"old\\legacy.dll"},{"name":"../victim.dll"},{"name":"./kept//file.dat"},{"name":"/abs/evil.dll"},{"name":"a//b\\c.dat"}]}]}}"#,
+        )
+        .await;
+        let hyp = HypClient::new_with_bases(
+            Biz::Hk4eGlobal,
+            base,
+            "http://sophon.test/api".into(),
+            Arc::new(NoSleep),
+        )
+        .expect("build the stub client");
+
+        let list = fetch_deprecated(&hyp).await;
+
+        assert_eq!(
+            &list[..],
+            ["old/legacy.dll", "kept/file.dat", "a/b/c.dat"],
+            "the fetch drops unsafe names and hands on / forms in input order"
+        );
     }
 }
