@@ -1312,6 +1312,15 @@ mod tests {
             assert!(!symlink_creation_denied(
                 &std::io::Error::from_raw_os_error(5)
             ));
+            assert_eq!(
+                symlink_skip_reason(&std::io::Error::from_raw_os_error(1314)),
+                Some("creating a directory symlink is denied on this host"),
+                "the privilege denial skips, not panics"
+            );
+            assert!(
+                symlink_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
+                "another access failure must still fail the test"
+            );
         }
         #[cfg(unix)]
         {
@@ -1324,6 +1333,17 @@ mod tests {
             assert!(!symlink_creation_denied(
                 &std::io::Error::from_raw_os_error(30)
             ));
+            for denied in [1, 13] {
+                assert_eq!(
+                    symlink_skip_reason(&std::io::Error::from_raw_os_error(denied)),
+                    Some("creating a directory symlink is denied on this host"),
+                    "the privilege denial skips, not panics"
+                );
+            }
+            assert!(
+                symlink_skip_reason(&std::io::Error::from_raw_os_error(30)).is_none(),
+                "a read-only filesystem must still fail the test"
+            );
         }
     }
 
