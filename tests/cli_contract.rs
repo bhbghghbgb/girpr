@@ -75,6 +75,15 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
+/// The indent clap's help gives each option line.
+///
+/// The command's `--help` lays options out flat under `Options:` with six
+/// leading spaces. [`help_entry`] depends on that layout: if a clap upgrade
+/// changes it, the entry will not be found and the helper panics with the
+/// expected indent and the help text, rather than returning a slice of the
+/// wrong part of the output.
+const HELP_OPTION_INDENT: &str = "      ";
+
 /// The slice of `--help` output that belongs to one option: from the option's
 /// own line to the next option's line.
 ///
@@ -82,7 +91,7 @@ fn strip_ansi(s: &str) -> String {
 /// satisfied by another option's annotation. The block keeps an assertion about
 /// one flag about that flag.
 fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
-    let entry_line = format!("      {flag}");
+    let entry_line = format!("{HELP_OPTION_INDENT}{flag}");
     // A flag is a whole token: `--jobs` must not match a `--jobs-<something>`
     // option line. clap follows the flag with a space when it takes a value and
     // with a newline when it does not; the end of the text is also a boundary.
@@ -96,10 +105,16 @@ fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
     let start = std::iter::once(0)
         .chain(help.match_indices('\n').map(|(i, _)| i + 1))
         .find(|&line| at_entry_line(line))
-        .unwrap_or_else(|| panic!("help has no {flag} entry:\n{help}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "help has no {flag} entry at the expected {}-space option indent:\n{help}",
+                HELP_OPTION_INDENT.len()
+            )
+        });
     let entry = &help[start..];
+    let next_option = format!("\n{HELP_OPTION_INDENT}--");
     let end = entry
-        .match_indices("\n      --")
+        .match_indices(&next_option)
         .next()
         .map_or(entry.len(), |(i, _)| i);
     &entry[..end]
