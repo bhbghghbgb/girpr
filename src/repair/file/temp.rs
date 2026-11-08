@@ -774,6 +774,7 @@ mod tests {
     struct SeekRecording<'a> {
         file: &'a mut File,
         seeks: Vec<SeekFrom>,
+        write_calls: usize,
         bytes: usize,
     }
 
@@ -782,6 +783,7 @@ mod tests {
             Self {
                 file,
                 seeks: Vec::new(),
+                write_calls: 0,
                 bytes: 0,
             }
         }
@@ -790,6 +792,7 @@ mod tests {
     impl Write for SeekRecording<'_> {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             let n = self.file.write(buf)?;
+            self.write_calls += 1;
             self.bytes += n;
             Ok(n)
         }
@@ -918,6 +921,52 @@ mod tests {
             chain.contains(&tmp.display().to_string()) && chain.contains("rolling the tmp back"),
             "the rollback failure must be attached with the path: {chain}"
         );
+    }
+
+    /// The recorder's byte count is the bytes that landed, not the writes that
+    /// carried them: a chunk larger than one copy piece is written in two
+    /// pieces, and the count is still the chunk's size.
+    #[test]
+    fn a_reused_slice_is_counted_by_the_bytes_it_writes() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_bytes");
+        let src = dir.join("source.bin");
+        let size = COPY_BUF + 4;
+        let source: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &source).unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 0, size as u64).unwrap();
+        let reuse = reuse_at(&md5, size as i64, 0);
+        let c = chunk_at("c0", &md5, 0, size as i64);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+        let mut tmp_len = 0u64;
+        let mut handle = None;
+
+        let outcome = try_reuse_slice(&mut ReuseCall {
+            ctx: &ctx,
+            src: &src,
+            c: &c,
+            end: chunk_end(&c).unwrap(),
+            reuse_entries: Some(&reuse),
+            out: &mut out,
+            scratch: &mut scratch,
+            src_handle: &mut handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut writes,
+        })
+        .unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert_eq!(out.write_calls, 2, "the copy goes through in two pieces");
+        assert_eq!(
+            out.bytes, size,
+            "the count is the bytes written, not the number of writes"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), source);
     }
 
     /// The source is one file for the whole attempt: the first reuse opens it,
