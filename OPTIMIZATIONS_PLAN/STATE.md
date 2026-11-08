@@ -656,7 +656,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-02 | F154, F155 | done | Wave D; tools build-doc note and explicit digest trait import; low; 02ff8aa, 62b9fc3, 0ebb636 |
 | BUILD-03 | F227, F228, F229 | done | Wave E; iot-bench pin, benchmark honesty and MSRV enforcement; low; c13c7e7, 6332e10, 21400a1 |
 | BUILD-04 | F326, F327, F328 | done | Wave E; CI cost and MSRV/bench gate coverage; low; dd79ec1, fa5d90a, 315a356 |
-| BUILD-05 | F334, F335, F336 | todo | Wave E; bench toolchain pin, README wording and required-check coverage; low |
+| BUILD-05 | F334, F335, F336 | in_progress | Wave E; bench toolchain pin, README wording and required-check coverage; low |
 | BUILD-TOOLS-03 | F230, F231 | done | Wave E; tokio default features and manifest comment precision; low; a30bdaf |
 | BUILD-TOOLS-04 | F329, F330 | done | Wave E; root tokio default features and comment nuance; low; 1effa98, 2681403 |
 | BUILD-TOOLS-05 | F337, F338, F339 | todo | Wave E; tokio dev-dependency and comment precision; low |
