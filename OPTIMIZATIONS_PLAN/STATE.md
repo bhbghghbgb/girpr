@@ -479,7 +479,7 @@ until the main tasks and rework are done.
 | F378 | HYP-04 review | `src/repair/mod.rs` | `spawn_blocking_traced`'s doc should note that dropping the handle detaches rather than cancels the task. | completed |
 | F379 | HYP-04 review | `src/repair/mod.rs` | No test pins the eager-spawn property the refactor exists for; a narrow test would guard the overlap contract. | completed |
 | F380 | HYP-04 review | `src/repair/phases/scan.rs`, `check.rs`, `mod.rs` | Other raw `spawn_blocking` sites do not propagate a scoped dispatcher; they would need `spawn_blocking_traced` if per-file log assertions are added. | completed |
-| F381 | HYP-04 review | `tests/common/mod.rs` | `logs_of` and the metadata test's `logs_of` duplicate the same capture implementation; a shared test-support helper could remove it. | completed |
+| F381 | HYP-04 review | `tests/common/mod.rs` | `logs_of` and the metadata test's `logs_of` duplicate the same capture implementation; a shared test-support helper could remove it. | skipped (lib/integration boundary; needs a new public async helper) |
 | F382 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek` names its `Arc<Summary>` `ledger` while the rest of the file says summary/download meter; rename for consistency. | todo |
 | F383 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `SeekRecording.bytes` is only asserted to be 0; a case that writes through the recorder would verify the byte count. | todo |
 | F384 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek`'s `Option<Arc<Summary>>` + `Default` exist for one call site; a required parameter would simplify it. | todo |
@@ -512,6 +512,8 @@ until the main tasks and rework are done.
 | F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | todo |
 | F412 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | The region list no longer contains `audio.rs`/`lock.rs` while the next paragraph says they were swept the same way; fold them in or reword the list. | todo |
 | F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | todo |
+| F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | todo |
+| F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | todo |
 
 ## Follow-up batches
 
@@ -576,6 +578,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-06 | F407, F408 | todo | Wave E; simulated-skip wording and bridge skip visibility; low |
 | DOCS-USER-05 | F409, F410, F411 | todo | Wave E; bridge recipe alignment and profile wording; low |
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
+| HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
