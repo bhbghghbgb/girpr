@@ -507,6 +507,12 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
     `crates/tempdir/src/lib.rs` — are mirrored by unit tests beside them, and
     `cargo nextest run` alone covers everything the suite covers.
 
+- **The two non-UTF-8 audio-cache cases can skip.** A host whose filesystem
+  cannot create a name with an unpaired surrogate (or a non-UTF-8 byte) skips
+  them rather than failing. Set `GIRPR_TEST_REQUIRE_NON_UTF8=1` to turn that
+  skip into a failure, so a run meant to prove the byte-exact move cannot pass
+  having checked nothing.
+
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;

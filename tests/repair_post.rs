@@ -439,11 +439,39 @@ async fn dry_run_lists_the_post_phase_and_changes_nothing() {
     mock.stop();
 }
 
+/// Create the non-UTF-8 cache file, or report that this host cannot.
+///
+/// The default suite skips the case when the host refuses the name, so it stays
+/// green on a filesystem that cannot represent one. Setting
+/// `GIRPR_TEST_REQUIRE_NON_UTF8` turns that refusal into a failure: a run that
+/// is meant to prove the byte-exact move must not pass having checked nothing.
+///
+/// Returns whether the file was created.
+#[cfg(any(unix, windows))]
+fn write_non_utf8_source(src: &std::path::Path) -> bool {
+    match std::fs::write(src, b"non-utf8 cache bytes") {
+        Ok(()) => true,
+        Err(e) => {
+            assert!(
+                std::env::var_os("GIRPR_TEST_REQUIRE_NON_UTF8").is_none(),
+                "GIRPR_TEST_REQUIRE_NON_UTF8 is set, but this host cannot create a \
+                 non-UTF-8 name: {e}"
+            );
+            eprintln!(
+                "SKIP precondition: this host cannot create a non-UTF-8 name: {e}; \
+                 set GIRPR_TEST_REQUIRE_NON_UTF8=1 to fail instead"
+            );
+            false
+        }
+    }
+}
+
 /// A cache file whose name is not UTF-8 moves under its own bytes: the scope
 /// keys the lossy `/` rel, but the destination name is the source's name.
 ///
-/// The name is built with the platform's own byte constructor, so a host that
-/// cannot create one skips rather than failing.
+/// The name is built with the platform's own byte constructor. A host that
+/// cannot create one skips the case, unless `GIRPR_TEST_REQUIRE_NON_UTF8` is
+/// set, which makes that refusal a failure.
 #[cfg(any(unix, windows))]
 #[tokio::test]
 async fn a_non_utf8_audio_cache_name_moves_byte_for_byte() {
@@ -480,8 +508,7 @@ async fn a_non_utf8_audio_cache_name_moves_byte_for_byte() {
     };
 
     let src = cache.join(&name);
-    if let Err(e) = std::fs::write(&src, b"non-utf8 cache bytes") {
-        eprintln!("skipping: this host cannot create a non-UTF-8 name: {e}");
+    if !write_non_utf8_source(&src) {
         mock.stop();
         return;
     }
@@ -526,8 +553,9 @@ async fn a_non_utf8_audio_cache_name_moves_byte_for_byte() {
 /// case does not prove that context construction preserves the name; it proves
 /// the CLI layer's flag parsing and `RunCtx` wiring reach that same walk.
 ///
-/// The name is built with the platform's own byte constructor, so a host that
-/// cannot create one skips rather than failing.
+/// The name is built with the platform's own byte constructor. A host that
+/// cannot create one skips the case, unless `GIRPR_TEST_REQUIRE_NON_UTF8` is
+/// set, which makes that refusal a failure.
 #[cfg(any(unix, windows))]
 #[tokio::test]
 async fn a_non_utf8_audio_cache_name_moves_through_the_binary() {
@@ -564,8 +592,7 @@ async fn a_non_utf8_audio_cache_name_moves_through_the_binary() {
     };
 
     let src = cache.join(&name);
-    if let Err(e) = std::fs::write(&src, b"non-utf8 cache bytes") {
-        eprintln!("skipping: this host cannot create a non-UTF-8 name: {e}");
+    if !write_non_utf8_source(&src) {
         mock.stop();
         return;
     }
