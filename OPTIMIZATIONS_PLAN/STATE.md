@@ -502,7 +502,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-04 | F277, F278 | done | Wave E; shared saturating-add helper and deprecated collect allocation; low; 803dcbf, 12a4941 |
 | PURGE-PERF-05 | F305, F306, F307 | done | Wave E; deprecated normalization test and counter-barrier notes; low; 4af6344, c6871df, a59c949, a76c901 |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
-| TEST-REGRESSION-03 | F279, F280 | in_progress | Wave E; host-clock-independent stamps and shared phase-test setup; low |
+| TEST-REGRESSION-03 | F279, F280 | pending_review | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | todo | Wave E; value-aware text parser and stronger plan-out assertions; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
