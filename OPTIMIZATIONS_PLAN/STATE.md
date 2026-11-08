@@ -485,6 +485,9 @@ until the main tasks and rework are done.
 | F384 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` tests | `RefusingSeek`'s `Option<Arc<Summary>>` + `Default` exist for one call site; a required parameter would simplify it. | todo |
 | F385 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `settle_seek_failure`'s doc justifies itself as a "test seam" in production code; reframe around the refund invariant. | todo |
 | F386 | TEMP-WRITER-04 review | `src/repair/file/temp.rs` | `ChunkFileSink`'s doc cites `copy_within` as the reuse copy, but temp mode uses `try_reuse_slice`. | todo |
+| F387 | TEMP-PUBLISH-04 review | `src/repair/scope/report.rs` | `atomic::publish` accepts no-file-name targets and relies on the rename failing; an early refusal would give a clearer error. | todo |
+| F388 | TEMP-PUBLISH-04 review | `src/util/path.rs` tests | The `temp_sibling` test asserts the unresolved `Audio/res/../.girpr_tmp` spelling while the doc says it lands at `Audio/.girpr_tmp`; pin the resolved location. | todo |
+| F389 | TEMP-PUBLISH-04 review | `src/repair/phases/post.rs` | If the audio-cache walk ever follows links or admits directories, the no-file-name guard becomes production-reachable and needs a production-path test. | todo |
 
 ## Follow-up batches
 
@@ -612,6 +615,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
 | TEMP-PUBLISH-04 | F295, F296 | skipped | Wave E; fallback-decision and future walk-reachability notes; low |
+| TEMP-PUBLISH-05 | F387, F388, F389 | todo | Wave E; no-file-name publish refusal and temp-sibling resolution pin; low |
 | INPLACE-02 | F169, F170, F171, F172 | done | Wave D; coarse-mtime skip-path hardening and guard robustness; medium; 7744afb, 9e232ad, bb03835 |
 | CHECK-02 | F173, F174, F175, F176 | done | Wave D; check-progress signal, tally ambiguity, cancellation and comment; low; ab15eae, 3895704, f682292, f46cf6d, ff8a17a |
 
