@@ -7,9 +7,10 @@
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture,
+    ChunkSpec, FileSpec, FixtureSpec, GameFixture, Lies, MockOpts, MockServer, build_fixture,
     build_fixture_spec, read_game_file, run_binary, temp_dir, write_game_file,
 };
+use girpr_tempdir::TempDir;
 
 /// Run the shipped binary with the reading end of its stdout pipe gone.
 ///
@@ -32,6 +33,23 @@ async fn run_binary_with_closed_stdout(args: &[&str], env: &[(&str, &str)]) -> (
         out.status.code().expect("process must exit normally"),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// The standard fixture as a running mock plus a fresh install holding that
+/// fixture's files, ready for a run.
+///
+/// The fixture is built twice: once for the mock to serve and once for the
+/// bytes laid out on disk, so the install starts from the same game the mock
+/// describes.
+async fn start_standard_install(name: &str) -> (MockServer, TempDir, GameFixture, String) {
+    let mock = MockServer::start(build_fixture(), MockOpts::default()).await;
+    let dir = temp_dir(name);
+    let fx = build_fixture();
+    for f in &fx.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let game = dir.to_string_lossy().into_owned();
+    (mock, dir, fx, game)
 }
 
 // ---------------------------------------------------------------------------
@@ -465,14 +483,7 @@ async fn the_env_seam_still_works_without_the_flags() {
 
 #[tokio::test]
 async fn the_phase_completion_lines_carry_a_duration_field() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("phase_durations");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, dir, fx, game) = start_standard_install("phase_durations").await;
 
     let log = dir.join("run.log");
     let log_arg = log.to_string_lossy().into_owned();
@@ -510,7 +521,7 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
     }
 
     // The per-file total is at debug and names the file.
-    let rel = &fx2.files[0].rel;
+    let rel = &fx.files[0].rel;
     let line = body
         .lines()
         .find(|line| {
@@ -573,14 +584,7 @@ async fn the_phase_completion_lines_carry_a_duration_field() {
 /// `--scan` asked for it, and the repair phase still runs.
 #[tokio::test]
 async fn an_unscanned_run_does_not_log_a_scan_phase() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("unscanned_phase");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
+    let (mock, dir, _, game) = start_standard_install("unscanned_phase").await;
 
     let log = dir.join("run.log");
     let log_arg = log.to_string_lossy().into_owned();
