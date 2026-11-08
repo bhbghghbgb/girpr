@@ -1,7 +1,7 @@
 # Panic-site audit for `girpr`
 
-**Status: complete (2026-10-30).** Audit of the tree at `1f4c3b2` plus the §6
-changes in this branch.
+**Status: complete (2026-10-30, re-swept 2026-11-08).** Audit of the tree at
+`1f4c3b2` plus the §6 changes in this branch.
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
 value chosen by the server (or by a hostile local manifest) reaches arithmetic,
@@ -22,9 +22,12 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
    `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
    `src/util/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
-   `src/repair/{scan,reuse,purge,mod}.rs`,
+   `src/repair/{scan,reuse,purge,audio,lock,mod}.rs`,
    `src/repair/file/{mod,temp,inplace,mode}.rs`,
    `src/repair/scope/{report,limits,ledger,filter}.rs`.
+   `audio.rs` and `lock.rs` are on the plan/write paths: the former has no
+   production `unwrap`/`expect`/`panic!`, and the latter's only direct index
+   is the bounded `head[..read]` in `may_write_body` (listed below).
 2. For each site, traced where the value comes from:
    - **server** — a protobuf field, a `getBuild`/`getGameConfigs` JSON field, a
      URL/prefix, or a path in a manifest;
@@ -33,10 +36,11 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 3. Classified each as **guarded** (checked/refused), **saturated** (bounded
    arithmetic), or **invariant** (no server input can break it), and named the
    test that pins the behaviour.
-4. `rg` checklist used for the sweep:
+4. `rg` checklist used for the sweep, re-run on 2026-11-08 against the current
+   tree:
 
    ```
-   rg -n '\.unwrap\(\)|\.expect\(|\[[a-zA-Z_][a-zA-Z0-9_.]*\]| as usize| as u64| as i64|saturating|checked_| \+= | -= ' src
+   rg -n '\.unwrap\(\)|\.expect\(|panic!|unreachable!|\[[a-zA-Z_][a-zA-Z0-9_.]*\]|\[[^\]]*\.\.[^\]]*\]| as usize| as u64| as i64|saturating|checked_| \+= | -= ' src
    ```
 
    followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
@@ -59,6 +63,7 @@ server-controlled.
 | `src/repair/phases/plan.rs` `validate_chunk_ranges` | chunk `offset`, `uncompressed_size`, file `size` | server | **Guarded**: negative/overflow/past-size are `Err` → metadata exit `2`. `checked_add` guards the addition. |
 | `src/repair/phases/plan.rs` `PlannedFile::layout` | chunk offsets/lengths | server | **Invariant**: runs after `validate_chunk_ranges` in `build_plan`; both operands are non-negative `i64`, so their `u64` sum is at most `2^64-2` and cannot overflow. |
 | `src/repair/phases/plan.rs` `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
+| `src/repair/phases/manifest.rs` `ManifestFetches::next_ordered` | manifest result stream and selection index | local | **Invariant**: the stream is built from `manifests.clone().into_iter().enumerate()`, so it yields exactly one result per selected index; `has_next` stops at `slots.len()`, and `manifests[index]` is that same selection. |
 | `src/repair/reuse.rs` `survives` | local-manifest offset/size | server (local manifest) | **Guarded**: `max(0)` then `checked_add`; a source past the file is not live. `live[i]` indexes a vector built with `chunks.len()` — **invariant**. |
 | `src/repair/scan.rs` `all_chunks_download_bytes` and `est_file_download_bytes` | chunk `compressed_size` | server | **Saturating**. |
 | `src/repair/scan.rs` `scan_plan`; `src/repair/file/inplace.rs` `attempt_inplace_inner` and `patch_chunks` | `dest_ok[i]`, `source_ok[i]`, `sources[i]`, `captured[i]`, `bad[k]` | server manifest/plan | **Invariant**: every vector is built from `file.chunks.len()` or from `dest_ranges`/`source_ranges` over the same chunk list in the same function; `bad` is a subset of valid indices. |
@@ -68,7 +73,10 @@ server-controlled.
 | `src/repair/file/temp.rs` `try_reuse_slice` (reuse copy) | offset/size casts after the gate | server | **Guarded**: casts are after the checked gate; `remaining -= n` is bounded by the `min` and the read. |
 | `src/repair/file/mod.rs` `copy_within`/`zero_fill` | chunk length/offset | server | **Invariant**: offsets stay within `i64` range, so `src/dst + done` cannot overflow `u64`; each loop step is bounded by `COPY_BUF` and a successful read/write. |
 | `src/repair/mod.rs` `publish_plan` (`disk.as_ref().expect`) | disk plan for the report | local | **Invariant**: `disk` is `Some` exactly when `--print-plan` or `--plan-out` is set, the same condition that builds it in this function; each `expect` is reached only under that condition. |
+| `src/repair/lock.rs` `may_write_body` (`head[..read]`) | lock-file body prefix | local | **Invariant**: `read` is the count returned by `File::read` into the 8-byte `head`, so `read <= head.len()`; the slice is bounded by the read. |
 | `src/repair/scope/report.rs` `DiskPlan::new` | file `size`, `compressed_size` | server | **Saturating** (`est_write_bytes`, `est_extra_bytes`, `saturating_sub`). |
+| `src/repair/scope/report.rs` `PlanDocument::new` (`disk.for_id(...).expect`) | disk-plan entry for each planned file | local | **Invariant**: `DiskPlan::new` pushes exactly one entry per `plan.iter()` in plan order; `debug_assert_eq!` pins the length, and the release `expect` refuses a hand-built plan that breaks coverage instead of shifting another file's figures. |
+| `src/repair/scope/report.rs` `PlanTotals::new` (`max_chunk_bytes`) | chunk `compressed_size` | server | **Guarded**: `max(0)` before the `u64` cast; `max()`/`unwrap_or(0)` is total, so a corrupt size cannot panic. |
 | `src/repair/file/inplace.rs` `staged_payload` | chunk `uncompressed_size` | server | **Saturating**, so a corrupt sum falls back to the ordered tier instead of bypassing the RAM budget. |
 | `src/repair/mod.rs` `estimate_download` fold | per-file estimates | server-derived | **Saturating**. |
 | `src/repair/purge.rs` `finish_plan` (`total_bytes`) | on-disk sizes | local | **Saturating**; `apply_purge` counters are local file sizes, not server values. |
