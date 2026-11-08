@@ -505,6 +505,8 @@ until the main tasks and rework are done.
 | F404 | CHECK-05 review | `src/repair/phases/check.rs` tests | On expiry the injected closure returns `CheckOutcome::clean()` so counters still read 2; a distinct outcome or comment would read clearer. | todo |
 | F405 | CHECK-05 review | `src/repair/phases/check.rs` tests | Three waits each get a full `GATE_WAIT` from their own start; one absolute test deadline shared by all would make failure ordering unambiguous. | todo |
 | F406 | CHECK-05 review | `src/repair/phases/check.rs` tests | The shared 10 s constant conflates "how long the test waits" with "how long release may take"; splitting the two is a cleanup if touched again. | todo |
+| F407 | PATHHELPERS-05 review | `tests/repair_post.rs`, `src/util/path.rs` tests | The injected `*_skips_without_the_switch` tests print a `SKIP precondition:` line though nothing was skipped; distinguish the simulated refusal. | todo |
+| F408 | PATHHELPERS-05 review | `tests/artifact_bridge.rs` | The `gircap`-absent skip still relies on `--no-capture`; a matching `success-output` override could surface it under a plain run. | todo |
 
 ## Follow-up batches
 
@@ -566,6 +568,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-04 | F357, F358, F359 | done | Wave E; text-grammar ambiguity and shared schema vocabulary; low; f38bf2b, e5d1a3d |
 | TEST-OUTPUT-05 | F401, F402, F403 | todo | Wave E; remaining text-plane vocabulary notes; low |
 | CHECK-06 | F404, F405, F406 | todo | Wave E; gate-test failure reporting and deadline unification; low |
+| PATHHELPERS-06 | F407, F408 | todo | Wave E; simulated-skip wording and bridge skip visibility; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
