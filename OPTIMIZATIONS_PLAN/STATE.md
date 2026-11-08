@@ -449,8 +449,8 @@ until the main tasks and rework are done.
 | F348 | INI-04 review | `src/util/ini.rs` | The `Err` doc says "the caller must surface it", but the `NotADirectory` caller keeps its original error; clarify. | todo |
 | F349 | METADATA-04 review | `tests/common/mod.rs` | `BranchFailure::Terminal { retcode }` does not validate that `retcode` is terminal; a debug assertion or restricted constructor would self-check the knob. | completed |
 | F350 | METADATA-04 review | `tests/repair_offline.rs` | `a_terminal_branch_failure_is_metadata_under_chunk_mode` now exercises the non-JSON fatal-parse body; its name/comment could be aligned. | completed |
-| F351 | MANIFEST-04 review | `tests/repair_limits.rs` | `a_404_manifest_fails_the_run_without_waiting_for_it` saw one transient ~5 s run under load; a stability pass is warranted if it recurs. | todo |
-| F352 | MANIFEST-04 review | `src/repair/phases/manifest.rs` tests | The `InFlight`/`TestServer` coordination helpers could be shared with other phase test modules if similar gated-origin patterns appear. | todo |
+| F351 | MANIFEST-04 review | `tests/repair_limits.rs` | `a_404_manifest_fails_the_run_without_waiting_for_it` saw one transient ~5 s run under load; a stability pass is warranted if it recurs. | skipped (no change needed: no avoidable wait; no second gated-origin consumer) |
+| F352 | MANIFEST-04 review | `src/repair/phases/manifest.rs` tests | The `InFlight`/`TestServer` coordination helpers could be shared with other phase test modules if similar gated-origin patterns appear. | skipped (no change needed: no avoidable wait; no second gated-origin consumer) |
 | F353 | TEST-REGRESSION-03 review | `src/repair/file/inplace.rs` tests | Unit tests still use absolute `UNIX_EPOCH + 1_700_000_000` stamps and share the pre-2023 host-clock sensitivity. | completed |
 | F354 | TEST-REGRESSION-03 review | `tests/process.rs` | Other process tests still repeat the standard-install setup; adopting `start_standard_install` would reduce duplication further. | completed |
 | F355 | TEST-REGRESSION-03 review | `tests/process.rs` | `the_publish_and_pre_purge_steps_are_timed` still open-codes the mock + temp dir + fixture write and could use `start_standard_install`. | completed |
@@ -617,7 +617,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-02 | F136, F137 | done | Wave D; manifest mock shutdown and out-of-order stream coverage; low; 6abf7c9, 538e0ad |
 | MANIFEST-03 | F241, F242, F243 | done | Wave E; first-error message, live-stream coverage and task reaping; low; 4441005, 205980a, de13f61 |
 | MANIFEST-04 | F312, F313, F314 | done | Wave E; test-server wakeup and bound-table hardening; low; 300900d, 6a886b6 |
-| MANIFEST-05 | F351, F352 | in_progress | Wave E; 404-manifest stability pass and shared coordination helpers; low |
+| MANIFEST-05 | F351, F352 | skipped | Wave E; 404-manifest stability pass and shared coordination helpers; low |
 | JOBS-02 | F139, F140, F141 | done | Wave D; alias boundary case, help default annotation and ceiling review; low; 3f602a7, 1749bb9, 6f34e2f |
 | JOBS-03 | F238, F239, F240 | done | Wave E; help assertion scope, default literal and binary parity; low; bcdb196, f3491e8 |
 | JOBS-04 | F315, F316, F317 | todo | Wave E; help-entry slicing hardening; low |
