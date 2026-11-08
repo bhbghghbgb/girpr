@@ -1157,6 +1157,68 @@ mod tests {
         );
     }
 
+    /// A directory junction whose target does not exist is a name-surrogate
+    /// reparse point, so `FileType::is_symlink` reports it as a link and the
+    /// refusal must name the dangling link instead of "does not exist".
+    /// Junctions need no privilege, but a host that refuses to create one
+    /// cannot exercise the classification and skips rather than failing.
+    #[cfg(windows)]
+    #[test]
+    fn config_bump_refuses_a_dangling_junction_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_junction");
+        let target = root.join("never-created-target");
+        let link = root.join("dangling-game-dir");
+        if let Err(why) = try_junction_dir(&target, &link) {
+            eprintln!("SKIP precondition: this host cannot create a directory junction: {why}");
+            return;
+        }
+
+        let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a dangling junction must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("dangling symlink") && msg.contains("dangling-game-dir"),
+            "the refusal names the dangling link: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "an existing junction must not be reported as missing: {msg}"
+        );
+        assert!(
+            !target.exists(),
+            "the writer must not create the junction target"
+        );
+
+        // Remove the reparse point itself, so the temp-dir cleanup does not
+        // walk a junction whose target is gone.
+        std::fs::remove_dir(&link).expect("the junction is removable");
+    }
+
+    /// Create a directory junction with `mklink /J`, which (unlike a symlink)
+    /// needs no privilege. `target` need not exist: Windows stores the path in
+    /// the reparse point, which is exactly the dangling case.
+    #[cfg(windows)]
+    fn try_junction_dir(target: &Path, link: &Path) -> Result<(), String> {
+        let out = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output();
+        match out {
+            Ok(out) if out.status.success() && std::fs::symlink_metadata(link).is_ok() => Ok(()),
+            Ok(out) if out.status.success() => Err(format!(
+                "mklink /J reported success but {} is missing",
+                link.display()
+            )),
+            Ok(out) => Err(format!(
+                "mklink /J exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )),
+            Err(e) => Err(format!("mklink /J could not run: {e}")),
+        }
+    }
+
     /// Whether a failed directory-symlink creation is the known privilege
     /// denial that means the test cannot run on this host. Every other error
     /// is a broken test environment and must fail loudly instead of silently
