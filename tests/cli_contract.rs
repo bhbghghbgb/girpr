@@ -1556,12 +1556,21 @@ async fn the_text_plane_plan_out_alone_writes_the_document_without_a_plan_record
 
     let written = std::fs::read_to_string(&out).expect("--plan-out writes its document");
     let document: serde_json::Value = serde_json::from_str(&written).expect("valid plan JSON");
-    assert_eq!(
-        document["repair"].as_array().map(Vec::len),
-        Some(2),
-        "the document describes the run's two planned files:\n{written}"
-    );
     let fixture = build_fixture();
+    // The plan is the sorted, deduped work list, so the document's entries are
+    // exactly the fixture's files in that order.
+    let mut expected_rels: Vec<&str> = fixture.files.iter().map(|file| file.rel.as_str()).collect();
+    expected_rels.sort_unstable();
+    let rels: Vec<&str> = document["repair"]
+        .as_array()
+        .expect("the document has a repair list")
+        .iter()
+        .map(|entry| entry["rel"].as_str().expect("every entry names its rel"))
+        .collect();
+    assert_eq!(
+        rels, expected_rels,
+        "the document describes exactly the fixture's files, in plan order:\n{written}"
+    );
     assert_eq!(
         read_game_file(&dir, &fixture.files[0].rel),
         Some(fixture.files[0].data.clone()),
