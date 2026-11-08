@@ -452,12 +452,6 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throu
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
 ```
 
-- **The artifact bridge is a pre-release gate, not part of the default suite.**
-  The six `tests/artifact_bridge.rs` cases are `#[ignore]`d because each drives
-  real `girpr` runs over ~20 MB of bundle bytes. `cargo nextest run` compiles
-  them, so they cannot rot, but does not run them; run the ignored command
-  above against a captured bundle before releasing a change to the repair spec.
-
 - **Hash and scan throughput is measured by hand, not asserted.** The ignored
   `util::md5::tests::md5_throughput` hashes a generated file through the same
   whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`). The
@@ -574,9 +568,9 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
   `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs real binary runs over ~20 MB of bundle bytes per run**, and it is
-  meant to be started **by hand, only when a repair-spec change is
-  suspected**:
+  it costs real binary runs over ~20 MB of bundle bytes per run**, and it is a
+  **pre-release gate: run it by hand before any release that changes the repair
+  spec, and whenever a regression in that spec is suspected**:
   ```powershell
   cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
   ```

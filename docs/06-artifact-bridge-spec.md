@@ -152,8 +152,8 @@ four manifests — ~20 MB of real bundle bytes — before it can plan a single f
 The suite is six cases and well under a minute in release. That is worth paying
 when something has gone wrong and not worth paying on every `cargo nextest run`.
 
-So it runs **by hand, deliberately, and only when the repair spec is suspected
-to have regressed**:
+So it runs **by hand, deliberately: before any release that changes the repair
+spec, and whenever that spec is suspected to have regressed**:
 
 ```
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
