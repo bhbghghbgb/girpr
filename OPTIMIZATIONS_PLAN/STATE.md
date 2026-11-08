@@ -451,14 +451,14 @@ until the main tasks and rework are done.
 | F350 | METADATA-04 review | `tests/repair_offline.rs` | `a_terminal_branch_failure_is_metadata_under_chunk_mode` now exercises the non-JSON fatal-parse body; its name/comment could be aligned. | todo |
 | F351 | MANIFEST-04 review | `tests/repair_limits.rs` | `a_404_manifest_fails_the_run_without_waiting_for_it` saw one transient ~5 s run under load; a stability pass is warranted if it recurs. | todo |
 | F352 | MANIFEST-04 review | `src/repair/phases/manifest.rs` tests | The `InFlight`/`TestServer` coordination helpers could be shared with other phase test modules if similar gated-origin patterns appear. | todo |
-| F353 | TEST-REGRESSION-03 review | `src/repair/file/inplace.rs` tests | Unit tests still use absolute `UNIX_EPOCH + 1_700_000_000` stamps and share the pre-2023 host-clock sensitivity. | todo |
-| F354 | TEST-REGRESSION-03 review | `tests/process.rs` | Other process tests still repeat the standard-install setup; adopting `start_standard_install` would reduce duplication further. | todo |
-| F355 | TEST-REGRESSION-03 review | `tests/process.rs` | `the_publish_and_pre_purge_steps_are_timed` still open-codes the mock + temp dir + fixture write and could use `start_standard_install`. | todo |
-| F356 | TEST-REGRESSION-03 review | `tests/repair_machinery.rs` | `stamp_ago` panics if the host clock is within 48 h of the platform minimum representable `SystemTime`; clamping or a documented floor would harden it. | todo |
+| F353 | TEST-REGRESSION-03 review | `src/repair/file/inplace.rs` tests | Unit tests still use absolute `UNIX_EPOCH + 1_700_000_000` stamps and share the pre-2023 host-clock sensitivity. | completed |
+| F354 | TEST-REGRESSION-03 review | `tests/process.rs` | Other process tests still repeat the standard-install setup; adopting `start_standard_install` would reduce duplication further. | completed |
+| F355 | TEST-REGRESSION-03 review | `tests/process.rs` | `the_publish_and_pre_purge_steps_are_timed` still open-codes the mock + temp dir + fixture write and could use `start_standard_install`. | completed |
+| F356 | TEST-REGRESSION-03 review | `tests/repair_machinery.rs` | `stamp_ago` panics if the host clock is within 48 h of the platform minimum representable `SystemTime`; clamping or a documented floor would harden it. | completed |
 | F357 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | The bare text grammar is ambiguous for a value containing a known key token followed by `=`; production has no escaping to resolve it. | todo |
 | F358 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | `scan_bytes` is a literal special case apart from `PLAN_KEYS`; a named constant would keep the vocabulary symmetric. | todo |
 | F359 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | The test's event/key schema duplicates the production schema; a shared exported constant would avoid drift. | todo |
-| F360 | INPLACE-04 review | `tests/repair_machinery.rs` | The future stamp uses unchecked `SystemTime + Duration`; a `stamp_ahead` helper mirroring `stamp_ago` would make the pair symmetric and the failure explicit. | todo |
+| F360 | INPLACE-04 review | `tests/repair_machinery.rs` | The future stamp uses unchecked `SystemTime + Duration`; a `stamp_ahead` helper mirroring `stamp_ago` would make the pair symmetric and the failure explicit. | completed |
 | F361 | CHECK-04 review | `src/report/summary.rs` | "no store reaches this field without the flag" is true of production paths but a test stores directly; say "no production store" for strict precision. | todo |
 | F362 | CHECK-04 review | `src/repair/phases/check.rs` | The test repeats `Duration::from_secs(10)` across the gate wait and `recv_timeout`; a module-level constant would keep them in step. | todo |
 | F363 | CHECK-04 review | `src/repair/phases/check.rs` | The injected check closure still has an unbounded `while !state.release_slow { cv.wait(state) }` inside its spawned thread. | todo |
@@ -551,7 +551,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-05 | F305, F306, F307 | done | Wave E; deprecated normalization test and counter-barrier notes; low; 4af6344, c6871df, a59c949, a76c901 |
 | TEST-REGRESSION-02 | F214, F215 | done | Wave E; coarse-mtime flake and test focus; low; 967f670, e4a1ce0 |
 | TEST-REGRESSION-03 | F279, F280 | done | Wave E; host-clock-independent stamps and shared phase-test setup; low; ea1dc1f, ee7d6c7 |
-| TEST-REGRESSION-04 | F353, F354, F355, F356, F360 | pending_review | Wave E; remaining absolute stamps and process-test setup reuse; low; 016c716, ed4a829, 93f5aed |
+| TEST-REGRESSION-04 | F353, F354, F355, F356, F360 | done | Wave E; remaining absolute stamps and process-test setup reuse; low; 016c716, ed4a829, 93f5aed |
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | TEST-OUTPUT-04 | F357, F358, F359 | todo | Wave E; text-grammar ambiguity and shared schema vocabulary; low |
