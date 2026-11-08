@@ -536,10 +536,12 @@ mod tests {
 
     /// Run `f` with a debug-level subscriber whose lines are captured.
     ///
-    /// `set_default` is thread-local and the tests run in parallel, so the
-    /// subscriber cannot leak into another test. The phase's blocking reads use
-    /// `spawn_blocking_traced`, which installs the same dispatcher on the pool
-    /// thread, so their lines are captured too.
+    /// `set_default` installs the subscriber on the current thread only, and
+    /// `#[tokio::test]` runs `f` on a current-thread runtime, so the future is
+    /// polled on the thread that installed it and no other test can observe
+    /// the subscriber. The phase's blocking reads use `spawn_blocking_traced`,
+    /// which installs the same dispatcher on the pool thread, so their lines
+    /// are captured too.
     async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
         #[derive(Clone, Default)]
         struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
