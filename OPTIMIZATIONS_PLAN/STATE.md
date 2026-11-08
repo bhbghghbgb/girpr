@@ -458,6 +458,7 @@ until the main tasks and rework are done.
 | F357 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | The bare text grammar is ambiguous for a value containing a known key token followed by `=`; production has no escaping to resolve it. | todo |
 | F358 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | `scan_bytes` is a literal special case apart from `PLAN_KEYS`; a named constant would keep the vocabulary symmetric. | todo |
 | F359 | TEST-OUTPUT-03 review | `tests/cli_contract.rs` | The test's event/key schema duplicates the production schema; a shared exported constant would avoid drift. | todo |
+| F360 | INPLACE-04 review | `tests/repair_machinery.rs` | The future stamp uses unchecked `SystemTime + Duration`; a `stamp_ahead` helper mirroring `stamp_ago` would make the pair symmetric and the failure explicit. | todo |
 
 ## Follow-up batches
 
