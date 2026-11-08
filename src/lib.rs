@@ -86,8 +86,11 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 /// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
 ///   for real;
 /// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile`,
-///   `SophonChunkManifest` and `stream_chunk_to` are the manifest and stream
-///   helpers the offline artifact server and the peak-heap probe need;
+///   `SophonChunkManifest`, `stream_chunk_to` and `join_url` are the manifest
+///   and stream helpers the offline artifact server and the peak-heap probe
+///   need; `join_url` is the one URL join the fetches use, so a test that
+///   builds an advertised blob's URL asks production rather than restating the
+///   formula;
 /// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk.
 ///
 /// `Record` and `summary_record` repeat the root exports on purpose: an
@@ -100,6 +103,7 @@ pub mod test_support {
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
     pub use crate::sleep::{NoSleep, RealSleep};
+    pub use crate::sophon::stream::join_url;
     pub use crate::sophon::{
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };

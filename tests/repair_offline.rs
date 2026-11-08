@@ -36,7 +36,7 @@ use common::{
     remove_run_lock, run, run_binary, scope, temp_dir, write_game_file,
 };
 use girpr::RunExit;
-use girpr::test_support::{Lock, RepairMode, summary_record};
+use girpr::test_support::{Lock, RepairMode, join_url, summary_record};
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
@@ -1204,8 +1204,8 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
 
     // Servability follows the advertisement: asking the URL the build
     // publishes for each manifest gets the body the origin has, so the absent
-    // one is a `404` and the kept one is a `200`. The URL is joined the way the
-    // client joins a manifest prefix and id.
+    // one is a `404` and the kept one is a `200`. The URL is production's join
+    // of a manifest prefix and id.
     let body_url = |field: &str| {
         let manifest = manifests
             .iter()
@@ -1217,7 +1217,7 @@ async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
         let id = manifest["manifest"]["id"]
             .as_str()
             .expect("an id per manifest");
-        format!("{}/{}", prefix.trim_end_matches('/'), id)
+        join_url(prefix, id)
     };
     let kept_body = client
         .get(body_url("kept"))
