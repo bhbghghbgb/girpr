@@ -452,13 +452,20 @@ fn set_mtime(path: &Path, stamp: SystemTime) {
         .expect("set mtime");
 }
 
+/// A stamp a given age before the current clock.
+///
+/// Relative to "now" rather than an absolute epoch, so the reuse guard's age
+/// rule holds on a host whose clock is set to any date.
+fn stamp_ago(age: Duration) -> SystemTime {
+    SystemTime::now()
+        .checked_sub(age)
+        .expect("the host clock can represent the stamp")
+}
+
 /// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
 /// so a `--scan` run can still exercise the guarded plan-scan reuse.
 fn age_mtime(path: &Path) {
-    set_mtime(
-        path,
-        SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-    );
+    set_mtime(path, stamp_ago(Duration::from_secs(24 * 60 * 60)));
 }
 
 /// A `--scan` repair and an unscanned repair of the same damage are the same
@@ -575,11 +582,9 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
             std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
             // A stamp far from the aged one the plan scanned, so the guard sees
             // a different file on every filesystem, including one that only
-            // advances mtimes once per coarse tick.
-            set_mtime(
-                &path,
-                SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000),
-            );
+            // advances mtimes once per coarse tick. Both stamps are relative to
+            // the current clock.
+            set_mtime(&path, stamp_ago(Duration::from_secs(2 * 24 * 60 * 60)));
         })),
         ..Default::default()
     };
