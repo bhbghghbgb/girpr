@@ -755,6 +755,26 @@ mod tests {
             temp_sibling(dotdot),
             PathBuf::from("Audio/res/../.girpr_tmp")
         );
+
+        // Resolved, that spelling lands beside `res`, not inside it: the
+        // fallback name is in the directory the `..` walks up to. The fixture
+        // makes both sides resolvable, so the landing location is pinned
+        // instead of only its unresolved spelling.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp_sibling", "dotdot");
+        std::fs::create_dir_all(dir.join("Audio/res")).unwrap();
+        let in_fixture = dir.join("Audio/res/..");
+        assert!(in_fixture.file_name().is_none());
+        let landed = resolve_existing_prefix(&temp_sibling(&in_fixture)).unwrap();
+        let want = resolve_existing_prefix(&dir.join("Audio/.girpr_tmp")).unwrap();
+        assert_eq!(
+            landed, want,
+            "the fallback temp lands beside `res`, not inside it"
+        );
+        assert!(
+            landed.ends_with(Path::new("Audio").join(".girpr_tmp")),
+            "the resolved location is Audio/.girpr_tmp: {}",
+            landed.display()
+        );
     }
 
     /// The suffix is pushed onto the `OsString`, so a name that is not UTF-8
