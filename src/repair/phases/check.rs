@@ -614,12 +614,20 @@ mod tests {
         });
 
         // Wait until both tasks have reached their gate: one is held, the
-        // other has returned and is ready to be folded.
+        // other has returned and is ready to be folded. The deadline is only a
+        // guard against the suite hanging when a task never arrives; the wait
+        // still wakes on the notify, so it is not a timing bound.
         let (lock, cv) = &*gate;
-        let mut state = lock.lock().unwrap();
-        while !(state.slow_started && state.fast_done) {
-            state = cv.wait(state).unwrap();
-        }
+        let state = lock.lock().unwrap();
+        let (state, _) = cv
+            .wait_timeout_while(state, Duration::from_secs(10), |state| {
+                !(state.slow_started && state.fast_done)
+            })
+            .unwrap();
+        assert!(
+            state.slow_started && state.fast_done,
+            "the checks did not reach the live-progress gate within 10s"
+        );
         drop(state);
 
         // The first fold is the finished task. `recv_timeout` parks the test
