@@ -537,7 +537,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
 | EXIT-07 | F394, F395 | todo | Wave E; macro generality and duplicated status list; low |
-| PURGE-PERF-06 | F332, F333 | todo | Wave E; counter scoping and fetch-path coverage; low |
+| PURGE-PERF-06 | F332, F333 | in_progress | Wave E; counter scoping and fetch-path coverage; low |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
 | DRYRUN-04 | F275, F276 | done | Wave E; purge-before plan-out coverage and asymmetry decision; low; 8023145, 28c1716 |
