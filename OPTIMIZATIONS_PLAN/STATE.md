@@ -681,7 +681,7 @@ until the main tasks and rework are done.
 | F580 | LOCK-08 implementer | `tests/run_lock.rs` | A future value-taking flag using `allow_hyphen_values` or a short value form would need the table and rule revisited; the drift test covers arity and aliases only. | skipped (the drift test fails first if arity changes) |
 | F581 | LOCK-08 review | `tests/common/run_lock.rs` | Invalid inline values (`--jobs=`, `--max-files=abc`) are not validated, so the helper can return a path for a list clap refuses. | skipped (clap refuses the argv, so the run never starts and there is no lock to remove) |
 | F582 | LOCK-08 review | `tests/common/run_lock.rs` | `--` end-of-options and flag-conflict shapes are not mirrored. | skipped (same reachability argument as F578) |
-| F583 | INI-08 implementer | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir`, `junction_skip_reason` and the 1314 check now exist twice, in two `#[cfg(test)]` modules; a shared `util`-local test helper would remove the duplication without widening the `lib.rs` test seam. | pending_review |
+| F583 | INI-08 implementer | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir`, `junction_skip_reason` and the 1314 check now exist twice, in two `#[cfg(test)]` modules; a shared `util`-local test helper would remove the duplication without widening the `lib.rs` test seam. | completed |
 | F584 | INI-08 implementer | `src/util/path.rs` | The path helper's doc omits the `%VAR%` caveat the ini helper documents: `cmd` expands percent pairs even inside quotes. | completed |
 | F585 | INI-08 implementer | `src/util/ini.rs` | `link_creation_denied`'s Unix branch documentation is symlink-specific, though no Unix link variant shares it today. | skipped (conditional; only the symlink classifier compiles on Unix) |
 | F586 | INI-08 review | `src/util/path.rs` | The exit-0-but-link-missing branch has no direct test; only its `ErrorKind::Other` class is covered through the non-zero-exit case, so a seam over `Output`/`ExitStatus` would pin it. | todo |
@@ -693,6 +693,9 @@ until the main tasks and rework are done.
 | F592 | INI-10 implementer | `src/util/ini.rs` | `link_creation_denied`'s doc says it classifies "a directory symlink or a junction", but junction classification now lives in the shared module. | todo |
 | F593 | INI-10 implementer | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not in the `success-output = "immediate"` override, so a future host skip there would be invisible under the default gate. | todo |
 | F594 | INI-10 implementer | `src/util/ini.rs` | The ini junction test prints its skip manually while the path test routes through `skip_fixture_refusal`; the two styles still differ. | todo |
+| F595 | INI-10 review | `src/util/ini.rs` | The ini junction test ignores `GIRPR_TEST_REQUIRE_JUNCTION` while the path test honours it, so ini's junction case can silently skip under the require switch. | todo |
+| F596 | INI-10 review | `src/util/junction_support.rs` | The inner `mod tests` relies on the module's `#[cfg(all(test, windows))]` gate instead of carrying `#[cfg(test)]` like the rest of the crate. | skipped (redundant under the module gate; not a behaviour difference) |
+| F597 | INI-10 review | `src/util/mod.rs` | Unix compilation of the `#[cfg(all(test, windows))]` gate was not exercised on this host. | skipped (gating is structurally sound; a Unix CI run confirms it) |
 
 ## Follow-up batches
 
@@ -800,12 +803,12 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-08 | F510, F511 | done | Wave E; clap arity mirroring and lone-dash assertion; low; c93137b, f3a507e |
 | INI-08 | F512, F513 | done | Wave E; path junction refusal classification and shared comment; low; 2cd7789, a411cc3 |
 | INI-09 | F514, F515 | done | Wave E; junction metadata error cause and unreachable skip branch; low; cc7ba1f, b2634eb |
-| INI-10 | F583, F584 | pending_review | Wave E; shared junction test helper and `%VAR%` caveat; low; 1a822ca |
+| INI-10 | F583, F584 | done | Wave E; shared junction test helper and `%VAR%` caveat; low; 1a822ca |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
 | INI-12 | F586 | todo | Wave E; pin the link-missing junction branch; low |
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
-| INI-15 | F592, F593, F594 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
+| INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
