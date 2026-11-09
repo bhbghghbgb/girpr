@@ -1385,14 +1385,17 @@ mod tests {
     /// this host, or `None` when it is a broken test environment that must fail
     /// loudly.
     ///
-    /// A spawn failure carries its OS error, so the same two host refusals as
-    /// the symlink case apply: an unsupported platform and the known privilege
-    /// denial. `mklink` exposes only a non-zero exit and localized text, not
-    /// the Win32 code, so a failed command is `Other` and stays unclassified
-    /// (see [`try_junction_dir`]). A host whose volume cannot hold a junction
-    /// therefore fails loudly rather than silently skipping: guessing from the
-    /// exit status would also hide a broken `cmd`/`mklink` environment, which
-    /// is exactly what this classifier exists to expose.
+    /// Only a spawn failure can carry a raw OS code, so the two provable host
+    /// refusals are an unsupported platform and the known privilege denial
+    /// (`ERROR_PRIVILEGE_NOT_HELD`). `mklink` itself reports every refusal as
+    /// exit `1` plus localized text and no Win32 code, so its failure arrives
+    /// as `Other` and stays unclassified: guessing from the exit status or the
+    /// message text would also hide a broken `cmd`/`mklink` environment, which
+    /// is exactly what this classifier exists to expose. The raw-code arm
+    /// therefore belongs to the spawn path — and to the injected test that
+    /// pins the classifier's contract — not to a `mklink` refusal that only
+    /// looks like it. A host whose volume cannot hold a junction still fails
+    /// loudly rather than silently skipping.
     #[cfg(windows)]
     fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
         if e.kind() == std::io::ErrorKind::Unsupported {
@@ -1482,10 +1485,11 @@ mod tests {
 
     /// Only a spawn failure that proves an unsupported platform or the known
     /// privilege denial skips the junction case. A failed `mklink` command has
-    /// no raw code to classify, so it must fail the test rather than skip.
+    /// no raw code to classify, whatever its text says, so it must fail the
+    /// test rather than skip.
     #[cfg(windows)]
     #[test]
-    fn only_a_denied_or_unsupported_junction_skips_the_link_test() {
+    fn only_a_proven_host_refusal_skips_the_junction() {
         assert!(
             junction_skip_reason(&std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -1501,6 +1505,17 @@ mod tests {
             .is_none(),
             "a failed mklink command has no provable raw code and must fail"
         );
+        assert!(
+            junction_skip_reason(&std::io::Error::other(
+                "mklink /J exited with exit code: 1: 1314 privilege not held",
+            ))
+            .is_none(),
+            "a 1314 in the localized text is not a raw code and must fail"
+        );
+        assert!(
+            junction_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
+            "another access failure must still fail the test"
+        );
         assert_eq!(
             junction_skip_reason(&std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -1513,10 +1528,6 @@ mod tests {
             junction_skip_reason(&std::io::Error::from_raw_os_error(1314)),
             Some("creating a directory junction is denied on this host"),
             "the privilege denial skips, not panics"
-        );
-        assert!(
-            junction_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
-            "another access failure must still fail the test"
         );
     }
 
