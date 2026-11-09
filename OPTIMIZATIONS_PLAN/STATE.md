@@ -654,6 +654,9 @@ until the main tasks and rework are done.
 | F553 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | `remaining_or_zero` could also serve the release wait if its `Some`/`None` branch were refactored. | skipped (would change the release-wait shape) |
 | F554 | CHECK-08 review | `src/repair/phases/check.rs` tests | `check_warnings` slices from `CHECK fail`, stripping the `WARN` level, so a regression from `warn!` to `info!` would still pass. | todo |
 | F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | todo |
+| F556 | PATHHELPERS-08 implementer | `README.md`, `docs/06-artifact-bridge-spec.md` | The default parallel bridge run (69.4 s here) is not faster than the recorded serial 63 s on this 4-core host; a timing claim should say which mode it measured. | skipped (the docs say "roughly a minute", which both measurements support) |
+| F557 | PATHHELPERS-08 implementer | `tests/artifact_bridge.rs` | Parallel safety is stated in prose only; asserting that scratch paths differ would test the tempdir crate rather than the bridge. | skipped (the property belongs to the tempdir crate) |
+| F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | todo |
 
 ## Follow-up batches
 
@@ -786,6 +789,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-09 | F552 | todo | Wave E; pin the remaining check warn arms; low |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
 | CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
+| PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
+| PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
