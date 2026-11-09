@@ -664,6 +664,9 @@ until the main tasks and rework are done.
 | F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the measured 97.7 MiB bundle and 41.4 MiB of manifests. | pending_review |
 | F564 | DOCS-USER-07 review | `tests/artifact_bridge/server.rs` | Manifests are described as "~40 MB of a ~130 MB bundle" and "~320 MB across eight runs"; the bundle is 97.7 MiB with 41.4 MiB under `manifests/`, and there are six tests. | skipped (duplicate of F563, which now carries these measurements) |
 | F565 | DOCS-USER-07 review | `docs/06-artifact-bridge-spec.md` | §3.2 step 4 says "otherwise a directory scan" though the scan runs only when `gircap list` is unavailable or fails, and step 5's `--out <root>` text covers the zero-bundle failure while the multiple-bundle failure points at `GIRPR_ARTIFACT_BUNDLE`. | todo |
+| F566 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs` | The comments say "a `getBuild` body declares five manifests and the bundle stores two", while §4.6 says "four manifests per run"; both can be true but read as a contradiction. | todo |
+| F567 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs`, `docs/06-artifact-bridge-spec.md` | The cache holds only the served `.manifest.zst` archives (~19.0 MiB), not the whole 41.4 MiB `manifests/` tree both texts cite for scale. | todo |
+| F568 | DOCS-USER-08 implementer | `tests/artifact_bridge.rs` | The `#[ignore]` reason mentions the `.config/nextest.toml` success-output override. | skipped (the override exists and was exercised in the parallel bridge run) |
 
 ## Follow-up batches
 
@@ -802,6 +805,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-08 | F563 | pending_review | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
 | DOCS-USER-10 | F565 | todo | Wave E; bundle-search failure wording; low |
+| DOCS-USER-11 | F566, F567 | todo | Wave E; manifest-count wording and served-archive scale; low |
+| DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
