@@ -1269,7 +1269,9 @@ mod tests {
         // a command separator could split into extra arguments. Pass one
         // pre-quoted line verbatim instead, so each path reaches `mklink` as a
         // single argument. Windows paths cannot contain `"`, so a plain quote
-        // pair is enough.
+        // pair is enough. Quotes do not stop `cmd`'s `%VAR%` expansion, though:
+        // a path carrying a literal `%NAME%` would still be rewritten, so the
+        // caller must keep percent pairs out of the fixture paths.
         let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
         let out = std::process::Command::new("cmd")
             .arg("/C")
