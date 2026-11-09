@@ -1217,11 +1217,16 @@ mod tests {
             Self { link, armed: true }
         }
 
-        /// Remove the link now and report a failure. Disarms `Drop`, so the
-        /// cleanup is attempted once and the success path can assert it.
+        /// Remove the link now and report a failure. `Drop` stays armed until
+        /// the removal succeeds, so a failed success-path removal is retried
+        /// there instead of leaving the link behind; a successful removal is
+        /// not repeated.
         fn remove(&mut self) -> std::io::Result<()> {
-            self.armed = false;
-            remove_link(self.link)
+            let result = remove_link(self.link);
+            if result.is_ok() {
+                self.armed = false;
+            }
+            result
         }
     }
 
@@ -1419,6 +1424,47 @@ mod tests {
                 "a read-only filesystem must still fail the test"
             );
         }
+    }
+
+    /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`
+    /// retries it. A non-empty directory makes the first removal fail; clearing
+    /// it lets the retry succeed, and the link must then be gone.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn link_guard_retries_a_failed_explicit_removal_on_drop() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "guard_retry");
+        let link = root.join("link");
+
+        #[cfg(windows)]
+        {
+            // `remove_dir` refuses a non-empty directory.
+            std::fs::create_dir(&link).unwrap();
+            std::fs::write(link.join("blocker"), b"x").unwrap();
+            {
+                let mut guard = LinkGuard::new(&link);
+                assert!(
+                    guard.remove().is_err(),
+                    "a non-empty directory is not removable"
+                );
+                std::fs::remove_file(link.join("blocker")).unwrap();
+            }
+        }
+        #[cfg(unix)]
+        {
+            // `remove_file` refuses a directory.
+            std::fs::create_dir(&link).unwrap();
+            {
+                let mut guard = LinkGuard::new(&link);
+                assert!(guard.remove().is_err(), "a directory is not a file");
+                std::fs::remove_dir(&link).unwrap();
+                std::fs::write(&link, b"x").unwrap();
+            }
+        }
+
+        assert!(
+            std::fs::symlink_metadata(&link).is_err(),
+            "the guard must retry the failed removal when it drops"
+        );
     }
 
     /// A parent that cannot be traversed is a permission failure, not a
