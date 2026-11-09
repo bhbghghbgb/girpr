@@ -582,9 +582,9 @@ until the main tasks and rework are done.
 | F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | completed |
 | F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | completed |
 | F483 | TEMP-WRITER-06 follow-up | `src/hyp.rs` | A pre-existing broken intra-doc link (`crate::sophon::retryable`) makes `cargo doc -p girpr --no-deps` fail under `-D warnings`. | completed |
-| F484 | TEMP-PUBLISH-06 review | `src/repair/phases/post.rs` | `copy_publish_with` still guards only with `file_name()`, so it would accept a `dir/.` target; share `ends_in_a_file_name` if that writer becomes reachable. | todo |
-| F485 | TEMP-PUBLISH-06 review | `src/util/atomic.rs` | Windows targets ending in a dot or space (e.g. `config.`) are accepted and alias another name; `contained_rel` already refuses those, the atomic writer does not. | todo |
-| F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | todo |
+| F484 | TEMP-PUBLISH-06 review | `src/repair/phases/post.rs` | `copy_publish_with` still guards only with `file_name()`, so it would accept a `dir/.` target; share `ends_in_a_file_name` if that writer becomes reachable. | skipped (writer is not reachable with a `dir/.` target) |
+| F485 | TEMP-PUBLISH-06 review | `src/util/atomic.rs` | Windows targets ending in a dot or space (e.g. `config.`) are accepted and alias another name; `contained_rel` already refuses those, the atomic writer does not. | pending_review |
+| F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | pending_review |
 | F487 | TEST-MANIFEST-06 review | `tools/capture/src/manifest/mod.rs` | `CapturedManifest::url` and `chunk_url` append `url_suffix` without the new "unmeasured conservative reading" note. | completed |
 | F488 | TEST-MANIFEST-06 review | `tools/capture` | Starward's unused `GameSophonManifestUrl.BuildUrl` reads `url_suffix` as a query string; informational unless reference parity is revisited. | skipped (external reference has no callers; no repo change) |
 | F489 | MANIFEST-07 review | `src/repair/file/inplace.rs` | The overlap guard is conservative: duplicate identical chunks count as overlapping and stay retryable; a post-redo rescan could recover the terminal classification at the cost of one extra read on the failure path. | todo |
@@ -726,7 +726,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-07 | F476, F477 | done | Wave E; junction skip classification and guard removal order; low; 8483c89, d3dba86 |
 | BUILD-07 | F478, F479, F480 | done | Wave E; metadata failure message, MSRV literals, installer helper threshold; low; a6d34b0, 3b29885, e34a8b2 |
 | TEMP-WRITER-07 | F481, F482, F483 | done | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low; 8fab9f8, a60f278 |
-| TEMP-PUBLISH-07 | F484, F485, F486 | in_progress | Wave E; shared spelling guard, Windows aliases, doc wording; low |
+| TEMP-PUBLISH-07 | F484, F485, F486 | pending_review | Wave E; shared spelling guard, Windows aliases, doc wording; low; 3766e53, 6ac80bd |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
 | MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
