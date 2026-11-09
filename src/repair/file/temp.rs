@@ -774,6 +774,61 @@ mod tests {
             .unwrap()
     }
 
+    /// The per-file state a reuse test shares across its calls: one scratch
+    /// buffer, the lazily opened source handle, the tracked resume point, and
+    /// the write counter. Bundling it keeps each call down to the pieces the
+    /// test varies.
+    struct ReuseState<'a> {
+        ctx: &'a FileCtx,
+        scratch: Vec<u8>,
+        src_handle: Option<File>,
+        tmp_len: u64,
+        writes: FileWrites,
+    }
+
+    impl<'a> ReuseState<'a> {
+        fn new(ctx: &'a FileCtx) -> Self {
+            Self {
+                ctx,
+                scratch: Vec::new(),
+                src_handle: None,
+                tmp_len: 0,
+                writes: FileWrites::default(),
+            }
+        }
+
+        /// A call for `c` against `src` and `out`. The chunk's end is derived
+        /// from its offset and size, and there is no reuse entry until a test
+        /// adds one with [`ReuseCall::with_reuse`].
+        fn call<'b, W: Write + Seek>(
+            &'b mut self,
+            src: &'b std::path::Path,
+            c: &'b SophonChunk,
+            out: &'b mut W,
+        ) -> ReuseCall<'b, W> {
+            ReuseCall {
+                ctx: self.ctx,
+                src,
+                c,
+                end: chunk_end(c).expect("test chunk has a valid offset and size"),
+                reuse_entries: None,
+                out,
+                scratch: &mut self.scratch,
+                src_handle: &mut self.src_handle,
+                tmp_len: &mut self.tmp_len,
+                writes: &mut self.writes,
+            }
+        }
+    }
+
+    impl<'a, W: Write + Seek> ReuseCall<'a, W> {
+        /// Point the lookup at `entries`.
+        fn with_reuse(mut self, entries: &'a FileReuse) -> Self {
+            self.reuse_entries = Some(entries);
+            self
+        }
+    }
+
     /// A sink that records every seek it is asked for, so a test can assert
     /// that a path did not position the file instead of inferring it from the
     /// final cursor value.
@@ -946,24 +1001,10 @@ mod tests {
         let mut file = temp_out(&out_path);
         let mut out = SeekRecording::new(&mut file);
         let ctx = test_ctx();
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut tmp_len = 0u64;
-        let mut handle = None;
+        let mut state = ReuseState::new(&ctx);
 
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &src,
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
 
         assert!(matches!(outcome, ChunkOutcome::Reused));
         assert_eq!(out.write_calls, 2, "the copy goes through in two pieces");
@@ -989,45 +1030,23 @@ mod tests {
         let tmp_path = dir.join("out.bin");
         let mut out = temp_out(&tmp_path);
         let ctx = test_ctx();
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut tmp_len = 0u64;
-        let mut handle = None;
+        let mut state = ReuseState::new(&ctx);
 
         let first = chunk_at("c0", &md5, 0, 4);
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &src,
-            c: &first,
-            end: chunk_end(&first).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &first, &mut out).with_reuse(&reuse)).unwrap();
         assert!(matches!(outcome, ChunkOutcome::Reused));
-        assert!(handle.is_some(), "the first reuse keeps the source handle");
+        assert!(
+            state.src_handle.is_some(),
+            "the first reuse keeps the source handle"
+        );
 
         // The removal is allowed to fail on a platform that will not unlink an
         // open file; the held handle is what the next chunk must use either way.
         let _ = std::fs::remove_file(&src);
         let second = chunk_at("c1", &md5, 4, 4);
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &src,
-            c: &second,
-            end: chunk_end(&second).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &second, &mut out).with_reuse(&reuse)).unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Reused),
             "the held handle serves the later chunk"
@@ -1048,26 +1067,15 @@ mod tests {
         let mut file = temp_out(&dir.join("out.bin"));
         let mut out = SeekRecording::new(&mut file);
         let ctx = test_ctx();
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut tmp_len = 0u64;
-        let mut handle = None;
+        let mut state = ReuseState::new(&ctx);
 
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &src,
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
         assert!(matches!(outcome, ChunkOutcome::Download));
-        assert!(handle.is_none(), "a failed open leaves no handle behind");
+        assert!(
+            state.src_handle.is_none(),
+            "a failed open leaves no handle behind"
+        );
         assert!(
             out.seeks.is_empty(),
             "the download path must not position the sink; the streaming sink places it"
@@ -1092,27 +1100,20 @@ mod tests {
         let mut file = temp_out(&out_path);
         let mut out = SeekRecording::new(&mut file);
         let ctx = test_ctx();
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut tmp_len = 0u64;
-        let mut handle = None;
+        let mut state = ReuseState::new(&ctx);
 
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &dir.join("never-written.bin"),
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
+        let outcome = try_reuse_slice(
+            &mut state
+                .call(&dir.join("never-written.bin"), &c, &mut out)
+                .with_reuse(&reuse),
+        )
         .unwrap();
 
         assert!(matches!(outcome, ChunkOutcome::Download));
-        assert!(handle.is_none(), "there is no source to hold open");
+        assert!(
+            state.src_handle.is_none(),
+            "there is no source to hold open"
+        );
         assert!(
             out.seeks.is_empty(),
             "the download path must not position the sink for a missing candidate"
@@ -1146,28 +1147,14 @@ mod tests {
         let mut file = temp_out(&out_path);
         let mut out = SeekRecording::new(&mut file);
         let ctx = test_ctx();
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut tmp_len = 0u64;
-        let mut handle = None;
+        let mut state = ReuseState::new(&ctx);
 
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &src,
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: Some(&reuse),
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
 
         assert!(matches!(outcome, ChunkOutcome::Download));
         assert!(
-            handle.is_some(),
+            state.src_handle.is_some(),
             "a readable source stays open for the next chunk when only the slice digest failed"
         );
         assert!(
@@ -1199,24 +1186,10 @@ mod tests {
         let md5 = "d41d8cd98f00b204e9800998ecf8427e";
         let c = chunk_at("c1", md5, 4, 4);
         let missing = dir.join("never-written.bin");
-        let mut scratch = Vec::new();
-        let mut writes = FileWrites::default();
-        let mut handle = None;
-        let mut tmp_len = 8u64;
+        let mut state = ReuseState::new(&ctx);
+        state.tmp_len = 8;
 
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &missing,
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: None,
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        let outcome = try_reuse_slice(&mut state.call(&missing, &c, &mut out)).unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Resumed),
             "the chunk's end is inside the tmp"
@@ -1224,21 +1197,9 @@ mod tests {
 
         // The rollback and the tracked resume point move together; the update
         // is the caller's, not a value the test sets by hand.
-        rollback_failed_chunk(&mut out, &tmp, &c, &mut tmp_len).unwrap();
-        assert_eq!(tmp_len, 4, "the tracked point follows the truncation");
-        let outcome = try_reuse_slice(&mut ReuseCall {
-            ctx: &ctx,
-            src: &missing,
-            c: &c,
-            end: chunk_end(&c).unwrap(),
-            reuse_entries: None,
-            out: &mut out,
-            scratch: &mut scratch,
-            src_handle: &mut handle,
-            tmp_len: &mut tmp_len,
-            writes: &mut writes,
-        })
-        .unwrap();
+        rollback_failed_chunk(&mut out, &tmp, &c, &mut state.tmp_len).unwrap();
+        assert_eq!(state.tmp_len, 4, "the tracked point follows the truncation");
+        let outcome = try_reuse_slice(&mut state.call(&missing, &c, &mut out)).unwrap();
         assert!(
             matches!(outcome, ChunkOutcome::Download),
             "the rolled-back chunk must not be resumed"
