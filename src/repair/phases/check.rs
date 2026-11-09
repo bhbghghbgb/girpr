@@ -371,9 +371,11 @@ mod tests {
     /// not a timing assertion, because every wait wakes on its notify.
     const GATE_WAIT: Duration = Duration::from_secs(10);
 
-    /// Time left before `deadline`, or `None` once it has passed. Keeping the
-    /// expired case separate from a zero duration lets a wait record expiry
-    /// instead of merely waking immediately.
+    /// Time left before `deadline`, or `None` once it has passed. The slow
+    /// check's release wait distinguishes `None` from a zero duration so it can
+    /// record expiry; the two harness waits collapse it to zero because they
+    /// only need to wake, and the assertion that follows reports the shared
+    /// deadline.
     fn before(deadline: Instant) -> Option<Duration> {
         deadline.checked_duration_since(Instant::now())
     }
@@ -605,7 +607,9 @@ mod tests {
         // One absolute deadline for the whole test. The slow check's release
         // wait and both harness waits measure against it, so on a stuck gate
         // there is one expiry point to read in the failure, not three
-        // independent allowances that can race.
+        // independent allowances that can race. Each wait's headroom is the
+        // time left at that point, not a fresh `GATE_WAIT`: a wait that starts
+        // late gets less of the shared budget.
         let deadline = Instant::now() + GATE_WAIT;
 
         let thread_summary = Arc::clone(&summary);
