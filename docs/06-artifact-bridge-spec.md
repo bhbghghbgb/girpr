@@ -386,9 +386,11 @@ Each run fetches four manifests and the `manifests/` directory is ~41 MiB of the
 ~98 MiB bundle; across the suite's runs that is over a hundred megabytes
 re-read for nothing. They are immutable per bundle, so cache them.
 
-The cache is process-global, keyed by `(bundle, tag, field)`, and shared by every
-listener: it holds bytes that are a function of the bundle alone, so nothing
-about per-capture isolation is lost by sharing it.
+The cache is process-global, keyed by the archive's own path —
+`<bundle>/manifests/<tag>/<field>.manifest.zst`, the `(bundle, tag, field)`
+triple spelled as a path — and shared by every listener: it holds bytes that
+are a function of the bundle alone, so nothing about per-capture isolation is
+lost by sharing it.
 
 ### 4.7 The request log is not optional, and it is the primary source
 
