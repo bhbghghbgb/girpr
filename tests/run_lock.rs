@@ -333,11 +333,14 @@ mod run_lock_tests {
         ] {
             assert!(Args::try_parse_from(argv.clone()).is_err(), "{argv:?}");
         }
-        // An explicit `=` value and a lone `-` are still values.
-        assert!(Args::try_parse_from(["girpr", "--game-path=-", "--biz", "hk4e_global"]).is_ok());
-        assert!(
-            Args::try_parse_from(["girpr", "--game-path", "-", "--biz", "hk4e_global"]).is_ok()
-        );
+        // An explicit `=` value and a lone `-` are still values, and the
+        // parsed path is exactly that one-character spelling.
+        let explicit = Args::try_parse_from(["girpr", "--game-path=-", "--biz", "hk4e_global"])
+            .expect("an explicit `=` value parses");
+        assert_eq!(explicit.game_path.to_str(), Some("-"));
+        let lone = Args::try_parse_from(["girpr", "--game-path", "-", "--biz", "hk4e_global"])
+            .expect("a lone `-` is a value");
+        assert_eq!(lone.game_path.to_str(), Some("-"));
     }
 
     #[test]
