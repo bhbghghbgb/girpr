@@ -23,7 +23,7 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
    `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
    `src/util/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
-   `src/repair/{scan,reuse,purge,mod}.rs`,
+   `src/repair/{scan,reuse,purge,audio,lock,mod}.rs`,
    `src/repair/file/{mod,temp,inplace,mode}.rs`,
    `src/repair/scope/{report,limits,ledger,filter}.rs`.
 2. For each site, traced where the value comes from:
@@ -43,10 +43,9 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 
    followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
 
-`audio.rs` and `lock.rs` are on the plan/write paths and were swept the same
-way: the former has no production `unwrap`/`expect`/`panic!`, and the latter's
-only direct index is the bounded `head[..read]` in `may_write_body` (listed
-below).
+In those regions, `audio.rs` and `lock.rs` are on the plan/write paths: the
+former has no production `unwrap`/`expect`/`panic!`, and the latter's only
+direct index is the bounded `head[..read]` in `may_write_body` (listed below).
 
 ---
 
