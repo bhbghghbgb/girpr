@@ -730,7 +730,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
-| BUILD-10 | F520 | todo | Wave E; make the README workspace floor robust to a member above the root; low |
+| BUILD-10 | F520 | in_progress | Wave E; make the README workspace floor robust to a member above the root; low |
 | BUILD-11 | F521 | todo | Wave E; exit codes for the remaining MSRV script failures; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
