@@ -13,7 +13,7 @@
 #[path = "common/run_lock.rs"]
 mod run_lock;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use girpr::test_support::{Lock, lock_path, takes_lock};
 use girpr::{Args, RunCtx};
 use girpr_tempdir::TempDir;
@@ -45,6 +45,16 @@ fn ctx_for(flags: &[&str]) -> RunCtx {
     Args::parse_from(argv)
         .into_ctx()
         .expect("test flags must parse")
+}
+
+/// clap's own reading of an argument list: the game path when the CLI accepts
+/// the list, and `None` when it refuses it.
+fn clap_game_path(args: &[&str]) -> Option<String> {
+    let mut argv = vec!["girpr"];
+    argv.extend_from_slice(args);
+    Args::try_parse_from(argv)
+        .ok()
+        .map(|parsed| parsed.game_path.to_string_lossy().into_owned())
 }
 
 mod run_lock_tests {
@@ -160,6 +170,150 @@ mod run_lock_tests {
         }
         // A lone `-` is a value, not a flag.
         assert_eq!(game_path_arg(&["--game-path", "-"]), Some("-"));
+    }
+
+    #[test]
+    fn game_path_arg_skips_another_flags_value() {
+        // The token after a value-taking flag is that flag's value, so a
+        // `--game-path` there is not a game path. clap refuses such a spelling
+        // (a value may not look like a flag), so the run never takes a lock.
+        for args in [
+            vec!["--include", "--game-path", "/games/a"],
+            vec!["--include", "--game-path=/games/a"],
+            vec!["--max-files", "--game-path", "/games/a"],
+            vec!["--jobs", "--game-path", "/games/a"],
+            vec!["--log-file", "--game-path", "/games/a"],
+            vec!["--include", "--dry-run", "--game-path", "/games/a"],
+        ] {
+            assert_eq!(game_path_arg(&args), None, "{args:?}");
+        }
+
+        // The same flags with a value of their own leave the path visible.
+        for args in [
+            vec!["--include", "*.blk", "--game-path", "/games/a"],
+            vec!["--include=*.blk", "--game-path", "/games/a"],
+            vec!["--jobs", "4", "--game-path", "/games/a"],
+            vec!["--io-threads", "4", "--game-path", "/games/a"],
+            vec!["--include", "-", "--game-path", "/games/a"],
+        ] {
+            assert_eq!(game_path_arg(&args), Some("/games/a"), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn every_value_flag_hides_a_following_game_path() {
+        // Read the value-taking flags from the CLI itself, so a new flag cannot
+        // be added without the cleanup learning that it owns the next token.
+        let command = Args::command();
+        let mut checked = 0;
+        for arg in command.get_arguments() {
+            if !arg.get_action().takes_values() {
+                continue;
+            }
+            let long = arg
+                .get_long()
+                .expect("every value-taking flag has a long name");
+            for name in std::iter::once(long).chain(arg.get_aliases().unwrap_or_default()) {
+                checked += 1;
+                let flag = format!("--{name}");
+                assert_eq!(
+                    game_path_arg(&[flag.as_str(), "--game-path", "/games/a"]),
+                    None,
+                    "{flag} takes a value"
+                );
+                // A second `--game-path` is a repeat rather than a visible
+                // path, so only the other flags get this shape.
+                if flag != "--game-path" {
+                    assert_eq!(
+                        game_path_arg(&[flag.as_str(), "value", "--game-path", "/games/a"]),
+                        Some("/games/a"),
+                        "{flag} takes a value"
+                    );
+                }
+            }
+        }
+        assert!(checked >= 20, "the CLI exposes its value-taking flags");
+    }
+
+    #[test]
+    fn game_path_mirror_matches_clap_option_arity() {
+        // Each list is either accepted by the CLI, and then the mirror must
+        // name the same path, or refused, and then the mirror must name none
+        // because no run took a lock.
+        for args in [
+            vec!["--game-path", "/games/a", "--biz", "hk4e_global"],
+            vec!["--game-path=/games/a", "--biz", "hk4e_global"],
+            vec!["--game-path", "-", "--biz", "hk4e_global"],
+            vec!["--game-path=-", "--biz", "hk4e_global"],
+            vec!["--biz", "hk4e_global", "--game-path", "/games/a"],
+            vec![
+                "--audio",
+                "en-us",
+                "--audio",
+                "ja-jp",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec![
+                "--include",
+                "*.blk",
+                "--exclude",
+                "*_tmp",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec![
+                "--include=--game-path",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec![
+                "--include",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec!["--include", "--game-path=/games/a", "--biz", "hk4e_global"],
+            vec![
+                "--max-files",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec!["--game-path", "--include", "*.blk", "--biz", "hk4e_global"],
+            vec![
+                "--game-path",
+                "/games/a",
+                "--game-path",
+                "/games/b",
+                "--biz",
+                "hk4e_global",
+            ],
+            vec!["--game-path", "", "--biz", "hk4e_global"],
+            vec!["--game-path=", "--biz", "hk4e_global"],
+            vec![
+                "--include",
+                "-",
+                "--game-path",
+                "/games/a",
+                "--biz",
+                "hk4e_global",
+            ],
+        ] {
+            assert_eq!(
+                game_path_arg(&args),
+                clap_game_path(&args).as_deref(),
+                "{args:?}"
+            );
+        }
     }
 
     #[test]

@@ -124,38 +124,81 @@ pub fn mode_takes_lock(readonly: bool, check_only: bool, print_plan: bool) -> bo
 }
 
 /// Whether a binary argument list names a mode that takes the lock.
+///
+/// Unlike [`game_path_arg`], this needs no option-arity mirror: a value may not
+/// start with `-` (the CLI refuses it), and an inline `--flag=value` token is
+/// not a bare mode flag, so a mode flag is never another flag's value.
 pub(crate) fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
     !args
         .iter()
         .any(|arg| matches!(arg.as_ref(), "--dry-run" | "--check-only" | "--print-plan"))
 }
 
+/// Long flags whose next token is their value rather than another flag.
+///
+/// `--io-threads` is the deprecated alias of `--jobs`. A value attached with
+/// `=` carries its own token, and the CLI declares no short flags.
+const VALUE_FLAGS: &[&str] = &[
+    "--audio",
+    "--biz",
+    "--exclude",
+    "--game-path",
+    "--hyp-base",
+    "--include",
+    "--io-threads",
+    "--jobs",
+    "--log-file",
+    "--log-file-level",
+    "--log-level",
+    "--max-delete-bytes",
+    "--max-download-bytes",
+    "--max-files",
+    "--max-ram-bytes",
+    "--max-verified-download-bytes",
+    "--max-verified-write-bytes",
+    "--max-write-bytes",
+    "--output",
+    "--plan-out",
+    "--repair-mode",
+    "--sophon-base",
+];
+
 /// The one `--game-path` value in a binary argument list, in either spelling.
 ///
 /// `None` when the list names no game path, when the flag has no following
 /// value, when the following token is another flag, when the value is empty, or
-/// when the flag is repeated. The CLI refuses each of those spellings before a
-/// run can take a lock, so cleanup must not pick a directory that never ran.
+/// when the flag is repeated. The token after any other value-taking flag is
+/// that flag's value, so `--include --game-path /x` names an `--include` value
+/// and no game path. The CLI refuses each of those spellings before a run can
+/// take a lock, so cleanup must not pick a directory that never ran.
 pub(crate) fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
     let mut found = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
-        let value = if arg == "--game-path" {
-            match args.next().map(|value| value.as_ref()) {
+        // `--flag=value` carries its value; only a bare flag consumes the next
+        // token.
+        let (name, inline) = match arg.split_once('=') {
+            Some((name, value)) => (name, Some(value)),
+            None => (arg, None),
+        };
+        if name != "--game-path" && !VALUE_FLAGS.contains(&name) {
+            continue;
+        }
+        let value = match inline {
+            Some(value) => value,
+            None => match args.next().map(|value| value.as_ref()) {
                 // clap reads a token that starts with `-` as a flag rather
                 // than the option's value; a lone `-` is still a value.
-                Some(value) if value == "-" || !value.starts_with('-') => Some(value),
+                Some(value) if value == "-" || !value.starts_with('-') => value,
                 // A missing value or another flag is a usage error, so the run
                 // never starts and takes no lock.
                 _ => return None,
-            }
-        } else {
-            arg.strip_prefix("--game-path=")
+            },
         };
-        let Some(value) = value else {
+        if name != "--game-path" {
             continue;
-        };
+        }
         if value.is_empty() || found.replace(value).is_some() {
             return None;
         }
