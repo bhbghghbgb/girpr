@@ -630,7 +630,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
 | METADATA-06 | F416, F417, F418 | done | Wave E; branch-failure wording and shared terminal predicate; low; 211a332, ebb59d8 |
-| MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
+| MANIFEST-06 | F419, F420 | in_progress | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
