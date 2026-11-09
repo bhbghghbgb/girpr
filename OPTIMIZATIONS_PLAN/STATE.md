@@ -776,7 +776,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-08 | F501, F502 | done | Wave E; remaining bridge recipes and parallel-run isolation; low; 5c8839a |
 | DOCS-USER-07 | F503, F504, F505 | done | Wave E; cache-key wording, artifact-root variable, wall-time wording; low; 2bc0239, 2b3d76b, ae20679, dcc5874 |
 | HYP-08 | F506 | done | Wave E; align the metadata log helper with the shared one; low; f53e096 |
-| JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
+| JOBS-07 | F507 | in_progress | Wave E; assert the help indent relationship; low |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
 | LOCK-08 | F510, F511 | todo | Wave E; clap arity mirroring and lone-dash assertion; low |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
