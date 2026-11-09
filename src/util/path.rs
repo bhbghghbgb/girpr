@@ -975,9 +975,11 @@ mod tests {
     /// escape, exactly like a Unix symlink, so the resolution path needs a
     /// test on the platform whose reparse points it will meet.
     ///
-    /// Junctions need no privilege (unlike symlinks), but a host that refuses
-    /// to create one cannot confirm the escape here, so the case is skipped
-    /// rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION` is present.
+    /// Junctions need no privilege (unlike symlinks), but a host that provably
+    /// refuses to create one cannot confirm the escape here, so that case is
+    /// skipped rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION` is
+    /// present. A failure whose cause cannot be proved a host refusal fails
+    /// loudly instead of skipping.
     /// Link support is host-dependent — see
     /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
     /// only, exFAT has no hard links).
@@ -987,51 +989,124 @@ mod tests {
         let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_out");
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
         let link = dir.join("game");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&link)
-            .arg(&*outside)
-            .status();
-        if let Some(why) = junction_refusal(&status, &link) {
-            skip_junction(&why, require_junction(), FixtureRefusal::Host);
-            return;
+        if let Err(e) = try_junction_dir(&outside, &link) {
+            match junction_skip_reason(&e) {
+                Some(why) => {
+                    skip_junction(why, require_junction(), FixtureRefusal::Host);
+                    return;
+                }
+                None => panic!("could not create the test directory junction: {e}"),
+            }
         }
         let got = contained_join(&dir, "game/evil.dat");
         assert!(
             got.is_err(),
             "a junction out of the base must be refused: {got:?}"
         );
-        // A junction that stays inside is still fine.
+        // A junction that stays inside is still fine. The first creation proved
+        // this host can make one, so a refusal here is a broken fixture, not a
+        // host skip.
         std::fs::create_dir_all(dir.join("real")).unwrap();
         let alias = dir.join("alias");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&alias)
-            .arg(dir.join("real"))
-            .status();
-        if let Some(why) = junction_refusal(&status, &alias) {
-            skip_junction(&why, require_junction(), FixtureRefusal::Host);
-            return;
-        }
+        try_junction_dir(&dir.join("real"), &alias)
+            .expect("this host already created one junction");
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
     }
 
-    /// Describe why a `mklink /J` attempt did not leave a usable link, or
-    /// `None` when it did.
+    /// Create a directory junction with `mklink /J`. `target` need not exist:
+    /// Windows stores the path in the reparse point.
+    ///
+    /// `cmd` reparses its command line itself, and `Command::arg` quotes for
+    /// the argv convention `cmd` does not follow: a temp path with a space
+    /// could split into extra arguments. Pass one pre-quoted line verbatim
+    /// instead, so each path reaches `mklink` as a single argument.
+    ///
+    /// A spawn failure keeps its `std::io::Error`, so
+    /// [`junction_skip_reason`] can still see a provable host refusal.
+    /// `mklink` itself reports every refusal as exit code 1 plus localized
+    /// text and no Win32 code, so a non-zero exit becomes `Other`: its cause
+    /// cannot be proved, and the test must fail instead of skipping.
     #[cfg(windows)]
-    fn junction_refusal(
-        status: &std::io::Result<std::process::ExitStatus>,
-        link: &Path,
-    ) -> Option<String> {
-        match status {
-            Ok(s) if s.success() && link.exists() => None,
-            Ok(s) if s.success() => Some(format!(
+    fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+        use std::os::windows::process::CommandExt;
+
+        let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
+        let out = std::process::Command::new("cmd")
+            .arg("/C")
+            .raw_arg(command)
+            .output()?;
+        if !out.status.success() {
+            return Err(std::io::Error::other(format!(
+                "mklink /J exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        if std::fs::symlink_metadata(link).is_err() {
+            return Err(std::io::Error::other(format!(
                 "mklink /J reported success but {} is missing",
                 link.display()
-            )),
-            Ok(s) => Some(format!("mklink /J exited with {s}")),
-            Err(e) => Some(format!("mklink /J could not run: {e}")),
+            )));
         }
+        Ok(())
+    }
+
+    /// Why a failed junction creation proves this host cannot run the case, or
+    /// `None` when it is a broken test environment that must fail loudly.
+    ///
+    /// Only a spawn failure can carry proof: an unsupported platform or the
+    /// known privilege denial. A failed `mklink` command has no raw code to
+    /// classify, so it stays unprovable.
+    #[cfg(windows)]
+    fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
+        if e.kind() == std::io::ErrorKind::Unsupported {
+            Some("directory junctions are not supported on this platform")
+        } else if e.raw_os_error() == Some(1314) {
+            // `ERROR_PRIVILEGE_NOT_HELD`; Rust maps it to `Uncategorized`, so
+            // the raw code is the reliable check.
+            Some("creating a directory junction is denied on this host")
+        } else {
+            None
+        }
+    }
+
+    /// Only a proven host refusal skips the junction case; an unprovable
+    /// `mklink` failure or a missing `cmd` must fail the test.
+    #[cfg(windows)]
+    #[test]
+    fn only_a_proven_host_refusal_skips_the_junction() {
+        assert!(
+            junction_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cmd is missing",
+            ))
+            .is_none(),
+            "a missing cmd is a broken environment, not a host skip"
+        );
+        assert!(
+            junction_skip_reason(&std::io::Error::other(
+                "mklink /J exited with exit code: 1: access denied",
+            ))
+            .is_none(),
+            "a failed mklink command has no provable raw code and must fail"
+        );
+        assert!(
+            junction_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
+            "another access failure must still fail the test"
+        );
+        assert_eq!(
+            junction_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no directory junctions",
+            )),
+            Some("directory junctions are not supported on this platform"),
+            "an unsupported platform is a skip, not a panic"
+        );
+        assert_eq!(
+            junction_skip_reason(&std::io::Error::from_raw_os_error(1314)),
+            Some("creating a directory junction is denied on this host"),
+            "the privilege denial skips, not panics"
+        );
     }
 
     /// Both junction branches are reachable without a host that refuses one.
