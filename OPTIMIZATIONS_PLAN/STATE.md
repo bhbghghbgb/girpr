@@ -576,8 +576,8 @@ until the main tasks and rework are done.
 | F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | completed |
 | F476 | INI-06 review | `src/util/ini.rs` tests | The junction test treats any `try_junction_dir` failure as a host skip, unlike the narrower `symlink_skip_reason`; a broken `cmd`/`mklink` environment would silently skip. | completed |
 | F477 | INI-06 review | `src/util/ini.rs` tests | `LinkGuard::remove` disarms before attempting removal, so a failed success-path removal is never retried in `Drop`; swapping the order would retry cleanly. | completed |
-| F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | pending_review |
-| F479 | BUILD-06 review | `README.md`, `tests/scripts/check-msrv.ps1` | The README and the script header still spell out `1.89`/`1.88`/`1.85`, which will drift when the MSRV moves. | pending_review |
+| F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | completed |
+| F479 | BUILD-06 review | `README.md`, `tests/scripts/check-msrv.ps1` | The README and the script header still spell out `1.89`/`1.88`/`1.85`, which will drift when the MSRV moves. | completed |
 | F480 | BUILD-06 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The duplicated `rustup toolchain install` is accepted for now; if a third install site appears, extract a shared installer helper. | skipped (install sites: 2, threshold not met) |
 | F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | todo |
 | F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | todo |
@@ -707,7 +707,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-06 | F472, F473 | done | Wave E; lock doc scope and typed rejection pin; low; e3a3cf3, b79ef56 |
 | LOCK-07 | F474, F475 | done | Wave E; run-lock cleanup hardening and module doc; low; 1d525d5, e5cde0b, 07c92d9 |
 | INI-07 | F476, F477 | done | Wave E; junction skip classification and guard removal order; low; 8483c89, d3dba86 |
-| BUILD-07 | F478, F479, F480 | pending_review | Wave E; metadata failure message, MSRV literals, installer helper threshold; low; a6d34b0, 3b29885, e34a8b2 |
+| BUILD-07 | F478, F479, F480 | done | Wave E; metadata failure message, MSRV literals, installer helper threshold; low; a6d34b0, 3b29885, e34a8b2 |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
