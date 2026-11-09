@@ -591,8 +591,8 @@ until the main tasks and rework are done.
 | F490 | MANIFEST-07 review | `tests/repair_scan.rs` | No end-to-end fixture with overlapping chunk offsets proves a retry eventually reaches the manifest digest; the current test pins the guard only. | completed |
 | F491 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | `Download::url_suffix` points two hops at the caveat through `archive_url`; a direct link is awkward because `join` is `pub(crate)`. | skipped (the two-hop chain is correct; no public target for a direct link) |
 | F492 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | The shared caveat now covers the chunk join but names only the manifest-fetch paths of the reference clients. | skipped (accurate while every measured `url_suffix` is empty) |
-| F493 | PURGE-PERF-08 review | `src/util/counter.rs` tests | `ReleaseOnPanic` has a narrow race: if the guard drops after `Barrier::wait` releases the helper but before it records `passed`, the waiter can park until exit. | todo |
-| F494 | PURGE-PERF-08 review | `src/repair/mod.rs` | A private 10 s `RECEIVE_WAIT` remains there; it is a candidate for the same single-constant hoist. | todo |
+| F493 | PURGE-PERF-08 review | `src/util/counter.rs` tests | `ReleaseOnPanic` has a narrow race: if the guard drops after `Barrier::wait` releases the helper but before it records `passed`, the waiter can park until exit. | pending_review |
+| F494 | PURGE-PERF-08 review | `src/repair/mod.rs` | A private 10 s `RECEIVE_WAIT` remains there; it is a candidate for the same single-constant hoist. | skipped (different operation from the hoisted counter constant; one caller, no shared constant to join) |
 | F495 | TEST-REGRESSION-06 review | `src/lib.rs` | The new helper pins cover an ordinary and a pre-epoch clock, but not a clock shortly *after* the epoch crossing backward, which was the removed test's other shape. | todo |
 | F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | todo |
 | F497 | TEST-OUTPUT-06 review | `README.md` | The `--output` row says "Stdout only; diagnostics stay on stderr" without mentioning that the log file carries the same rendered lines. | skipped (pre-existing gap, outside this batch's row; no test covers it) |
@@ -736,7 +736,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
 | MANIFEST-08 | F489, F490 | done | Wave E; overlap-guard precision and end-to-end overlapping fixture; low; ff1dcef, ff2e6b7, cd7afbd |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
-| PURGE-PERF-09 | F493, F494 | in_progress | Wave E; release-guard race and the remaining wait constant; low |
+| PURGE-PERF-09 | F493, F494 | pending_review | Wave E; release-guard race and the remaining wait constant; low; ae55ba3 |
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
