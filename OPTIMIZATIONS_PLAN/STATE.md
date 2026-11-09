@@ -553,9 +553,9 @@ until the main tasks and rework are done.
 | F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | completed |
 | F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | completed |
 | F454 | TEST-OUTPUT-05 review | `README.md` | The `--output` flag table row is now very long; a short subsection could carry the caveat and keep the table readable. | completed |
-| F455 | CHECK-06 review | `src/repair/phases/check.rs` tests | `before`'s doc says expiry is kept separate so a wait records it, but only the release wait distinguishes it; the two harness waits collapse it via `unwrap_or_default()`. | pending_review |
-| F456 | CHECK-06 review | `src/repair/phases/check.rs` tests | Expiry is reported through `CheckFailure::Read`, so the log reads "CHECK fail: unreadable"; harmless for a test double, but a dedicated marker would read better. | pending_review |
-| F457 | CHECK-06 review | `src/repair/phases/check.rs` tests | The shared deadline means each wait's headroom is "time left" rather than a fresh 10 s; worth a comment if the fixture grows. | pending_review |
+| F455 | CHECK-06 review | `src/repair/phases/check.rs` tests | `before`'s doc says expiry is kept separate so a wait records it, but only the release wait distinguishes it; the two harness waits collapse it via `unwrap_or_default()`. | completed |
+| F456 | CHECK-06 review | `src/repair/phases/check.rs` tests | Expiry is reported through `CheckFailure::Read`, so the log reads "CHECK fail: unreadable"; harmless for a test double, but a dedicated marker would read better. | completed |
+| F457 | CHECK-06 review | `src/repair/phases/check.rs` tests | The shared deadline means each wait's headroom is "time left" rather than a fresh 10 s; worth a comment if the fixture grows. | completed |
 | F458 | PATHHELPERS-06 review | `tests/artifact_bridge.rs` | The module doc and `#[ignore]` messages still tell readers to pass `--no-capture`, which the new override makes unnecessary. | todo |
 | F459 | PATHHELPERS-06 review | `.config/nextest.toml` | The adjacent comment saying the run command carries `--no-capture` only to make the line visible is now stale; update with the docs. | todo |
 | F460 | PATHHELPERS-06 review | `tests/repair_post.rs`, `src/util/path.rs` tests | `JunctionRefusal` and `NameRefusal` express the same two-state idea in two test modules; a shared helper could deduplicate them. | todo |
@@ -676,7 +676,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-08 | F447, F448, F449, F450 | done | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low; 798adc5, 952b7f3, 6c4dd61, 29db786 |
 | TEST-REGRESSION-06 | F451, F452 | done | Wave E; pre-epoch fixture ageing and shared stamp helpers; low; 562af2a, 90fb7c5, 9d256ab, 82b8942, c668aa6 |
 | TEST-OUTPUT-06 | F453, F454 | done | Wave E; shared scan-bytes key and README layout; low; 7e8c04d, a7d9834 |
-| CHECK-07 | F455, F456, F457 | pending_review | Wave E; gate-test expiry wording and deadline comment; low; df3f4c4, 5701bd8, 1a0fb73 |
+| CHECK-07 | F455, F456, F457 | done | Wave E; gate-test expiry wording and deadline comment; low; df3f4c4, 5701bd8, 1a0fb73 |
 | PATHHELPERS-07 | F458, F459, F460 | todo | Wave E; bridge flag docs, stale config comment, refusal dedup; low |
 | DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
 | DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
