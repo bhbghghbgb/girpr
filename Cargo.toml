@@ -3,7 +3,8 @@ name = "girpr"
 version = "0.1.0"
 edition = "2024"
 # The single-writer lock uses `File::try_lock`/`File::unlock`, stable since
-# 1.89; edition 2024 and the dependency tree need less than that. Every
+# 1.89; edition 2024 and the dependency tree need less than that. `girsync`
+# independently ties at the same 1.89 floor through its pinned redb. Every
 # workspace member declares its own minimum, so a version error names the
 # member that actually needs the newer compiler.
 rust-version = "1.89"
