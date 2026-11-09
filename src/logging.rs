@@ -301,6 +301,14 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     /// Serializes tests that touch the process-wide sink registry.
+    ///
+    /// The registry and the global subscriber are both process-wide, and the
+    /// subscriber can only be installed once. The lock keeps the sink installs
+    /// and flushes in these tests from interleaving, and is enough only because
+    /// nextest runs each test in its own process, so the subscriber test is the
+    /// first `try_init` there. If another test in the same process installed a
+    /// global subscriber first, that install would be rejected and the accepted
+    /// sink would never exist.
     static SINK_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// A writer that records everything it is given and counts its flushes.
