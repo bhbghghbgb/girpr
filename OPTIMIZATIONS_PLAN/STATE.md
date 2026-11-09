@@ -628,6 +628,9 @@ until the main tasks and rework are done.
 | F527 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The `rustup run ... rustc --version` probe treats any failure as a missing toolchain (e.g. a corrupt one) and then tries to install. | todo |
 | F528 | BUILD-13 implementer | `tools/sync/Cargo.toml` | Line 5 still justifies the crate's `rust-version` with "redb 4.1 needs 1.89". | skipped (accurate and complementary to the reworded pin comment; no conflict) |
 | F529 | BUILD-13 implementer | `README.md` | The root's requirement is attributed to `File::try_lock`/`File::unlock`, matching the root manifest comment; both need the same edit if that API's MSRV changes. | skipped (cross-file coupling is inherent; both places agree today) |
+| F530 | BUILD-13 review | `README.md` | "pins `redb` to its 4.1 line" reads as the whole 4.1 series while the manifest pins exactly `=4.1.0`. | todo |
+| F531 | BUILD-13 review | `Cargo.toml` | The root comment explains the 1.89 floor without noting `girsync` ties at 1.89. | todo |
+| F532 | BUILD-13 review | `README.md`, `tools/sync/Cargo.toml` | The MSRV prose literals duplicate manifest and registry facts, and `check-msrv.ps1` derives from `cargo metadata` so it cannot catch prose drift. | skipped (the literals are deliberate and named by the surrounding prose; a metadata-driven check would not cover prose either) |
 
 ## Follow-up batches
 
@@ -743,6 +746,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-13 | F524, F525 | done | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
 | BUILD-14 | F526, F527 | todo | Wave E; native-command preference and probe failure classification; low |
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
+| BUILD-16 | F530, F531 | todo | Wave E; 4.1.0 pin wording and root MSRV tie; low |
+| BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
