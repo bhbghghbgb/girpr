@@ -797,7 +797,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-08 | F510, F511 | done | Wave E; clap arity mirroring and lone-dash assertion; low; c93137b, f3a507e |
 | INI-08 | F512, F513 | done | Wave E; path junction refusal classification and shared comment; low; 2cd7789, a411cc3 |
 | INI-09 | F514, F515 | done | Wave E; junction metadata error cause and unreachable skip branch; low; cc7ba1f, b2634eb |
-| INI-10 | F583, F584 | todo | Wave E; shared junction test helper and `%VAR%` caveat; low |
+| INI-10 | F583, F584 | in_progress | Wave E; shared junction test helper and `%VAR%` caveat; low |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
 | INI-12 | F586 | todo | Wave E; pin the link-missing junction branch; low |
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
