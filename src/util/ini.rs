@@ -1075,6 +1075,9 @@ mod tests {
     /// makes `symlink_metadata` fail with `InvalidInput` on every supported
     /// platform, so the inspection failure comes from the real syscall
     /// boundary; the context is applied exactly as the caller applies it.
+    /// A NUL read fails with `InvalidInput` before `write_config_ini` reaches
+    /// the `NotFound` arm, so the private helper is driven directly here: there
+    /// is no call-site path that can reach that arm with an unreadable path.
     #[test]
     fn a_failed_game_dir_inspection_keeps_its_kind_and_names_the_path() {
         let game_dir = Path::new("uninspected\0game-dir");
@@ -1319,6 +1322,11 @@ mod tests {
     ///
     /// A platform without directory symlinks reports `Unsupported`; the known
     /// privilege denial is the other untestable host.
+    ///
+    /// Treating every `Unsupported` as a host skip is deliberate: `std` may map
+    /// more platform failures there over time, and a host that cannot make the
+    /// link cannot exercise the case. Any other error is a broken test
+    /// environment and must still panic rather than quietly skip.
     fn symlink_skip_reason(e: &std::io::Error) -> Option<&'static str> {
         if e.kind() == std::io::ErrorKind::Unsupported {
             Some("directory symlinks are not supported on this platform")
