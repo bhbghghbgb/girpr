@@ -553,6 +553,9 @@ until the main tasks and rework are done.
 | F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | todo |
 | F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | todo |
 | F454 | TEST-OUTPUT-05 review | `README.md` | The `--output` flag table row is now very long; a short subsection could carry the caveat and keep the table readable. | todo |
+| F455 | CHECK-06 review | `src/repair/phases/check.rs` tests | `before`'s doc says expiry is kept separate so a wait records it, but only the release wait distinguishes it; the two harness waits collapse it via `unwrap_or_default()`. | todo |
+| F456 | CHECK-06 review | `src/repair/phases/check.rs` tests | Expiry is reported through `CheckFailure::Read`, so the log reads "CHECK fail: unreadable"; harmless for a test double, but a dedicated marker would read better. | todo |
+| F457 | CHECK-06 review | `src/repair/phases/check.rs` tests | The shared deadline means each wait's headroom is "time left" rather than a fresh 10 s; worth a comment if the fixture grows. | todo |
 
 ## Follow-up batches
 
@@ -632,6 +635,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
+| CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
