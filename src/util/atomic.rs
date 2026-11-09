@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::path::temp_sibling;
+use super::path::{has_windows_trailing_dot_or_space, temp_sibling};
 
 /// Publish `bytes` to `path` through a temp sibling.
 ///
@@ -36,11 +36,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 /// rename removes the temp and returns the original error with the temp path in
 /// its context; a rename failure removes the temp too.
 ///
-/// A `path` that does not end in a file name is refused before the parent is
-/// created or a temp is named: a spelling like `dir/.` or `dir/` names the
-/// directory rather than a file, so there is no location a file can be
-/// published to, and the temp helper's fallback would put the temp under the
-/// path's directories instead.
+/// A `path` that does not end in a usable file name is refused before the parent
+/// is created or a temp is named: a spelling like `dir/.` or `dir/` names the
+/// directory rather than a file, and a Windows-trailing dot or space
+/// (`config.`, `config `) aliases another name. There is no location a file can
+/// be published to under those spellings, and the temp helper's fallback would
+/// put the temp under the path's directories instead. The trailing dot/space
+/// rule is [`has_windows_trailing_dot_or_space`], shared with
+/// [`super::path::contained_rel`] and applied on every host.
 ///
 /// With `durable`, the temp file is `sync_all`ed before the rename and the
 /// parent directory is synced best-effort afterwards: a directory sync failure
@@ -76,8 +79,9 @@ impl DurableFile for File {
 /// [`Path::file_name`] ignores a trailing `.`, so it reports `Some("dir")` for
 /// `dir/.` even though that spelling names the directory, not a file. Look at
 /// the raw spelling instead: an empty tail (a trailing separator, a root or an
-/// empty path) or a `.` tail names no file, while a real name — including a
-/// Unix name that ends in `.` — does.
+/// empty path) or a `.` tail names no file, while a real name does. A name that
+/// ends in a dot or space is a name here; the separate Windows alias rule in
+/// [`publish`] refuses it.
 fn ends_in_a_file_name(path: &Path) -> bool {
     if path.file_name().is_none() {
         return false;
@@ -110,6 +114,18 @@ where
     // another directory.
     if !ends_in_a_file_name(path) {
         anyhow::bail!("publish target has no file name: {}", path.display());
+    }
+    // Windows strips a trailing dot or space when it resolves a name, so
+    // `config.` and `config ` would publish over `config`. The rule is shared
+    // with `contained_rel` and lexical, so it applies on every host: the
+    // install is a Windows tree even when girpr runs elsewhere.
+    if let Some(name) = path.file_name()
+        && has_windows_trailing_dot_or_space(&name.to_string_lossy())
+    {
+        anyhow::bail!(
+            "publish target has a Windows-trailing dot or space: {}",
+            path.display()
+        );
     }
     // A bare file name has no directory component; there is nothing to create.
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -321,13 +337,39 @@ mod tests {
         }
     }
 
-    /// A name that legitimately ends in `.` is a file on Unix, so the guard
-    /// must not treat every trailing dot as a directory spelling.
-    #[cfg(unix)]
+    /// Windows strips a trailing dot or space from a name, so `config.` or
+    /// `config ` would alias `config`. The publisher refuses that spelling
+    /// before the parent is created or a temp is written, on every host.
     #[test]
-    fn a_unix_name_ending_in_a_dot_is_still_published() {
-        let d = dir("dot_name");
-        let path = d.join("file.");
+    fn a_windows_trailing_dot_or_space_is_refused_before_anything_is_written() {
+        let d = dir("windows_alias");
+        let parent = d.join("missing");
+        for name in ["config.", "config "] {
+            let path = parent.join(name);
+            assert!(
+                path.file_name().is_some(),
+                "the fixture has a file name; only the alias rule refuses it"
+            );
+
+            let err = write_atomic(&path, b"{}", false).unwrap_err();
+
+            assert!(
+                format!("{err:#}").contains("Windows-trailing dot or space"),
+                "{err:#}"
+            );
+            assert!(
+                !parent.exists(),
+                "the refusal happens before the parent directory is created"
+            );
+        }
+    }
+
+    /// A dot inside the name is not an alias: Windows strips only a trailing
+    /// dot or space, so an ordinary name is still published.
+    #[test]
+    fn an_ordinary_file_name_is_still_published() {
+        let d = dir("ordinary_name");
+        let path = d.join("config.ini");
         write_atomic(&path, b"{}", false).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"{}");
     }

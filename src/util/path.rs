@@ -393,9 +393,13 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 /// contains the `..` before resolution and resolves to `Audio/.girpr_tmp` —
 /// beside `res`, not inside it — and the empty path becomes `.girpr_tmp` in the
 /// current directory. A caller that must publish under the name it was given
-/// therefore refuses a target with no file name before calling this helper:
-/// `copy_publish_with` in the post-phase and `atomic::publish` both do. This
-/// helper keeps the simple shape instead of inventing a directory for the temp.
+/// therefore refuses a target that names no file before calling this helper:
+/// `copy_publish_with` in the post-phase and `atomic::publish` both do.
+/// `atomic::publish` also refuses a target that spells a directory (`dir/.`,
+/// `dir/`) or ends in a Windows-trailing dot or space
+/// ([`has_windows_trailing_dot_or_space`]), because none of those is a name a
+/// file can be published under. This helper keeps the simple shape instead of
+/// inventing a directory for the temp.
 pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()
