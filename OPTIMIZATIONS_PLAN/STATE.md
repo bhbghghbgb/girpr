@@ -742,7 +742,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-08 | F489, F490 | done | Wave E; overlap-guard precision and end-to-end overlapping fixture; low; ff1dcef, ff2e6b7, cd7afbd |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | done | Wave E; release-guard race and the remaining wait constant; low; ae55ba3 |
-| TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
+| TEST-REGRESSION-07 | F495, F496 | in_progress | Wave E; post-epoch pin and skip-result type; low |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
 | PATHHELPERS-08 | F501, F502 | todo | Wave E; remaining bridge recipes and parallel-run isolation; low |
