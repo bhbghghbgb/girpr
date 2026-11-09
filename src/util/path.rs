@@ -1026,6 +1026,11 @@ mod tests {
     /// `mklink` itself reports every refusal as exit code 1 plus localized
     /// text and no Win32 code, so a non-zero exit becomes `Other`: its cause
     /// cannot be proved, and the test must fail instead of skipping.
+    ///
+    /// An exit of `0` only claims that the link exists; the test still inspects
+    /// it. A link that did not appear fails closed as missing, and an
+    /// inspection that fails for another reason keeps that cause, so a
+    /// permission or transient I/O failure is never reported as missing.
     #[cfg(windows)]
     fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         use std::os::windows::process::CommandExt;
@@ -1042,13 +1047,30 @@ mod tests {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        if std::fs::symlink_metadata(link).is_err() {
-            return Err(std::io::Error::other(format!(
+        std::fs::symlink_metadata(link)
+            .map(|_| ())
+            .map_err(|e| junction_inspection_error(link, e))
+    }
+
+    /// Turn a failed inspection of the link that `mklink` claims to have
+    /// created into the test's failure. `NotFound` is the link that never
+    /// appeared; every other cause (a permission or transient I/O failure)
+    /// keeps its own wording, so the panic neither claims the link is missing
+    /// nor names the wrong cause. Both stay `Other`, so neither can be
+    /// mistaken for a proven host refusal by [`junction_skip_reason`].
+    #[cfg(windows)]
+    fn junction_inspection_error(link: &Path, e: std::io::Error) -> std::io::Error {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            std::io::Error::other(format!(
                 "mklink /J reported success but {} is missing",
                 link.display()
-            )));
+            ))
+        } else {
+            std::io::Error::other(format!(
+                "mklink /J reported success but {} could not be inspected: {e}",
+                link.display()
+            ))
         }
-        Ok(())
     }
 
     /// Why a failed junction creation proves this host cannot run the case, or
@@ -1106,6 +1128,50 @@ mod tests {
             junction_skip_reason(&std::io::Error::from_raw_os_error(1314)),
             Some("creating a directory junction is denied on this host"),
             "the privilege denial skips, not panics"
+        );
+    }
+
+    /// `mklink` exiting `0` is a claim, not proof: the inspection that follows
+    /// separates a link that never appeared from one that could not be looked
+    /// at. A permission or transient I/O cause is carried verbatim instead of
+    /// being relabelled missing, and neither outcome may skip the case.
+    #[cfg(windows)]
+    #[test]
+    fn an_uninspectable_junction_names_its_cause_and_fails_closed() {
+        let link = Path::new("game-dir-link");
+
+        let missing = junction_inspection_error(
+            link,
+            std::io::Error::new(std::io::ErrorKind::NotFound, "nothing there"),
+        );
+        let msg = format!("{missing:#}");
+        assert!(msg.contains("is missing"), "{msg}");
+        assert!(!msg.contains("could not be inspected"), "{msg}");
+        assert!(
+            junction_skip_reason(&missing).is_none(),
+            "a link that never appeared must fail, not skip: {msg}"
+        );
+
+        let inspected = junction_inspection_error(
+            link,
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the link could not be read",
+            ),
+        );
+        let msg = format!("{inspected:#}");
+        assert!(msg.contains("could not be inspected"), "{msg}");
+        assert!(
+            msg.contains("the link could not be read"),
+            "the inspection cause survives: {msg}"
+        );
+        assert!(
+            !msg.contains("is missing"),
+            "an unreadable link is not a missing one: {msg}"
+        );
+        assert!(
+            junction_skip_reason(&inspected).is_none(),
+            "an inspection failure must fail, not skip: {msg}"
         );
     }
 
