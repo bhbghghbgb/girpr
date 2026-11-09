@@ -652,7 +652,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-06 | F429, F430, F431, F432, F433 | done | Wave E; junction/symlink test cleanup and platform broadenings; low; f5135f1, 9426a7e, c4cf9bf, b4c6098 |
 | BUILD-06 | F434, F435, F436 | done | Wave E; MSRV pin derivation and cache keying; low; 0f466e0 |
 | BUILD-TOOLS-06 | F437 | done | Wave E; capture comment wording; low; 0fd58ab |
-| TEMP-WRITER-06 | F438, F439, F440 | todo | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
+| TEMP-WRITER-06 | F438, F439, F440 | in_progress | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
 | TEMP-PUBLISH-06 | F441, F442, F443 | todo | Wave E; publish guard spelling and doc sync; low |
 | TEST-MANIFEST-06 | F444, F445, F446 | todo | Wave E; suffix contract, seam doc, helper placement; low |
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
