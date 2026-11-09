@@ -637,6 +637,8 @@ until the main tasks and rework are done.
 | F536 | TEMP-WRITER-07 review | `src/hyp.rs` | The reword dropped the pointer to the blob retry policy; linking `crate::sophon::stream::retryable` would restore it. | skipped (`sophon` is a private module, so that path is not publicly linkable and rustdoc rejects it) |
 | F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | todo |
 | F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | todo |
+| F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | todo |
+| F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | todo |
 
 ## Follow-up batches
 
@@ -758,6 +760,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-08 | F535 | todo | Wave E; on-disk length after the failed read path; low |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | todo | Wave E; alias-shaped directories and copy-path trailing dot/space; low |
+| MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
