@@ -1169,8 +1169,9 @@ mod tests {
     /// A directory junction whose target does not exist is a name-surrogate
     /// reparse point, so `FileType::is_symlink` reports it as a link and the
     /// refusal must name the dangling link instead of "does not exist".
-    /// Junctions need no privilege, but a host that refuses to create one
-    /// cannot exercise the classification and skips rather than failing.
+    /// Junctions need no privilege, so only a proven host refusal (an
+    /// unsupported platform or the known privilege denial) skips; any other
+    /// failure is a broken test environment and must fail loudly.
     #[cfg(windows)]
     #[test]
     fn config_bump_refuses_a_dangling_junction_game_dir() {
@@ -1178,9 +1179,14 @@ mod tests {
         let target = root.join("never-created-target");
         let link = root.join("dangling-game-dir");
         let mut cleanup = LinkGuard::new(&link);
-        if let Err(why) = try_junction_dir(&target, &link) {
-            eprintln!("SKIP precondition: this host cannot create a directory junction: {why}");
-            return;
+        if let Err(e) = try_junction_dir(&target, &link) {
+            match junction_skip_reason(&e) {
+                Some(why) => {
+                    eprintln!("SKIP precondition: {why}: {e}");
+                    return;
+                }
+                None => panic!("could not create the test directory junction: {e}"),
+            }
         }
 
         let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
@@ -1265,8 +1271,15 @@ mod tests {
     /// Create a directory junction with `mklink /J`, which (unlike a symlink)
     /// needs no privilege. `target` need not exist: Windows stores the path in
     /// the reparse point, which is exactly the dangling case.
+    ///
+    /// A failure to spawn `cmd` keeps its `std::io::Error`, so the raw OS code
+    /// is still available to [`junction_skip_reason`]. `mklink` itself exits
+    /// with `1` and prints a localized message, not the Win32 code, for every
+    /// refusal. A non-zero exit therefore becomes an `Other` error: its cause
+    /// cannot be proved, so the test fails loudly instead of guessing that the
+    /// host refused the junction.
     #[cfg(windows)]
-    fn try_junction_dir(target: &Path, link: &Path) -> Result<(), String> {
+    fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         use std::os::windows::process::CommandExt;
 
         // `cmd` reparses the command line itself, and `Command::arg` quotes for
@@ -1281,27 +1294,27 @@ mod tests {
         let out = std::process::Command::new("cmd")
             .arg("/C")
             .raw_arg(command)
-            .output();
-        match out {
-            Ok(out) if out.status.success() && std::fs::symlink_metadata(link).is_ok() => Ok(()),
-            Ok(out) if out.status.success() => Err(format!(
-                "mklink /J reported success but {} is missing",
-                link.display()
-            )),
-            Ok(out) => Err(format!(
+            .output()?;
+        if !out.status.success() {
+            return Err(std::io::Error::other(format!(
                 "mklink /J exited with {}: {}",
                 out.status,
                 String::from_utf8_lossy(&out.stderr).trim()
-            )),
-            Err(e) => Err(format!("mklink /J could not run: {e}")),
+            )));
         }
+        if std::fs::symlink_metadata(link).is_err() {
+            return Err(std::io::Error::other(format!(
+                "mklink /J reported success but {} is missing",
+                link.display()
+            )));
+        }
+        Ok(())
     }
 
-    /// Whether a failed directory-symlink creation is the known privilege
-    /// denial that means the test cannot run on this host. Every other error
-    /// is a broken test environment and must fail loudly instead of silently
-    /// skipping.
-    fn symlink_creation_denied(e: &std::io::Error) -> bool {
+    /// Whether a failed link creation is the known privilege denial that means
+    /// the test cannot run on this host. Every other error is a broken test
+    /// environment and must fail loudly instead of silently skipping.
+    fn link_creation_denied(e: &std::io::Error) -> bool {
         #[cfg(windows)]
         {
             // `CreateSymbolicLinkW` without the privilege (or developer mode)
@@ -1337,8 +1350,31 @@ mod tests {
     fn symlink_skip_reason(e: &std::io::Error) -> Option<&'static str> {
         if e.kind() == std::io::ErrorKind::Unsupported {
             Some("directory symlinks are not supported on this platform")
-        } else if symlink_creation_denied(e) {
+        } else if link_creation_denied(e) {
             Some("creating a directory symlink is denied on this host")
+        } else {
+            None
+        }
+    }
+
+    /// Why a failed directory-junction creation means the case cannot run on
+    /// this host, or `None` when it is a broken test environment that must fail
+    /// loudly.
+    ///
+    /// A spawn failure carries its OS error, so the same two host refusals as
+    /// the symlink case apply: an unsupported platform and the known privilege
+    /// denial. `mklink` exposes only a non-zero exit and localized text, not
+    /// the Win32 code, so a failed command is `Other` and stays unclassified
+    /// (see [`try_junction_dir`]). A host whose volume cannot hold a junction
+    /// therefore fails loudly rather than silently skipping: guessing from the
+    /// exit status would also hide a broken `cmd`/`mklink` environment, which
+    /// is exactly what this classifier exists to expose.
+    #[cfg(windows)]
+    fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
+        if e.kind() == std::io::ErrorKind::Unsupported {
+            Some("directory junctions are not supported on this platform")
+        } else if link_creation_denied(e) {
+            Some("creating a directory junction is denied on this host")
         } else {
             None
         }
@@ -1385,12 +1421,10 @@ mod tests {
         );
         #[cfg(windows)]
         {
-            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
+            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(
                 1314
             )));
-            assert!(!symlink_creation_denied(
-                &std::io::Error::from_raw_os_error(5)
-            ));
+            assert!(!link_creation_denied(&std::io::Error::from_raw_os_error(5)));
             assert_eq!(
                 symlink_skip_reason(&std::io::Error::from_raw_os_error(1314)),
                 Some("creating a directory symlink is denied on this host"),
@@ -1403,15 +1437,11 @@ mod tests {
         }
         #[cfg(unix)]
         {
-            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
-                1
+            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(1)));
+            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(13)));
+            assert!(!link_creation_denied(&std::io::Error::from_raw_os_error(
+                30
             )));
-            assert!(symlink_creation_denied(&std::io::Error::from_raw_os_error(
-                13
-            )));
-            assert!(!symlink_creation_denied(
-                &std::io::Error::from_raw_os_error(30)
-            ));
             for denied in [1, 13] {
                 assert_eq!(
                     symlink_skip_reason(&std::io::Error::from_raw_os_error(denied)),
@@ -1424,6 +1454,46 @@ mod tests {
                 "a read-only filesystem must still fail the test"
             );
         }
+    }
+
+    /// Only a spawn failure that proves an unsupported platform or the known
+    /// privilege denial skips the junction case. A failed `mklink` command has
+    /// no raw code to classify, so it must fail the test rather than skip.
+    #[cfg(windows)]
+    #[test]
+    fn only_a_denied_or_unsupported_junction_skips_the_link_test() {
+        assert!(
+            junction_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "cmd is missing",
+            ))
+            .is_none(),
+            "a missing cmd is a broken environment, not a host skip"
+        );
+        assert!(
+            junction_skip_reason(&std::io::Error::other(
+                "mklink /J exited with exit code: 1: access denied",
+            ))
+            .is_none(),
+            "a failed mklink command has no provable raw code and must fail"
+        );
+        assert_eq!(
+            junction_skip_reason(&std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "no directory junctions",
+            )),
+            Some("directory junctions are not supported on this platform"),
+            "an unsupported platform is a skip, not a panic"
+        );
+        assert_eq!(
+            junction_skip_reason(&std::io::Error::from_raw_os_error(1314)),
+            Some("creating a directory junction is denied on this host"),
+            "the privilege denial skips, not panics"
+        );
+        assert!(
+            junction_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
+            "another access failure must still fail the test"
+        );
     }
 
     /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`
