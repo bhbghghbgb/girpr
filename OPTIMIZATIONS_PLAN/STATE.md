@@ -730,7 +730,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-07 | F481, F482, F483 | done | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low; 8fab9f8, a60f278 |
 | TEMP-PUBLISH-07 | F484, F485, F486 | done | Wave E; shared spelling guard, Windows aliases, doc wording; low; 3766e53, 6ac80bd |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
-| MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
+| MANIFEST-08 | F489, F490 | in_progress | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | todo | Wave E; release-guard race and the remaining wait constant; low |
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
