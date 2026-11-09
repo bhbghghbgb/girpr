@@ -551,8 +551,8 @@ until the main tasks and rework are done.
 | F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | completed |
 | F451 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | On a pre-epoch host `stamp_ago` returns `now`, so fixtures silently lose their "older than one coarse tick" property and the guarded-reuse path is not exercised. | completed |
 | F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | completed |
-| F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | pending_review |
-| F454 | TEST-OUTPUT-05 review | `README.md` | The `--output` flag table row is now very long; a short subsection could carry the caveat and keep the table readable. | pending_review |
+| F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | completed |
+| F454 | TEST-OUTPUT-05 review | `README.md` | The `--output` flag table row is now very long; a short subsection could carry the caveat and keep the table readable. | completed |
 | F455 | CHECK-06 review | `src/repair/phases/check.rs` tests | `before`'s doc says expiry is kept separate so a wait records it, but only the release wait distinguishes it; the two harness waits collapse it via `unwrap_or_default()`. | todo |
 | F456 | CHECK-06 review | `src/repair/phases/check.rs` tests | Expiry is reported through `CheckFailure::Read`, so the log reads "CHECK fail: unreadable"; harmless for a test double, but a dedicated marker would read better. | todo |
 | F457 | CHECK-06 review | `src/repair/phases/check.rs` tests | The shared deadline means each wait's headroom is "time left" rather than a fresh 10 s; worth a comment if the fixture grows. | todo |
@@ -673,7 +673,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-06 | F444, F445, F446 | done | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555, 9c1c400 |
 | PURGE-PERF-08 | F447, F448, F449, F450 | done | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low; 798adc5, 952b7f3, 6c4dd61, 29db786 |
 | TEST-REGRESSION-06 | F451, F452 | done | Wave E; pre-epoch fixture ageing and shared stamp helpers; low; 562af2a, 90fb7c5, 9d256ab, 82b8942, c668aa6 |
-| TEST-OUTPUT-06 | F453, F454 | pending_review | Wave E; shared scan-bytes key and README layout; low; 7e8c04d, a7d9834 |
+| TEST-OUTPUT-06 | F453, F454 | done | Wave E; shared scan-bytes key and README layout; low; 7e8c04d, a7d9834 |
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
 | PATHHELPERS-07 | F458, F459, F460 | todo | Wave E; bridge flag docs, stale config comment, refusal dedup; low |
 | DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
