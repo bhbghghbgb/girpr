@@ -96,9 +96,33 @@ pub(crate) mod test_support {
 mod tests {
     use super::add_saturating;
     use super::test_support::pause_before_cas_of;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
+
+    /// How long the test receiver waits before deciding the helper is parked
+    /// at its barrier, so a broken gate fails the test instead of hanging it.
+    const RECEIVE_WAIT: Duration = Duration::from_secs(10);
+
+    /// Releases a two-party barrier when a failing test unwinds.
+    ///
+    /// A helper parked at the barrier on the failure path would otherwise stay
+    /// there until the process exits. The guard only spawns the releasing
+    /// waiter when the test is already unwinding and the helper has not yet
+    /// passed the barrier; a passing test spawns nothing.
+    struct ReleaseOnPanic {
+        barrier: Arc<Barrier>,
+        passed: Arc<AtomicBool>,
+    }
+
+    impl Drop for ReleaseOnPanic {
+        fn drop(&mut self) {
+            if std::thread::panicking() && !self.passed.load(Ordering::Acquire) {
+                let barrier = Arc::clone(&self.barrier);
+                std::thread::spawn(move || barrier.wait());
+            }
+        }
+    }
 
     /// A pause installed for one cell does not hold a charge to a different
     /// cell on the same thread: the scope gate is the cell identity, not "this
@@ -111,19 +135,27 @@ mod tests {
     /// the test rather than hanging the suite.
     #[test]
     fn a_paused_cell_does_not_hold_a_charge_to_another_cell() {
-        const RECEIVE_WAIT: Duration = Duration::from_secs(10);
         let paused = Arc::new(AtomicU64::new(0));
         let other = Arc::new(AtomicU64::new(0));
 
+        let barrier = Arc::new(Barrier::new(2));
+        let passed = Arc::new(AtomicBool::new(false));
+        let _release = ReleaseOnPanic {
+            barrier: Arc::clone(&barrier),
+            passed: Arc::clone(&passed),
+        };
+
         let thread_paused = Arc::clone(&paused);
         let thread_other = Arc::clone(&other);
+        let thread_passed = Arc::clone(&passed);
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         let charger = std::thread::spawn(move || {
             // A charge that wrongly consulted this pause would wait at the
             // two-party barrier instead of reaching its compare-exchange.
-            let _pause = pause_before_cas_of(&thread_paused, Arc::new(Barrier::new(2)));
+            let _pause = pause_before_cas_of(&thread_paused, barrier);
 
             add_saturating(&thread_other, 5);
+            thread_passed.store(true, Ordering::Release);
             done_tx.send(()).expect("the test receiver is alive");
         });
 
@@ -148,15 +180,21 @@ mod tests {
     /// failure instead of hanging the suite.
     #[test]
     fn a_paused_cell_resumes_after_its_barrier() {
-        const RECEIVE_WAIT: Duration = Duration::from_secs(10);
         let cell = Arc::new(AtomicU64::new(0));
         let barrier = Arc::new(Barrier::new(2));
+        let passed = Arc::new(AtomicBool::new(false));
+        let _release = ReleaseOnPanic {
+            barrier: Arc::clone(&barrier),
+            passed: Arc::clone(&passed),
+        };
 
         let (released_tx, released_rx) = std::sync::mpsc::channel();
         let releaser = {
             let barrier = Arc::clone(&barrier);
+            let passed = Arc::clone(&passed);
             std::thread::spawn(move || {
                 barrier.wait();
+                passed.store(true, Ordering::Release);
                 released_tx.send(()).expect("the test receiver is alive");
             })
         };
