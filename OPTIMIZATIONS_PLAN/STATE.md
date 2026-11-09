@@ -574,6 +574,8 @@ until the main tasks and rework are done.
 | F473 | LOGGING-05 review | `src/logging.rs` tests | `already been set` is tied to `tracing-core`'s wording; testing the typed `SetGlobalDefaultError` rejection would survive a dependency bump. | todo |
 | F474 | LOCK-06 review | `tests/common/run_lock.rs` | `game_path_arg` still returns `Some` for a trailing `--game-path` with no value or a flag-looking value; clap rejects both, so the doc's "no value" claim is broader than the code. | todo |
 | F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | todo |
+| F476 | INI-06 review | `src/util/ini.rs` tests | The junction test treats any `try_junction_dir` failure as a host skip, unlike the narrower `symlink_skip_reason`; a broken `cmd`/`mklink` environment would silently skip. | todo |
+| F477 | INI-06 review | `src/util/ini.rs` tests | `LinkGuard::remove` disarms before attempting removal, so a failed success-path removal is never retried in `Drop`; swapping the order would retry cleanly. | todo |
 
 ## Follow-up batches
 
@@ -662,6 +664,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
+| INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
