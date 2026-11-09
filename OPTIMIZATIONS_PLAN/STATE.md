@@ -499,9 +499,9 @@ until the main tasks and rework are done.
 | F398 | PURGE-PERF-06 review | `src/repair/mod.rs` tests | The new `serve_body` helper duplicates the loopback-stub idiom in `metadata`, `manifest`, and `hyp` tests; a shared `#[cfg(test)]` fixture would remove it. | completed |
 | F399 | TEST-REGRESSION-04 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago` docs say it saturates at the Unix epoch, but a pre-epoch clock returns `now`; align doc and behavior or guard pre-epoch. | completed |
 | F400 | TEST-REGRESSION-04 review | `src/repair/file/inplace.rs` tests | `coarse_tick_of` still `expect`s a post-epoch clock and does epoch math; it is the last epoch-dependent helper. | completed |
-| F401 | TEST-OUTPUT-04 review | `tests/repair_scan.rs` | The emitted `scan_bytes=` value is still spelled literally; a shared spelling could be used if a test-support location exists. | todo |
-| F402 | TEST-OUTPUT-04 review | `README.md` | The bare-text limitation is documented only beside the test parser; the `--output` guidance could point users to JSON when values may contain `key=` tokens. | todo |
-| F403 | TEST-OUTPUT-04 review | `tests/cli_contract.rs` | If production later exposes a key/schema manifest, the golden key lists could be derived from it instead of duplicated. | todo |
+| F401 | TEST-OUTPUT-04 review | `tests/repair_scan.rs` | The emitted `scan_bytes=` value is still spelled literally; a shared spelling could be used if a test-support location exists. | skipped (no shared key location in scope; PLAN_SCAN_BYTES_KEY is private to cli_contract) |
+| F402 | TEST-OUTPUT-04 review | `README.md` | The bare-text limitation is documented only beside the test parser; the `--output` guidance could point users to JSON when values may contain `key=` tokens. | pending_review |
+| F403 | TEST-OUTPUT-04 review | `tests/cli_contract.rs` | If production later exposes a key/schema manifest, the golden key lists could be derived from it instead of duplicated. | pending_review |
 | F404 | CHECK-05 review | `src/repair/phases/check.rs` tests | On expiry the injected closure returns `CheckOutcome::clean()` so counters still read 2; a distinct outcome or comment would read clearer. | todo |
 | F405 | CHECK-05 review | `src/repair/phases/check.rs` tests | Three waits each get a full `GATE_WAIT` from their own start; one absolute test deadline shared by all would make failure ordering unambiguous. | todo |
 | F406 | CHECK-05 review | `src/repair/phases/check.rs` tests | The shared 10 s constant conflates "how long the test waits" with "how long release may take"; splitting the two is a cleanup if touched again. | todo |
@@ -610,7 +610,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-02 | F216, F217, F218 | done | Wave E; JSON-plane summary assertion, text-value guard and extra text paths; low; 4c0ef53, babff10 |
 | TEST-OUTPUT-03 | F281, F282, F283, F284 | done | Wave E; value-aware text parser and stronger plan-out assertions; low; 1fcd7d9, d3c096f |
 | TEST-OUTPUT-04 | F357, F358, F359 | done | Wave E; text-grammar ambiguity and shared schema vocabulary; low; f38bf2b, e5d1a3d |
-| TEST-OUTPUT-05 | F401, F402, F403 | in_progress | Wave E; remaining text-plane vocabulary notes; low |
+| TEST-OUTPUT-05 | F401, F402, F403 | pending_review | Wave E; remaining text-plane vocabulary notes; low; 9eaefe7, f74ec88 |
 | CHECK-06 | F404, F405, F406 | todo | Wave E; gate-test failure reporting and deadline unification; low |
 | PATHHELPERS-06 | F407, F408 | todo | Wave E; simulated-skip wording and bridge skip visibility; low |
 | DOCS-USER-05 | F409, F410, F411 | todo | Wave E; bridge recipe alignment and profile wording; low |
