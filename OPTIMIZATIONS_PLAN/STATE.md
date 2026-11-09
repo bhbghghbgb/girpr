@@ -643,6 +643,9 @@ until the main tasks and rework are done.
 | F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | todo |
 | F543 | PURGE-PERF-09 implementer | `src/util/counter.rs` | The test-only `Gate` is deliberately two-party (`arrived == 2`); N-party reuse would need generalizing. | skipped (conditional; no N-party fixture exists) |
 | F544 | PURGE-PERF-09 implementer | `src/util/counter.rs` tests | The new regression test's simulated panic text reaches captured test output. | skipped (harmless; visible only in verbose runs) |
+| F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | todo |
+| F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | todo |
+| F547 | PURGE-PERF-09 review | `src/util/counter.rs` | `release` uses `lock().unwrap()`; `unwrap_or_else(PoisonError::into_inner)` would make the drop immune to a poisoned mutex. | skipped (poisoning is unreachable through this code; robustness only) |
 
 ## Follow-up batches
 
@@ -767,6 +770,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
 | MANIFEST-10 | F541, F542 | todo | Wave E; overlap-only rescan and verdict-length guard; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
+| PURGE-PERF-11 | F545, F546 | todo | Wave E; release-wakes-a-parked-party test and doc wording; low |
+| PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
