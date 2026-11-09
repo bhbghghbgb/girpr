@@ -152,6 +152,8 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 ```powershell
 # in the girpr package. Needs one bundle and FAILS without one.
 $env:GIRPR_ARTIFACT_BUNDLE = "<path to one bundle>"
+# build the verifier so the gircap verify precondition runs instead of skipping
+cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture --test-threads=1
 ```
 
