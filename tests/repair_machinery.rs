@@ -457,9 +457,9 @@ fn set_mtime(path: &Path, stamp: SystemTime) {
 
 /// A stamp a given age before `now`.
 ///
-/// The stamp never reaches below the Unix epoch. A clock less than `age` past
-/// the epoch saturates there; a clock before the epoch comes back unchanged,
-/// because every stamp the helper could build from the epoch is in its future.
+/// The subtraction never reaches below the Unix epoch: a clock less than `age`
+/// past the epoch saturates there, and a clock before the epoch comes back
+/// unchanged, because a floor at the epoch would be in that clock's future.
 /// Neither case panics.
 fn stamp_ago_from(now: SystemTime, age: Duration) -> SystemTime {
     // The Unix epoch is representable on every supported platform, so it is a
@@ -472,9 +472,9 @@ fn stamp_ago_from(now: SystemTime, age: Duration) -> SystemTime {
 
 /// A stamp a given age before the current clock.
 ///
-/// Relative to "now" rather than a fixed epoch, so the reuse guard's age rule
-/// holds on a host whose clock is set to any date. See [`stamp_ago_from`] for
-/// how a clock near or before the Unix epoch is handled.
+/// Relative to "now" rather than a fixed epoch, so it follows the host clock.
+/// See [`stamp_ago_from`] for how a clock near or before the Unix epoch is
+/// handled.
 fn stamp_ago(age: Duration) -> SystemTime {
     stamp_ago_from(SystemTime::now(), age)
 }
