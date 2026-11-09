@@ -585,7 +585,7 @@ until the main tasks and rework are done.
 | F484 | TEMP-PUBLISH-06 review | `src/repair/phases/post.rs` | `copy_publish_with` still guards only with `file_name()`, so it would accept a `dir/.` target; share `ends_in_a_file_name` if that writer becomes reachable. | todo |
 | F485 | TEMP-PUBLISH-06 review | `src/util/atomic.rs` | Windows targets ending in a dot or space (e.g. `config.`) are accepted and alias another name; `contained_rel` already refuses those, the atomic writer does not. | todo |
 | F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | todo |
-| F487 | TEST-MANIFEST-06 review | `tools/capture/src/manifest/mod.rs` | `CapturedManifest::url` and `chunk_url` append `url_suffix` without the new "unmeasured conservative reading" note. | todo |
+| F487 | TEST-MANIFEST-06 review | `tools/capture/src/manifest/mod.rs` | `CapturedManifest::url` and `chunk_url` append `url_suffix` without the new "unmeasured conservative reading" note. | pending_review |
 | F488 | TEST-MANIFEST-06 review | `tools/capture` | Starward's unused `GameSophonManifestUrl.BuildUrl` reads `url_suffix` as a query string; informational unless reference parity is revisited. | skipped (external reference has no callers; no repo change) |
 
 ## Follow-up batches
@@ -679,7 +679,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
-| TEST-MANIFEST-07 | F487 | in_progress | Wave E; capture suffix note consistency; low |
+| TEST-MANIFEST-07 | F487 | pending_review | Wave E; capture suffix note consistency; low; bf0ad72 |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
