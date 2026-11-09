@@ -736,16 +736,36 @@ async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
         "the plan is printed even though the digest is wrong:\n{stdout}"
     );
 
-    // The digest mismatch is deterministic, so the repair's retry budget buys
-    // nothing here: `--fail-fast` gives the file one attempt instead of five
-    // and keeps the case from spending the linear backoff (1+2+3+4 s) proving
-    // that an unchanged file still fails the same gate.
-    let mut args = base.to_vec();
-    args.push("--fail-fast");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
+    // The digest mismatch is deterministic: the file has no chunks, so the
+    // next attempt would assemble the same empty bytes and fail the same gate.
+    // It is therefore terminal, not retried — exactly one attempt is made even
+    // without `--fail-fast` — and the failure names the whole-file digest gate
+    // rather than some other write error.
+    let (code, stdout, stderr) = run_binary(&base, &[]).await;
     assert_eq!(
         code, 3,
         "the repair must fail the one file it cannot make true: {stderr}"
+    );
+    assert!(
+        stderr.contains("final md5 mismatch for game/empty.dat"),
+        "the repair must fail on the whole-file digest gate: {stderr}"
+    );
+    assert!(
+        stderr.contains("(the bytes outside the chunks are wrong)"),
+        "the failure must name the part the plan cannot write: {stderr}"
+    );
+    assert_eq!(
+        stderr.matches("attempt failed").count(),
+        1,
+        "a deterministic digest mismatch must not be attempted again: {stderr}"
+    );
+    assert!(
+        !stderr.contains("after 5 attempts"),
+        "the terminal failure must not be reported as exhausted retries: {stderr}"
+    );
+    assert!(
+        stdout.contains("failed=1") && stdout.contains("exit=3"),
+        "the summary must carry the failed file and the write exit: {stdout}"
     );
     assert_eq!(
         read_game_file(&game, "game/empty.dat"),
