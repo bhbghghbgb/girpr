@@ -89,11 +89,12 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 ///   lock policy and the file a run leaves behind;
 /// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
 ///   for real;
-/// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile`,
-///   `SophonChunkManifest`, `stream_chunk_to` and `join_url` are the manifest
-///   and stream helpers the offline artifact server and the peak-heap probe
-///   need; `join_url` is the one URL join the fetches use, so a test that
-///   builds an advertised blob's URL asks production rather than restating the
+/// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile` and
+///   `SophonChunkManifest` build the offline mock's manifests, and
+///   `stream_chunk_to` (with `ChunkFetch` and `ChunkSink`) is what the
+///   peak-heap probe measures;
+/// - `join_url` is the one URL join the fetches use, so `tests/repair_offline.rs`
+///   builds an advertised manifest's URL through it rather than restating the
 ///   formula;
 /// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk;
 /// - `terminal_retcode` is the retcode classifier the fixture builds its
