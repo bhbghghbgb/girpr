@@ -202,6 +202,10 @@ where
                     CheckFailure::Read(e) => {
                         tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e}");
                     }
+                    #[cfg(test)]
+                    CheckFailure::TestGateExpired(why) => {
+                        tracing::warn!(file = %f.rel, "CHECK fail: test double: {why}");
+                    }
                 }
             }
         }
@@ -265,6 +269,10 @@ enum CheckFailure {
     },
     /// Reading the file for its digest failed.
     Read(String),
+    /// Test double only: a deliberate gate wait expired, not a real read
+    /// failure. Compiled out of production so it cannot become a verdict.
+    #[cfg(test)]
+    TestGateExpired(&'static str),
 }
 
 /// What checking one planned file found.
@@ -648,8 +656,8 @@ mod tests {
                                 // Deliberately not `clean()`: an expired
                                 // release must move the counters, so the
                                 // failure cannot read as a passing check.
-                                return CheckOutcome::failed(CheckFailure::Read(
-                                    "the slow check's gate wait expired before release".into(),
+                                return CheckOutcome::failed(CheckFailure::TestGateExpired(
+                                    "the slow check's gate wait expired before release",
                                 ));
                             }
                         } else {
