@@ -667,7 +667,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-06 | F438, F439, F440 | done | Wave E; dual-mode sink doc, read wrapper, reuse builder; low; 683e227, 63004a5, 53cf1be, d20aeb6 |
 | TEMP-PUBLISH-06 | F441, F442, F443 | done | Wave E; publish guard spelling and doc sync; low; 5e8075b, 9546194, b0d5c3c, 002dffa |
 | TEST-MANIFEST-06 | F444, F445, F446 | done | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555, 9c1c400 |
-| PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
+| PURGE-PERF-08 | F447, F448, F449, F450 | in_progress | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
