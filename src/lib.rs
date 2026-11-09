@@ -89,10 +89,9 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 ///   lock policy and the file a run leaves behind;
 /// - `NoSleep` and `RealSleep` choose the wait policy without a test sleeping
 ///   for real;
-/// - `ChunkFetch`, `ChunkSink`, `SophonChunk`, `SophonChunkFile` and
-///   `SophonChunkManifest` build the offline mock's manifests, and
-///   `stream_chunk_to` (with `ChunkFetch` and `ChunkSink`) is what the
-///   peak-heap probe measures;
+/// - `SophonChunk`, `SophonChunkFile` and `SophonChunkManifest` build the
+///   offline mock's manifests; `ChunkFetch`, `ChunkSink` and `stream_chunk_to`
+///   are what the peak-heap probe measures;
 /// - `join_url` is the one URL join the fetches use, so `tests/repair_offline.rs`
 ///   builds an advertised manifest's URL through it rather than restating the
 ///   formula;

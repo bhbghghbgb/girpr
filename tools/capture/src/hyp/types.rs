@@ -596,13 +596,13 @@ impl BuildManifest {
     /// is non-empty.
     ///
     /// The suffix is empty in every response measured so far. Both reference
-    /// Sophon clients build `{url_prefix}/{id}` and never read it — Starward's
-    /// `EnsureSophonManifestFileAsync` and Collapse's `ManifestFileUrl` — so
-    /// appending a non-empty suffix here is a conservative reading, not a
-    /// measured join order, and it is where this tool deliberately differs from
-    /// them. It is modelled anyway, because ignoring a field the API sends would
-    /// be wrong the day it is used, and the difference cannot be observed while
-    /// the field stays empty.
+    /// Sophon clients' fetch paths build `{url_prefix}/{id}` and ignore it —
+    /// Starward's `EnsureSophonManifestFileAsync` and Collapse's
+    /// `ManifestFileUrl` — so appending a non-empty suffix here is a
+    /// conservative reading, not a measured join order, and it is where this
+    /// tool deliberately differs from them. It is modelled anyway, because
+    /// ignoring a field the API sends would be wrong the day it is used, and the
+    /// difference cannot be observed while the field stays empty.
     pub fn archive_url(&self) -> String {
         join(&self.manifest_download, &self.manifest.id)
     }
@@ -666,7 +666,8 @@ pub struct Download {
     #[serde(default)]
     pub url_prefix: String,
     /// Appended after the id by this tool. Empty everywhere measured; the
-    /// reference Sophon clients never read it. See [`BuildManifest::archive_url`].
+    /// reference Sophon clients' fetch paths ignore it. See
+    /// [`BuildManifest::archive_url`].
     #[serde(default)]
     pub url_suffix: String,
 }
