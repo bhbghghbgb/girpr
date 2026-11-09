@@ -192,14 +192,18 @@ for*, and it says so loudly.
 Resolution order:
 
 1. `GIRPR_ARTIFACT_BUNDLE` — an explicit path wins, always;
-2. otherwise `gircap list --root artifacts`, which reports one `bundle` record
-   per bundle on stdout;
-3. otherwise a directory scan under `artifacts/`, which must agree with (2) —
+2. otherwise the root to search: `GIRPR_ARTIFACT_ROOT` when it is set, else
+   `artifacts/` beside the package manifest. The variable names the root, not a
+   bundle, and it outranks the default root only — (1) still wins over it;
+3. then, under that root, `gircap list --root <root>`, which reports one
+   `bundle` record per bundle on stdout;
+4. otherwise a directory scan under `<root>`, which must agree with (3) —
    `gircap`'s own `tests/bundle_consistency.rs` asserts the two name the same
    bundles in the same order, so which one ran never depends on whether a
    sibling workspace member happened to be compiled;
-4. otherwise **fail**, naming the reason and the exact command:
-   `cargo run -p gircap -- capture --out artifacts`.
+5. otherwise **fail**, naming the reason, the root it searched, and the command
+   that produces a bundle there: `cargo run -p gircap -- capture --out <root>`
+   (by default `cargo run -p gircap -- capture --out artifacts`).
 
 The same rule applies one level down: a capture the suite names must be in the
 bundle. **The capture is resolved through the matrix**, not by looking for a

@@ -601,9 +601,10 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
   It still *compiles* under `cargo nextest run`, so a broken bridge fails to
   build rather than failing silently. And because it only ever runs
-  deliberately, a **missing prerequisite is an error**: no bundle under
-  `artifacts/` and no `GIRPR_ARTIFACT_BUNDLE` fails the run with the command
-  that would produce one, rather than passing quietly having checked nothing.
+  deliberately, a **missing prerequisite is an error**: no bundle under the
+  search root (`artifacts/`, or `GIRPR_ARTIFACT_ROOT` when set; an explicit
+  `GIRPR_ARTIFACT_BUNDLE` outranks both) fails the run with the command that
+  would produce one, rather than passing quietly having checked nothing.
   - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md).
   - The server rewrites only the **scheme and authority** of the `url_prefix`
     inside each `getBuild` body, because manifest and chunk URLs are built from
