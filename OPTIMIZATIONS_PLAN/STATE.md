@@ -545,6 +545,10 @@ until the main tasks and rework are done.
 | F444 | TEST-MANIFEST-05 review | `src/sophon/stream.rs`, `tools/capture` | `join_url` (`{prefix}/{id}`) conflicts with the capture tool's `{prefix}/{id}{suffix}`; decide the contract and test a non-empty suffix. | todo |
 | F445 | TEST-MANIFEST-05 review | `src/lib.rs` | The `test_support` doc groups `join_url` under helpers the offline server and peak-heap probe need, but the new consumer is `tests/repair_offline.rs`. | todo |
 | F446 | TEST-MANIFEST-05 review | `tests/repair_offline.rs` | `extra_manifest` is local; if another test binary describes extra latest manifests, move it into `tests/common`. | todo |
+| F447 | PURGE-PERF-07 review | `src/sophon/stream.rs` tests | `serve_status` shares the accept/count/one-shot-reply skeleton with `test_http::serve_bodies`; a status-aware parameter would remove a third copy. | todo |
+| F448 | PURGE-PERF-07 review | `src/util/counter.rs` tests | Both pause tests repeat `const RECEIVE_WAIT: Duration = Duration::from_secs(10)`; a module-level constant would keep the single hang guard in one place. | todo |
+| F449 | PURGE-PERF-07 review | `src/util/counter.rs` tests | On assertion failure the helper thread stays parked at the two-party barrier until process exit; worth a release path if the suite ever joins threads in-process. | todo |
+| F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | todo |
 
 ## Follow-up batches
 
@@ -621,6 +625,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-06 | F438, F439, F440 | todo | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
 | TEMP-PUBLISH-06 | F441, F442, F443 | todo | Wave E; publish guard spelling and doc sync; low |
 | TEST-MANIFEST-06 | F444, F445, F446 | todo | Wave E; suffix contract, seam doc, helper placement; low |
+| PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
