@@ -620,7 +620,7 @@ until the main tasks and rework are done.
 | F519 | BUILD-07 implementer | `tests/scripts/io-profile/iot-bench/Cargo.toml` | `iot-bench` is a standalone workspace with no `rust-version`; the MSRV workflow intentionally reads the root manifest. | skipped (intentional; the bench has no floor of its own) |
 | F520 | BUILD-07 review | `README.md` | "The root package's `rust-version` ... for the whole workspace" is true only while no member exceeds the root's 1.89; a member floor above the root would make it stale. | todo |
 | F521 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1` | Other failures (toolchain install, member check) still omit exit codes, so they report less detail than the metadata failure now does. | todo |
-| F522 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1`, `.github/workflows/msrv.yml` | The same \`cargo metadata\` command line and message now live in both files; a flag change must update both. | skipped (inherent to the YAML/PowerShell split; the duplication is two short lines) |
+| F522 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1`, `.github/workflows/msrv.yml` | The same `cargo metadata` command line and message now live in both files; a flag change must update both. | skipped (inherent to the YAML/PowerShell split; the duplication is two short lines) |
 
 ## Follow-up batches
 
