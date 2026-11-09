@@ -605,6 +605,7 @@ until the main tasks and rework are done.
 | F504 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md`, `README.md` | `GIRPR_ARTIFACT_ROOT` is honoured by `artifacts_root()` but is absent from the documented resolution order. | todo |
 | F505 | DOCS-USER-06 review | `README.md`, `docs/06-artifact-bridge-spec.md` | "63 s for the six tests" is run wall time, not the sum of case durations; the wording could say "wall". | todo |
 | F506 | HYP-07 review | `src/repair/phases/metadata.rs` | The private `logs_of` copy still has the older doc and no runtime-flavor guard; bring it in line with the shared helper. | todo |
+| F507 | JOBS-06 review | `tests/cli_contract.rs` | `HELP_DESCRIPTION_INDENT` is documented as `HELP_OPTION_INDENT` + 4 but neither derived nor asserted, so the two can desync silently. | todo |
 
 ## Follow-up batches
 
@@ -707,6 +708,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-08 | F501, F502 | todo | Wave E; remaining bridge recipes and parallel-run isolation; low |
 | DOCS-USER-07 | F503, F504, F505 | todo | Wave E; cache-key wording, artifact-root variable, wall-time wording; low |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
+| JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
