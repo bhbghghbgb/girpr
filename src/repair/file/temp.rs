@@ -392,33 +392,59 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
     // it: `write_downloaded_chunk` builds a `ChunkFileSink`, whose constructor
     // seeks this same file to the chunk's offset before the stream starts.
     call.out.seek(SeekFrom::Start(c.offset as u64))?;
-    let mut remaining = c.uncompressed_size as u64;
-    let buf = scratch_slice(&mut *call.scratch, COPY_BUF);
-    while remaining > 0 {
-        let want = (remaining as usize).min(buf.len());
-        let n = match sf.read(&mut buf[..want]) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-                return Ok(ChunkOutcome::Download);
-            }
-        };
-        if n == 0 {
-            // Short slice: fall through to the download, which re-seeks
-            // to `c.offset` and overwrites the partial copy.
-            *call.src_handle = Some(sf);
-            tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
-            return Ok(ChunkOutcome::Download);
-        }
-        // The write ceiling counts *this* copy: it goes into `*_tmp` and
-        // appears in neither `download_bytes` nor the plan's estimate.
-        reserve_write(call.ctx, n as u64)?;
-        call.out.write_all(&buf[..n])?;
-        note_write(call.ctx, &mut *call.writes, n as u64)?;
-        remaining -= n as u64;
+    if !copy_reuse_pieces(
+        call.ctx,
+        &mut *call.writes,
+        &mut sf,
+        &mut *call.out,
+        &mut *call.scratch,
+        c,
+    )? {
+        // A read error or a short slice falls through to the download, which
+        // re-seeks to `c.offset` and overwrites the partial copy.
+        *call.src_handle = Some(sf);
+        return Ok(ChunkOutcome::Download);
     }
     *call.src_handle = Some(sf);
     Ok(ChunkOutcome::Reused)
+}
+
+/// Copy a verified reuse slice into the sink, one piece at a time.
+///
+/// Returns `false` on a read error or a short slice, leaving the caller to fall
+/// back to the download. Each piece is reserved before it lands, so the write
+/// ceiling is charged at the same granularity as the download sink.
+fn copy_reuse_pieces<R: Read, W: Write>(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    src: &mut R,
+    out: &mut W,
+    scratch: &mut Vec<u8>,
+    c: &SophonChunk,
+) -> Result<bool> {
+    let mut remaining = c.uncompressed_size as u64;
+    let buf = scratch_slice(scratch, COPY_BUF);
+    while remaining > 0 {
+        let want = (remaining as usize).min(buf.len());
+        let n = match src.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                return Ok(false);
+            }
+        };
+        if n == 0 {
+            tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
+            return Ok(false);
+        }
+        // The write ceiling counts *this* copy: it goes into `*_tmp` and
+        // appears in neither `download_bytes` nor the plan's estimate.
+        reserve_write(ctx, n as u64)?;
+        out.write_all(&buf[..n])?;
+        note_write(ctx, writes, n as u64)?;
+        remaining -= n as u64;
+    }
+    Ok(true)
 }
 
 /// The sink of a streamed chunk: the decoded bytes go straight into the
@@ -870,6 +896,35 @@ mod tests {
         }
     }
 
+    /// A reader that hands back exactly what the caller asked for, up to what
+    /// is left. The copy loop's piece boundaries then come from the loop
+    /// itself, not from how the OS chose to split a regular-file read.
+    struct ExactReads {
+        data: Vec<u8>,
+        pos: usize,
+        reads: usize,
+    }
+
+    impl ExactReads {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                pos: 0,
+                reads: 0,
+            }
+        }
+    }
+
+    impl Read for ExactReads {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            let n = buf.len().min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
     /// A sink that can be written but not positioned: every seek is refused,
     /// the way a stream that cannot be rewound presents itself. It records
     /// what the writer attempted, so a test can tell a refused seek from a
@@ -1007,7 +1062,45 @@ mod tests {
             try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
 
         assert!(matches!(outcome, ChunkOutcome::Reused));
-        assert_eq!(out.write_calls, 2, "the copy goes through in two pieces");
+        assert!(
+            out.write_calls >= 2,
+            "a chunk larger than one copy piece takes more than one write"
+        );
+        assert_eq!(
+            out.bytes, size,
+            "the count is the bytes written, not the number of writes"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), source);
+    }
+
+    /// The copy loop asks for one piece at a time and writes each piece it
+    /// reads. This source returns exactly the requested length, so the pieces
+    /// come from the loop's `COPY_BUF` boundary rather than from how a
+    /// regular-file read happened to split.
+    #[test]
+    fn a_reuse_copy_writes_one_piece_per_read() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_pieces");
+        let size = COPY_BUF + 4;
+        let source: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let mut src = ExactReads::new(source.clone());
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let c = chunk_at("c0", "", 0, size as i64);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+
+        let copied =
+            copy_reuse_pieces(&ctx, &mut writes, &mut src, &mut out, &mut scratch, &c).unwrap();
+
+        assert!(copied, "the whole slice is available");
+        assert_eq!(
+            src.reads, 2,
+            "the loop asks for COPY_BUF and then the remainder"
+        );
+        assert_eq!(out.write_calls, 2, "one write per read piece");
         assert_eq!(
             out.bytes, size,
             "the count is the bytes written, not the number of writes"
