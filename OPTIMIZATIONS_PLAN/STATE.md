@@ -519,9 +519,9 @@ until the main tasks and rework are done.
 | F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | skipped (history-only; the fixture is already distinguished by its constructor and doc) |
 | F419 | MANIFEST-05 review | `tests/repair_scan.rs` | `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` took 11.0 s in a full-suite run; may merit a look if it recurs. | completed |
 | F420 | MANIFEST-05 review | `src/repair/phases/metadata.rs`, `src/sophon/stream.rs`, `src/hyp.rs`, `tests/common` | Plain test HTTP servers remain duplicated; consolidation is worthwhile only once a second gated-origin user exists. | skipped (no second gated-origin user; the three plain helpers differ in contract) |
-| F421 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry`'s synthetic fixtures spell the six-space indent literally instead of using `HELP_OPTION_INDENT`. | pending_review |
-| F422 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry` cannot find an option rendered with a short-alias prefix (`-j, --jobs`); it would panic rather than return a wrong slice. | pending_review |
-| F423 | JOBS-04 review | `tests/cli_contract.rs` | The boundary set omits `\r`; harmless for clap's `\n` output but would break on a Windows-console capture. | pending_review |
+| F421 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry`'s synthetic fixtures spell the six-space indent literally instead of using `HELP_OPTION_INDENT`. | completed |
+| F422 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry` cannot find an option rendered with a short-alias prefix (`-j, --jobs`); it would panic rather than return a wrong slice. | completed |
+| F423 | JOBS-04 review | `tests/cli_contract.rs` | The boundary set omits `\r`; harmless for clap's `\n` output but would break on a Windows-console capture. | completed |
 | F424 | LOGGING-04 review | `src/logging.rs` tests | `SINK_REGISTRY_TEST_LOCK`'s doc should note the reliance on no other test installing a global subscriber first (nextest process-per-test). | todo |
 | F425 | LOGGING-04 review | `src/logging.rs` tests | The warning assertion pins the prefix but not the upstream `SetGlobalDefaultError` reason (`already been set`); optional. | todo |
 | F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | todo |
@@ -634,7 +634,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
 | METADATA-06 | F416, F417, F418 | done | Wave E; branch-failure wording and shared terminal predicate; low; 211a332, ebb59d8 |
 | MANIFEST-06 | F419, F420 | done | Wave E; slow md5-gate test and server duplication; low; ea8b9f0 |
-| JOBS-05 | F421, F422, F423 | pending_review | Wave E; help_entry fixture constants and boundary edges; low; 976e65e |
+| JOBS-05 | F421, F422, F423 | done | Wave E; help_entry fixture constants and boundary edges; low; 976e65e |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
 | INI-06 | F429, F430, F431, F432, F433 | todo | Wave E; junction/symlink test cleanup and platform broadenings; low |
