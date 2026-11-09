@@ -649,6 +649,7 @@ until the main tasks and rework are done.
 | F548 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The test name `an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch` does not mention the backward crossing now pinned. | todo |
 | F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | todo |
 | F550 | TEST-REGRESSION-07 implementer | `OPTIMIZATIONS_PLAN` gates | Positional nextest filters like `girpr lib` or `girpr machinery` select zero tests; `--lib` / `--test <name>` are the working spellings. | skipped (harness/nextest filter behaviour, not repo code) |
+| F551 | TEST-REGRESSION-07 review | `tests/repair_machinery.rs` | `MtimeAge` is local; if another test file needs the same named skip outcome it should live beside the shared clock helpers. | skipped (conditional; only one test file uses it today) |
 
 ## Follow-up batches
 
@@ -777,6 +778,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | TEST-REGRESSION-08 | F548, F549 | todo | Wave E; pin name and checked pre-epoch construction; low |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
+| TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
