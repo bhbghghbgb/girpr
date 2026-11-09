@@ -1264,12 +1264,68 @@ mod tests {
 
     /// The coarse tick containing `t`, used to model a store that truncates
     /// modification times to 2 s.
+    ///
+    /// The tick stays on the Unix epoch's 2 s grid, where a real coarse store
+    /// truncates, but it is found by subtracting the offset into the tick
+    /// rather than by rebuilding a time from epoch seconds. A clock on either
+    /// side of the epoch therefore gets the tick at or before it, and a
+    /// subtraction the platform cannot represent leaves `t` unchanged instead
+    /// of panicking.
     fn coarse_tick_of(t: SystemTime) -> SystemTime {
-        let secs = t
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("the test clock is after the epoch")
-            .as_secs();
-        SystemTime::UNIX_EPOCH + Duration::from_secs(secs - secs % 2)
+        let tick = COARSE_MTIME_TICK.as_nanos();
+        let since_epoch = match t.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(since) => since.as_nanos() as i128,
+            Err(before) => -(before.duration().as_nanos() as i128),
+        };
+        // The non-negative remainder is the distance back to the tick, whether
+        // the stamp is before or after the epoch.
+        let into_tick = since_epoch.rem_euclid(tick as i128) as u64;
+        t.checked_sub(Duration::from_nanos(into_tick)).unwrap_or(t)
+    }
+
+    /// The coarse tick is the epoch-aligned 2 s boundary at or before the
+    /// stamp, on either side of the epoch, and truncating it again is a no-op.
+    #[test]
+    fn coarse_tick_is_at_or_before_the_stamp_on_either_side_of_the_epoch() {
+        let cases = [
+            SystemTime::UNIX_EPOCH + Duration::from_millis(1500),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+            SystemTime::UNIX_EPOCH - Duration::from_millis(1500),
+            SystemTime::UNIX_EPOCH - Duration::from_secs(10),
+        ];
+        for t in cases {
+            let tick = coarse_tick_of(t);
+            let into_tick = t
+                .duration_since(tick)
+                .expect("the tick is at or before the stamp");
+            assert!(
+                into_tick < COARSE_MTIME_TICK,
+                "the tick starts less than one tick before {t:?}"
+            );
+            assert_eq!(
+                coarse_tick_of(tick),
+                tick,
+                "a tick is stable under truncation"
+            );
+        }
+        assert_eq!(
+            coarse_tick_of(SystemTime::UNIX_EPOCH + Duration::from_millis(1500)),
+            SystemTime::UNIX_EPOCH
+        );
+        assert_eq!(
+            coarse_tick_of(SystemTime::UNIX_EPOCH - Duration::from_millis(1500)),
+            SystemTime::UNIX_EPOCH - COARSE_MTIME_TICK
+        );
+        for boundary in [
+            SystemTime::UNIX_EPOCH + COARSE_MTIME_TICK * 4,
+            SystemTime::UNIX_EPOCH - COARSE_MTIME_TICK * 4,
+        ] {
+            assert_eq!(
+                coarse_tick_of(boundary),
+                boundary,
+                "a boundary is its own tick"
+            );
+        }
     }
 
     fn set_modified(path: &std::path::Path, stamp: SystemTime) {
