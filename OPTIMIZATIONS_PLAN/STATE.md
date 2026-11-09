@@ -512,8 +512,8 @@ until the main tasks and rework are done.
 | F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | completed |
 | F412 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | The region list no longer contains `audio.rs`/`lock.rs` while the next paragraph says they were swept the same way; fold them in or reword the list. | completed |
 | F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | completed |
-| F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | todo |
-| F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | todo |
+| F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | pending_review |
+| F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | skipped (needs a public async test helper; no non-public seam covers it) |
 | F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | todo |
 | F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | todo |
 | F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | todo |
@@ -627,7 +627,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-06 | F407, F408 | done | Wave E; simulated-skip wording and bridge skip visibility; low; 9488a01, 2edf394 |
 | DOCS-USER-05 | F409, F410, F411 | done | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
 | DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
-| HYP-06 | F414, F415 | in_progress | Wave E; shared log-helper wording and duplication decision; low |
+| HYP-06 | F414, F415 | pending_review | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
 | METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
