@@ -110,17 +110,44 @@ mod run_lock_tests {
         );
         assert_eq!(game_path_arg(&["--game-path"]), None);
         assert_eq!(game_path_arg(&["--other", "/games/a"]), None);
-        // A later spelling wins, so a repeated flag keeps the last value.
-        // Cleanup only reaches this with a failed invocation: the parser
-        // refuses a repeated `--game-path` before a run can take a lock.
-        assert_eq!(
-            game_path_arg(&["--game-path", "/games/a", "--game-path=/games/b"]),
-            Some("/games/b")
+        // The CLI rejects an empty value, so cleanup has no path to target.
+        assert_eq!(game_path_arg(&["--game-path="]), None);
+        assert_eq!(game_path_arg(&["--game-path", ""]), None);
+    }
+
+    #[test]
+    fn game_path_arg_refuses_a_repeated_flag() {
+        // A repeated `--game-path` is a usage error: the run never starts and
+        // takes no lock, so cleanup must not choose one of the two paths.
+        for args in [
+            vec!["--game-path", "/games/a", "--game-path=/games/b"],
+            vec!["--game-path=/games/a", "--game-path", "/games/b"],
+            vec!["--game-path", "/games/a", "--game-path", "/games/a"],
+        ] {
+            assert_eq!(game_path_arg(&args), None, "{args:?}");
+        }
+        assert!(
+            Args::try_parse_from([
+                "girpr",
+                "--game-path",
+                "/games/a",
+                "--game-path",
+                "/games/b",
+                "--biz",
+                "hk4e_global",
+            ])
+            .is_err()
         );
-        assert_eq!(
-            game_path_arg(&["--game-path=/games/a", "--game-path", "/games/b"]),
-            Some("/games/b")
+    }
+
+    #[test]
+    fn the_cli_refuses_an_empty_game_path() {
+        // This is why `lock_key_path` does not mirror production's key for
+        // `""`: clap rejects the empty value before any run can take a lock.
+        assert!(
+            Args::try_parse_from(["girpr", "--game-path", "", "--biz", "hk4e_global"]).is_err()
         );
+        assert!(Args::try_parse_from(["girpr", "--game-path=", "--biz", "hk4e_global"]).is_err());
     }
 
     #[test]

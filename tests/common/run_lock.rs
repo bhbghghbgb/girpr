@@ -31,6 +31,9 @@ use girpr::test_support::{Lock, lock_path};
 /// that model a vanished install use an ordinary directory, so the invariant is
 /// that the removed part carries no reparse point of its own.
 pub(crate) fn lock_key_path(game_dir: &Path) -> PathBuf {
+    // An empty path is not reachable: the CLI rejects it ("a value is
+    // required") and `game_path_arg` reports none, so production's fallback key
+    // for `""` is deliberately not mirrored here.
     if let Ok(canonical) = game_dir.canonicalize() {
         return canonical;
     }
@@ -126,16 +129,27 @@ pub(crate) fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
         .any(|arg| matches!(arg.as_ref(), "--dry-run" | "--check-only" | "--print-plan"))
 }
 
-/// The `--game-path` value in a binary argument list, in either spelling.
+/// The one `--game-path` value in a binary argument list, in either spelling.
+///
+/// `None` when the list names no game path, when the flag has no value, when
+/// the value is empty, or when the flag is repeated. The CLI refuses a repeated
+/// `--game-path` before a run can take a lock, and refuses an empty value, so
+/// cleanup must not pick a directory that never ran.
 pub(crate) fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
     let mut found = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
-        if arg == "--game-path" {
-            found = args.next().map(|value| value.as_ref());
-        } else if let Some(value) = arg.strip_prefix("--game-path=") {
-            found = Some(value);
+        let value = if arg == "--game-path" {
+            args.next().map(|value| value.as_ref())
+        } else {
+            arg.strip_prefix("--game-path=")
+        };
+        let Some(value) = value else {
+            continue;
+        };
+        if value.is_empty() || found.replace(value).is_some() {
+            return None;
         }
     }
     found
