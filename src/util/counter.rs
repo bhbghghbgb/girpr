@@ -98,20 +98,39 @@ mod tests {
     use super::test_support::pause_before_cas_of;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Barrier};
+    use std::time::Duration;
 
     /// A pause installed for one cell does not hold a charge to a different
     /// cell on the same thread: the scope gate is the cell identity, not "this
     /// thread has some pause installed".
+    ///
+    /// The charge runs on its own thread, because the pause is thread-local
+    /// and has to be installed on the charging thread to be observable at all.
+    /// The receive has a deadline so a gate that consulted the wrong cell —
+    /// which would park the charge at a barrier only it could reach — fails
+    /// the test rather than hanging the suite.
     #[test]
     fn a_paused_cell_does_not_hold_a_charge_to_another_cell() {
-        let paused = AtomicU64::new(0);
-        let other = AtomicU64::new(0);
+        const RECEIVE_WAIT: Duration = Duration::from_secs(10);
+        let paused = Arc::new(AtomicU64::new(0));
+        let other = Arc::new(AtomicU64::new(0));
 
-        // A charge that wrongly consulted this pause would wait at the barrier
-        // instead of reaching its compare-exchange.
-        let _pause = pause_before_cas_of(&paused, Arc::new(Barrier::new(2)));
+        let thread_paused = Arc::clone(&paused);
+        let thread_other = Arc::clone(&other);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let charger = std::thread::spawn(move || {
+            // A charge that wrongly consulted this pause would wait at the
+            // two-party barrier instead of reaching its compare-exchange.
+            let _pause = pause_before_cas_of(&thread_paused, Arc::new(Barrier::new(2)));
 
-        add_saturating(&other, 5);
+            add_saturating(&thread_other, 5);
+            done_tx.send(()).expect("the test receiver is alive");
+        });
+
+        done_rx
+            .recv_timeout(RECEIVE_WAIT)
+            .expect("a charge to another cell must not wait on the paused cell's barrier");
+        charger.join().expect("the charging thread finishes");
         assert_eq!(
             other.load(Ordering::Relaxed),
             5,
@@ -119,21 +138,40 @@ mod tests {
         );
     }
 
-    /// A pause is per charge, not a permanent block: once the barrier releases
-    /// (here a one-party barrier releases immediately), the paused cell's own
-    /// charge commits. Clearing the pause then leaves the cell charging
-    /// normally.
+    /// A pause is per charge, not a permanent block: the paused charge holds
+    /// at a two-party barrier until this thread's helper arrives, then
+    /// commits. Clearing the pause then leaves the cell charging normally.
+    ///
+    /// A one-party barrier would release immediately and prove nothing. Here
+    /// the charge cannot pass the barrier on its own, and a skipped pause
+    /// leaves the helper waiting at it — the bounded receive reports that as a
+    /// failure instead of hanging the suite.
     #[test]
     fn a_paused_cell_resumes_after_its_barrier() {
-        let cell = AtomicU64::new(0);
-        let guard = pause_before_cas_of(&cell, Arc::new(Barrier::new(1)));
+        const RECEIVE_WAIT: Duration = Duration::from_secs(10);
+        let cell = Arc::new(AtomicU64::new(0));
+        let barrier = Arc::new(Barrier::new(2));
 
+        let (released_tx, released_rx) = std::sync::mpsc::channel();
+        let releaser = {
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                released_tx.send(()).expect("the test receiver is alive");
+            })
+        };
+
+        let guard = pause_before_cas_of(&cell, Arc::clone(&barrier));
         add_saturating(&cell, 7);
         assert_eq!(
             cell.load(Ordering::Relaxed),
             7,
             "the paused cell charges once its barrier releases"
         );
+        released_rx
+            .recv_timeout(RECEIVE_WAIT)
+            .expect("the paused charge released its barrier's second party");
+        releaser.join().expect("the releasing thread finishes");
 
         drop(guard);
         add_saturating(&cell, 1);
