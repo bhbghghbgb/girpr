@@ -304,9 +304,10 @@ the completed `*_tmp` prefix and continuing it.
   `edition = "2024"`, and the single-writer lock uses
   `File::try_lock`/`File::unlock`, both stable since 1.89); network to
   HoYoPlay + Sophon CDNs (production runs only). The
-  dev-only `girsync` cache pins `redb` to its 4.1 line, the newest that
-  supports `girsync`'s minimum, so checking the whole workspace needs a
-  toolchain at least as new as every member's minimum, not only the product's.
+  dev-only `girsync` cache pins `redb` to exactly 4.1.0, the last 4.x release
+  that supports `girsync`'s minimum (4.2 and later need 1.90), so checking the
+  whole workspace needs a toolchain at least as new as every member's minimum,
+  not only the product's.
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
