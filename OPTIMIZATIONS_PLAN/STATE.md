@@ -726,7 +726,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-08 | F510, F511 | todo | Wave E; clap arity mirroring and lone-dash assertion; low |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
-| BUILD-08 | F517 | todo | Wave E; name the command and exit code in the MSRV script failure; low |
+| BUILD-08 | F517 | in_progress | Wave E; name the command and exit code in the MSRV script failure; low |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | todo | Wave E; make the README workspace floor robust to a member above the root; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
