@@ -780,7 +780,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-08 | F506 | done | Wave E; align the metadata log helper with the shared one; low; f53e096 |
 | JOBS-07 | F507 | done | Wave E; assert the help indent relationship; low; 81cd638 |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
-| LOCK-08 | F510, F511 | todo | Wave E; clap arity mirroring and lone-dash assertion; low |
+| LOCK-08 | F510, F511 | in_progress | Wave E; clap arity mirroring and lone-dash assertion; low |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
