@@ -626,6 +626,8 @@ until the main tasks and rework are done.
 | F525 | BUILD-10 review | `tools/sync/Cargo.toml` | The pin comment says "supports the workspace's Rust 1.89", while the README now anchors the pin to `girsync`'s own minimum. | pending_review |
 | F526 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The script relies on the host's `$PSNativeCommandUseErrorActionPreference`; if it is `$true`, native failures throw before the `$LASTEXITCODE` branches and the tailored messages are lost. | todo |
 | F527 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The `rustup run ... rustc --version` probe treats any failure as a missing toolchain (e.g. a corrupt one) and then tries to install. | todo |
+| F528 | BUILD-13 implementer | `tools/sync/Cargo.toml` | Line 5 still justifies the crate's `rust-version` with "redb 4.1 needs 1.89". | skipped (accurate and complementary to the reworded pin comment; no conflict) |
+| F529 | BUILD-13 implementer | `README.md` | The root's requirement is attributed to `File::try_lock`/`File::unlock`, matching the root manifest comment; both need the same edit if that API's MSRV changes. | skipped (cross-file coupling is inherent; both places agree today) |
 
 ## Follow-up batches
 
@@ -740,6 +742,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
 | BUILD-13 | F524, F525 | pending_review | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
 | BUILD-14 | F526, F527 | todo | Wave E; native-command preference and probe failure classification; low |
+| BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
