@@ -556,6 +556,9 @@ until the main tasks and rework are done.
 | F455 | CHECK-06 review | `src/repair/phases/check.rs` tests | `before`'s doc says expiry is kept separate so a wait records it, but only the release wait distinguishes it; the two harness waits collapse it via `unwrap_or_default()`. | todo |
 | F456 | CHECK-06 review | `src/repair/phases/check.rs` tests | Expiry is reported through `CheckFailure::Read`, so the log reads "CHECK fail: unreadable"; harmless for a test double, but a dedicated marker would read better. | todo |
 | F457 | CHECK-06 review | `src/repair/phases/check.rs` tests | The shared deadline means each wait's headroom is "time left" rather than a fresh 10 s; worth a comment if the fixture grows. | todo |
+| F458 | PATHHELPERS-06 review | `tests/artifact_bridge.rs` | The module doc and `#[ignore]` messages still tell readers to pass `--no-capture`, which the new override makes unnecessary. | todo |
+| F459 | PATHHELPERS-06 review | `.config/nextest.toml` | The adjacent comment saying the run command carries `--no-capture` only to make the line visible is now stale; update with the docs. | todo |
+| F460 | PATHHELPERS-06 review | `tests/repair_post.rs`, `src/util/path.rs` tests | `JunctionRefusal` and `NameRefusal` express the same two-state idea in two test modules; a shared helper could deduplicate them. | todo |
 
 ## Follow-up batches
 
@@ -636,6 +639,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
+| PATHHELPERS-07 | F458, F459, F460 | todo | Wave E; bridge flag docs, stale config comment, refusal dedup; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
