@@ -674,6 +674,8 @@ until the main tasks and rework are done.
 | F573 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | "the future ... may be polled on worker threads" is over-broad: a multi-thread `#[tokio::test]` still polls the awaited body on the calling thread; only spawned tasks migrate. | todo |
 | F574 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | `spawn_blocking_traced` captures the dispatcher at spawn time, so on a multi-thread runtime the spawn site may already lack the subscriber; the "blocking lines are captured too" claim is scoped to correct usage. | todo |
 | F575 | HYP-08 review | `src/repair/test_support.rs` | An async `logs_of` could live behind `cfg(test)`, but it would be unreachable from integration tests and still duplicated. | skipped (only worth revisiting if a third copy appears) |
+| F576 | JOBS-07 implementer | `tests/cli_contract.rs` | `HELP_SHORT_OPTION_INDENT` likewise has no automated tie to clap's actual layout; only fixture-based tests exercise it. | todo |
+| F577 | JOBS-07 implementer | `tests/cli_contract.rs` | No test asserts that a real `--help` description line begins at `HELP_DESCRIPTION_INDENT`; output is only checked through `help_entry`. | todo |
 
 ## Follow-up batches
 
@@ -818,6 +820,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
 | HYP-10 | F573, F574 | todo | Wave E; runtime-flavor doc scoping in both log helpers; low |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
+| JOBS-08 | F576, F577 | todo | Wave E; real help output indent pins; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
