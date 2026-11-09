@@ -551,6 +551,8 @@ until the main tasks and rework are done.
 | F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | todo |
 | F451 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | On a pre-epoch host `stamp_ago` returns `now`, so fixtures silently lose their "older than one coarse tick" property and the guarded-reuse path is not exercised. | todo |
 | F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | todo |
+| F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | todo |
+| F454 | TEST-OUTPUT-05 review | `README.md` | The `--output` flag table row is now very long; a short subsection could carry the caveat and keep the table readable. | todo |
 
 ## Follow-up batches
 
@@ -629,6 +631,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-06 | F444, F445, F446 | todo | Wave E; suffix contract, seam doc, helper placement; low |
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
+| TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
