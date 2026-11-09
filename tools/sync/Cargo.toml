@@ -50,8 +50,8 @@ rayon = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
-# Pinned to the last 4.x release that supports the workspace's Rust 1.89:
-# 4.2 and later require 1.90.
+# Pinned to the last 4.x release that supports this crate's declared minimum
+# of Rust 1.89: 4.2 and later require 1.90.
 redb = "=4.1.0"
 
 # Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
