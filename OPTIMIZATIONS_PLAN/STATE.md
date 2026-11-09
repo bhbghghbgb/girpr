@@ -593,8 +593,8 @@ until the main tasks and rework are done.
 | F492 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | The shared caveat now covers the chunk join but names only the manifest-fetch paths of the reference clients. | skipped (accurate while every measured `url_suffix` is empty) |
 | F493 | PURGE-PERF-08 review | `src/util/counter.rs` tests | `ReleaseOnPanic` has a narrow race: if the guard drops after `Barrier::wait` releases the helper but before it records `passed`, the waiter can park until exit. | completed |
 | F494 | PURGE-PERF-08 review | `src/repair/mod.rs` | A private 10 s `RECEIVE_WAIT` remains there; it is a candidate for the same single-constant hoist. | skipped (different operation from the hoisted counter constant; one caller, no shared constant to join) |
-| F495 | TEST-REGRESSION-06 review | `src/lib.rs` | The new helper pins cover an ordinary and a pre-epoch clock, but not a clock shortly *after* the epoch crossing backward, which was the removed test's other shape. | pending_review |
-| F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | pending_review |
+| F495 | TEST-REGRESSION-06 review | `src/lib.rs` | The new helper pins cover an ordinary and a pre-epoch clock, but not a clock shortly *after* the epoch crossing backward, which was the removed test's other shape. | completed |
+| F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | completed |
 | F497 | TEST-OUTPUT-06 review | `README.md` | The `--output` row says "Stdout only; diagnostics stay on stderr" without mentioning that the log file carries the same rendered lines. | skipped (pre-existing gap, outside this batch's row; no test covers it) |
 | F498 | TEST-OUTPUT-06 review | `tests/common/mod.rs` | The shared constant's doc hard-codes the emitting function name, which a future rename would leave stale. | skipped (prose-only nit; the emitter is stable and covered by cli_contract) |
 | F499 | CHECK-07 review | `src/repair/phases/check.rs` tests | The new `CHECK fail: test double:` branch only runs on a genuine 10 s stall and has no test; feeding a `TestGateExpired` outcome through the warn site would pin it. | todo |
@@ -745,7 +745,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-08 | F489, F490 | done | Wave E; overlap-guard precision and end-to-end overlapping fixture; low; ff1dcef, ff2e6b7, cd7afbd |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | done | Wave E; release-guard race and the remaining wait constant; low; ae55ba3 |
-| TEST-REGRESSION-07 | F495, F496 | pending_review | Wave E; post-epoch pin and skip-result type; low; f6da824, 5556cc2 |
+| TEST-REGRESSION-07 | F495, F496 | done | Wave E; post-epoch pin and skip-result type; low; f6da824, 5556cc2 |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
 | PATHHELPERS-08 | F501, F502 | todo | Wave E; remaining bridge recipes and parallel-run isolation; low |
