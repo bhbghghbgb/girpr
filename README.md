@@ -298,11 +298,12 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- Rust 1.89+ for the whole workspace (the crates are `edition = "2024"`, and
-  the single-writer lock uses `File::try_lock`/`File::unlock`, which
-  stabilised in 1.89); network to HoYoPlay + Sophon CDNs (production runs
-  only). The dev-only `girsync` cache pins `redb` to its 4.1 line, the newest
-  that supports 1.89, so checking the whole workspace needs the same toolchain
+- Rust at the workspace's declared minimum or newer (each manifest's
+  `rust-version`; the crates are `edition = "2024"`, and the single-writer
+  lock uses `File::try_lock`/`File::unlock`, which stabilised in 1.89);
+  network to HoYoPlay + Sophon CDNs (production runs only). The dev-only
+  `girsync` cache pins `redb` to its 4.1 line, the newest that supports the
+  workspace minimum, so checking the whole workspace needs the same toolchain
   as the product.
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
@@ -325,8 +326,8 @@ The script reads the members and their minimums from `cargo metadata`, installs
 any missing toolchain through rustup, and runs
 `cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
 so tests and benches are held to the same floor. It needs
-rustup and network access on the first run; after that the three toolchains
-(1.85, 1.88, 1.89) and the shared target directory make a run a few minutes of
+rustup and network access on the first run; after that the declared
+toolchains and the shared target directory make a run a few minutes of
 incremental builds. The `msrv` workflow runs the same script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the

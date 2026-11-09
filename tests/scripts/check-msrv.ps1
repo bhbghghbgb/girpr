@@ -5,10 +5,10 @@ Checks every workspace member, with tests and benches, at the rust-version its
 manifest declares.
 
 .DESCRIPTION
-The workspace is one lockfile with members that have different minimum
-Rust versions: the product and `girsync` need 1.89, `gircap` needs 1.88 and
-the two shared policy crates need 1.85. A check of the root package alone
-would never notice a change that silently raises a lower member's floor.
+The workspace is one lockfile with members that declare different minimum
+Rust versions; each manifest's `rust-version` is the only place the number
+lives. A check of the root package alone would never notice a change that
+silently raises a lower member's floor.
 
 The members and their minimums come from `cargo metadata`, so this script
 follows the manifests instead of keeping a second list. Each member is then
