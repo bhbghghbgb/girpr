@@ -608,8 +608,8 @@ until the main tasks and rework are done.
 | F507 | JOBS-06 review | `tests/cli_contract.rs` | `HELP_DESCRIPTION_INDENT` is documented as `HELP_OPTION_INDENT` + 4 but neither derived nor asserted, so the two can desync silently. | completed |
 | F508 | LOGGING-06 review | `src/logging.rs` tests | The full-line assertion couples to `TryInitError` forwarding the inner `Display` verbatim; no stable public accessor compares `source()`. | skipped (no stable public API exists to assert the typed source) |
 | F509 | LOGGING-06 review | `src/logging.rs` tests | `set_global_default(NoSubscriber::default())` builds a `Dispatch` only to elicit the error; a comment could note that. | skipped (purely cosmetic; the construct is idiomatic for eliciting the error) |
-| F510 | LOCK-07 review | `tests/common/run_lock.rs` | The helpers tokenize rather than mirror clap's option arity, so `--include --game-path /x` can still be read as a game path. | todo |
-| F511 | LOCK-07 review | `tests/run_lock.rs` | The CLI test proves a lone `-` parses but does not assert the parsed `game_path` equals `-`. | todo |
+| F510 | LOCK-07 review | `tests/common/run_lock.rs` | The helpers tokenize rather than mirror clap's option arity, so `--include --game-path /x` can still be read as a game path. | pending_review |
+| F511 | LOCK-07 review | `tests/run_lock.rs` | The CLI test proves a lone `-` parses but does not assert the parsed `game_path` equals `-`. | pending_review |
 | F512 | INI-07 implementer | `src/util/path.rs` | `junction_refusal` treats any `mklink` failure as a host refusal and skips unless `GIRPR_TEST_REQUIRE_JUNCTION` is set; the same broken `cmd`/argument failure could skip silently. | todo |
 | F513 | INI-07 implementer | `src/util/ini.rs` tests | The shared `link_creation_denied` comment still names `CreateSymbolicLinkW` specifically, though it now also covers junctions. | todo |
 | F514 | INI-07 review | `src/util/ini.rs` | `try_junction_dir` treats any `symlink_metadata` error as "missing", so a permission or transient error is reported as a missing link instead of its own cause. | todo |
@@ -780,7 +780,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-08 | F506 | done | Wave E; align the metadata log helper with the shared one; low; f53e096 |
 | JOBS-07 | F507 | done | Wave E; assert the help indent relationship; low; 81cd638 |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
-| LOCK-08 | F510, F511 | in_progress | Wave E; clap arity mirroring and lone-dash assertion; low |
+| LOCK-08 | F510, F511 | pending_review | Wave E; clap arity mirroring and lone-dash assertion; low; c93137b, f3a507e |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
