@@ -579,9 +579,9 @@ until the main tasks and rework are done.
 | F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | completed |
 | F479 | BUILD-06 review | `README.md`, `tests/scripts/check-msrv.ps1` | The README and the script header still spell out `1.89`/`1.88`/`1.85`, which will drift when the MSRV moves. | completed |
 | F480 | BUILD-06 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The duplicated `rustup toolchain install` is accepted for now; if a third install site appears, extract a shared installer helper. | skipped (install sites: 2, threshold not met) |
-| F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | todo |
-| F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | todo |
-| F483 | TEMP-WRITER-06 follow-up | `src/hyp.rs` | A pre-existing broken intra-doc link (`crate::sophon::retryable`) makes `cargo doc -p girpr --no-deps` fail under `-D warnings`. | todo |
+| F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | pending_review |
+| F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | pending_review |
+| F483 | TEMP-WRITER-06 follow-up | `src/hyp.rs` | A pre-existing broken intra-doc link (`crate::sophon::retryable`) makes `cargo doc -p girpr --no-deps` fail under `-D warnings`. | pending_review |
 | F484 | TEMP-PUBLISH-06 review | `src/repair/phases/post.rs` | `copy_publish_with` still guards only with `file_name()`, so it would accept a `dir/.` target; share `ends_in_a_file_name` if that writer becomes reachable. | todo |
 | F485 | TEMP-PUBLISH-06 review | `src/util/atomic.rs` | Windows targets ending in a dot or space (e.g. `config.`) are accepted and alias another name; `contained_rel` already refuses those, the atomic writer does not. | todo |
 | F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | todo |
@@ -721,7 +721,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-07 | F474, F475 | done | Wave E; run-lock cleanup hardening and module doc; low; 1d525d5, e5cde0b, 07c92d9 |
 | INI-07 | F476, F477 | done | Wave E; junction skip classification and guard removal order; low; 8483c89, d3dba86 |
 | BUILD-07 | F478, F479, F480 | done | Wave E; metadata failure message, MSRV literals, installer helper threshold; low; a6d34b0, 3b29885, e34a8b2 |
-| TEMP-WRITER-07 | F481, F482, F483 | in_progress | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
+| TEMP-WRITER-07 | F481, F482, F483 | pending_review | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low; 8fab9f8, a60f278 |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
 | MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
