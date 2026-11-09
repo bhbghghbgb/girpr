@@ -631,6 +631,8 @@ until the main tasks and rework are done.
 | F530 | BUILD-13 review | `README.md` | "pins `redb` to its 4.1 line" reads as the whole 4.1 series while the manifest pins exactly `=4.1.0`. | todo |
 | F531 | BUILD-13 review | `Cargo.toml` | The root comment explains the 1.89 floor without noting `girsync` ties at 1.89. | todo |
 | F532 | BUILD-13 review | `README.md`, `tools/sync/Cargo.toml` | The MSRV prose literals duplicate manifest and registry facts, and `check-msrv.ps1` derives from `cargo metadata` so it cannot catch prose drift. | skipped (the literals are deliberate and named by the surrounding prose; a metadata-driven check would not cover prose either) |
+| F533 | TEMP-WRITER-07 implementer | `src/repair/file/temp.rs` | The copy-stage `ReuseCopy::ReadFailed` handle drop can only be tested end-to-end behind a reader/handle generic threaded through `ReuseCall`, `try_reuse_slice`, and the caller. | skipped (would change production types in three places; the helper-level pin is retained) |
+| F534 | TEMP-WRITER-07 implementer | `src/lib.rs` | `terminal_retcode` is exposed only through `#[doc(hidden)] test_support` yet documented as public; a real public API would need `SophonNotFound` exported to restore the link. | skipped (conditional on making it a real public API) |
 
 ## Follow-up batches
 
@@ -748,6 +750,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
 | BUILD-16 | F530, F531 | todo | Wave E; 4.1.0 pin wording and root MSRV tie; low |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
+| BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
