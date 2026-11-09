@@ -562,6 +562,7 @@ until the main tasks and rework are done.
 | F461 | DOCS-USER-05 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md`, `tests/artifact_bridge.rs` | The four bridge-run recipes differ cosmetically (`--test-threads=1`, `GIRPR_ARTIFACT_BUNDLE` spelled out in only two); unify them. | todo |
 | F462 | DOCS-USER-05 review | `tools/capture/README.md` | The reference bundle label `20261021T141336Z` no longer matches the locally present bundle; the example can drift. | todo |
 | F463 | DOCS-USER-05 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | The 139 s cost figure is host-qualified but the command/profile that produced it is not recorded; state the exact command. | todo |
+| F464 | DOCS-COMMENTS-05 review | `docs/07-panic-audit.md` | The sweep regex matches only `as usize|as u64|as i64` while the prose says "`as` casts" generally; narrow the wording or extend the command. | todo |
 
 ## Follow-up batches
 
@@ -644,6 +645,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
 | PATHHELPERS-07 | F458, F459, F460 | todo | Wave E; bridge flag docs, stale config comment, refusal dedup; low |
 | DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
+| DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
