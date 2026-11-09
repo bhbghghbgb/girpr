@@ -704,7 +704,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-06 | F472, F473 | done | Wave E; lock doc scope and typed rejection pin; low; e3a3cf3, b79ef56 |
 | LOCK-07 | F474, F475 | done | Wave E; run-lock cleanup hardening and module doc; low; 1d525d5, e5cde0b, 07c92d9 |
 | INI-07 | F476, F477 | done | Wave E; junction skip classification and guard removal order; low; 8483c89, d3dba86 |
-| BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
+| BUILD-07 | F478, F479, F480 | in_progress | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
