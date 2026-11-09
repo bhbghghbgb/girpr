@@ -554,12 +554,11 @@ async fn verify_and_retry(
         Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),
         Verified::Mismatch { md5, still_bad } => {
             if still_bad.is_empty() {
-                anyhow::bail!(
+                return Err(FinalDigestMismatch(format!(
                     "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
-                    file.rel,
-                    file.md5,
-                    md5
-                );
+                    file.rel, file.md5, md5
+                ))
+                .into());
             }
             still_bad
         }
@@ -589,15 +588,42 @@ async fn verify_and_retry(
     handle.flush()?;
     let final_md5 = util::md5::md5_reader_digest(handle)?;
     if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
-        anyhow::bail!(
+        return Err(FinalDigestMismatch(format!(
             "final md5 mismatch for {}: expect {} got {}",
-            file.rel,
-            file.md5,
-            final_md5
-        );
+            file.rel, file.md5, final_md5
+        ))
+        .into());
     }
     Ok(repaired_in_place(stats, final_md5))
 }
+
+/// A whole-file digest mismatch that no retry can change.
+///
+/// The in-place writer assembles the target from bytes it has already checked
+/// one chunk at a time: a staged source's MD5, an in-file source range the
+/// scan found intact, or a downloaded chunk that passed its own gate. The
+/// bytes outside those ranges are the plan's zero-filled gaps and declared
+/// length. A whole-file mismatch therefore means the **plan** is inconsistent
+/// with itself — bytes no chunk describes, chunks that overlap and cannot all
+/// be correct, or a declared digest no assembly of them can produce — not
+/// that a download or a write went wrong. The next attempt reads the same
+/// plan and reaches the same verdict, so the file loop treats this error as
+/// terminal instead of spending the file's retry budget on it.
+///
+/// A **transient** download or write error is still an ordinary `Err` and is
+/// retried; this marker is only for the verify gate's deterministic verdict.
+/// The temp path's digest gate keeps its retries: it resumes by length, so a
+/// corrupt `_tmp` prefix is a cause a retry can remove.
+#[derive(Debug)]
+pub(super) struct FinalDigestMismatch(String);
+
+impl std::fmt::Display for FinalDigestMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FinalDigestMismatch {}
 
 /// What one verification pass over the in-place target answered.
 enum Verified {
@@ -1203,6 +1229,47 @@ mod tests {
         assert_eq!(
             source_ok_by_chunk(chunks.len(), &owner, &[true]),
             vec![false, true]
+        );
+    }
+
+    /// A whole-file digest mismatch with every chunk range already correct is
+    /// unretryable: the writer marks it so the file loop answers `Fatal`
+    /// instead of running the same scan, the same zero-fill, and the same
+    /// digest again.
+    #[tokio::test]
+    async fn a_digest_mismatch_outside_the_chunks_is_unretryable() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "unretryable_digest");
+        let path = dir.join("f.dat");
+        std::fs::write(&path, b"").unwrap();
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 0,
+            // Not the digest of the empty file: no byte string has this one.
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: Vec::new(),
+        };
+        let ctx = test_ctx(None);
+        let mut handle = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let mut writes = FileWrites::default();
+        let mut stats = ChunkStats::default();
+
+        let err = verify_and_retry(&ctx, &mut writes, &mut handle, &[], &file, "", &mut stats)
+            .await
+            .err()
+            .expect("the empty file cannot carry a non-empty digest");
+        assert!(
+            err.downcast_ref::<FinalDigestMismatch>().is_some(),
+            "the file loop must see the deterministic mismatch as terminal: {err:#}"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("the bytes outside the chunks are wrong"),
+            "{chain}"
         );
     }
 

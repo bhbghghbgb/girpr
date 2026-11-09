@@ -89,6 +89,8 @@ mod inplace;
 mod mode;
 mod temp;
 
+use self::inplace::FinalDigestMismatch;
+
 #[cfg(test)]
 use self::inplace::trim_is_free;
 
@@ -581,6 +583,16 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
                         // its own 5× chunk retry inside `stream_chunk_to`) before the
                         // run even starts on the next file.
                         if ctx.summary.aborted() {
+                            return RetryState::Fatal(e);
+                        }
+                        // A whole-file digest mismatch after every chunk range
+                        // was verified is a function of the plan, not of the
+                        // network: the next attempt would assemble the same
+                        // bytes and fail the same gate. It is terminal by
+                        // construction, so it must not spend the file's whole
+                        // backoff budget. Transient download and write errors
+                        // are ordinary errors here and stay retryable.
+                        if e.downcast_ref::<FinalDigestMismatch>().is_some() {
                             return RetryState::Fatal(e);
                         }
                         return RetryState::Retry(state, e);
