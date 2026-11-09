@@ -27,6 +27,7 @@ use std::sync::{
 
 use girpr::test_support::{
     Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
+    terminal_retcode,
 };
 use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
 use prost::Message as _;
@@ -874,17 +875,6 @@ pub enum BranchFailure {
     Terminal { retcode: i64 },
 }
 
-/// Whether `retcode` is one the production client treats as terminal
-/// (`invalid params` / `not found`), and so one that an identical retry cannot
-/// fix.
-///
-/// Mirrors the crate's private classifier: a test that says "terminal" has to
-/// carry a code the client really will not retry, or the fixture asserts the
-/// opposite of what its name says.
-fn is_terminal_retcode(retcode: i64) -> bool {
-    matches!(retcode, -201 | -202 | -1001)
-}
-
 impl BranchFailure {
     /// A terminal failure carrying a `retcode` the client classifies as
     /// terminal.
@@ -893,7 +883,7 @@ impl BranchFailure {
     /// wearing the terminal name.
     pub fn terminal(retcode: i64) -> Self {
         assert!(
-            is_terminal_retcode(retcode),
+            terminal_retcode(retcode),
             "retcode {retcode} is not terminal; expected -201, -202 or -1001"
         );
         Self::Terminal { retcode }
@@ -1139,7 +1129,7 @@ fn build_responses(
     // usable because this is only a self-check.
     if let BranchFailure::Terminal { retcode } = opts.branch_failure {
         debug_assert!(
-            is_terminal_retcode(retcode),
+            terminal_retcode(retcode),
             "retcode {retcode} is not terminal; expected -201, -202 or -1001"
         );
     }

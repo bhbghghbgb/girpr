@@ -95,7 +95,10 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 ///   need; `join_url` is the one URL join the fetches use, so a test that
 ///   builds an advertised blob's URL asks production rather than restating the
 ///   formula;
-/// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk.
+/// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk;
+/// - `terminal_retcode` is the retcode classifier the fixture builds its
+///   terminal failures with, so a test cannot disagree with the client about
+///   which codes are final.
 ///
 /// `Record` and `summary_record` repeat the root exports on purpose: an
 /// integration test can import everything it needs from this one module. That
@@ -103,6 +106,7 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 #[doc(hidden)]
 pub mod test_support {
     pub use crate::config::RepairMode;
+    pub use crate::hyp::terminal_retcode;
     pub use crate::repair::lock::{Lock, lock_path, takes_lock};
     pub use crate::repair::scope::{Limits, PathScope};
     pub use crate::report::{Record, summary_record};
