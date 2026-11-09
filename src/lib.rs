@@ -75,11 +75,12 @@ pub use repair::run;
 pub use repair::scope::ledger::Meter;
 pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, summary_record};
 
-/// The integration tests' seam.
+/// The tests' seam.
 ///
 /// These items are implementation details. They are public only so that the
 /// integration tests can construct a run and inspect its results without
-/// importing a private module. Nothing here is production API.
+/// importing a private module, and so that a unit test can share a helper with
+/// them. Nothing here is production API.
 ///
 /// The list is deliberately explicit:
 ///
@@ -100,10 +101,13 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 ///   which codes are final;
 /// - `stamp_ago`, `stamp_ago_from`, `stamp_ahead` and `stamp_ahead_from`
 ///   build host-relative fixture timestamps, so the repair's age rule is not
-///   tested against a fixed epoch that a clock could pass.
+///   tested against a fixed epoch that a clock could pass;
+/// - `FixtureRefusal` and `skip_fixture_refusal` report a fixture this host
+///   cannot create, so a case skips out loud unless an opt-in variable makes
+///   that refusal a failure.
 ///
-/// `Record` and `summary_record` repeat the root exports on purpose: an
-/// integration test can import everything it needs from this one module. That
+/// `Record` and `summary_record` repeat the root exports on purpose: a test can
+/// import everything it needs from this one module. That
 /// repetition is a convenience of the test seam, not a second API.
 #[doc(hidden)]
 pub mod test_support {
@@ -120,6 +124,57 @@ pub mod test_support {
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };
     pub use crate::util::EMPTY_MD5;
+
+    /// Where a refusal to create a host-dependent test fixture came from.
+    ///
+    /// A host that cannot create one and a test that injected the failure both
+    /// take the skip branch, but only the first is a skipped case. The printed
+    /// line says which, and only the real skip keeps the `SKIP precondition:`
+    /// wording the runner is configured to surface.
+    #[derive(Clone, Copy)]
+    pub enum FixtureRefusal {
+        /// The host refused the fixture.
+        Host,
+        /// The test supplied the refusal; no host behaviour was observed.
+        Injected,
+    }
+
+    impl FixtureRefusal {
+        fn lead(self, subject: &str) -> String {
+            match self {
+                Self::Host => format!("SKIP precondition: this host cannot create {subject}"),
+                Self::Injected => format!(
+                    "simulated refusal: no host was consulted; a host that cannot create \
+                     {subject} would skip"
+                ),
+            }
+        }
+    }
+
+    /// Report that a host-dependent fixture could not be created, or fail when
+    /// `required_env` says the case must not be skipped.
+    ///
+    /// `subject` completes "this host cannot create …" (`a directory junction`,
+    /// `a non-UTF-8 name`) and `detail` is the reason the attempt failed. A run
+    /// meant to prove the fixture must not pass having checked nothing, so the
+    /// presence-based switch named by `required_env` turns the skip into a
+    /// failure.
+    pub fn skip_fixture_refusal(
+        refusal: FixtureRefusal,
+        subject: &str,
+        required_env: &str,
+        detail: impl std::fmt::Display,
+        required: bool,
+    ) {
+        assert!(
+            !required,
+            "{required_env} is set, but this host cannot create {subject}: {detail}"
+        );
+        eprintln!(
+            "{}: {detail}; set {required_env} (to any value) to fail instead",
+            refusal.lead(subject)
+        );
+    }
 
     /// `now` minus `age`, or `None` when this platform cannot represent the
     /// result.
