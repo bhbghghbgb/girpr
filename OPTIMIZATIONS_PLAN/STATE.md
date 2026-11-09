@@ -660,6 +660,8 @@ until the main tasks and rework are done.
 | F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | todo |
 | F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | todo |
 | F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | todo |
+| F562 | DOCS-USER-07 implementer | `tests/artifact_bridge.rs` | The module docs still say "63 s for the six tests" and show a resolution order without `GIRPR_ARTIFACT_ROOT`, mirroring the old wording. | todo |
+| F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the doc (~41 MiB of ~98 MiB). | todo |
 
 ## Follow-up batches
 
@@ -795,6 +797,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
+| DOCS-USER-08 | F562, F563 | todo | Wave E; bridge module docs and server comment accuracy; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
