@@ -617,7 +617,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-04 | F357, F358, F359 | done | Wave E; text-grammar ambiguity and shared schema vocabulary; low; f38bf2b, e5d1a3d |
 | TEST-OUTPUT-05 | F401, F402, F403 | done | Wave E; remaining text-plane vocabulary notes; low; 9eaefe7, f74ec88, 73374f5 |
 | CHECK-06 | F404, F405, F406 | done | Wave E; gate-test failure reporting and deadline unification; low; 3dc4247 |
-| PATHHELPERS-06 | F407, F408 | todo | Wave E; simulated-skip wording and bridge skip visibility; low |
+| PATHHELPERS-06 | F407, F408 | in_progress | Wave E; simulated-skip wording and bridge skip visibility; low |
 | DOCS-USER-05 | F409, F410, F411 | todo | Wave E; bridge recipe alignment and profile wording; low |
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
