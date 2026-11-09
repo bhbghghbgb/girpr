@@ -935,22 +935,50 @@ mod tests {
         std::env::var_os("GIRPR_TEST_REQUIRE_JUNCTION").is_some()
     }
 
-    /// Report that this host refused to create a junction, or fail when
+    /// Where a refusal to create the junction came from.
+    ///
+    /// A host that cannot create one and a test that injected the failure both
+    /// take this branch, but only the first is a skipped case. The printed
+    /// line says which, and only the real skip keeps the `SKIP precondition:`
+    /// wording the runner is configured to surface.
+    #[cfg(windows)]
+    #[derive(Clone, Copy)]
+    enum JunctionRefusal {
+        /// `mklink /J` refused on this host.
+        Host,
+        /// The test supplied the refusal; no host behaviour was observed.
+        Injected,
+    }
+
+    #[cfg(windows)]
+    impl JunctionRefusal {
+        fn lead(self) -> &'static str {
+            match self {
+                Self::Host => "SKIP precondition: this host cannot create a directory junction",
+                Self::Injected => {
+                    "simulated refusal: no host was consulted; a host that cannot create a \
+                     directory junction would skip"
+                }
+            }
+        }
+    }
+
+    /// Report that the junction could not be created, or fail when
     /// `GIRPR_TEST_REQUIRE_JUNCTION` says the case must not be skipped. A run
     /// meant to prove the escape must not pass having checked nothing.
     ///
     /// Split from `mklink` so both branches are reachable on a host that can
     /// create a junction.
     #[cfg(windows)]
-    fn skip_junction(why: &str, required: bool) {
+    fn skip_junction(why: &str, required: bool, refusal: JunctionRefusal) {
         assert!(
             !required,
             "GIRPR_TEST_REQUIRE_JUNCTION is set, but this host cannot create a \
              directory junction: {why}"
         );
         eprintln!(
-            "SKIP precondition: this host cannot create a directory junction: \
-             {why}; set GIRPR_TEST_REQUIRE_JUNCTION (to any value) to fail instead"
+            "{}: {why}; set GIRPR_TEST_REQUIRE_JUNCTION (to any value) to fail instead",
+            refusal.lead()
         );
     }
 
@@ -976,7 +1004,7 @@ mod tests {
             .arg(&*outside)
             .status();
         if let Some(why) = junction_refusal(&status, &link) {
-            skip_junction(&why, require_junction());
+            skip_junction(&why, require_junction(), JunctionRefusal::Host);
             return;
         }
         let got = contained_join(&dir, "game/evil.dat");
@@ -993,7 +1021,7 @@ mod tests {
             .arg(dir.join("real"))
             .status();
         if let Some(why) = junction_refusal(&status, &alias) {
-            skip_junction(&why, require_junction());
+            skip_junction(&why, require_junction(), JunctionRefusal::Host);
             return;
         }
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
@@ -1021,7 +1049,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn a_junction_failure_skips_without_the_switch() {
-        skip_junction("injected refusal", false);
+        skip_junction("injected refusal", false, JunctionRefusal::Injected);
     }
 
     /// The same refusal is a failure when the switch is present, whatever its
@@ -1030,7 +1058,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
     fn a_junction_failure_fails_with_the_switch() {
-        skip_junction("injected refusal", true);
+        skip_junction("injected refusal", true, JunctionRefusal::Injected);
     }
 
     /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.

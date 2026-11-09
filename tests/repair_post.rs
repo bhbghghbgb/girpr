@@ -445,7 +445,35 @@ fn require_non_utf8() -> bool {
     std::env::var_os("GIRPR_TEST_REQUIRE_NON_UTF8").is_some()
 }
 
-/// Decide what a host's refusal to create the non-UTF-8 name means.
+/// Where a refusal to create the non-UTF-8 name came from.
+///
+/// A host that cannot create one and a test that injected the failure both
+/// take this branch, but only the first is a skipped case. The printed line
+/// says which, and only the real skip keeps the `SKIP precondition:` wording
+/// the runner is configured to surface.
+#[cfg(any(unix, windows))]
+#[derive(Clone, Copy)]
+enum NameRefusal {
+    /// The filesystem refused the write.
+    Host,
+    /// The test supplied the error; no host behaviour was observed.
+    Injected,
+}
+
+#[cfg(any(unix, windows))]
+impl NameRefusal {
+    fn lead(self) -> &'static str {
+        match self {
+            Self::Host => "SKIP precondition: this host cannot create a non-UTF-8 name",
+            Self::Injected => {
+                "simulated refusal: no host was consulted; a host that cannot create a \
+                 non-UTF-8 name would skip"
+            }
+        }
+    }
+}
+
+/// Decide what a refusal to create the non-UTF-8 name means.
 ///
 /// The default suite skips the case when the host refuses the name, so it stays
 /// green on a filesystem that cannot represent one. Setting
@@ -455,15 +483,15 @@ fn require_non_utf8() -> bool {
 /// Split from the write so both branches are reachable on a host that can
 /// create the name. Always returns `false` (the case did not run).
 #[cfg(any(unix, windows))]
-fn skip_non_utf8_source(e: &std::io::Error, required: bool) -> bool {
+fn skip_non_utf8_source(e: &std::io::Error, required: bool, refusal: NameRefusal) -> bool {
     assert!(
         !required,
         "GIRPR_TEST_REQUIRE_NON_UTF8 is set, but this host cannot create a \
          non-UTF-8 name: {e}"
     );
     eprintln!(
-        "SKIP precondition: this host cannot create a non-UTF-8 name: {e}; \
-         set GIRPR_TEST_REQUIRE_NON_UTF8 (to any value) to fail instead"
+        "{}: {e}; set GIRPR_TEST_REQUIRE_NON_UTF8 (to any value) to fail instead",
+        refusal.lead()
     );
     false
 }
@@ -475,7 +503,7 @@ fn skip_non_utf8_source(e: &std::io::Error, required: bool) -> bool {
 fn write_non_utf8_source(src: &std::path::Path) -> bool {
     match std::fs::write(src, b"non-utf8 cache bytes") {
         Ok(()) => true,
-        Err(e) => skip_non_utf8_source(&e, require_non_utf8()),
+        Err(e) => skip_non_utf8_source(&e, require_non_utf8(), NameRefusal::Host),
     }
 }
 
@@ -486,7 +514,7 @@ fn write_non_utf8_source(src: &std::path::Path) -> bool {
 fn a_non_utf8_write_failure_skips_without_the_switch() {
     let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
     assert!(
-        !skip_non_utf8_source(&err, false),
+        !skip_non_utf8_source(&err, false, NameRefusal::Injected),
         "without the switch a refused name skips the case"
     );
 }
@@ -498,7 +526,7 @@ fn a_non_utf8_write_failure_skips_without_the_switch() {
 #[should_panic(expected = "GIRPR_TEST_REQUIRE_NON_UTF8 is set")]
 fn a_non_utf8_write_failure_fails_with_the_switch() {
     let err = std::io::Error::new(std::io::ErrorKind::Unsupported, "injected refusal");
-    skip_non_utf8_source(&err, true);
+    skip_non_utf8_source(&err, true, NameRefusal::Injected);
 }
 
 /// A cache file whose name is not UTF-8 moves under its own bytes: the scope
