@@ -1281,20 +1281,56 @@ mod tests {
             .unwrap();
     }
 
-    /// A stamp a given age before the current clock.
+    /// A stamp a given age before `now`.
     ///
-    /// Relative to "now" rather than an absolute epoch, so the age rule holds
-    /// on a host whose clock is set to any date. When the clock is too close
-    /// to the platform's minimum representable time for the full age, the
-    /// subtraction saturates at the Unix epoch instead of panicking.
-    fn stamp_ago(age: Duration) -> SystemTime {
-        let now = SystemTime::now();
+    /// The stamp never reaches below the Unix epoch. A clock less than `age`
+    /// past the epoch saturates there; a clock before the epoch comes back
+    /// unchanged, because every stamp the helper could build from the epoch is
+    /// in its future. Neither case panics.
+    fn stamp_ago_from(now: SystemTime, age: Duration) -> SystemTime {
         // The Unix epoch is representable on every supported platform, so it
         // is a safe floor for a stamp that only needs to be old.
         let reachable = now
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default();
         now.checked_sub(age.min(reachable)).unwrap_or(now)
+    }
+
+    /// A stamp a given age before the current clock.
+    ///
+    /// Relative to "now" rather than a fixed epoch, so the age rule holds on a
+    /// host whose clock is set to any date. See [`stamp_ago_from`] for how a
+    /// clock near or before the Unix epoch is handled.
+    fn stamp_ago(age: Duration) -> SystemTime {
+        stamp_ago_from(SystemTime::now(), age)
+    }
+
+    /// The helper's edge cases, pinned without depending on the host clock:
+    /// an ordinary clock gets the requested age, a clock near the epoch
+    /// saturates there, and a pre-epoch clock comes back unchanged rather than
+    /// as a future epoch stamp.
+    #[test]
+    fn stamp_ago_stays_relative_and_never_panics_near_the_epoch() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * 24 * 60 * 60);
+        assert_eq!(
+            stamp_ago_from(now, day),
+            now.checked_sub(day).expect("an ordinary clock has the age"),
+            "an ordinary clock gets exactly the requested age"
+        );
+        assert_eq!(
+            stamp_ago_from(SystemTime::UNIX_EPOCH + Duration::from_secs(60), day),
+            SystemTime::UNIX_EPOCH,
+            "a clock less than the age past the epoch saturates at the epoch"
+        );
+        let before_epoch = SystemTime::UNIX_EPOCH
+            .checked_sub(Duration::from_secs(60))
+            .expect("a minute before the epoch is representable");
+        assert_eq!(
+            stamp_ago_from(before_epoch, day),
+            before_epoch,
+            "a pre-epoch clock comes back unchanged, never as a future stamp"
+        );
     }
 
     /// The natural coarse-timestamp window: the recorded mtime must share a
