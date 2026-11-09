@@ -670,6 +670,7 @@ until the main tasks and rework are done.
 | F569 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | The cache is a per-process `static`, and nextest gives each test its own process, so "shared by all of them — including across the six per-capture bridges" only holds in a single-process run. | todo |
 | F570 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "every capture pays the disk read once instead of six times" mixes a per-capture subject with a suite-wide count. | todo |
 | F571 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "the suite's six runs" counts test cases, but each case is a pre-pass plus a real run (twelve `girpr` invocations). | todo |
+| F572 | HYP-08 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The async `logs_of` now exists twice; consolidating needs a public async test helper. | skipped (would add public API surface for a private test helper) |
 
 ## Follow-up batches
 
@@ -811,6 +812,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-11 | F566, F567 | todo | Wave E; manifest-count wording and served-archive scale; low |
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | DOCS-USER-13 | F569, F570, F571 | todo | Wave E; cache comment scope and count wording; low |
+| HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
