@@ -618,7 +618,7 @@ until the main tasks and rework are done.
 | F517 | BUILD-07 implementer | `tests/scripts/check-msrv.ps1` | The script already checks `$LASTEXITCODE` but reports a generic "cargo metadata failed"; the message could name the command and exit code like the workflow now does. | completed |
 | F518 | BUILD-07 implementer | `Cargo.toml`, `tools/sync/Cargo.toml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | Comments still name `1.89`/`1.90` when documenting the redb 4.1 pin. | skipped (accurate today; they document the dependency pin, and only need a revisit if the MSRV moves) |
 | F519 | BUILD-07 implementer | `tests/scripts/io-profile/iot-bench/Cargo.toml` | `iot-bench` is a standalone workspace with no `rust-version`; the MSRV workflow intentionally reads the root manifest. | skipped (intentional; the bench has no floor of its own) |
-| F520 | BUILD-07 review | `README.md` | "The root package's `rust-version` ... for the whole workspace" is true only while no member exceeds the root's 1.89; a member floor above the root would make it stale. | todo |
+| F520 | BUILD-07 review | `README.md` | "The root package's `rust-version` ... for the whole workspace" is true only while no member exceeds the root's 1.89; a member floor above the root would make it stale. | pending_review |
 | F521 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1` | Other failures (toolchain install, member check) still omit exit codes, so they report less detail than the metadata failure now does. | todo |
 | F522 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1`, `.github/workflows/msrv.yml` | The same `cargo metadata` command line and message now live in both files; a flag change must update both. | skipped (inherent to the YAML/PowerShell split; the duplication is two short lines) |
 
@@ -730,7 +730,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
-| BUILD-10 | F520 | in_progress | Wave E; make the README workspace floor robust to a member above the root; low |
+| BUILD-10 | F520 | pending_review | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
 | BUILD-11 | F521 | todo | Wave E; exit codes for the remaining MSRV script failures; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
