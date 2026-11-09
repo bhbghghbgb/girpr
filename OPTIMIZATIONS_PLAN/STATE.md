@@ -639,6 +639,8 @@ until the main tasks and rework are done.
 | F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | todo |
 | F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | todo |
 | F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | todo |
+| F541 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `redo_mismatch_is_terminal` rescans the whole file through `scan_reader`; only the overlapping ranges need re-checking. | todo |
+| F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | todo |
 
 ## Follow-up batches
 
@@ -761,6 +763,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | todo | Wave E; alias-shaped directories and copy-path trailing dot/space; low |
 | MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
+| MANIFEST-10 | F541, F542 | todo | Wave E; overlap-only rescan and verdict-length guard; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
