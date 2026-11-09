@@ -59,8 +59,11 @@ jobs:
         shell: pwsh
         run: |
           $rootManifest = (Resolve-Path Cargo.toml).Path
-          $version = (cargo metadata --no-deps --format-version 1 --locked |
-            ConvertFrom-Json).packages |
+          $metadataJson = cargo metadata --no-deps --format-version 1 --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo metadata --no-deps --format-version 1 --locked failed with exit code $LASTEXITCODE"
+          }
+          $version = ($metadataJson | ConvertFrom-Json).packages |
             Where-Object { $_.manifest_path -eq $rootManifest } |
             Select-Object -ExpandProperty rust_version
           if (-not $version) {
