@@ -1259,10 +1259,18 @@ mod tests {
     /// the reparse point, which is exactly the dangling case.
     #[cfg(windows)]
     fn try_junction_dir(target: &Path, link: &Path) -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+
+        // `cmd` reparses the command line itself, and `Command::arg` quotes for
+        // the argv convention `cmd` does not follow: a temp path with a space or
+        // a command separator could split into extra arguments. Pass one
+        // pre-quoted line verbatim instead, so each path reaches `mklink` as a
+        // single argument. Windows paths cannot contain `"`, so a plain quote
+        // pair is enough.
+        let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
         let out = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg("/C")
+            .raw_arg(command)
             .output();
         match out {
             Ok(out) if out.status.success() && std::fs::symlink_metadata(link).is_ok() => Ok(()),
