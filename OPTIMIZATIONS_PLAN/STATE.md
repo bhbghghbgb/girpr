@@ -635,8 +635,8 @@ until the main tasks and rework are done.
 | F534 | TEMP-WRITER-07 implementer | `src/lib.rs` | `terminal_retcode` is exposed only through `#[doc(hidden)] test_support` yet documented as public; a real public API would need `SophonNotFound` exported to restore the link. | skipped (conditional on making it a real public API) |
 | F535 | TEMP-WRITER-07 review | `src/repair/file/temp.rs` tests | The new read-error test asserts sink emptiness only through `SeekRecording`, while sibling tests also check the on-disk length after a failed path. | completed |
 | F536 | TEMP-WRITER-07 review | `src/hyp.rs` | The reword dropped the pointer to the blob retry policy; linking `crate::sophon::stream::retryable` would restore it. | skipped (`sophon` is a private module, so that path is not publicly linkable and rustdoc rejects it) |
-| F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | pending_review |
-| F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | pending_review |
+| F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | completed |
+| F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | completed |
 | F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | todo |
 | F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | todo |
 | F541 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `redo_mismatch_is_terminal` rescans the whole file through `scan_reader`; only the overlapping ranges need re-checking. | todo |
@@ -706,6 +706,8 @@ until the main tasks and rework are done.
 | F605 | TEMP-WRITER-08 review | `src/repair/file/temp.rs` tests | The new assertion message calls the on-disk length "in the sink" while the siblings phrase it as bytes landing in the sink. | skipped (cosmetic; all three assert the same exact length and the message states its intent) |
 | F606 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | `move_audio_cache_with` tries `std::fs::rename` before the copy fallback, so on Unix a cache file named `foo.` can still be published as `res/foo.` without reaching the new refusal. | todo |
 | F607 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | The copy alias refusal message omits the path; the caller's warn line supplies both paths. | skipped (informational only; the caller names both paths) |
+| F608 | TEMP-PUBLISH-08 review | `src/repair/phases/post.rs` tests | The copy test's "no destination directory" assertion is vacuous because `copy_publish_with` never creates directories; an integration test through `move_audio_cache_with` would cover the real sequence. | todo |
+| F609 | TEMP-PUBLISH-08 review | `src/util/path.rs`, `src/util/atomic.rs` | Windows verbatim targets (`\\?\…`) do not strip dot/space, so the lexical rule can refuse a spelling verbatim would accept. | skipped (conditional; no caller produces verbatim publish targets) |
 
 ## Follow-up batches
 
@@ -824,7 +826,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
 | TEMP-WRITER-10 | F603, F604 | todo | Wave E; on-disk assertions for the remaining fallback paths; low |
 | TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
-| TEMP-PUBLISH-09 | F606, F607 | todo | Wave E; guard the rename target against alias spellings; low |
+| TEMP-PUBLISH-09 | F606, F607, F608 | todo | Wave E; guard the rename target against alias spellings and cover it end to end; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
@@ -838,7 +840,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
 | TEMP-WRITER-08 | F535 | done | Wave E; on-disk length after the failed read path; low; 3e38b4c |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
-| TEMP-PUBLISH-08 | F537, F538 | pending_review | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4 |
+| TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
 | MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
 | MANIFEST-10 | F541, F542 | todo | Wave E; overlap-only rescan and verdict-length guard; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
