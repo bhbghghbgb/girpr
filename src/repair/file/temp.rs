@@ -1248,6 +1248,11 @@ mod tests {
             "the read fails before the download path positions the sink"
         );
         assert_eq!(out.bytes, 0, "a failed read must not write to the sink");
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "a failed read must not leave bytes behind in the sink"
+        );
 
         // The dropped handle costs one open, not the file's reuse: the next
         // chunk takes the same readable path and copies from it.
