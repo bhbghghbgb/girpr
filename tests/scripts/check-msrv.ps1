@@ -54,15 +54,17 @@ try {
         if ($LASTEXITCODE -ne 0) {
             Write-Host "    installing the $ver toolchain"
             & rustup toolchain install $ver --profile minimal --no-self-update
-            if ($LASTEXITCODE -ne 0) {
-                throw "could not install the $ver toolchain"
+            $installExit = $LASTEXITCODE
+            if ($installExit -ne 0) {
+                throw "could not install the $ver toolchain (exit code $installExit)"
             }
         }
 
         & cargo "+$ver" check -p $pkg.name --all-targets --locked
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver"
-            $failed += "$($pkg.name) ($ver)"
+        $checkExit = $LASTEXITCODE
+        if ($checkExit -ne 0) {
+            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver (exit code $checkExit)"
+            $failed += "$($pkg.name) ($ver, exit code $checkExit)"
         } else {
             Write-Host "ok: $($pkg.name) builds with Rust $ver"
         }
