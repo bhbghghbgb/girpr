@@ -619,7 +619,7 @@ until the main tasks and rework are done.
 | F518 | BUILD-07 implementer | `Cargo.toml`, `tools/sync/Cargo.toml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | Comments still name `1.89`/`1.90` when documenting the redb 4.1 pin. | skipped (accurate today; they document the dependency pin, and only need a revisit if the MSRV moves) |
 | F519 | BUILD-07 implementer | `tests/scripts/io-profile/iot-bench/Cargo.toml` | `iot-bench` is a standalone workspace with no `rust-version`; the MSRV workflow intentionally reads the root manifest. | skipped (intentional; the bench has no floor of its own) |
 | F520 | BUILD-07 review | `README.md` | "The root package's `rust-version` ... for the whole workspace" is true only while no member exceeds the root's 1.89; a member floor above the root would make it stale. | completed |
-| F521 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1` | Other failures (toolchain install, member check) still omit exit codes, so they report less detail than the metadata failure now does. | pending_review |
+| F521 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1` | Other failures (toolchain install, member check) still omit exit codes, so they report less detail than the metadata failure now does. | completed |
 | F522 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1`, `.github/workflows/msrv.yml` | The same `cargo metadata` command line and message now live in both files; a flag change must update both. | skipped (inherent to the YAML/PowerShell split; the duplication is two short lines) |
 | F523 | BUILD-10 implementer | `README.md` | The testing section names a concrete host toolchain (`clippy 0.1.99 / rustc 1.99.1`). | skipped (it records the measurement environment for the allowances, so it is intentionally concrete) |
 | F524 | BUILD-10 review | `README.md` | "The root's is today's high-water mark" reads as uniquely highest, while `tools/sync` is tied at 1.89. | todo |
@@ -736,7 +736,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
-| BUILD-11 | F521 | pending_review | Wave E; exit codes for the remaining MSRV script failures; low; 24ec32c |
+| BUILD-11 | F521 | done | Wave E; exit codes for the remaining MSRV script failures; low; 24ec32c |
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
 | BUILD-13 | F524, F525 | todo | Wave E; high-water-mark wording and pin-comment consistency; low |
 | BUILD-14 | F526, F527 | todo | Wave E; native-command preference and probe failure classification; low |
