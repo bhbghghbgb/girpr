@@ -98,3 +98,20 @@ filter = """
     or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
 """
 success-output = "immediate"
+
+# The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
+# optional sibling binary. When it is not built, `assert_bundle_verifies`
+# prints the same kind of host-dependent skip and the case still passes. The
+# run command in `tests/artifact_bridge.rs` carries `--no-capture` only to make
+# that line visible, so show it for these cases too; the binary's other tests
+# (the run-lock helpers) stay captured.
+[[profile.default.overrides]]
+filter = """
+    test(=the_identical_capture_fetches_nothing)
+    or test(=the_no_reuse_capture_fetches_the_whole_file)
+    or test(=the_reuse_in_place_capture_fetches_only_what_it_must)
+    or test(=the_reuse_moved_capture_fetches_only_what_it_must)
+    or test(=the_added_capture_writes_the_new_file)
+    or test(=the_removed_capture_purges_the_file)
+"""
+success-output = "immediate"
