@@ -507,9 +507,9 @@ until the main tasks and rework are done.
 | F406 | CHECK-05 review | `src/repair/phases/check.rs` tests | The shared 10 s constant conflates "how long the test waits" with "how long release may take"; splitting the two is a cleanup if touched again. | skipped (only one real wait duration; the release wait is the same absolute deadline) |
 | F407 | PATHHELPERS-05 review | `tests/repair_post.rs`, `src/util/path.rs` tests | The injected `*_skips_without_the_switch` tests print a `SKIP precondition:` line though nothing was skipped; distinguish the simulated refusal. | completed |
 | F408 | PATHHELPERS-05 review | `tests/artifact_bridge.rs` | The `gircap`-absent skip still relies on `--no-capture`; a matching `success-output` override could surface it under a plain run. | completed |
-| F409 | DOCS-USER-04 review | `tools/capture/README.md` | Its bridge run recipe (`--test-threads=1` variant) omits the `cargo build -p gircap` precondition step. | pending_review |
-| F410 | DOCS-USER-04 review | `tests/artifact_bridge.rs` | The `#[ignore]` reason strings name only the nextest command; they could mention the verifier build so the listing is self-sufficient. | pending_review |
-| F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | pending_review |
+| F409 | DOCS-USER-04 review | `tools/capture/README.md` | Its bridge run recipe (`--test-threads=1` variant) omits the `cargo build -p gircap` precondition step. | completed |
+| F410 | DOCS-USER-04 review | `tests/artifact_bridge.rs` | The `#[ignore]` reason strings name only the nextest command; they could mention the verifier build so the listing is self-sufficient. | completed |
+| F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | completed |
 | F412 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | The region list no longer contains `audio.rs`/`lock.rs` while the next paragraph says they were swept the same way; fold them in or reword the list. | todo |
 | F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | todo |
 | F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | todo |
@@ -621,7 +621,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-05 | F401, F402, F403 | done | Wave E; remaining text-plane vocabulary notes; low; 9eaefe7, f74ec88, 73374f5 |
 | CHECK-06 | F404, F405, F406 | done | Wave E; gate-test failure reporting and deadline unification; low; 3dc4247 |
 | PATHHELPERS-06 | F407, F408 | done | Wave E; simulated-skip wording and bridge skip visibility; low; 9488a01, 2edf394 |
-| DOCS-USER-05 | F409, F410, F411 | pending_review | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
+| DOCS-USER-05 | F409, F410, F411 | done | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
 | METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
