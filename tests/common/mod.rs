@@ -804,11 +804,16 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
 /// Drive `f` under a debug-level scoped subscriber and return its result with
 /// the log lines the run emitted.
 ///
-/// The library installs no global subscriber, so `set_default` is
-/// thread-local and cannot race another test. Blocking tasks propagate the
-/// dispatcher themselves, so the post-phase's listing is captured too. The
-/// stdout data plane (`REPORT`/`SUMMARY`) is separate and is asserted through
-/// the returned `Summary`, not through these lines.
+/// `set_default` installs the subscriber on the current thread only, and
+/// `#[tokio::test]` runs `f` on a current-thread runtime, so the future is
+/// polled on the thread that installed it and no other test can observe the
+/// subscriber. The blocking tasks whose lines a test asserts use
+/// `spawn_blocking_traced`, which installs the same dispatcher on the pool
+/// thread, so their lines (including the post-phase's listing) are captured
+/// too. The async form is duplicated in the metadata tests: sharing it would
+/// require exporting a public test helper. The stdout data plane
+/// (`REPORT`/`SUMMARY`) is separate and is asserted through the returned
+/// `Summary`, not through these lines.
 pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
     #[derive(Clone, Default)]
     struct Captured(Arc<Mutex<Vec<u8>>>);
