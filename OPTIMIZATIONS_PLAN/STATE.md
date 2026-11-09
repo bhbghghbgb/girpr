@@ -563,7 +563,7 @@ until the main tasks and rework are done.
 | F462 | DOCS-USER-05 review | `tools/capture/README.md` | The reference bundle label `20261021T141336Z` no longer matches the locally present bundle; the example can drift. | completed |
 | F463 | DOCS-USER-05 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | The 139 s cost figure is host-qualified but the command/profile that produced it is not recorded; state the exact command. | completed |
 | F464 | DOCS-COMMENTS-05 review | `docs/07-panic-audit.md` | The sweep regex matches only `as usize|as u64|as i64` while the prose says "`as` casts" generally; narrow the wording or extend the command. | completed |
-| F465 | HYP-06 review | `tests/common/mod.rs` | `logs_of`'s correctness depends on the default current-thread runtime; a future multi-thread `#[tokio::test]` caller would silently lose non-`spawn_blocking_traced` task lines. | pending_review |
+| F465 | HYP-06 review | `tests/common/mod.rs` | `logs_of`'s correctness depends on the default current-thread runtime; a future multi-thread `#[tokio::test]` caller would silently lose non-`spawn_blocking_traced` task lines. | completed |
 | F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | completed |
 | F467 | MANIFEST-06 follow-up | `src/repair/phases/manifest.rs`, `tests/artifact_bridge/server.rs`, `tests/common` | If a shared gated-origin helper is ever attempted, `manifest.rs::TestServer` and `artifact_bridge/server.rs::Origins` are the real candidates, not the plain helpers. | skipped (gated-origin helper does not exist; a note about a future one would be noise) |
 | F468 | MANIFEST-06 review | `tests/repair_scan.rs` | Exit 3 is asserted without pinning that the md5 gate (not another write failure) produced it; asserting the final-digest message would harden it. | completed |
@@ -687,7 +687,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-07 | F458, F459, F460 | done | Wave E; bridge flag docs, stale config comment, refusal dedup; low; ccaa79e, 5680206 |
 | DOCS-USER-06 | F461, F462, F463 | done | Wave E; bridge recipe unification and cost provenance; low; 3a83504, 81d5f4b, 4157326 |
 | DOCS-COMMENTS-06 | F464 | done | Wave E; sweep cast wording; low; da468d2 |
-| HYP-07 | F465 | pending_review | Wave E; multi-thread runtime caveat for the log helper; low; 74db398 |
+| HYP-07 | F465 | done | Wave E; multi-thread runtime caveat for the log helper; low; 74db398 |
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
 | JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
