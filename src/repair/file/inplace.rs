@@ -984,6 +984,7 @@ mod tests {
     use crate::repair::scan::ScanReport;
     use crate::report::Summary;
     use crate::sleep::NoSleep;
+    use crate::test_support::stamp_ago;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
     /// not ignored and then blamed on the re-open. A directory at the target
@@ -1461,56 +1462,14 @@ mod tests {
             .unwrap();
     }
 
-    /// A stamp a given age before `now`.
+    /// A stamp a given age before the current clock, shared with the
+    /// integration fixtures.
     ///
-    /// The subtraction never reaches below the Unix epoch: a clock less than
-    /// `age` past the epoch saturates there, and a clock before the epoch comes
-    /// back unchanged, because a floor at the epoch would be in that clock's
-    /// future. Neither case panics.
-    fn stamp_ago_from(now: SystemTime, age: Duration) -> SystemTime {
-        // The Unix epoch is representable on every supported platform, so it
-        // is a safe floor for a stamp that only needs to be old.
-        let reachable = now
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        now.checked_sub(age.min(reachable)).unwrap_or(now)
-    }
-
-    /// A stamp a given age before the current clock.
-    ///
-    /// Relative to "now" rather than a fixed epoch, so it follows the host
-    /// clock. See [`stamp_ago_from`] for how a clock near or before the Unix
-    /// epoch is handled.
-    fn stamp_ago(age: Duration) -> SystemTime {
-        stamp_ago_from(SystemTime::now(), age)
-    }
-
-    /// The helper's edge cases, pinned without depending on the host clock:
-    /// an ordinary clock gets the requested age, a clock near the epoch
-    /// saturates there, and a pre-epoch clock comes back unchanged rather than
-    /// as a future epoch stamp.
-    #[test]
-    fn stamp_ago_stays_relative_and_never_panics_near_the_epoch() {
-        let day = Duration::from_secs(24 * 60 * 60);
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * 24 * 60 * 60);
-        assert_eq!(
-            stamp_ago_from(now, day),
-            now.checked_sub(day).expect("an ordinary clock has the age"),
-            "an ordinary clock gets exactly the requested age"
-        );
-        assert_eq!(
-            stamp_ago_from(SystemTime::UNIX_EPOCH + Duration::from_secs(60), day),
-            SystemTime::UNIX_EPOCH,
-            "a clock less than the age past the epoch saturates at the epoch"
-        );
-        let before_epoch = SystemTime::UNIX_EPOCH
-            .checked_sub(Duration::from_secs(60))
-            .expect("a minute before the epoch is representable");
-        assert_eq!(
-            stamp_ago_from(before_epoch, day),
-            before_epoch,
-            "a pre-epoch clock comes back unchanged, never as a future stamp"
-        );
+    /// The fixture asserts the age the test needs instead of silently running
+    /// with a younger stamp: on a host that cannot represent it, the case
+    /// would otherwise stop exercising the age rule without saying so.
+    fn ago(age: Duration) -> SystemTime {
+        stamp_ago(age).expect("this host can represent the fixture's age")
     }
 
     /// The natural coarse-timestamp window: the recorded mtime must share a
@@ -1595,7 +1554,7 @@ mod tests {
         let mut damaged = good.clone();
         damaged[5] ^= 0xff;
         std::fs::write(&path, &damaged).unwrap();
-        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
+        let stamp = ago(Duration::from_secs(24 * 60 * 60));
         set_modified(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
         let scanned_at = SystemTime::now();
@@ -1666,7 +1625,7 @@ mod tests {
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
+        let stamp = ago(Duration::from_secs(24 * 60 * 60));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -1746,7 +1705,7 @@ mod tests {
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = stamp_ago(Duration::from_secs(24 * 60 * 60));
+        let stamp = ago(Duration::from_secs(24 * 60 * 60));
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -1832,7 +1791,7 @@ mod tests {
     /// and the exact boundary all mean "read it again".
     #[test]
     fn the_reuse_age_rule_requires_more_than_one_coarse_tick() {
-        let recorded = stamp_ago(Duration::from_secs(24 * 60 * 60));
+        let recorded = ago(Duration::from_secs(24 * 60 * 60));
         assert!(
             !mtime_predates_scan(recorded, None),
             "a report with no scan time cannot prove the window is closed"
