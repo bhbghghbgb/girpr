@@ -579,6 +579,9 @@ until the main tasks and rework are done.
 | F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | todo |
 | F479 | BUILD-06 review | `README.md`, `tests/scripts/check-msrv.ps1` | The README and the script header still spell out `1.89`/`1.88`/`1.85`, which will drift when the MSRV moves. | todo |
 | F480 | BUILD-06 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The duplicated `rustup toolchain install` is accepted for now; if a third install site appears, extract a shared installer helper. | todo |
+| F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | todo |
+| F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | todo |
+| F483 | TEMP-WRITER-06 follow-up | `src/hyp.rs` | A pre-existing broken intra-doc link (`crate::sophon::retryable`) makes `cargo doc -p girpr --no-deps` fail under `-D warnings`. | todo |
 
 ## Follow-up batches
 
@@ -669,6 +672,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
 | BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
+| TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
