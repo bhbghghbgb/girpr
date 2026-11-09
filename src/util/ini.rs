@@ -1311,15 +1311,17 @@ mod tests {
         Ok(())
     }
 
-    /// Whether a failed link creation is the known privilege denial that means
-    /// the test cannot run on this host. Every other error is a broken test
-    /// environment and must fail loudly instead of silently skipping.
+    /// Whether a failed link creation — a directory symlink or a junction —
+    /// is the known privilege denial that means the test cannot run on this
+    /// host. Every other error is a broken test environment and must fail
+    /// loudly instead of silently skipping.
     fn link_creation_denied(e: &std::io::Error) -> bool {
         #[cfg(windows)]
         {
-            // `CreateSymbolicLinkW` without the privilege (or developer mode)
-            // fails with `ERROR_PRIVILEGE_NOT_HELD` (1314). Rust maps it to
-            // `Uncategorized`, so the raw code is the reliable check.
+            // A link creation the host's policy denies reports
+            // `ERROR_PRIVILEGE_NOT_HELD` (1314); a directory symlink without
+            // the privilege (or developer mode) is the usual case. Rust maps
+            // it to `Uncategorized`, so the raw code is the reliable check.
             e.raw_os_error() == Some(1314)
         }
         #[cfg(unix)]
