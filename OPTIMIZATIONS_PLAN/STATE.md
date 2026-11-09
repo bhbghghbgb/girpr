@@ -564,9 +564,9 @@ until the main tasks and rework are done.
 | F463 | DOCS-USER-05 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | The 139 s cost figure is host-qualified but the command/profile that produced it is not recorded; state the exact command. | todo |
 | F464 | DOCS-COMMENTS-05 review | `docs/07-panic-audit.md` | The sweep regex matches only `as usize|as u64|as i64` while the prose says "`as` casts" generally; narrow the wording or extend the command. | todo |
 | F465 | HYP-06 review | `tests/common/mod.rs` | `logs_of`'s correctness depends on the default current-thread runtime; a future multi-thread `#[tokio::test]` caller would silently lose non-`spawn_blocking_traced` task lines. | todo |
-| F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | pending_review |
+| F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | completed |
 | F467 | MANIFEST-06 follow-up | `src/repair/phases/manifest.rs`, `tests/artifact_bridge/server.rs`, `tests/common` | If a shared gated-origin helper is ever attempted, `manifest.rs::TestServer` and `artifact_bridge/server.rs::Origins` are the real candidates, not the plain helpers. | skipped (gated-origin helper does not exist; a note about a future one would be noise) |
-| F468 | MANIFEST-06 review | `tests/repair_scan.rs` | Exit 3 is asserted without pinning that the md5 gate (not another write failure) produced it; asserting the final-digest message would harden it. | pending_review |
+| F468 | MANIFEST-06 review | `tests/repair_scan.rs` | Exit 3 is asserted without pinning that the md5 gate (not another write failure) produced it; asserting the final-digest message would harden it. | completed |
 | F469 | JOBS-05 review | `tests/cli_contract.rs` | No test pins the panic message's "both shapes" wording; a `#[should_panic(expected = ...)]` test would lock it in. | todo |
 | F470 | JOBS-05 review | `tests/cli_contract.rs` | No fixture combines CRLF with the short-alias shape; the two paths are tested only separately. | todo |
 | F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | todo |
@@ -671,7 +671,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
 | DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
 | HYP-07 | F465 | todo | Wave E; multi-thread runtime caveat for the log helper; low |
-| MANIFEST-07 | F466, F467, F468 | pending_review | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7 |
+| MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
 | JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
