@@ -131,8 +131,8 @@ pub mod test_support {
     /// a caller must then skip the case rather than run it with a stamp that
     /// is younger than the one it asked for.
     ///
-    /// The result is never in the current clock's future, and it is never the
-    /// clock itself.
+    /// The result is never later than `now`, and a non-zero `age` makes it
+    /// strictly older.
     pub fn stamp_ago_from(now: SystemTime, age: Duration) -> Option<SystemTime> {
         now.checked_sub(age)
     }
