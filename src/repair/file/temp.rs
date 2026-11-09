@@ -1206,6 +1206,65 @@ mod tests {
         assert_eq!(std::fs::read(&tmp_path).unwrap(), b"89ab89ab");
     }
 
+    /// A read error while hashing the held source drops the handle, the same
+    /// way one during the copy does: the chunk falls back to the download and
+    /// the next chunk opens the readable path again instead of trusting a
+    /// handle whose read already failed.
+    ///
+    /// The fault is a handle opened without read access: it seeks fine and
+    /// refuses every read, which is a deterministic read error on a regular
+    /// file on every host. The digest-mismatch case keeps the handle; this one
+    /// must not.
+    #[test]
+    fn a_read_error_on_the_held_source_drops_it() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_read_error");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 0, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 0);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+        state.src_handle = Some(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&src)
+                .expect("the source exists"),
+        );
+        let first = chunk_at("c0", &md5, 0, 4);
+
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &first, &mut out).with_reuse(&reuse)).unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            state.src_handle.is_none(),
+            "a failed read leaves no handle for the next chunk"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the read fails before the download path positions the sink"
+        );
+        assert_eq!(out.bytes, 0, "a failed read must not write to the sink");
+
+        // The dropped handle costs one open, not the file's reuse: the next
+        // chunk takes the same readable path and copies from it.
+        let second = chunk_at("c1", &md5, 4, 4);
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &second, &mut out).with_reuse(&reuse)).unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert!(
+            state.src_handle.is_some(),
+            "the reopened handle is kept for later chunks"
+        );
+        out.flush().unwrap();
+        let written = std::fs::read(&out_path).unwrap();
+        assert_eq!(written.len(), 8);
+        assert_eq!(&written[4..], b"0123");
+    }
+
     /// A source that cannot be opened is not a file failure: the chunk is
     /// downloaded, and the empty slot lets the next chunk try a fresh open.
     #[test]
