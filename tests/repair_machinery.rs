@@ -52,7 +52,7 @@ use std::time::{Duration, SystemTime};
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
-    md5hex, temp_dir,
+    md5hex, stamp_ago, stamp_ahead, temp_dir,
 };
 use girpr_tempdir::TempDir;
 
@@ -455,72 +455,18 @@ fn set_mtime(path: &Path, stamp: SystemTime) {
         .expect("set mtime");
 }
 
-/// A stamp a given age before `now`.
-///
-/// The subtraction never reaches below the Unix epoch: a clock less than `age`
-/// past the epoch saturates there, and a clock before the epoch comes back
-/// unchanged, because a floor at the epoch would be in that clock's future.
-/// Neither case panics.
-fn stamp_ago_from(now: SystemTime, age: Duration) -> SystemTime {
-    // The Unix epoch is representable on every supported platform, so it is a
-    // safe floor for a stamp that only needs to be old.
-    let reachable = now
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    now.checked_sub(age.min(reachable)).unwrap_or(now)
-}
-
-/// A stamp a given age before the current clock.
-///
-/// Relative to "now" rather than a fixed epoch, so it follows the host clock.
-/// See [`stamp_ago_from`] for how a clock near or before the Unix epoch is
-/// handled.
-fn stamp_ago(age: Duration) -> SystemTime {
-    stamp_ago_from(SystemTime::now(), age)
-}
-
-/// The helper's edge cases, pinned without depending on the host clock: an
-/// ordinary clock gets the requested age, a clock near the epoch saturates
-/// there, and a pre-epoch clock comes back unchanged rather than as a future
-/// epoch stamp.
-#[test]
-fn stamp_ago_stays_relative_and_never_panics_near_the_epoch() {
-    let day = Duration::from_secs(24 * 60 * 60);
-    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * 24 * 60 * 60);
-    assert_eq!(
-        stamp_ago_from(now, day),
-        now.checked_sub(day).expect("an ordinary clock has the age"),
-        "an ordinary clock gets exactly the requested age"
-    );
-    assert_eq!(
-        stamp_ago_from(SystemTime::UNIX_EPOCH + Duration::from_secs(60), day),
-        SystemTime::UNIX_EPOCH,
-        "a clock less than the age past the epoch saturates at the epoch"
-    );
-    let before_epoch = SystemTime::UNIX_EPOCH
-        .checked_sub(Duration::from_secs(60))
-        .expect("a minute before the epoch is representable");
-    assert_eq!(
-        stamp_ago_from(before_epoch, day),
-        before_epoch,
-        "a pre-epoch clock comes back unchanged, never as a future stamp"
-    );
-}
-
-/// A stamp a given age after the current clock.
-///
-/// The mirror of [`stamp_ago`]: relative to "now", and saturating at the
-/// current clock rather than panicking when the platform cannot represent the
-/// full offset.
-fn stamp_ahead(age: Duration) -> SystemTime {
-    let now = SystemTime::now();
-    now.checked_add(age).unwrap_or(now)
-}
-
 /// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
 /// so a `--scan` run can still exercise the guarded plan-scan reuse.
-fn age_mtime(path: &Path) {
-    set_mtime(path, stamp_ago(Duration::from_secs(24 * 60 * 60)));
+///
+/// Returns `false` when the host clock cannot represent a stamp that old. The
+/// caller must then skip the case: running it with a younger stamp would stop
+/// exercising the guarded reuse without saying so.
+fn age_mtime(path: &Path) -> bool {
+    let Some(stamp) = stamp_ago(Duration::from_secs(24 * 60 * 60)) else {
+        return false;
+    };
+    set_mtime(path, stamp);
+    true
 }
 
 /// A `--scan` repair and an unscanned repair of the same damage are the same
@@ -551,7 +497,13 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
 
     let scanned_rig = Rig::start(&spec).await;
     scanned_rig.at_local_version();
-    age_mtime(&scanned_rig.game().join("game/parity.dat"));
+    if !age_mtime(&scanned_rig.game().join("game/parity.dat")) {
+        eprintln!(
+            "skipping a_scanned_repair_and_an_unscanned_repair_agree: the host clock \
+             cannot represent a stamp a day old"
+        );
+        return;
+    }
     let mut scanned_args = vec!["--scan"];
     scanned_args.extend_from_slice(&args);
     let scanned = scanned_rig.run(&scanned_args).await;
@@ -627,6 +579,13 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
     // the first chunk request, which is after `run` starts.
     let target_path = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
     let hook_path = std::sync::Arc::clone(&target_path);
+    let Some(changed_stamp) = stamp_ago(Duration::from_secs(2 * 24 * 60 * 60)) else {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again: the host clock \
+             cannot represent a stamp two days old"
+        );
+        return;
+    };
     let opts = MockOpts {
         on_first_chunk: Some(std::sync::Arc::new(move || {
             let path = hook_path
@@ -639,14 +598,20 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
             // a different file on every filesystem, including one that only
             // advances mtimes once per coarse tick. Both stamps are relative to
             // the current clock.
-            set_mtime(&path, stamp_ago(Duration::from_secs(2 * 24 * 60 * 60)));
+            set_mtime(&path, changed_stamp);
         })),
         ..Default::default()
     };
 
     let rig = Rig::start_with(&spec, opts).await;
     *target_path.lock().expect("hook path lock") = Some(rig.game().join("game/z_target.dat"));
-    age_mtime(&rig.game().join("game/z_target.dat"));
+    if !age_mtime(&rig.game().join("game/z_target.dat")) {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again: the host clock \
+             cannot represent a stamp a day old"
+        );
+        return;
+    }
 
     let run = rig.run(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
@@ -710,7 +675,14 @@ async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_chang
     // `stamp_ago` and `stamp_ahead`: a fixed future epoch stops being future
     // once a host's clock passes it, and the age rule would then accept the
     // verdict.
-    set_mtime(&target, stamp_ahead(Duration::from_secs(3600)));
+    let Some(ahead) = stamp_ahead(Duration::from_secs(3600)) else {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_change: \
+             the host clock cannot represent a stamp an hour ahead"
+        );
+        return;
+    };
+    set_mtime(&target, ahead);
 
     let run = rig.run(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
