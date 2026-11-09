@@ -90,6 +90,12 @@ const HELP_OPTION_INDENT: &str = "      ";
 /// (`-h, --help`), two spaces in, rather than at [`HELP_OPTION_INDENT`].
 const HELP_SHORT_OPTION_INDENT: &str = "  ";
 
+/// The indent clap's help gives an option line's description.
+///
+/// A description continues under the flag column: [`HELP_OPTION_INDENT`] (six
+/// spaces) plus four more.
+const HELP_DESCRIPTION_INDENT: &str = "          ";
+
 /// The part of an option line that starts at its long flag, when `line` is one.
 ///
 /// clap writes a long-only option as `      --jobs <JOBS>` and one with a short
@@ -153,9 +159,9 @@ fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
 fn help_entry_does_not_borrow_a_neighbours_annotations() {
     let help = format!(
         "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
          {HELP_OPTION_INDENT}--other\n\
-         {HELP_OPTION_INDENT}    [default: 4]\n"
+         {HELP_DESCRIPTION_INDENT}[default: 4]\n"
     );
     assert!(
         !help_entry(&help, "--jobs").contains("[default: 4]"),
@@ -172,23 +178,23 @@ fn help_entry_requires_a_boundary_after_the_flag() {
     // `--jobs` lands there, and only the space after the flag tells them apart.
     let help = format!(
         "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
          {HELP_OPTION_INDENT}--jobs-extra <N>\n\
-         {HELP_OPTION_INDENT}    different option\n"
+         {HELP_DESCRIPTION_INDENT}different option\n"
     );
     let jobs = help_entry(&help, "--jobs");
     assert_eq!(
         jobs,
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"),
         "the block belongs to --jobs, not the option whose name it prefixes"
     );
     assert!(!jobs.contains("different option"));
     // The boundary is also a newline (a flag with no value) or the end of the
     // text, not only the space before a value.
-    let boolean = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_OPTION_INDENT}    no value\n");
+    let boolean = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n");
     assert_eq!(
         help_entry(&boolean, "--dry-run"),
-        format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_OPTION_INDENT}    no value\n")
+        format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n")
     );
     assert_eq!(
         help_entry(&format!("{HELP_OPTION_INDENT}--dry-run"), "--dry-run"),
@@ -202,16 +208,16 @@ fn help_entry_finds_an_entry_after_a_preceding_option() {
     // from the newline before it rather than from the start of the text.
     let help = format!(
         "{HELP_OPTION_INDENT}--first\n\
-         {HELP_OPTION_INDENT}    first text\n\n\
+         {HELP_DESCRIPTION_INDENT}first text\n\n\
          {HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
          {HELP_OPTION_INDENT}--last\n\
-         {HELP_OPTION_INDENT}    last text\n"
+         {HELP_DESCRIPTION_INDENT}last text\n"
     );
     assert!(!help.starts_with(&format!("{HELP_OPTION_INDENT}--jobs")));
     assert_eq!(
         help_entry(&help, "--jobs"),
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"),
         "the block runs from --jobs to the next option"
     );
 }
@@ -222,15 +228,17 @@ fn help_entry_finds_an_entry_behind_a_short_alias() {
     // is no longer the first token on the line.
     let help = format!(
         "{HELP_OPTION_INDENT}--first\n\
-         {HELP_OPTION_INDENT}    first text\n\n\
+         {HELP_DESCRIPTION_INDENT}first text\n\n\
          {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n\
-         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
          {HELP_OPTION_INDENT}--last\n\
-         {HELP_OPTION_INDENT}    last text\n"
+         {HELP_DESCRIPTION_INDENT}last text\n"
     );
     assert_eq!(
         help_entry(&help, "--jobs"),
-        format!("{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
+        format!(
+            "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"
+        ),
         "the block starts at the alias's line, not the long-only indent"
     );
 }
@@ -241,14 +249,14 @@ fn help_entry_stops_before_an_entry_with_a_short_alias() {
     // short-alias indent rather than the long-only one.
     let help = format!(
         "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
          {HELP_SHORT_OPTION_INDENT}-h, --help\n\
-         {HELP_OPTION_INDENT}    Print help\n"
+         {HELP_DESCRIPTION_INDENT}Print help\n"
     );
     let jobs = help_entry(&help, "--jobs");
     assert_eq!(
         jobs,
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n")
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n")
     );
     assert!(!jobs.contains("Print help"));
 }
@@ -272,17 +280,17 @@ fn help_entry_reads_a_crlf_capture() {
     // capture's.
     let help = format!(
         "{HELP_OPTION_INDENT}--jobs <JOBS>\r\n\
-         {HELP_OPTION_INDENT}    jobs text\r\n\r\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
          {HELP_OPTION_INDENT}--dry-run\r\n\
-         {HELP_OPTION_INDENT}    no value\r\n"
+         {HELP_DESCRIPTION_INDENT}no value\r\n"
     );
     assert_eq!(
         help_entry(&help, "--jobs"),
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_OPTION_INDENT}    jobs text\r\n")
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n")
     );
     assert_eq!(
         help_entry(&help, "--dry-run"),
-        format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_OPTION_INDENT}    no value\r\n")
+        format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_DESCRIPTION_INDENT}no value\r\n")
     );
 }
 
