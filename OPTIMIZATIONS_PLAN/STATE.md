@@ -841,7 +841,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-08 | F535 | done | Wave E; on-disk length after the failed read path; low; 3e38b4c |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
-| MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
+| MANIFEST-09 | F539, F540 | in_progress | Wave E; single-pass digest and range scan on failure paths; low |
 | MANIFEST-10 | F541, F542 | todo | Wave E; overlap-only rescan and verdict-length guard; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | todo | Wave E; release-wakes-a-parked-party test and doc wording; low |
