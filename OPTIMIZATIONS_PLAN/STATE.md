@@ -690,7 +690,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-06 | F464 | done | Wave E; sweep cast wording; low; da468d2 |
 | HYP-07 | F465 | done | Wave E; multi-thread runtime caveat for the log helper; low; 74db398 |
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
-| JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
+| JOBS-06 | F469, F470, F471 | in_progress | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
