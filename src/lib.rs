@@ -125,14 +125,14 @@ pub mod test_support {
     /// result.
     ///
     /// The subtraction is **not** floored at the Unix epoch: a clock on either
-    /// side of the epoch gets a stamp exactly `age` older, so a fixture's
+    /// side of the epoch is aged by the requested `age`, so a fixture's
     /// "older than one coarse tick" property holds on a pre-epoch clock too.
     /// `None` is the only answer when the platform cannot reach that far back;
     /// a caller must then skip the case rather than run it with a stamp that
     /// is younger than the one it asked for.
     ///
-    /// The result is never later than `now`, and a non-zero `age` makes it
-    /// strictly older.
+    /// The result is never later than `now`; an `age` the platform can
+    /// represent as a distinct offset makes it strictly older.
     pub fn stamp_ago_from(now: SystemTime, age: Duration) -> Option<SystemTime> {
         now.checked_sub(age)
     }
