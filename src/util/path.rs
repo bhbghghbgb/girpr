@@ -284,8 +284,10 @@ pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
 /// does.
 ///
 /// A prefix (a drive or a UNC share) and the root name a filesystem, not a
-/// file, so they are not checked. `components()` drops `.` and repeated
-/// separators, which name nothing either.
+/// file, so they are not checked. A `..` parent is not a name either: it walks
+/// out of a directory rather than naming one, and it would otherwise match this
+/// rule because it ends in a dot, refusing every path that climbs. `components()`
+/// drops `.` and repeated separators for the same reason.
 pub(crate) fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
     path.components().any(|c| match c {
         Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),

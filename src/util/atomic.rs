@@ -124,7 +124,7 @@ where
     // aliased `dir`. The rule is shared with `contained_rel` and lexical, so
     // it applies on every host: the install is a Windows tree even when girpr
     // runs elsewhere. A prefix and a root name a filesystem, not a file, and
-    // are not checked.
+    // neither they nor a `..` parent are checked: none of them names a file.
     if any_component_has_windows_trailing_dot_or_space(path) {
         anyhow::bail!(
             "publish target has a Windows-trailing dot or space: {}",
