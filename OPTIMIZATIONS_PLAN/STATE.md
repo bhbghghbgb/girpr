@@ -570,6 +570,8 @@ until the main tasks and rework are done.
 | F469 | JOBS-05 review | `tests/cli_contract.rs` | No test pins the panic message's "both shapes" wording; a `#[should_panic(expected = ...)]` test would lock it in. | todo |
 | F470 | JOBS-05 review | `tests/cli_contract.rs` | No fixture combines CRLF with the short-alias shape; the two paths are tested only separately. | todo |
 | F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | todo |
+| F472 | LOGGING-05 review | `src/logging.rs` tests | The lock doc's "only because nextest runs each test in its own process" is stronger than needed while no second `try_init` exists; a future subscriber-installing unit test must take the lock. | todo |
+| F473 | LOGGING-05 review | `src/logging.rs` tests | `already been set` is tied to `tracing-core`'s wording; testing the typed `SetGlobalDefaultError` rejection would survive a dependency bump. | todo |
 
 ## Follow-up batches
 
@@ -656,6 +658,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-07 | F465 | todo | Wave E; multi-thread runtime caveat for the log helper; low |
 | MANIFEST-07 | F466, F467, F468 | todo | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low |
 | JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
+| LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
