@@ -730,14 +730,15 @@ fn last_two(path: &str) -> Option<(String, String)> {
 // served-manifest bytes cache (`docs/06` §4.6)
 // ---------------------------------------------------------------------------
 
-/// Manifest archives are immutable per bundle and ~40 MB of a ~130 MB bundle,
-/// so every run re-reading them is ~320 MB across eight runs for nothing.
+/// Manifest archives are immutable per bundle and ~41 MiB of the ~98 MiB
+/// bundle, so every run re-reading them is over a hundred megabytes across the
+/// suite's six runs for nothing.
 ///
 /// The cache is **outside the listeners and shared by all of them** — including
-/// across the eight per-capture bridges — because it holds bytes that are a
+/// across the six per-capture bridges — because it holds bytes that are a
 /// function of the bundle alone, so nothing about per-capture isolation
 /// (`docs/06` §6.2) is lost by sharing it, and every capture pays the disk read
-/// once instead of eight times.
+/// once instead of six times.
 static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 
 fn manifest_bytes(path: &Path) -> Arc<Vec<u8>> {
