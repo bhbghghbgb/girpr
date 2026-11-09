@@ -289,7 +289,10 @@ mod tests {
     #[test]
     fn a_directory_spelling_is_refused_before_anything_is_written() {
         let d = dir("directory_spelling");
-        let target = d.join("game");
+        // The parent does not exist, so creating it is observable on both
+        // platforms, and the temp would land in it.
+        let parent = d.join("missing");
+        let target = parent.join("game");
         for path in [target.join("."), target.join("")] {
             assert_eq!(
                 path.file_name(),
@@ -304,12 +307,16 @@ mod tests {
                 "{err:#}"
             );
             assert!(
-                !target.exists(),
+                !parent.exists(),
                 "the refusal happens before the parent directory is created"
             );
             assert!(
-                !d.join("game.girpr_tmp").exists(),
-                "no temp is written beside the directory spelling"
+                !target.exists(),
+                "the directory spelling is not published as a file"
+            );
+            assert!(
+                !parent.join(".girpr_tmp").exists(),
+                "no temp is written at the resolved fallback location"
             );
         }
     }
