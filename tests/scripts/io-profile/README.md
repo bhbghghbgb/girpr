@@ -67,8 +67,9 @@ run is still only worth about 10%.
 
 The bench is a standalone workspace, so ordinary builds do not compile it. CI
 runs `cargo check --locked --manifest-path
-tests/scripts/io-profile/iot-bench/Cargo.toml` with Rust 1.89, the workspace
-MSRV, to keep its pinned `redb` line buildable there.
+tests/scripts/io-profile/iot-bench/Cargo.toml` with the workspace MSRV (the
+root package's `rust-version`), to keep its pinned `redb` line buildable
+there.
 
 ## Reading the output
 

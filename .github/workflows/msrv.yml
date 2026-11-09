@@ -47,21 +47,38 @@ jobs:
   iot-bench:
     runs-on: windows-latest
     timeout-minutes: 15
-    env:
+    steps:
+      - uses: actions/checkout@v4
       # The bench pins redb to the newest line that still supports the
       # workspace MSRV. Build it with that toolchain, not the runner's default
       # stable, so a dependency bump that raises the bench's floor fails here.
-      RUSTUP_TOOLCHAIN: '1.89'
-    steps:
-      - uses: actions/checkout@v4
+      # Read the version from the root manifest instead of repeating it here;
+      # the job then follows the workspace when its MSRV moves.
+      - name: Read the workspace MSRV
+        id: msrv
+        shell: pwsh
+        run: |
+          $rootManifest = (Resolve-Path Cargo.toml).Path
+          $version = (cargo metadata --no-deps --format-version 1 --locked |
+            ConvertFrom-Json).packages |
+            Where-Object { $_.manifest_path -eq $rootManifest } |
+            Select-Object -ExpandProperty rust_version
+          if (-not $version) {
+            throw "the root package does not declare rust-version"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       # The bench is a standalone workspace with its own lockfile, so this is
       # the only job that compiles its pinned dependency.
-      - name: Install Rust 1.89
+      - name: Install Rust ${{ steps.msrv.outputs.version }}
         shell: pwsh
-        run: rustup toolchain install 1.89 --profile minimal --no-self-update
+        run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal --no-self-update
       - uses: Swatinem/rust-cache@v2
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
         with:
           workspaces: |
             tests/scripts/io-profile/iot-bench -> target
       - name: Check the standalone I/O bench
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
         run: cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
