@@ -238,7 +238,6 @@ mod tests {
         let d = dir("no_file_name");
         let path = d.join("missing").join("..");
         assert!(path.file_name().is_none(), "the fixture names no file");
-        let tmp = temp_sibling(&path);
 
         let err = write_atomic(&path, b"{}", false).unwrap_err();
 
@@ -250,7 +249,13 @@ mod tests {
             !d.join("missing").exists(),
             "the refusal happens before the parent directory is created"
         );
-        assert!(!tmp.exists(), "no temp is named or written");
+        // The helper's fallback resolves here once `missing` exists, so the
+        // unresolved `missing/../.girpr_tmp` cannot be probed: it is absent
+        // whether or not a temp was written. Assert the resolved location.
+        assert!(
+            !d.join(".girpr_tmp").exists(),
+            "no temp is written at the fallback location"
+        );
     }
 
     /// A failing rename (a directory sits where the file should be) removes the
