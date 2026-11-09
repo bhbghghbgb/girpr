@@ -667,6 +667,9 @@ until the main tasks and rework are done.
 | F566 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs` | The comments say "a `getBuild` body declares five manifests and the bundle stores two", while §4.6 says "four manifests per run"; both can be true but read as a contradiction. | todo |
 | F567 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs`, `docs/06-artifact-bridge-spec.md` | The cache holds only the served `.manifest.zst` archives (~19.0 MiB), not the whole 41.4 MiB `manifests/` tree both texts cite for scale. | todo |
 | F568 | DOCS-USER-08 implementer | `tests/artifact_bridge.rs` | The `#[ignore]` reason mentions the `.config/nextest.toml` success-output override. | skipped (the override exists and was exercised in the parallel bridge run) |
+| F569 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | The cache is a per-process `static`, and nextest gives each test its own process, so "shared by all of them — including across the six per-capture bridges" only holds in a single-process run. | todo |
+| F570 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "every capture pays the disk read once instead of six times" mixes a per-capture subject with a suite-wide count. | todo |
+| F571 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "the suite's six runs" counts test cases, but each case is a pre-pass plus a real run (twelve `girpr` invocations). | todo |
 
 ## Follow-up batches
 
@@ -807,6 +810,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-10 | F565 | todo | Wave E; bundle-search failure wording; low |
 | DOCS-USER-11 | F566, F567 | todo | Wave E; manifest-count wording and served-archive scale; low |
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
+| DOCS-USER-13 | F569, F570, F571 | todo | Wave E; cache comment scope and count wording; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
