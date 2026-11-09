@@ -75,14 +75,35 @@ fn strip_ansi(s: &str) -> String {
     out
 }
 
-/// The indent clap's help gives each option line.
+/// The indent clap's help gives a long-only option line.
 ///
 /// The command's `--help` lays options out flat under `Options:` with six
 /// leading spaces. [`help_entry`] depends on that layout: if a clap upgrade
 /// changes it, the entry will not be found and the helper panics with the
-/// expected indent and the help text, rather than returning a slice of the
+/// expected shapes and the help text, rather than returning a slice of the
 /// wrong part of the output.
 const HELP_OPTION_INDENT: &str = "      ";
+
+/// The indent clap's help gives an option line that begins with a short alias.
+///
+/// An option with both spellings puts the short one in its own column
+/// (`-h, --help`), two spaces in, rather than at [`HELP_OPTION_INDENT`].
+const HELP_SHORT_OPTION_INDENT: &str = "  ";
+
+/// The part of an option line that starts at its long flag, when `line` is one.
+///
+/// clap writes a long-only option as `      --jobs <JOBS>` and one with a short
+/// alias as `  -j, --jobs <JOBS>`; a description line is indented further and is
+/// not an option line. Returning the body lets the caller look for the flag
+/// without caring which of the two shapes the line has.
+fn option_body(line: &str) -> Option<&str> {
+    if let Some(body) = line.strip_prefix(HELP_OPTION_INDENT) {
+        return body.starts_with("--").then_some(body);
+    }
+    let body = line.strip_prefix(HELP_SHORT_OPTION_INDENT)?;
+    let (short, long) = body.strip_prefix('-')?.split_once(", ")?;
+    (short.chars().count() == 1 && long.starts_with("--")).then_some(long)
+}
 
 /// The slice of `--help` output that belongs to one option: from the option's
 /// own line to the next option's line.
@@ -91,44 +112,56 @@ const HELP_OPTION_INDENT: &str = "      ";
 /// satisfied by another option's annotation. The block keeps an assertion about
 /// one flag about that flag.
 fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
-    let entry_line = format!("{HELP_OPTION_INDENT}{flag}");
-    // A flag is a whole token: `--jobs` must not match a `--jobs-<something>`
-    // option line. clap follows the flag with a space when it takes a value and
-    // with a newline when it does not; the end of the text is also a boundary.
-    let at_entry_line = |line: usize| {
-        help[line..].starts_with(&entry_line)
+    let mut start = None;
+    for line in std::iter::once(0).chain(help.match_indices('\n').map(|(i, _)| i + 1)) {
+        let Some(body) = option_body(&help[line..]) else {
+            continue;
+        };
+        if let Some(start) = start {
+            // The newline before this line ends the previous entry. A CRLF
+            // capture also has the previous line's `\r` there; dropping it
+            // keeps the block the same text as the LF capture's.
+            let mut end = line - 1;
+            if help.as_bytes().get(end.wrapping_sub(1)) == Some(&b'\r') {
+                end -= 1;
+            }
+            return &help[start..end];
+        }
+        // A flag is a whole token: `--jobs` must not match a `--jobs-<something>`
+        // option line. clap follows the flag with a space when it takes a value
+        // and with a newline when it does not; a CRLF capture puts `\r` there
+        // instead, and the end of the text is also a boundary.
+        if body.starts_with(flag)
             && matches!(
-                help.as_bytes().get(line + entry_line.len()),
-                Some(b' ' | b'\n') | None
+                body.as_bytes().get(flag.len()),
+                Some(b' ' | b'\n' | b'\r') | None
             )
+        {
+            start = Some(line);
+        }
+    }
+    let Some(start) = start else {
+        panic!(
+            "help has no {flag} entry as an option line \
+             (`{HELP_OPTION_INDENT}{flag}` or `{HELP_SHORT_OPTION_INDENT}-x, {flag}`):\n{help}"
+        )
     };
-    let start = std::iter::once(0)
-        .chain(help.match_indices('\n').map(|(i, _)| i + 1))
-        .find(|&line| at_entry_line(line))
-        .unwrap_or_else(|| {
-            panic!(
-                "help has no {flag} entry at the expected {}-space option indent:\n{help}",
-                HELP_OPTION_INDENT.len()
-            )
-        });
-    let entry = &help[start..];
-    let next_option = format!("\n{HELP_OPTION_INDENT}--");
-    let end = entry
-        .match_indices(&next_option)
-        .next()
-        .map_or(entry.len(), |(i, _)| i);
-    &entry[..end]
+    &help[start..]
 }
 
 #[test]
 fn help_entry_does_not_borrow_a_neighbours_annotations() {
-    let help =
-        "      --jobs <JOBS>\n          jobs text\n\n      --other\n          [default: 4]\n";
+    let help = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_OPTION_INDENT}--other\n\
+         {HELP_OPTION_INDENT}    [default: 4]\n"
+    );
     assert!(
-        !help_entry(help, "--jobs").contains("[default: 4]"),
+        !help_entry(&help, "--jobs").contains("[default: 4]"),
         "the block ended before the next option"
     );
-    assert!(help_entry(help, "--other").contains("[default: 4]"));
+    assert!(help_entry(&help, "--other").contains("[default: 4]"));
 }
 
 #[test]
@@ -137,23 +170,29 @@ fn help_entry_requires_a_boundary_after_the_flag() {
     // `--jobs` is the first entry, so the first line that carries a newline
     // before it is `--jobs-extra`: a search for the newline-marked form of
     // `--jobs` lands there, and only the space after the flag tells them apart.
-    let help = "      --jobs <JOBS>\n          jobs text\n\n      --jobs-extra <N>\n          different option\n";
-    let jobs = help_entry(help, "--jobs");
+    let help = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_OPTION_INDENT}--jobs-extra <N>\n\
+         {HELP_OPTION_INDENT}    different option\n"
+    );
+    let jobs = help_entry(&help, "--jobs");
     assert_eq!(
-        jobs, "      --jobs <JOBS>\n          jobs text\n",
+        jobs,
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
         "the block belongs to --jobs, not the option whose name it prefixes"
     );
     assert!(!jobs.contains("different option"));
     // The boundary is also a newline (a flag with no value) or the end of the
     // text, not only the space before a value.
-    let boolean = "      --dry-run\n          no value\n";
+    let boolean = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_OPTION_INDENT}    no value\n");
     assert_eq!(
-        help_entry(boolean, "--dry-run"),
-        "      --dry-run\n          no value\n"
+        help_entry(&boolean, "--dry-run"),
+        format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_OPTION_INDENT}    no value\n")
     );
     assert_eq!(
-        help_entry("      --dry-run", "--dry-run"),
-        "      --dry-run"
+        help_entry(&format!("{HELP_OPTION_INDENT}--dry-run"), "--dry-run"),
+        format!("{HELP_OPTION_INDENT}--dry-run")
     );
 }
 
@@ -161,12 +200,89 @@ fn help_entry_requires_a_boundary_after_the_flag() {
 fn help_entry_finds_an_entry_after_a_preceding_option() {
     // The desired entry is not the first line of the help, so its start comes
     // from the newline before it rather than from the start of the text.
-    let help = "      --first\n          first text\n\n      --jobs <JOBS>\n          jobs text\n\n      --last\n          last text\n";
-    assert!(!help.starts_with("      --jobs"));
+    let help = format!(
+        "{HELP_OPTION_INDENT}--first\n\
+         {HELP_OPTION_INDENT}    first text\n\n\
+         {HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_OPTION_INDENT}--last\n\
+         {HELP_OPTION_INDENT}    last text\n"
+    );
+    assert!(!help.starts_with(&format!("{HELP_OPTION_INDENT}--jobs")));
     assert_eq!(
-        help_entry(help, "--jobs"),
-        "      --jobs <JOBS>\n          jobs text\n",
+        help_entry(&help, "--jobs"),
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
         "the block runs from --jobs to the next option"
+    );
+}
+
+#[test]
+fn help_entry_finds_an_entry_behind_a_short_alias() {
+    // clap puts an option's short spelling in its own column, so the long flag
+    // is no longer the first token on the line.
+    let help = format!(
+        "{HELP_OPTION_INDENT}--first\n\
+         {HELP_OPTION_INDENT}    first text\n\n\
+         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n\
+         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_OPTION_INDENT}--last\n\
+         {HELP_OPTION_INDENT}    last text\n"
+    );
+    assert_eq!(
+        help_entry(&help, "--jobs"),
+        format!("{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n"),
+        "the block starts at the alias's line, not the long-only indent"
+    );
+}
+
+#[test]
+fn help_entry_stops_before_an_entry_with_a_short_alias() {
+    // `-h, --help` is the real help's last option, and its line starts at the
+    // short-alias indent rather than the long-only one.
+    let help = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_OPTION_INDENT}    jobs text\n\n\
+         {HELP_SHORT_OPTION_INDENT}-h, --help\n\
+         {HELP_OPTION_INDENT}    Print help\n"
+    );
+    let jobs = help_entry(&help, "--jobs");
+    assert_eq!(
+        jobs,
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_OPTION_INDENT}    jobs text\n")
+    );
+    assert!(!jobs.contains("Print help"));
+}
+
+#[test]
+fn help_entry_finds_the_help_option_behind_its_short_alias() {
+    // The real help renders the one short alias it has as `  -h, --help`.
+    let (_, stdout, _) = run(&["--help"]);
+    let help = help_entry(&stdout, "--help");
+    assert!(
+        help.starts_with(&format!("{HELP_SHORT_OPTION_INDENT}-h, --help")),
+        "the --help entry starts at its short-alias line:\n{help}"
+    );
+    assert!(help.contains("Print help"), "{help}");
+}
+
+#[test]
+fn help_entry_reads_a_crlf_capture() {
+    // A Windows-console capture ends its lines with `\r\n`; the flag's token
+    // boundary is then the `\r`, and the entry keeps the same text as the LF
+    // capture's.
+    let help = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\r\n\
+         {HELP_OPTION_INDENT}    jobs text\r\n\r\n\
+         {HELP_OPTION_INDENT}--dry-run\r\n\
+         {HELP_OPTION_INDENT}    no value\r\n"
+    );
+    assert_eq!(
+        help_entry(&help, "--jobs"),
+        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_OPTION_INDENT}    jobs text\r\n")
+    );
+    assert_eq!(
+        help_entry(&help, "--dry-run"),
+        format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_OPTION_INDENT}    no value\r\n")
     );
 }
 
