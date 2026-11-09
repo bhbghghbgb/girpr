@@ -815,7 +815,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-11 | F521 | done | Wave E; exit codes for the remaining MSRV script failures; low; 24ec32c |
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
 | BUILD-13 | F524, F525 | done | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
-| BUILD-14 | F526, F527 | todo | Wave E; native-command preference and probe failure classification; low |
+| BUILD-14 | F526, F527 | in_progress | Wave E; native-command preference and probe failure classification; low |
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
 | BUILD-16 | F530, F531 | todo | Wave E; 4.1.0 pin wording and root MSRV tie; low |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
