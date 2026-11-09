@@ -583,6 +583,56 @@ mod tests {
         );
     }
 
+    /// The test-double failure shape is logged by the same warn site as a real
+    /// damage verdict. Injecting the outcome exercises that branch without
+    /// waiting for a gate to expire.
+    #[test]
+    fn an_expired_gate_outcome_is_logged_as_a_test_double() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "test_double_log");
+        let base = &*dir;
+        let rel = "a.dat";
+        let plan = Arc::new(plan_of(vec![planned(
+            rel,
+            0,
+            "00000000000000000000000000000000",
+        )]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let why = "injected gate expiry";
+
+        let logs = crate::repair::test_support::logs_of(|| {
+            let bad = runtime
+                .block_on(verify_plan_with(
+                    base,
+                    None,
+                    plan,
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    None,
+                    1,
+                    None,
+                    move |_: &PlannedFile,
+                          _: &anyhow::Result<PathBuf>,
+                          _: DigestSource<'_>|
+                          -> CheckOutcome {
+                        CheckOutcome::failed(CheckFailure::TestGateExpired(why))
+                    },
+                ))
+                .expect("the check task finishes");
+            assert_eq!(bad, 1, "the injected failure is counted as damage");
+        });
+
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            check_warnings(&logs),
+            vec![format!("CHECK fail: test double: {why} file={rel}")],
+            "the expired gate is logged once, through the one warn site"
+        );
+    }
+
     /// The ticker reads the counters while the pass is still running, so a
     /// finished check is folded before the slowest one returns. The gate keeps
     /// one task blocked without sleeping; the other task's counter must be
