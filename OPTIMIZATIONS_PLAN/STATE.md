@@ -748,7 +748,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-09 | F493, F494 | done | Wave E; release-guard race and the remaining wait constant; low; ae55ba3 |
 | TEST-REGRESSION-07 | F495, F496 | done | Wave E; post-epoch pin and skip-result type; low; f6da824, 5556cc2 |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
-| CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
+| CHECK-08 | F499, F500 | in_progress | Wave E; test-double warn pin and a named remaining-time helper; low |
 | PATHHELPERS-08 | F501, F502 | todo | Wave E; remaining bridge recipes and parallel-run isolation; low |
 | DOCS-USER-07 | F503, F504, F505 | todo | Wave E; cache-key wording, artifact-root variable, wall-time wording; low |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
