@@ -22,6 +22,10 @@
 pub mod atomic;
 pub(crate) mod counter;
 pub mod ini;
+// Unit-test-only junction fixture and classifier shared by `ini` and `path`.
+// It stays out of `test_support`: only this crate's unit tests reach it.
+#[cfg(all(test, windows))]
+mod junction_support;
 pub mod md5;
 pub mod path;
 
