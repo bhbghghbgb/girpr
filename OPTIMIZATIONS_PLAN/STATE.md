@@ -587,8 +587,8 @@ until the main tasks and rework are done.
 | F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | completed |
 | F487 | TEST-MANIFEST-06 review | `tools/capture/src/manifest/mod.rs` | `CapturedManifest::url` and `chunk_url` append `url_suffix` without the new "unmeasured conservative reading" note. | completed |
 | F488 | TEST-MANIFEST-06 review | `tools/capture` | Starward's unused `GameSophonManifestUrl.BuildUrl` reads `url_suffix` as a query string; informational unless reference parity is revisited. | skipped (external reference has no callers; no repo change) |
-| F489 | MANIFEST-07 review | `src/repair/file/inplace.rs` | The overlap guard is conservative: duplicate identical chunks count as overlapping and stay retryable; a post-redo rescan could recover the terminal classification at the cost of one extra read on the failure path. | todo |
-| F490 | MANIFEST-07 review | `tests/repair_scan.rs` | No end-to-end fixture with overlapping chunk offsets proves a retry eventually reaches the manifest digest; the current test pins the guard only. | todo |
+| F489 | MANIFEST-07 review | `src/repair/file/inplace.rs` | The overlap guard is conservative: duplicate identical chunks count as overlapping and stay retryable; a post-redo rescan could recover the terminal classification at the cost of one extra read on the failure path. | pending_review |
+| F490 | MANIFEST-07 review | `tests/repair_scan.rs` | No end-to-end fixture with overlapping chunk offsets proves a retry eventually reaches the manifest digest; the current test pins the guard only. | pending_review |
 | F491 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | `Download::url_suffix` points two hops at the caveat through `archive_url`; a direct link is awkward because `join` is `pub(crate)`. | skipped (the two-hop chain is correct; no public target for a direct link) |
 | F492 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | The shared caveat now covers the chunk join but names only the manifest-fetch paths of the reference clients. | skipped (accurate while every measured `url_suffix` is empty) |
 | F493 | PURGE-PERF-08 review | `src/util/counter.rs` tests | `ReleaseOnPanic` has a narrow race: if the guard drops after `Barrier::wait` releases the helper but before it records `passed`, the waiter can park until exit. | todo |
@@ -730,7 +730,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-07 | F481, F482, F483 | done | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low; 8fab9f8, a60f278 |
 | TEMP-PUBLISH-07 | F484, F485, F486 | done | Wave E; shared spelling guard, Windows aliases, doc wording; low; 3766e53, 6ac80bd |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
-| MANIFEST-08 | F489, F490 | in_progress | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
+| MANIFEST-08 | F489, F490 | pending_review | Wave E; overlap-guard precision and end-to-end overlapping fixture; low; ff1dcef, ff2e6b7 |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | todo | Wave E; release-guard race and the remaining wait constant; low |
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
