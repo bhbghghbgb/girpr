@@ -510,8 +510,8 @@ until the main tasks and rework are done.
 | F409 | DOCS-USER-04 review | `tools/capture/README.md` | Its bridge run recipe (`--test-threads=1` variant) omits the `cargo build -p gircap` precondition step. | completed |
 | F410 | DOCS-USER-04 review | `tests/artifact_bridge.rs` | The `#[ignore]` reason strings name only the nextest command; they could mention the verifier build so the listing is self-sufficient. | completed |
 | F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | completed |
-| F412 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | The region list no longer contains `audio.rs`/`lock.rs` while the next paragraph says they were swept the same way; fold them in or reword the list. | pending_review |
-| F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | pending_review |
+| F412 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | The region list no longer contains `audio.rs`/`lock.rs` while the next paragraph says they were swept the same way; fold them in or reword the list. | completed |
+| F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | completed |
 | F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | todo |
 | F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | todo |
 | F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | todo |
@@ -625,7 +625,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-06 | F404, F405, F406 | done | Wave E; gate-test failure reporting and deadline unification; low; 3dc4247 |
 | PATHHELPERS-06 | F407, F408 | done | Wave E; simulated-skip wording and bridge skip visibility; low; 9488a01, 2edf394 |
 | DOCS-USER-05 | F409, F410, F411 | done | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
-| DOCS-COMMENTS-05 | F412, F413 | pending_review | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
+| DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
 | METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
