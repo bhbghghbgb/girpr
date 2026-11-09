@@ -572,6 +572,8 @@ until the main tasks and rework are done.
 | F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | todo |
 | F472 | LOGGING-05 review | `src/logging.rs` tests | The lock doc's "only because nextest runs each test in its own process" is stronger than needed while no second `try_init` exists; a future subscriber-installing unit test must take the lock. | todo |
 | F473 | LOGGING-05 review | `src/logging.rs` tests | `already been set` is tied to `tracing-core`'s wording; testing the typed `SetGlobalDefaultError` rejection would survive a dependency bump. | todo |
+| F474 | LOCK-06 review | `tests/common/run_lock.rs` | `game_path_arg` still returns `Some` for a trailing `--game-path` with no value or a flag-looking value; clap rejects both, so the doc's "no value" claim is broader than the code. | todo |
+| F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | todo |
 
 ## Follow-up batches
 
@@ -659,6 +661,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-07 | F466, F467, F468 | todo | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low |
 | JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
+| LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
