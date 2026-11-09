@@ -736,7 +736,13 @@ async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
         "the plan is printed even though the digest is wrong:\n{stdout}"
     );
 
-    let (code, _, stderr) = run_binary(&base, &[]).await;
+    // The digest mismatch is deterministic, so the repair's retry budget buys
+    // nothing here: `--fail-fast` gives the file one attempt instead of five
+    // and keeps the case from spending the linear backoff (1+2+3+4 s) proving
+    // that an unchanged file still fails the same gate.
+    let mut args = base.to_vec();
+    args.push("--fail-fast");
+    let (code, _, stderr) = run_binary(&args, &[]).await;
     assert_eq!(
         code, 3,
         "the repair must fail the one file it cannot make true: {stderr}"
