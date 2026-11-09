@@ -559,9 +559,9 @@ until the main tasks and rework are done.
 | F458 | PATHHELPERS-06 review | `tests/artifact_bridge.rs` | The module doc and `#[ignore]` messages still tell readers to pass `--no-capture`, which the new override makes unnecessary. | completed |
 | F459 | PATHHELPERS-06 review | `.config/nextest.toml` | The adjacent comment saying the run command carries `--no-capture` only to make the line visible is now stale; update with the docs. | completed |
 | F460 | PATHHELPERS-06 review | `tests/repair_post.rs`, `src/util/path.rs` tests | `JunctionRefusal` and `NameRefusal` express the same two-state idea in two test modules; a shared helper could deduplicate them. | completed |
-| F461 | DOCS-USER-05 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md`, `tests/artifact_bridge.rs` | The four bridge-run recipes differ cosmetically (`--test-threads=1`, `GIRPR_ARTIFACT_BUNDLE` spelled out in only two); unify them. | pending_review |
-| F462 | DOCS-USER-05 review | `tools/capture/README.md` | The reference bundle label `20261021T141336Z` no longer matches the locally present bundle; the example can drift. | pending_review |
-| F463 | DOCS-USER-05 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | The 139 s cost figure is host-qualified but the command/profile that produced it is not recorded; state the exact command. | pending_review |
+| F461 | DOCS-USER-05 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md`, `tests/artifact_bridge.rs` | The four bridge-run recipes differ cosmetically (`--test-threads=1`, `GIRPR_ARTIFACT_BUNDLE` spelled out in only two); unify them. | completed |
+| F462 | DOCS-USER-05 review | `tools/capture/README.md` | The reference bundle label `20261021T141336Z` no longer matches the locally present bundle; the example can drift. | completed |
+| F463 | DOCS-USER-05 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | The 139 s cost figure is host-qualified but the command/profile that produced it is not recorded; state the exact command. | completed |
 | F464 | DOCS-COMMENTS-05 review | `docs/07-panic-audit.md` | The sweep regex matches only `as usize|as u64|as i64` while the prose says "`as` casts" generally; narrow the wording or extend the command. | todo |
 | F465 | HYP-06 review | `tests/common/mod.rs` | `logs_of`'s correctness depends on the default current-thread runtime; a future multi-thread `#[tokio::test]` caller would silently lose non-`spawn_blocking_traced` task lines. | todo |
 | F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | completed |
@@ -682,7 +682,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-06 | F453, F454 | done | Wave E; shared scan-bytes key and README layout; low; 7e8c04d, a7d9834 |
 | CHECK-07 | F455, F456, F457 | done | Wave E; gate-test expiry wording and deadline comment; low; df3f4c4, 5701bd8, 1a0fb73 |
 | PATHHELPERS-07 | F458, F459, F460 | done | Wave E; bridge flag docs, stale config comment, refusal dedup; low; ccaa79e, 5680206 |
-| DOCS-USER-06 | F461, F462, F463 | pending_review | Wave E; bridge recipe unification and cost provenance; low; 3a83504, 81d5f4b, 4157326 |
+| DOCS-USER-06 | F461, F462, F463 | done | Wave E; bridge recipe unification and cost provenance; low; 3a83504, 81d5f4b, 4157326 |
 | DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
 | HYP-07 | F465 | todo | Wave E; multi-thread runtime caveat for the log helper; low |
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
