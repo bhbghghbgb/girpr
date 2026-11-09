@@ -572,8 +572,8 @@ until the main tasks and rework are done.
 | F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | completed |
 | F472 | LOGGING-05 review | `src/logging.rs` tests | The lock doc's "only because nextest runs each test in its own process" is stronger than needed while no second `try_init` exists; a future subscriber-installing unit test must take the lock. | completed |
 | F473 | LOGGING-05 review | `src/logging.rs` tests | `already been set` is tied to `tracing-core`'s wording; testing the typed `SetGlobalDefaultError` rejection would survive a dependency bump. | completed |
-| F474 | LOCK-06 review | `tests/common/run_lock.rs` | `game_path_arg` still returns `Some` for a trailing `--game-path` with no value or a flag-looking value; clap rejects both, so the doc's "no value" claim is broader than the code. | todo |
-| F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | todo |
+| F474 | LOCK-06 review | `tests/common/run_lock.rs` | `game_path_arg` still returns `Some` for a trailing `--game-path` with no value or a flag-looking value; clap rejects both, so the doc's "no value" claim is broader than the code. | pending_review |
+| F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | pending_review |
 | F476 | INI-06 review | `src/util/ini.rs` tests | The junction test treats any `try_junction_dir` failure as a host skip, unlike the narrower `symlink_skip_reason`; a broken `cmd`/`mklink` environment would silently skip. | todo |
 | F477 | INI-06 review | `src/util/ini.rs` tests | `LinkGuard::remove` disarms before attempting removal, so a failed success-path removal is never retried in `Drop`; swapping the order would retry cleanly. | todo |
 | F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | todo |
@@ -695,7 +695,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
 | JOBS-06 | F469, F470, F471 | done | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low; d3af585, d7c4b28, c989e28 |
 | LOGGING-06 | F472, F473 | done | Wave E; lock doc scope and typed rejection pin; low; e3a3cf3, b79ef56 |
-| LOCK-07 | F474, F475 | in_progress | Wave E; run-lock cleanup hardening and module doc; low |
+| LOCK-07 | F474, F475 | pending_review | Wave E; run-lock cleanup hardening and module doc; low; 1d525d5, e5cde0b |
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
 | BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
