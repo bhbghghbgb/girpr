@@ -762,7 +762,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | done | Wave E; test-double warn pin and a named remaining-time helper; low; 753f063, c90d1c0 |
 | PATHHELPERS-08 | F501, F502 | done | Wave E; remaining bridge recipes and parallel-run isolation; low; 5c8839a |
-| DOCS-USER-07 | F503, F504, F505 | done | Wave E; cache-key wording, artifact-root variable, wall-time wording; low; 2bc0239, 2b3d76b, 2bc0239, 2b3d76b, ae20679, dcc5874 |
+| DOCS-USER-07 | F503, F504, F505 | done | Wave E; cache-key wording, artifact-root variable, wall-time wording; low; 2bc0239, 2b3d76b, ae20679, dcc5874 |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
 | JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
@@ -797,7 +797,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
-| DOCS-USER-08 | F562, F563 | in_progress | Wave E; bridge module docs and server comment accuracy; low |
+| DOCS-USER-08 | F563 | in_progress | Wave E; bridge module docs and server comment accuracy; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
