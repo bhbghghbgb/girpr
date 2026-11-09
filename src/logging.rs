@@ -489,6 +489,9 @@ mod tests {
             warnings.contains("WARN cannot install the tracing subscriber"),
             "{warnings:?}"
         );
+        // The prefix is ours; the reason is `tracing`'s. Pin only the stable
+        // claim that the global default is already set, not its exact wording.
+        assert!(warnings.contains("already been set"), "{warnings:?}");
 
         let after = FILE_SINK
             .lock()
