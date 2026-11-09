@@ -593,7 +593,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
 | EXIT-07 | F394, F395 | done | Wave E; macro generality and duplicated status list; low; 3ffe754 |
 | PURGE-PERF-07 | F396, F397, F398 | done | Wave E; counter-test failure modes and shared stub; low; 3b5ec92, 45a6136 |
-| TEST-REGRESSION-05 | F399, F400 | todo | Wave E; remaining epoch assumptions in test helpers; low |
+| TEST-REGRESSION-05 | F399, F400 | in_progress | Wave E; remaining epoch assumptions in test helpers; low |
 | PURGE-PERF-06 | F332, F333 | done | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
 | DRYRUN-03 | F209, F210, F211 | done | Wave E; dry-run zero-byte line, ceiling-stage distinction and plan-out purge hazard; low; af47aa8, 7ebfcc6, cbae708, 61f7bfe, b71f0ed |
