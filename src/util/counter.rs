@@ -119,7 +119,10 @@ mod tests {
         fn drop(&mut self) {
             if std::thread::panicking() && !self.passed.load(Ordering::Acquire) {
                 let barrier = Arc::clone(&self.barrier);
-                std::thread::spawn(move || barrier.wait());
+                // A failed spawn must not panic: this runs while the test is
+                // already unwinding, and a second panic would abort. There is
+                // nothing useful to do with the error here.
+                let _ = std::thread::Builder::new().spawn(move || barrier.wait());
             }
         }
     }
