@@ -612,8 +612,8 @@ until the main tasks and rework are done.
 | F511 | LOCK-07 review | `tests/run_lock.rs` | The CLI test proves a lone `-` parses but does not assert the parsed `game_path` equals `-`. | completed |
 | F512 | INI-07 implementer | `src/util/path.rs` | `junction_refusal` treats any `mklink` failure as a host refusal and skips unless `GIRPR_TEST_REQUIRE_JUNCTION` is set; the same broken `cmd`/argument failure could skip silently. | completed |
 | F513 | INI-07 implementer | `src/util/ini.rs` tests | The shared `link_creation_denied` comment still names `CreateSymbolicLinkW` specifically, though it now also covers junctions. | completed |
-| F514 | INI-07 review | `src/util/ini.rs` | `try_junction_dir` treats any `symlink_metadata` error as "missing", so a permission or transient error is reported as a missing link instead of its own cause. | todo |
-| F515 | INI-07 review | `src/util/ini.rs` | The raw-1314 branch of `junction_skip_reason` is effectively unreachable for junction creation, since `mklink` failures arrive as `Error::other`; document it or key on the failure signature. | todo |
+| F514 | INI-07 review | `src/util/ini.rs` | `try_junction_dir` treats any `symlink_metadata` error as "missing", so a permission or transient error is reported as a missing link instead of its own cause. | pending_review |
+| F515 | INI-07 review | `src/util/ini.rs` | The raw-1314 branch of `junction_skip_reason` is effectively unreachable for junction creation, since `mklink` failures arrive as `Error::other`; document it or key on the failure signature. | pending_review |
 | F516 | INI-07 review | `src/util/ini.rs` tests | The guard-retry test exercises a plain directory rather than a reparse point, so it does not cover link-type-specific removal. | skipped (deliberately host-independent; the existing link tests cover real removal) |
 | F517 | BUILD-07 implementer | `tests/scripts/check-msrv.ps1` | The script already checks `$LASTEXITCODE` but reports a generic "cargo metadata failed"; the message could name the command and exit code like the workflow now does. | completed |
 | F518 | BUILD-07 implementer | `Cargo.toml`, `tools/sync/Cargo.toml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | Comments still name `1.89`/`1.90` when documenting the redb 4.1 pin. | skipped (accurate today; they document the dependency pin, and only need a revisit if the MSRV moves) |
@@ -685,6 +685,9 @@ until the main tasks and rework are done.
 | F584 | INI-08 implementer | `src/util/path.rs` | The path helper's doc omits the `%VAR%` caveat the ini helper documents: `cmd` expands percent pairs even inside quotes. | todo |
 | F585 | INI-08 implementer | `src/util/ini.rs` | `link_creation_denied`'s Unix branch documentation is symlink-specific, though no Unix link variant shares it today. | skipped (conditional; only the symlink classifier compiles on Unix) |
 | F586 | INI-08 review | `src/util/path.rs` | The exit-0-but-link-missing branch has no direct test; only its `ErrorKind::Other` class is covered through the non-zero-exit case, so a seam over `Output`/`ExitStatus` would pin it. | todo |
+| F587 | INI-09 implementer | `src/util/ini.rs`, `src/util/path.rs` | `link_creation_denied` exists only in `ini.rs`; `path.rs` inlines the same 1314 test. | skipped (duplicate of F583, which covers sharing the 1314 check) |
+| F588 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | `junction_inspection_error` collapses the original error to `Error::other`, so its kind and raw code cannot be recovered. | skipped (deliberate; classification is fail-closed by contract) |
+| F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | todo |
 
 ## Follow-up batches
 
@@ -791,10 +794,11 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
 | LOCK-08 | F510, F511 | done | Wave E; clap arity mirroring and lone-dash assertion; low; c93137b, f3a507e |
 | INI-08 | F512, F513 | done | Wave E; path junction refusal classification and shared comment; low; 2cd7789, a411cc3 |
-| INI-09 | F514, F515 | in_progress | Wave E; junction metadata error cause and unreachable skip branch; low |
+| INI-09 | F514, F515 | pending_review | Wave E; junction metadata error cause and unreachable skip branch; low; cc7ba1f, b2634eb |
 | INI-10 | F583, F584 | todo | Wave E; shared junction test helper and `%VAR%` caveat; low |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
 | INI-12 | F586 | todo | Wave E; pin the link-missing junction branch; low |
+| INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
