@@ -760,7 +760,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | done | Wave E; test-double warn pin and a named remaining-time helper; low; 753f063, c90d1c0 |
 | PATHHELPERS-08 | F501, F502 | done | Wave E; remaining bridge recipes and parallel-run isolation; low; 5c8839a |
-| DOCS-USER-07 | F503, F504, F505 | todo | Wave E; cache-key wording, artifact-root variable, wall-time wording; low |
+| DOCS-USER-07 | F503, F504, F505 | in_progress | Wave E; cache-key wording, artifact-root variable, wall-time wording; low |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
 | JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
