@@ -588,13 +588,31 @@ async fn verify_and_retry(
     handle.flush()?;
     let final_md5 = util::md5::md5_reader_digest(handle)?;
     if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
-        return Err(FinalDigestMismatch(format!(
+        let message = format!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel, file.md5, final_md5
-        ))
-        .into());
+        );
+        if redo_mismatch_is_terminal(file) {
+            return Err(FinalDigestMismatch(message).into());
+        }
+        return Err(anyhow::anyhow!(message));
     }
     Ok(repaired_in_place(stats, final_md5))
+}
+
+/// Can another attempt change the bytes a post-redo mismatch was computed
+/// over?
+///
+/// The redo wrote every chunk the second scan named, so without overlapping
+/// chunks every range now matches: the only remaining difference is the
+/// zero-filled gaps and the declared length. A second attempt then writes no
+/// chunk and repeats the digest.
+///
+/// An overlap can undo a neighbour when the next attempt rewrites a chunk, so
+/// that plan keeps its retries: the redo did not prove the bytes stable, only
+/// that this pass still missed the digest.
+fn redo_mismatch_is_terminal(file: &PlannedFile) -> bool {
+    file.layout().overlaps.is_empty()
 }
 
 /// A whole-file digest mismatch that no retry can change.
@@ -604,11 +622,14 @@ async fn verify_and_retry(
 /// scan found intact, or a downloaded chunk that passed its own gate. The
 /// bytes outside those ranges are the plan's zero-filled gaps and declared
 /// length. A whole-file mismatch therefore means the **plan** is inconsistent
-/// with itself — bytes no chunk describes, chunks that overlap and cannot all
-/// be correct, or a declared digest no assembly of them can produce — not
-/// that a download or a write went wrong. The next attempt reads the same
-/// plan and reaches the same verdict, so the file loop treats this error as
-/// terminal instead of spending the file's retry budget on it.
+/// with itself — bytes no chunk describes, or a declared digest no assembly
+/// of them can produce — not that a download or a write went wrong.
+///
+/// The marker is only used when another attempt cannot change the assembled
+/// bytes: either every chunk range already matched, or [`verify_and_retry`]'s
+/// redo ran over a plan with no overlapping chunks. An overlap keeps the
+/// ordinary error, because rewriting one chunk can make its neighbour wrong
+/// again and the next attempt may assemble different bytes.
 ///
 /// A **transient** download or write error is still an ordinary `Err` and is
 /// retried; this marker is only for the verify gate's deterministic verdict.
@@ -1270,6 +1291,42 @@ mod tests {
         assert!(
             chain.contains("the bytes outside the chunks are wrong"),
             "{chain}"
+        );
+    }
+
+    /// A post-redo mismatch is only final when the redo's writes cannot be
+    /// undone by the next attempt. Overlapping chunks can: writing the higher
+    /// chunk makes the lower one wrong again, so that plan must keep its
+    /// retries. A gap between chunks does not matter — it is zero-filled and
+    /// no chunk write touches it.
+    #[test]
+    fn a_redo_mismatch_is_final_only_without_overlapping_chunks() {
+        let overlapping = PlannedFile {
+            rel: "f.dat".into(),
+            size: 2,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 2),
+                chunk_at("b", "md5-b", 0, 2),
+                chunk_at("c", "md5-c", 1, 1),
+            ],
+        };
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping),
+            "an overlapping plan can assemble different bytes on the next attempt"
+        );
+
+        let gapped = PlannedFile {
+            rel: "f.dat".into(),
+            size: 3,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("a", "md5-a", 0, 1), chunk_at("b", "md5-b", 2, 1)],
+        };
+        assert!(
+            redo_mismatch_is_terminal(&gapped),
+            "a gap is zero-filled and does not make the digest changeable"
         );
     }
 
