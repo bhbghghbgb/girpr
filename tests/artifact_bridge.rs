@@ -43,8 +43,13 @@
 //!
 //! ```text
 //! cargo build -p gircap
-//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 //! ```
+//!
+//! No `--no-capture` is needed: the `[[profile.default.overrides]]` in
+//! `.config/nextest.toml` whose `filter` names these six cases sets
+//! `success-output = "immediate"`, so the precondition and per-capture lines
+//! are printed even though the cases pass.
 //!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
@@ -731,7 +736,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
             let bridge = bridge().await;
             drive_named(&bridge, $id).await;

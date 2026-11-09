@@ -101,9 +101,10 @@ success-output = "immediate"
 
 # The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
 # optional sibling binary. When it is not built, `assert_bundle_verifies`
-# prints the same kind of host-dependent skip and the case still passes. The
-# run command in `tests/artifact_bridge.rs` carries `--no-capture` only to make
-# that line visible, so show it for these cases too.
+# prints the same kind of host-dependent skip and the case still passes. Nextest
+# discards a passing test's captured output by default, so show it for this
+# filter: that is what lets the hand-run command in `tests/artifact_bridge.rs`
+# leave `--no-capture` off.
 [[profile.default.overrides]]
 filter = """
     test(=the_identical_capture_fetches_nothing)
