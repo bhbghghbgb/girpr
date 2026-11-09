@@ -593,6 +593,8 @@ until the main tasks and rework are done.
 | F492 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | The shared caveat now covers the chunk join but names only the manifest-fetch paths of the reference clients. | skipped (accurate while every measured `url_suffix` is empty) |
 | F493 | PURGE-PERF-08 review | `src/util/counter.rs` tests | `ReleaseOnPanic` has a narrow race: if the guard drops after `Barrier::wait` releases the helper but before it records `passed`, the waiter can park until exit. | todo |
 | F494 | PURGE-PERF-08 review | `src/repair/mod.rs` | A private 10 s `RECEIVE_WAIT` remains there; it is a candidate for the same single-constant hoist. | todo |
+| F495 | TEST-REGRESSION-06 review | `src/lib.rs` | The new helper pins cover an ordinary and a pre-epoch clock, but not a clock shortly *after* the epoch crossing backward, which was the removed test's other shape. | todo |
+| F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | todo |
 
 ## Follow-up batches
 
@@ -689,6 +691,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | todo | Wave E; release-guard race and the remaining wait constant; low |
+| TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
