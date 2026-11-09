@@ -29,6 +29,12 @@ use girpr::test_support::{
     Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
     terminal_retcode,
 };
+// Host-relative fixture timestamps. The implementation lives behind the
+// crate's test seam so the unit tests and the integration tests share one
+// definition; this re-export is the integration side's way in. Each binary
+// uses one of the two helpers, so the other is unused here.
+#[allow(unused_imports)]
+pub use girpr::test_support::{stamp_ago, stamp_ahead};
 use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
 use prost::Message as _;
 

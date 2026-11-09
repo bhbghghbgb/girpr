@@ -97,13 +97,18 @@ pub use report::{Ceiling, OutputFormat, Record, Summary, SummaryFlags, emit, sum
 /// - `EMPTY_MD5` is the digest the fixtures use for an absent chunk;
 /// - `terminal_retcode` is the retcode classifier the fixture builds its
 ///   terminal failures with, so a test cannot disagree with the client about
-///   which codes are final.
+///   which codes are final;
+/// - `stamp_ago`, `stamp_ago_from`, `stamp_ahead` and `stamp_ahead_from`
+///   build host-relative fixture timestamps, so the repair's age rule is not
+///   tested against a fixed epoch that a clock could pass.
 ///
 /// `Record` and `summary_record` repeat the root exports on purpose: an
 /// integration test can import everything it needs from this one module. That
 /// repetition is a convenience of the test seam, not a second API.
 #[doc(hidden)]
 pub mod test_support {
+    use std::time::{Duration, SystemTime};
+
     pub use crate::config::RepairMode;
     pub use crate::hyp::terminal_retcode;
     pub use crate::repair::lock::{Lock, lock_path, takes_lock};
@@ -115,4 +120,100 @@ pub mod test_support {
         ChunkFetch, ChunkSink, SophonChunk, SophonChunkFile, SophonChunkManifest, stream_chunk_to,
     };
     pub use crate::util::EMPTY_MD5;
+
+    /// `now` minus `age`, or `None` when this platform cannot represent the
+    /// result.
+    ///
+    /// The subtraction is **not** floored at the Unix epoch: a clock on either
+    /// side of the epoch gets a stamp exactly `age` older, so a fixture's
+    /// "older than one coarse tick" property holds on a pre-epoch clock too.
+    /// `None` is the only answer when the platform cannot reach that far back;
+    /// a caller must then skip the case rather than run it with a stamp that
+    /// is younger than the one it asked for.
+    ///
+    /// The result is never in the current clock's future, and it is never the
+    /// clock itself.
+    pub fn stamp_ago_from(now: SystemTime, age: Duration) -> Option<SystemTime> {
+        now.checked_sub(age)
+    }
+
+    /// [`stamp_ago_from`] relative to the current clock.
+    pub fn stamp_ago(age: Duration) -> Option<SystemTime> {
+        stamp_ago_from(SystemTime::now(), age)
+    }
+
+    /// `now` plus `age`, or `None` when this platform cannot represent the
+    /// result.
+    ///
+    /// The mirror of [`stamp_ago_from`]. `None` matters here for the same
+    /// reason: clamping to the current clock would turn an intended
+    /// future-dated fixture into an ordinary one without saying so.
+    pub fn stamp_ahead_from(now: SystemTime, age: Duration) -> Option<SystemTime> {
+        now.checked_add(age)
+    }
+
+    /// [`stamp_ahead_from`] relative to the current clock.
+    pub fn stamp_ahead(age: Duration) -> Option<SystemTime> {
+        stamp_ahead_from(SystemTime::now(), age)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// The age is exact on both sides of the epoch, and the clock itself
+        /// is never handed back as if it were older. A pre-epoch clock is the
+        /// case that used to silently lose the age.
+        #[test]
+        fn an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch() {
+            let day = Duration::from_secs(24 * 60 * 60);
+
+            let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * day.as_secs());
+            assert_eq!(
+                stamp_ago_from(now, day),
+                Some(now - day),
+                "an ordinary clock gets exactly the requested age"
+            );
+
+            let before_epoch = SystemTime::UNIX_EPOCH - Duration::from_secs(60);
+            let aged = stamp_ago_from(before_epoch, day)
+                .expect("a clock a minute before the epoch has a day of history");
+            assert_eq!(
+                aged,
+                before_epoch - day,
+                "a pre-epoch clock gets the requested age, not itself"
+            );
+            assert!(
+                aged < before_epoch,
+                "an ago stamp is never in the clock's future"
+            );
+        }
+
+        /// A platform that cannot reach the age reports it instead of passing
+        /// the current clock off as an old stamp.
+        #[test]
+        fn an_unrepresentable_ago_stamp_is_reported_not_clamped() {
+            assert_eq!(
+                stamp_ago_from(SystemTime::UNIX_EPOCH, Duration::from_secs(u64::MAX)),
+                None,
+                "an age no platform can represent is not the current clock"
+            );
+        }
+
+        /// The mirror helper is exact, and an offset the platform cannot
+        /// represent is reported rather than clamped to the clock.
+        #[test]
+        fn an_ahead_stamp_is_exact_or_reported() {
+            let now = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+            assert_eq!(
+                stamp_ahead_from(now, Duration::from_secs(1)),
+                Some(now + Duration::from_secs(1))
+            );
+            assert_eq!(
+                stamp_ahead_from(SystemTime::UNIX_EPOCH, Duration::from_secs(u64::MAX)),
+                None,
+                "an offset no platform can represent is not the current clock"
+            );
+        }
+    }
 }
