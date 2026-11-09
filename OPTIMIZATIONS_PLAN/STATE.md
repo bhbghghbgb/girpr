@@ -676,6 +676,9 @@ until the main tasks and rework are done.
 | F575 | HYP-08 review | `src/repair/test_support.rs` | An async `logs_of` could live behind `cfg(test)`, but it would be unreachable from integration tests and still duplicated. | skipped (only worth revisiting if a third copy appears) |
 | F576 | JOBS-07 implementer | `tests/cli_contract.rs` | `HELP_SHORT_OPTION_INDENT` likewise has no automated tie to clap's actual layout; only fixture-based tests exercise it. | todo |
 | F577 | JOBS-07 implementer | `tests/cli_contract.rs` | No test asserts that a real `--help` description line begins at `HELP_DESCRIPTION_INDENT`; output is only checked through `help_entry`. | todo |
+| F578 | LOCK-08 implementer | `tests/common/run_lock.rs` | The mirror does not model `--` or bare positionals; the helper could still name a game path seen before them. | skipped (the CLI has no positionals and every caller passes flags plus values only; lock removal is a no-op when wrong) |
+| F579 | LOCK-08 implementer | `tests/common/run_lock.rs` | `args_take_lock` still tokenizes without arity, so invalid argv gets an arbitrary (no-op) answer. | skipped (its documented reason holds for every argv clap accepts) |
+| F580 | LOCK-08 implementer | `tests/run_lock.rs` | A future value-taking flag using `allow_hyphen_values` or a short value form would need the table and rule revisited; the drift test covers arity and aliases only. | skipped (the drift test fails first if arity changes) |
 
 ## Follow-up batches
 
@@ -821,6 +824,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-10 | F573, F574 | todo | Wave E; runtime-flavor doc scoping in both log helpers; low |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
 | JOBS-08 | F576, F577 | todo | Wave E; real help output indent pins; low |
+| LOCK-09 | F578, F579, F580 | done | Wave E; argv terminator, lock-scan arity, hyphen values; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
