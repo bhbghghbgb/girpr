@@ -161,8 +161,9 @@ builds the verifier first, so the `gircap verify` precondition below actually
 executes instead of skipping:
 
 ```
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 ```
 
 Nothing else runs it. `cargo nextest run` still *compiles* the file, which is

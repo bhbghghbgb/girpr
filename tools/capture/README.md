@@ -150,11 +150,10 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 `#[ignore]`d for cost, so it is run by hand:
 
 ```powershell
-# in the girpr package. Needs one bundle and FAILS without one.
-$env:GIRPR_ARTIFACT_BUNDLE = "<path to one bundle>"
-# build the verifier so the gircap verify precondition runs instead of skipping
-cargo build -p gircap
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture --test-threads=1
+# in the girpr package. Needs exactly one bundle and FAILS without one.
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 ```
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on

@@ -42,14 +42,16 @@
 //! precondition actually executes instead of skipping:
 //!
 //! ```text
+//! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 //! cargo build -p gircap
 //! cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 //! ```
 //!
-//! No `--no-capture` is needed: the `[[profile.default.overrides]]` in
-//! `.config/nextest.toml` whose `filter` names these six cases sets
-//! `success-output = "immediate"`, so the precondition and per-capture lines
-//! are printed even though the cases pass.
+//! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
+//! own scratch tree and listeners (§6.2), so the cases are parallel-safe, and
+//! the `[[profile.default.overrides]]` in `.config/nextest.toml` whose `filter`
+//! names these six cases sets `success-output = "immediate"`, so the
+//! precondition and per-capture lines are printed even though the cases pass.
 //!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
