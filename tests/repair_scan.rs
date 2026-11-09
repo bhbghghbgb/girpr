@@ -866,6 +866,11 @@ async fn an_overlapping_layout_reaches_the_manifest_digest_after_the_redo() {
         logs.contains("final md5 mismatch -> redoing the mismatching chunks"),
         "the whole-file digest gate is what drove the redo: {logs}"
     );
+    assert!(
+        !logs.contains("attempt failed"),
+        "the redo must settle the file inside the first attempt, not through a \
+         file-level retry: {logs}"
+    );
     assert_eq!(
         mock.chunk_hits(),
         vec!["chunk_overlap_a".to_string(), "chunk_overlap_b".to_string()],
