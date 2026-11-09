@@ -372,10 +372,10 @@ mod tests {
     const GATE_WAIT: Duration = Duration::from_secs(10);
 
     /// Time left before `deadline`, or `None` once it has passed. The slow
-    /// check's release wait distinguishes `None` from a zero duration so it can
-    /// record expiry; the two harness waits collapse it to zero because they
-    /// only need to wake, and the assertion that follows reports the shared
-    /// deadline.
+    /// check's release wait records an expired deadline (no positive time
+    /// left) as a failed outcome; the two harness waits collapse it to a zero
+    /// timeout because they only need to wake, and the assertion that follows
+    /// reports the shared deadline.
     fn before(deadline: Instant) -> Option<Duration> {
         deadline.checked_duration_since(Instant::now())
     }
