@@ -567,9 +567,9 @@ until the main tasks and rework are done.
 | F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | completed |
 | F467 | MANIFEST-06 follow-up | `src/repair/phases/manifest.rs`, `tests/artifact_bridge/server.rs`, `tests/common` | If a shared gated-origin helper is ever attempted, `manifest.rs::TestServer` and `artifact_bridge/server.rs::Origins` are the real candidates, not the plain helpers. | skipped (gated-origin helper does not exist; a note about a future one would be noise) |
 | F468 | MANIFEST-06 review | `tests/repair_scan.rs` | Exit 3 is asserted without pinning that the md5 gate (not another write failure) produced it; asserting the final-digest message would harden it. | completed |
-| F469 | JOBS-05 review | `tests/cli_contract.rs` | No test pins the panic message's "both shapes" wording; a `#[should_panic(expected = ...)]` test would lock it in. | pending_review |
-| F470 | JOBS-05 review | `tests/cli_contract.rs` | No fixture combines CRLF with the short-alias shape; the two paths are tested only separately. | pending_review |
-| F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | pending_review |
+| F469 | JOBS-05 review | `tests/cli_contract.rs` | No test pins the panic message's "both shapes" wording; a `#[should_panic(expected = ...)]` test would lock it in. | completed |
+| F470 | JOBS-05 review | `tests/cli_contract.rs` | No fixture combines CRLF with the short-alias shape; the two paths are tested only separately. | completed |
+| F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | completed |
 | F472 | LOGGING-05 review | `src/logging.rs` tests | The lock doc's "only because nextest runs each test in its own process" is stronger than needed while no second `try_init` exists; a future subscriber-installing unit test must take the lock. | todo |
 | F473 | LOGGING-05 review | `src/logging.rs` tests | `already been set` is tied to `tracing-core`'s wording; testing the typed `SetGlobalDefaultError` rejection would survive a dependency bump. | todo |
 | F474 | LOCK-06 review | `tests/common/run_lock.rs` | `game_path_arg` still returns `Some` for a trailing `--game-path` with no value or a flag-looking value; clap rejects both, so the doc's "no value" claim is broader than the code. | todo |
@@ -690,7 +690,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-06 | F464 | done | Wave E; sweep cast wording; low; da468d2 |
 | HYP-07 | F465 | done | Wave E; multi-thread runtime caveat for the log helper; low; 74db398 |
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
-| JOBS-06 | F469, F470, F471 | pending_review | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low; d3af585, d7c4b28, c989e28 |
+| JOBS-06 | F469, F470, F471 | done | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low; d3af585, d7c4b28, c989e28 |
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
