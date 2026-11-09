@@ -543,7 +543,7 @@ until the main tasks and rework are done.
 | F442 | TEMP-PUBLISH-05 review | `src/util/path.rs` | `temp_sibling`'s doc names only `copy_publish_with` as the refusing caller; `atomic::publish` now refuses too. | completed |
 | F443 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` | `Path::file_name()` is `Some("dir")` for `dir/.`, so the new guard misses that spelling; the rename still fails and cleans up. | completed |
 | F444 | TEST-MANIFEST-05 review | `src/sophon/stream.rs`, `tools/capture` | `join_url` (`{prefix}/{id}`) conflicts with the capture tool's `{prefix}/{id}{suffix}`; decide the contract and test a non-empty suffix. | skipped (documented contract is prefix-only; references agree; suffix semantics unmeasurable) |
-| F445 | TEST-MANIFEST-05 review | `src/lib.rs` | The `test_support` doc groups `join_url` under helpers the offline server and peak-heap probe need, but the new consumer is `tests/repair_offline.rs`. | pending_review |
+| F445 | TEST-MANIFEST-05 review | `src/lib.rs` | The `test_support` doc groups `join_url` under helpers the offline server and peak-heap probe need, but the new consumer is `tests/repair_offline.rs`. | completed |
 | F446 | TEST-MANIFEST-05 review | `tests/repair_offline.rs` | `extra_manifest` is local; if another test binary describes extra latest manifests, move it into `tests/common`. | skipped (only one test binary describes extra latest manifests) |
 | F447 | PURGE-PERF-07 review | `src/sophon/stream.rs` tests | `serve_status` shares the accept/count/one-shot-reply skeleton with `test_http::serve_bodies`; a status-aware parameter would remove a third copy. | todo |
 | F448 | PURGE-PERF-07 review | `src/util/counter.rs` tests | Both pause tests repeat `const RECEIVE_WAIT: Duration = Duration::from_secs(10)`; a module-level constant would keep the single hang guard in one place. | todo |
@@ -660,7 +660,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-TOOLS-06 | F437 | done | Wave E; capture comment wording; low; 0fd58ab |
 | TEMP-WRITER-06 | F438, F439, F440 | done | Wave E; dual-mode sink doc, read wrapper, reuse builder; low; 683e227, 63004a5, 53cf1be, d20aeb6 |
 | TEMP-PUBLISH-06 | F441, F442, F443 | done | Wave E; publish guard spelling and doc sync; low; 5e8075b, 9546194, b0d5c3c, 002dffa |
-| TEST-MANIFEST-06 | F444, F445, F446 | pending_review | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555 |
+| TEST-MANIFEST-06 | F444, F445, F446 | done | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555, 9c1c400 |
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
