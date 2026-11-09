@@ -132,17 +132,24 @@ pub(crate) fn args_take_lock(args: &[impl AsRef<str>]) -> bool {
 
 /// The one `--game-path` value in a binary argument list, in either spelling.
 ///
-/// `None` when the list names no game path, when the flag has no value, when
-/// the value is empty, or when the flag is repeated. The CLI refuses a repeated
-/// `--game-path` before a run can take a lock, and refuses an empty value, so
-/// cleanup must not pick a directory that never ran.
+/// `None` when the list names no game path, when the flag has no following
+/// value, when the following token is another flag, when the value is empty, or
+/// when the flag is repeated. The CLI refuses each of those spellings before a
+/// run can take a lock, so cleanup must not pick a directory that never ran.
 pub(crate) fn game_path_arg(args: &[impl AsRef<str>]) -> Option<&str> {
     let mut found = None;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
         let value = if arg == "--game-path" {
-            args.next().map(|value| value.as_ref())
+            match args.next().map(|value| value.as_ref()) {
+                // clap reads a token that starts with `-` as a flag rather
+                // than the option's value; a lone `-` is still a value.
+                Some(value) if value == "-" || !value.starts_with('-') => Some(value),
+                // A missing value or another flag is a usage error, so the run
+                // never starts and takes no lock.
+                _ => return None,
+            }
         } else {
             arg.strip_prefix("--game-path=")
         };

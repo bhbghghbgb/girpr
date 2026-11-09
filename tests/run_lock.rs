@@ -144,6 +144,49 @@ mod run_lock_tests {
     }
 
     #[test]
+    fn game_path_arg_refuses_a_trailing_or_flag_value() {
+        // clap rejects a `--game-path` with no value or with another flag as
+        // its value, so the run never starts and takes no lock. The same holds
+        // when such an occurrence follows a valid one.
+        for args in [
+            vec!["--game-path"],
+            vec!["--game-path", "--dry-run"],
+            vec!["--game-path", "--biz", "hk4e_global"],
+            vec!["--game-path", "/games/a", "--game-path"],
+            vec!["--game-path", "/games/a", "--game-path", "--dry-run"],
+            vec!["--game-path=/games/a", "--game-path"],
+        ] {
+            assert_eq!(game_path_arg(&args), None, "{args:?}");
+        }
+        // A lone `-` is a value, not a flag.
+        assert_eq!(game_path_arg(&["--game-path", "-"]), Some("-"));
+    }
+
+    #[test]
+    fn the_cli_refuses_a_missing_or_flag_game_path_value() {
+        for argv in [
+            vec!["girpr", "--game-path"],
+            vec!["girpr", "--game-path", "--dry-run", "--biz", "hk4e_global"],
+            vec!["girpr", "--game-path", "--biz", "hk4e_global"],
+            vec![
+                "girpr",
+                "--game-path",
+                "/games/a",
+                "--game-path",
+                "--biz",
+                "hk4e_global",
+            ],
+        ] {
+            assert!(Args::try_parse_from(argv.clone()).is_err(), "{argv:?}");
+        }
+        // An explicit `=` value and a lone `-` are still values.
+        assert!(Args::try_parse_from(["girpr", "--game-path=-", "--biz", "hk4e_global"]).is_ok());
+        assert!(
+            Args::try_parse_from(["girpr", "--game-path", "-", "--biz", "hk4e_global"]).is_ok()
+        );
+    }
+
+    #[test]
     fn the_cli_refuses_an_empty_game_path() {
         // This is why `lock_key_path` does not mirror production's key for
         // `""`: clap rejects the empty value before any run can take a lock.
