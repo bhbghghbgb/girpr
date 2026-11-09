@@ -514,9 +514,9 @@ until the main tasks and rework are done.
 | F413 | DOCS-COMMENTS-04 review | `docs/07-panic-audit.md` | Name `saturating_*`/`checked_*` and `+=`/`-=` explicitly beside "arithmetic" so the prose mirrors the sweep command token for token. | completed |
 | F414 | HYP-05 review | `tests/common/mod.rs` | `logs_of` still carries the old "thread-local and cannot race another test" wording; apply the corrected `set_default` + current-thread-runtime phrasing. | completed |
 | F415 | HYP-05 review | `tests/common/mod.rs`, `src/repair/phases/metadata.rs` | The async `logs_of` duplication remains; consolidating it needs a public async helper, so leave unless that API is wanted. | skipped (needs a public async test helper; no non-public seam covers it) |
-| F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | todo |
-| F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | todo |
-| F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | todo |
+| F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | pending_review |
+| F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | pending_review |
+| F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | skipped (history-only; the fixture is already distinguished by its constructor and doc) |
 | F419 | MANIFEST-05 review | `tests/repair_scan.rs` | `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` took 11.0 s in a full-suite run; may merit a look if it recurs. | todo |
 | F420 | MANIFEST-05 review | `src/repair/phases/metadata.rs`, `src/sophon/stream.rs`, `src/hyp.rs`, `tests/common` | Plain test HTTP servers remain duplicated; consolidation is worthwhile only once a second gated-origin user exists. | todo |
 | F421 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry`'s synthetic fixtures spell the six-space indent literally instead of using `HELP_OPTION_INDENT`. | todo |
@@ -629,7 +629,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-05 | F409, F410, F411 | done | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
 | DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
-| METADATA-06 | F416, F417, F418 | in_progress | Wave E; branch-failure wording and shared terminal predicate; low |
+| METADATA-06 | F416, F417, F418 | pending_review | Wave E; branch-failure wording and shared terminal predicate; low; 211a332, ebb59d8 |
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
