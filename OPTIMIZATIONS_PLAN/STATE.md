@@ -682,7 +682,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-06 | F453, F454 | done | Wave E; shared scan-bytes key and README layout; low; 7e8c04d, a7d9834 |
 | CHECK-07 | F455, F456, F457 | done | Wave E; gate-test expiry wording and deadline comment; low; df3f4c4, 5701bd8, 1a0fb73 |
 | PATHHELPERS-07 | F458, F459, F460 | done | Wave E; bridge flag docs, stale config comment, refusal dedup; low; ccaa79e, 5680206 |
-| DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
+| DOCS-USER-06 | F461, F462, F463 | in_progress | Wave E; bridge recipe unification and cost provenance; low |
 | DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
 | HYP-07 | F465 | todo | Wave E; multi-thread runtime caveat for the log helper; low |
 | MANIFEST-07 | F466, F467, F468 | done | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low; 6192197, 7001ec7, f2966cc |
