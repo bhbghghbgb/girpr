@@ -21,10 +21,9 @@
 //!   are read into RAM, so the write order cannot destroy them;
 //! - **patch** — the wrong chunks are written, ascending: from the staged
 //!   bytes when there are any, from a download otherwise;
-//! - **verify** — the whole-file MD5 is computed from one read and is the
-//!   gate. Only when it does not match does a second pass read the chunk
-//!   ranges, so the per-chunk verdicts can name the culprit; only those chunks
-//!   are redone.
+//! - **verify** — one read is the gate and the culprit list: the whole-file
+//!   MD5 decides, and the same sweep holds the per-chunk verdicts that name
+//!   what to redo when it does not.
 //!
 //! Every byte written lands in a region that was **already wrong at the
 //! moment of the write**, and the whole-file MD5 decides whether the file is

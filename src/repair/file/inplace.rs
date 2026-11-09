@@ -43,10 +43,9 @@ use anyhow::{Context, Result};
 ///    file are read into RAM, so the write order cannot destroy them;
 /// 4. **patch** — the wrong chunks are written, ascending: from the staged
 ///    bytes when there are any, from a download otherwise;
-/// 5. **verify** — the whole-file MD5 is computed from one read and is the
-///    gate. Only when it does not match does a second pass read the chunk
-///    ranges, so the per-chunk verdicts can name the culprit; only those
-///    chunks are redone.
+/// 5. **verify** — one read is the gate and the culprit list: the whole-file
+///    MD5 decides, and the same sweep holds the per-chunk verdicts that name
+///    what to redo when it does not.
 ///
 /// A target that cannot be opened for writing answers [`Inplace::Unavailable`]
 /// and the caller writes that file the other way — through a `_tmp`, which
@@ -548,9 +547,13 @@ async fn verify_and_retry(
     prefix: &str,
     stats: &mut ChunkStats,
 ) -> Result<Inplace> {
-    // One whole-file digest is the gate. Only when it fails does the range
-    // scan run, and its per-chunk verdicts name the culprit.
-    let still_bad = match verify_in_place(handle, dest_ranges, file.chunks.len(), &file.md5)? {
+    // One pass is both the gate and, on a mismatch, the culprit list: the
+    // scan hashes the whole file and the chunk ranges together.
+    let still_bad = match verify_in_place(
+        || util::scan_reader(handle, dest_ranges, &[]),
+        file.chunks.len(),
+        &file.md5,
+    )? {
         Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),
         Verified::Mismatch { md5, still_bad } => {
             if still_bad.is_empty() {
@@ -564,9 +567,9 @@ async fn verify_and_retry(
         }
     };
 
-    // Redo only the chunks that are still wrong. A chunk that fails here
-    // passed its own MD5, so the damage is elsewhere: a second pass names
-    // it instead of re-fetching the whole file.
+    // Redo only the chunks the verify pass found still wrong. A chunk that
+    // fails here passed its own MD5, so the damage is elsewhere: the range
+    // verdicts name it instead of re-fetching the whole file.
     tracing::warn!(
         file = %file.rel,
         chunks = still_bad.len(),
@@ -586,13 +589,19 @@ async fn verify_and_retry(
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
-    let final_md5 = util::md5::md5_reader_digest(handle)?;
+    // The digest and, when the layout has an overlap, the verdicts the
+    // terminal decision needs are the same read: the scan hashes the whole
+    // file as it sweeps the ranges.
+    let scan = read_after_redo(file, dest_ranges, |ranges| {
+        util::scan_reader(handle, ranges, &[])
+    })?;
+    let final_md5 = scan.file_md5;
     if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
         let message = format!(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel, file.md5, final_md5
         );
-        if redo_mismatch_is_terminal(file, || util::scan_reader(handle, dest_ranges, &[]))? {
+        if redo_mismatch_is_terminal(&scan) {
             return Err(FinalDigestMismatch(message).into());
         }
         return Err(anyhow::anyhow!(message));
@@ -600,35 +609,49 @@ async fn verify_and_retry(
     Ok(repaired_in_place(stats, final_md5))
 }
 
+/// The one read the post-redo tail takes: the whole-file digest and, when the
+/// layout has an overlap, the per-chunk verdicts the terminal decision needs.
+///
+/// [`util::scan_reader`] hashes the whole file as it sweeps, so its digest is
+/// the digest a bare whole-file pass would return. An overlap needs the range
+/// verdicts anyway, so asking the scan for them costs no extra read; asking
+/// for a digest first and scanning after the comparison failed would read the
+/// file twice. The trade is the range digests on an overlap whose redo did
+/// settle the digest. A plan with no overlap is proved by the layout alone, so
+/// it is given no ranges: the same single pass still answers the digest, just
+/// without building per-range digests.
+fn read_after_redo(
+    file: &PlannedFile,
+    dest_ranges: &[util::ScanRange<'_>],
+    read: impl FnOnce(&[util::ScanRange<'_>]) -> Result<util::Scan>,
+) -> Result<util::Scan> {
+    let ranges = if file.layout().overlaps.is_empty() {
+        &[][..]
+    } else {
+        dest_ranges
+    };
+    read(ranges)
+}
+
 /// Can another attempt change the bytes a post-redo mismatch was computed
 /// over?
 ///
 /// The redo wrote every chunk the second scan named. Without overlapping
-/// chunks that is the whole proof: every range now matches, so the only
-/// remaining difference is the zero-filled gaps and the declared length, and
-/// a second attempt would write no chunk and repeat the digest. That answer
-/// reads nothing.
+/// chunks [`read_after_redo`] asked for no ranges, and the layout is the whole
+/// proof: the only remaining difference is the zero-filled gaps and the
+/// declared length, so a second attempt would write no chunk and repeat the
+/// digest.
 ///
 /// An overlap can undo a neighbour when the redo rewrites a chunk, so a
 /// non-empty overlap list is not proof by itself. Two chunks that claim the
 /// same bytes can be genuinely different — at most one of them can match — or
 /// identical duplicates, where both match and no write can change either.
 /// The layout cannot tell the two apart, because it only knows offsets and
-/// lengths; only the bytes can. `rescan` therefore reads the chunk ranges
-/// once and the mismatch is final exactly when every one of them now matches.
-///
-/// That extra read is taken **only** on this failure path. The success path
-/// returns before the redo, and a plan with no overlap is settled by the
-/// layout alone, so neither gains a read.
-fn redo_mismatch_is_terminal(
-    file: &PlannedFile,
-    rescan: impl FnOnce() -> Result<util::Scan>,
-) -> Result<bool> {
-    if file.layout().overlaps.is_empty() {
-        return Ok(true);
-    }
-    let scan = rescan()?;
-    Ok(scan.dest_ok.iter().all(|&ok| ok))
+/// lengths; only the bytes can. The scan therefore carries one verdict per
+/// range, and the mismatch is final exactly when every one of them now
+/// matches.
+fn redo_mismatch_is_terminal(scan: &util::Scan) -> bool {
+    scan.dest_ok.iter().all(|&ok| ok)
 }
 
 /// A whole-file digest mismatch that no retry can change.
@@ -643,10 +666,11 @@ fn redo_mismatch_is_terminal(
 ///
 /// The marker is only used when another attempt cannot change the assembled
 /// bytes: either every chunk range already matched, or [`verify_and_retry`]'s
-/// redo was followed by a rescan that found every range correct. An overlap
-/// whose ranges cannot all match keeps the ordinary error, because rewriting
-/// one chunk can make its neighbour wrong again and the next attempt may
-/// assemble different bytes.
+/// redo was followed by a scan that found every range it checked correct (a
+/// layout with no overlap asks for no ranges and is proved by that layout).
+/// An overlap whose ranges cannot all match keeps the ordinary error, because
+/// rewriting one chunk can make its neighbour wrong again and the next attempt
+/// may assemble different bytes.
 ///
 /// A **transient** download or write error is still an ordinary `Err` and is
 /// retried; this marker is only for the verify gate's deterministic verdict.
@@ -665,36 +689,37 @@ impl std::error::Error for FinalDigestMismatch {}
 
 /// What one verification pass over the in-place target answered.
 enum Verified {
-    /// The whole-file digest is the manifest's; nothing else had to be read.
+    /// The whole-file digest is the manifest's; the chunk verdicts were not
+    /// needed.
     Matches(Md5),
     /// The digest did not match. `still_bad` is one entry per chunk, in plan
-    /// order, from the extra scan that names what to redo.
+    /// order, from the same pass that computed the digest.
     Mismatch { md5: Md5, still_bad: Vec<usize> },
 }
 
-/// Verify the target with one whole-file digest, and scan the ranges only
-/// when that digest fails.
+/// Verify the target in one pass, and name the chunks to redo on a mismatch.
 ///
-/// The success path only needs the whole-file MD5, so it costs one digest over
-/// the file's bytes. The per-chunk verdicts exist to say which chunks to redo;
-/// they are needed after a mismatch and never on success, so the scan that
-/// produces them runs only then.
+/// The scan hashes the whole file as it sweeps, so the digest that gates the
+/// file and the per-chunk verdicts that say what to redo come from the same
+/// read. The digest alone answers success, but it cannot say in advance
+/// whether the verdicts will be needed, and digesting first and scanning after
+/// the comparison failed would read the file twice on every mismatch. One pass
+/// is therefore the only form that never pays a second read; `read` is that
+/// pass, and both outcomes call it exactly once.
 fn verify_in_place(
-    handle: &mut std::fs::File,
-    dest_ranges: &[util::ScanRange<'_>],
+    read: impl FnOnce() -> Result<util::Scan>,
     chunks_len: usize,
     expect: &str,
 ) -> Result<Verified> {
-    let after = util::md5::md5_reader_digest(handle)?;
-    if Md5::parse_hex(expect).is_ok_and(|expected| expected == after) {
-        return Ok(Verified::Matches(after));
+    let scan = read()?;
+    if Md5::parse_hex(expect).is_ok_and(|expected| expected == scan.file_md5) {
+        return Ok(Verified::Matches(scan.file_md5));
     }
-    let scan = util::scan_reader(handle, dest_ranges, &[])?;
     let still_bad = (0..chunks_len)
         .filter(|&i| !scan.dest_ok.get(i).copied().unwrap_or(false))
         .collect();
     Ok(Verified::Mismatch {
-        md5: after,
+        md5: scan.file_md5,
         still_bad,
     })
 }
@@ -1315,15 +1340,16 @@ mod tests {
     /// A post-redo mismatch is only final when the redo's writes cannot be
     /// undone by the next attempt. A gap between chunks does not matter — it
     /// is zero-filled and no chunk write touches it — so the layout alone
-    /// settles a plan with no overlap, without reading the file again.
+    /// settles a plan with no overlap, without asking for range verdicts.
     ///
     /// An overlap does need the bytes: two identical chunks at one offset both
     /// match after the redo, so no write a retry could make would change a
     /// byte, while two genuinely different chunks cannot both match and must
-    /// keep their retries. The rescan that tells them apart is exactly one
-    /// read, and only on this failure path.
+    /// keep their retries. The same pass that produces the digest carries
+    /// those verdicts, so the overlap path reads the file once instead of
+    /// digesting and then rescanning.
     #[test]
-    fn a_redo_mismatch_rescans_only_an_overlap_and_reads_once() {
+    fn a_redo_mismatch_settles_in_one_read_and_rescans_only_an_overlap() {
         let overlapping = PlannedFile {
             rel: "f.dat".into(),
             size: 2,
@@ -1336,7 +1362,8 @@ mod tests {
             ],
         };
 
-        // No overlap: the layout is the proof and the rescan must not run.
+        // No overlap: the layout is the proof, so the single pass is given no
+        // ranges and its digest settles the file.
         let gapped = PlannedFile {
             rel: "f.dat".into(),
             size: 3,
@@ -1344,23 +1371,39 @@ mod tests {
             url_prefix: Arc::from(""),
             chunks: vec![chunk_at("a", "md5-a", 0, 1), chunk_at("b", "md5-b", 2, 1)],
         };
+        let gapped_dest = [(0u64, 1u64, "md5-a"), (2, 1, "md5-b")];
         let mut reads = 0;
-        let terminal = redo_mismatch_is_terminal(&gapped, || {
+        let scan = read_after_redo(&gapped, &gapped_dest, |ranges| {
             reads += 1;
-            Ok(util::Scan::absent(0, 0))
+            assert!(
+                ranges.is_empty(),
+                "a plan with no overlap needs no per-range verdicts"
+            );
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 3,
+                dest_ok: Vec::new(),
+                source_ok: Vec::new(),
+            })
         })
         .unwrap();
+        assert_eq!(reads, 1, "the post-redo tail reads the file exactly once");
         assert!(
-            terminal,
+            redo_mismatch_is_terminal(&scan),
             "a gap is zero-filled and does not make the digest changeable"
         );
-        assert_eq!(reads, 0, "a plan with no overlap needs no extra read");
 
         // Duplicate identical chunks: every range matches after the redo, so
         // the next attempt would write nothing and repeat the same bytes.
+        let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
         let mut reads = 0;
-        let terminal = redo_mismatch_is_terminal(&overlapping, || {
+        let scan = read_after_redo(&overlapping, &overlap_dest, |ranges| {
             reads += 1;
+            assert_eq!(
+                ranges.len(),
+                3,
+                "an overlap needs a verdict for every range"
+            );
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
                 file_len: 2,
@@ -1369,16 +1412,23 @@ mod tests {
             })
         })
         .unwrap();
+        assert_eq!(
+            reads, 1,
+            "the whole-file digest and the range verdicts are one pass, not a \
+             digest followed by a rescan"
+        );
         assert!(
-            terminal,
+            redo_mismatch_is_terminal(&scan),
             "identical duplicates cannot make a retry assemble different bytes"
         );
-        assert_eq!(reads, 1, "the overlap is resolved by exactly one rescan");
+        // This is the branch that builds `FinalDigestMismatch`, so the file
+        // loop settles the file here instead of spending another attempt on
+        // the same bytes.
 
         // A genuine overlap: at least one range cannot match, so the next
         // attempt may assemble different bytes.
         let mut reads = 0;
-        let terminal = redo_mismatch_is_terminal(&overlapping, || {
+        let scan = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
             reads += 1;
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
@@ -1388,17 +1438,20 @@ mod tests {
             })
         })
         .unwrap();
+        assert_eq!(reads, 1, "one pass decides either way");
         assert!(
-            !terminal,
+            !redo_mismatch_is_terminal(&scan),
             "an overlapping plan whose ranges cannot all match keeps its retries"
         );
-        assert_eq!(reads, 1, "one rescan is enough to decide either way");
     }
 
     /// The verify pass pins the whole-file digest on success and names the
     /// chunks to redo on a mismatch. The corrupt byte is in the chunk the
-    /// patch did not write, so the digest has to fail first and the extra
-    /// scan then has to report that chunk — not the one the patch rewrote.
+    /// patch did not write, so the digest has to fail and the same pass has to
+    /// report that chunk — not the one the patch rewrote.
+    ///
+    /// Both outcomes take exactly one pass: digesting first and scanning only
+    /// after the comparison failed would read the file twice on a mismatch.
     #[test]
     fn the_in_place_verify_pins_the_digest_and_names_the_still_bad_chunks() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "verify_digest");
@@ -1420,12 +1473,23 @@ mod tests {
         // The verify starts at the beginning of the file even when the last
         // write left the handle at EOF.
         f.seek(SeekFrom::End(0)).unwrap();
-        match verify_in_place(&mut f, &dest, 2, &expect).unwrap() {
+        let mut reads = 0;
+        match verify_in_place(
+            || {
+                reads += 1;
+                util::scan_reader(&mut f, &dest, &[])
+            },
+            2,
+            &expect,
+        )
+        .unwrap()
+        {
             Verified::Matches(md5) => assert_eq!(md5.to_hex(), expect),
             Verified::Mismatch { md5, .. } => {
                 panic!("an intact file must match, got {md5}")
             }
         }
+        assert_eq!(reads, 1, "an intact file takes one pass");
 
         // Only the second chunk is damaged: chunk 0 is the one a patch would
         // have written, chunk 1 is outside it.
@@ -1438,17 +1502,31 @@ mod tests {
             .open(&path)
             .unwrap();
         f.seek(SeekFrom::End(0)).unwrap();
-        match verify_in_place(&mut f, &dest, 2, &expect).unwrap() {
+        let mut reads = 0;
+        match verify_in_place(
+            || {
+                reads += 1;
+                util::scan_reader(&mut f, &dest, &[])
+            },
+            2,
+            &expect,
+        )
+        .unwrap()
+        {
             Verified::Mismatch { md5, still_bad } => {
                 assert_eq!(
                     still_bad,
                     vec![1],
-                    "the extra scan names the chunk that is still wrong"
+                    "the pass names the chunk that is still wrong"
                 );
                 assert_eq!(md5, util::md5::md5_digest(&bad));
             }
             Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
         }
+        assert_eq!(
+            reads, 1,
+            "a mismatch is one pass too, not a digest and then a scan"
+        );
     }
 
     /// The coarse tick containing `t`, used to model a store that truncates
@@ -1668,7 +1746,8 @@ mod tests {
         assert_ne!(std::fs::read(&path).unwrap(), good);
 
         let dest: Vec<util::ScanRange<'_>> = vec![(0, 4, &md5_0), (4, 4, &md5_1)];
-        match verify_in_place(&mut handle, &dest, 2, &file.md5).unwrap() {
+        match verify_in_place(|| util::scan_reader(&mut handle, &dest, &[]), 2, &file.md5).unwrap()
+        {
             Verified::Mismatch { still_bad, .. } => assert_eq!(
                 still_bad,
                 vec![0, 1],
