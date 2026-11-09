@@ -612,6 +612,9 @@ until the main tasks and rework are done.
 | F511 | LOCK-07 review | `tests/run_lock.rs` | The CLI test proves a lone `-` parses but does not assert the parsed `game_path` equals `-`. | todo |
 | F512 | INI-07 implementer | `src/util/path.rs` | `junction_refusal` treats any `mklink` failure as a host refusal and skips unless `GIRPR_TEST_REQUIRE_JUNCTION` is set; the same broken `cmd`/argument failure could skip silently. | todo |
 | F513 | INI-07 implementer | `src/util/ini.rs` tests | The shared `link_creation_denied` comment still names `CreateSymbolicLinkW` specifically, though it now also covers junctions. | todo |
+| F514 | INI-07 review | `src/util/ini.rs` | `try_junction_dir` treats any `symlink_metadata` error as "missing", so a permission or transient error is reported as a missing link instead of its own cause. | todo |
+| F515 | INI-07 review | `src/util/ini.rs` | The raw-1314 branch of `junction_skip_reason` is effectively unreachable for junction creation, since `mklink` failures arrive as `Error::other`; document it or key on the failure signature. | todo |
+| F516 | INI-07 review | `src/util/ini.rs` tests | The guard-retry test exercises a plain directory rather than a reparse point, so it does not cover link-type-specific removal. | skipped (deliberately host-independent; the existing link tests cover real removal) |
 
 ## Follow-up batches
 
@@ -718,6 +721,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
 | LOCK-08 | F510, F511 | todo | Wave E; clap arity mirroring and lone-dash assertion; low |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
+| INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
