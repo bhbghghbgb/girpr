@@ -576,6 +576,9 @@ until the main tasks and rework are done.
 | F475 | LOCK-06 review | `tests/run_lock.rs` | The module doc says the shared file is included "with `#[path]` by every binary", but `tests/common/mod.rs` includes it as a plain child module. | todo |
 | F476 | INI-06 review | `src/util/ini.rs` tests | The junction test treats any `try_junction_dir` failure as a host skip, unlike the narrower `symlink_skip_reason`; a broken `cmd`/`mklink` environment would silently skip. | todo |
 | F477 | INI-06 review | `src/util/ini.rs` tests | `LinkGuard::remove` disarms before attempting removal, so a failed success-path removal is never retried in `Drop`; swapping the order would retry cleanly. | todo |
+| F478 | BUILD-06 review | `.github/workflows/msrv.yml` | A failed `cargo metadata` call surfaces as "root package does not declare rust-version"; an explicit `$LASTEXITCODE` check would report the real cause. | todo |
+| F479 | BUILD-06 review | `README.md`, `tests/scripts/check-msrv.ps1` | The README and the script header still spell out `1.89`/`1.88`/`1.85`, which will drift when the MSRV moves. | todo |
+| F480 | BUILD-06 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The duplicated `rustup toolchain install` is accepted for now; if a third install site appears, extract a shared installer helper. | todo |
 
 ## Follow-up batches
 
@@ -665,6 +668,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-06 | F472, F473 | todo | Wave E; lock doc scope and typed rejection pin; low |
 | LOCK-07 | F474, F475 | todo | Wave E; run-lock cleanup hardening and module doc; low |
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
+| BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
