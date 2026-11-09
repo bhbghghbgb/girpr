@@ -629,7 +629,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-05 | F409, F410, F411 | done | Wave E; bridge recipe alignment and profile wording; low; 1df38da, 002e9c7, ea33eda |
 | DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
-| METADATA-06 | F416, F417, F418 | todo | Wave E; branch-failure wording and shared terminal predicate; low |
+| METADATA-06 | F416, F417, F418 | in_progress | Wave E; branch-failure wording and shared terminal predicate; low |
 | MANIFEST-06 | F419, F420 | todo | Wave E; slow md5-gate test and server duplication; low |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
