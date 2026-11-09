@@ -203,6 +203,20 @@ fn help_entry_requires_a_boundary_after_the_flag() {
 }
 
 #[test]
+#[should_panic(
+    expected = "help has no --absent entry as an option line (`      --absent` or `  -x, --absent`)"
+)]
+fn help_entry_panic_names_both_option_shapes() {
+    // A missing flag says which two line shapes it looked for, so a layout
+    // change reads as a layout change rather than as a broken option.
+    let help = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n"
+    );
+    let _ = help_entry(&help, "--absent");
+}
+
+#[test]
 fn help_entry_finds_an_entry_after_a_preceding_option() {
     // The desired entry is not the first line of the help, so its start comes
     // from the newline before it rather than from the start of the text.
