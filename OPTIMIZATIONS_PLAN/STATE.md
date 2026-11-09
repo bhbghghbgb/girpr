@@ -524,9 +524,9 @@ until the main tasks and rework are done.
 | F423 | JOBS-04 review | `tests/cli_contract.rs` | The boundary set omits `\r`; harmless for clap's `\n` output but would break on a Windows-console capture. | completed |
 | F424 | LOGGING-04 review | `src/logging.rs` tests | `SINK_REGISTRY_TEST_LOCK`'s doc should note the reliance on no other test installing a global subscriber first (nextest process-per-test). | completed |
 | F425 | LOGGING-04 review | `src/logging.rs` tests | The warning assertion pins the prefix but not the upstream `SetGlobalDefaultError` reason (`already been set`); optional. | completed |
-| F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | todo |
-| F427 | LOCK-05 review | `tests/common/run_lock.rs` | The `#[cfg(test)]` module in the `#[path]`-shared file runs in every including binary; a dedicated module/bin would cut duplicated executions. | todo |
-| F428 | LOCK-05 review | `tests/common/run_lock.rs` | `lock_key_path` mis-keys an empty `--game-path` (anchors at cwd while production keys `""`); note it if empty paths ever matter. | todo |
+| F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | pending_review |
+| F427 | LOCK-05 review | `tests/common/run_lock.rs` | The `#[cfg(test)]` module in the `#[path]`-shared file runs in every including binary; a dedicated module/bin would cut duplicated executions. | pending_review |
+| F428 | LOCK-05 review | `tests/common/run_lock.rs` | `lock_key_path` mis-keys an empty `--game-path` (anchors at cwd while production keys `""`); note it if empty paths ever matter. | pending_review |
 | F429 | INI-05 review | `src/util/ini.rs` tests | The junction test's `remove_dir` runs only after every assertion; a cleanup guard would tidy failure paths that leave a dangling junction. | todo |
 | F430 | INI-05 review | `src/util/ini.rs` tests | The dangling-symlink test leaves its link for `TempDir` cleanup while the junction test removes its own; share one reparse-point cleanup strategy. | todo |
 | F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | todo |
@@ -641,7 +641,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-06 | F419, F420 | done | Wave E; slow md5-gate test and server duplication; low; ea8b9f0 |
 | JOBS-05 | F421, F422, F423 | done | Wave E; help_entry fixture constants and boundary edges; low; 976e65e |
 | LOGGING-05 | F424, F425 | done | Wave E; global-subscriber test preconditions; low; 9376cc6, 922053c |
-| LOCK-06 | F426, F427, F428 | in_progress | Wave E; duplicate game-path, shared-module test volume, empty key; low |
+| LOCK-06 | F426, F427, F428 | pending_review | Wave E; duplicate game-path, shared-module test volume, empty key; low; 27e28b8, 7b690c9 |
 | INI-06 | F429, F430, F431, F432, F433 | todo | Wave E; junction/symlink test cleanup and platform broadenings; low |
 | BUILD-06 | F434, F435, F436 | todo | Wave E; MSRV pin derivation and cache keying; low |
 | BUILD-TOOLS-06 | F437 | todo | Wave E; capture comment wording; low |
