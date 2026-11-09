@@ -1,8 +1,11 @@
 //! Tests for the shared run-lock cleanup helpers.
 //!
-//! `tests/common/run_lock.rs` is included with `#[path]` by every binary that
-//! needs the cleanup, so its tests live here rather than in a `#[cfg(test)]`
-//! module in that file: such a module would run once per including binary.
+//! `tests/common/run_lock.rs` reaches the test binaries in two ways:
+//! `tests/artifact_bridge.rs` and this file include it directly with `#[path]`,
+//! while the remaining binaries reach it through `tests/common`, whose `mod.rs`
+//! declares it as a plain child module. Its tests live here rather than in a
+//! `#[cfg(test)]` module in that file: such a module would run once per
+//! including binary.
 
 // Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -4,9 +4,10 @@
 //! so an opener cannot be unlinked; a test is not another run, and every case
 //! uses a unique install, so the file would otherwise accumulate one per case.
 //!
-//! The module is shared by several test binaries through `#[path]`, so it must
-//! not pull in the mock server or the fixture builders: a binary that only
-//! needs the cleanup should not compile them.
+//! The module is shared by several test binaries, directly through `#[path]`
+//! and through `tests/common`, so it must not pull in the mock server or the
+//! fixture builders: a binary that only needs the cleanup should not compile
+//! them.
 
 use std::path::{Component, Path, PathBuf};
 
