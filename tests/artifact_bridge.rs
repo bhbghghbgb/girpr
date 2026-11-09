@@ -30,8 +30,9 @@
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
 //! each run fetches four manifests — ~20 MB of real bundle bytes — before it
 //! can plan a single file. The six cases take roughly a minute of wall-clock
-//! in a debug build (measured: 63 s for the six tests, 67 s wall including the
-//! rebuild, on a 4-core Windows x86_64 host with
+//! in a debug build (measured: 63 s wall for the whole six-test run — the
+//! cases run in parallel, so that is not the sum of their durations — and 67 s
+//! wall including the rebuild, on a 4-core Windows x86_64 host with
 //! `cargo nextest run -p girpr --test artifact_bridge --run-ignored only`
 //! against one 7.0.0 → 7.1.0 bundle); the figure depends on the profile and
 //! host, and a release build was not measured here. That is a price worth
@@ -76,8 +77,9 @@
 //! set GIRPR_ARTIFACT_BUNDLE=<dir>
 //! ```
 //!
-//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then
-//! `gircap list --root artifacts`, then a directory scan.
+//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then the search
+//! root (`GIRPR_ARTIFACT_ROOT` when set, else `artifacts/`), then
+//! `gircap list --root <root>`, then a directory scan.
 //!
 //! # What this file is allowed to touch
 //!
