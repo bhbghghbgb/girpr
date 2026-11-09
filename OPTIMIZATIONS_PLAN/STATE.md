@@ -615,7 +615,7 @@ until the main tasks and rework are done.
 | F514 | INI-07 review | `src/util/ini.rs` | `try_junction_dir` treats any `symlink_metadata` error as "missing", so a permission or transient error is reported as a missing link instead of its own cause. | todo |
 | F515 | INI-07 review | `src/util/ini.rs` | The raw-1314 branch of `junction_skip_reason` is effectively unreachable for junction creation, since `mklink` failures arrive as `Error::other`; document it or key on the failure signature. | todo |
 | F516 | INI-07 review | `src/util/ini.rs` tests | The guard-retry test exercises a plain directory rather than a reparse point, so it does not cover link-type-specific removal. | skipped (deliberately host-independent; the existing link tests cover real removal) |
-| F517 | BUILD-07 implementer | `tests/scripts/check-msrv.ps1` | The script already checks `$LASTEXITCODE` but reports a generic "cargo metadata failed"; the message could name the command and exit code like the workflow now does. | todo |
+| F517 | BUILD-07 implementer | `tests/scripts/check-msrv.ps1` | The script already checks `$LASTEXITCODE` but reports a generic "cargo metadata failed"; the message could name the command and exit code like the workflow now does. | pending_review |
 | F518 | BUILD-07 implementer | `Cargo.toml`, `tools/sync/Cargo.toml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | Comments still name `1.89`/`1.90` when documenting the redb 4.1 pin. | skipped (accurate today; they document the dependency pin, and only need a revisit if the MSRV moves) |
 | F519 | BUILD-07 implementer | `tests/scripts/io-profile/iot-bench/Cargo.toml` | `iot-bench` is a standalone workspace with no `rust-version`; the MSRV workflow intentionally reads the root manifest. | skipped (intentional; the bench has no floor of its own) |
 | F520 | BUILD-07 review | `README.md` | "The root package's `rust-version` ... for the whole workspace" is true only while no member exceeds the root's 1.89; a member floor above the root would make it stale. | todo |
@@ -726,7 +726,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOCK-08 | F510, F511 | todo | Wave E; clap arity mirroring and lone-dash assertion; low |
 | INI-08 | F512, F513 | todo | Wave E; path junction refusal classification and shared comment; low |
 | INI-09 | F514, F515 | todo | Wave E; junction metadata error cause and unreachable skip branch; low |
-| BUILD-08 | F517 | in_progress | Wave E; name the command and exit code in the MSRV script failure; low |
+| BUILD-08 | F517 | pending_review | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | todo | Wave E; make the README workspace floor robust to a member above the root; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
