@@ -252,7 +252,7 @@ pub struct DeprecatedFile {
 ///
 /// | retcode | request | what it means |
 /// |---|---|---|
-/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as [`SophonNotFound`], which the local-build fallback is built around |
+/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as `SophonNotFound`, which the local-build fallback is built around |
 /// | `-201` | `getBuild` with a bad `package_id` | `invalid params` |
 /// | `-1001` | `getGameConfigs` / `getGameBranches` with a bad `game_ids[]` | `invalid params` |
 ///
@@ -268,9 +268,9 @@ pub struct DeprecatedFile {
 ///
 /// The two route families disagree about what failure looks like: the blob
 /// routes answer `404`, these JSON routes answer `200` and put it in
-/// `retcode`. So the retry policy is written per family — see
-/// [`crate::sophon::retryable`] for the blob half, which uses the same rule as
-/// `gircap`'s `RetryPolicy::should_retry_status`.
+/// `retcode`. So the retry policy is written per family — the blob half's
+/// `retryable` status rule uses the same rule as `gircap`'s
+/// `RetryPolicy::should_retry_status`.
 pub fn terminal_retcode(retcode: i64) -> bool {
     matches!(retcode, -201 | -202 | -1001)
 }
