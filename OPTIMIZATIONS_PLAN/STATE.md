@@ -517,7 +517,7 @@ until the main tasks and rework are done.
 | F416 | METADATA-05 review | `tests/repair_offline.rs` | After the rename, the temp-dir label `branch_terminal_metadata` and the `expect_err` message still say "terminal" for a fatal non-JSON parse. | completed |
 | F417 | METADATA-05 review | `tests/common/mod.rs` | `is_terminal_retcode` duplicates the production predicate; exposing one classifier in `test_support` would prevent drift. | completed |
 | F418 | METADATA-05 review | `tests/repair_offline.rs` | The `-1001` fixture construction was converted in the rename commit rather than the validator commit; history nit only. | skipped (history-only; the fixture is already distinguished by its constructor and doc) |
-| F419 | MANIFEST-05 review | `tests/repair_scan.rs` | `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` took 11.0 s in a full-suite run; may merit a look if it recurs. | pending_review |
+| F419 | MANIFEST-05 review | `tests/repair_scan.rs` | `an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate` took 11.0 s in a full-suite run; may merit a look if it recurs. | completed |
 | F420 | MANIFEST-05 review | `src/repair/phases/metadata.rs`, `src/sophon/stream.rs`, `src/hyp.rs`, `tests/common` | Plain test HTTP servers remain duplicated; consolidation is worthwhile only once a second gated-origin user exists. | skipped (no second gated-origin user; the three plain helpers differ in contract) |
 | F421 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry`'s synthetic fixtures spell the six-space indent literally instead of using `HELP_OPTION_INDENT`. | todo |
 | F422 | JOBS-04 review | `tests/cli_contract.rs` | `help_entry` cannot find an option rendered with a short-alias prefix (`-j, --jobs`); it would panic rather than return a wrong slice. | todo |
@@ -630,7 +630,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-05 | F412, F413 | done | Wave E; panic-audit region list and sweep vocabulary; low; f1921c2, 1be83dc |
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
 | METADATA-06 | F416, F417, F418 | done | Wave E; branch-failure wording and shared terminal predicate; low; 211a332, ebb59d8 |
-| MANIFEST-06 | F419, F420 | pending_review | Wave E; slow md5-gate test and server duplication; low; ea8b9f0 |
+| MANIFEST-06 | F419, F420 | done | Wave E; slow md5-gate test and server duplication; low; ea8b9f0 |
 | JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
