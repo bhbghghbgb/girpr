@@ -536,13 +536,27 @@ mod tests {
 
     /// Run `f` with a debug-level subscriber whose lines are captured.
     ///
-    /// `set_default` installs the subscriber on the current thread only, and
-    /// `#[tokio::test]` runs `f` on a current-thread runtime, so the future is
-    /// polled on the thread that installed it and no other test can observe
-    /// the subscriber. The phase's blocking reads use `spawn_blocking_traced`,
+    /// **Precondition: the caller must run on a current-thread runtime**, which
+    /// is what a plain `#[tokio::test]` provides. `set_default` installs the
+    /// subscriber on the calling thread only, so `f` is polled on the thread
+    /// that installed it. On a multi-thread runtime the future and any task it
+    /// spawns may be polled on worker threads without the subscriber, and their
+    /// lines (everything not routed through `spawn_blocking_traced`) would be
+    /// silently missing from the returned text. A debug build asserts the
+    /// runtime flavor so that misuse fails instead of returning partial logs.
+    ///
+    /// The blocking tasks whose lines a test asserts use `spawn_blocking_traced`,
     /// which installs the same dispatcher on the pool thread, so their lines
     /// are captured too.
     async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
+        // See the precondition above: a multi-thread runtime would poll `f` on
+        // worker threads without the thread-local subscriber and lose their lines.
+        debug_assert_eq!(
+            tokio::runtime::Handle::current().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
+        );
+
         #[derive(Clone, Default)]
         struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
 
