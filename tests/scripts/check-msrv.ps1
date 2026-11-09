@@ -35,7 +35,7 @@ Push-Location $root
 try {
     $metadataJson = cargo metadata --no-deps --format-version 1 --locked
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo metadata failed"
+        throw "cargo metadata --no-deps --format-version 1 --locked failed with exit code $LASTEXITCODE"
     }
     $metadata = $metadataJson | ConvertFrom-Json
     $members = @($metadata.packages |
