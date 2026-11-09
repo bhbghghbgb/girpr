@@ -634,7 +634,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-06 | F414, F415 | done | Wave E; shared log-helper wording and duplication decision; low; 8be8980 |
 | METADATA-06 | F416, F417, F418 | done | Wave E; branch-failure wording and shared terminal predicate; low; 211a332, ebb59d8 |
 | MANIFEST-06 | F419, F420 | done | Wave E; slow md5-gate test and server duplication; low; ea8b9f0 |
-| JOBS-05 | F421, F422, F423 | todo | Wave E; help_entry fixture constants and boundary edges; low |
+| JOBS-05 | F421, F422, F423 | in_progress | Wave E; help_entry fixture constants and boundary edges; low |
 | LOGGING-05 | F424, F425 | todo | Wave E; global-subscriber test preconditions; low |
 | LOCK-06 | F426, F427, F428 | todo | Wave E; duplicate game-path, shared-module test volume, empty key; low |
 | INI-06 | F429, F430, F431, F432, F433 | todo | Wave E; junction/symlink test cleanup and platform broadenings; low |
