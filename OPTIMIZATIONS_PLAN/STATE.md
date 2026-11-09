@@ -822,7 +822,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-13 | F524, F525 | done | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
 | BUILD-14 | F526, F527 | done | Wave E; native-command preference and probe failure classification; low; 3927ccf, 67606f6 |
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
-| BUILD-16 | F530, F531 | todo | Wave E; 4.1.0 pin wording and root MSRV tie; low |
+| BUILD-16 | F530, F531 | in_progress | Wave E; 4.1.0 pin wording and root MSRV tie; low |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
 | TEMP-WRITER-08 | F535 | todo | Wave E; on-disk length after the failed read path; low |
