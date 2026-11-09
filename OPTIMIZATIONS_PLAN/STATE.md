@@ -527,11 +527,11 @@ until the main tasks and rework are done.
 | F426 | LOCK-05 review | `tests/common/run_lock.rs` | The CLI rejects a repeated `--game-path`; `game_path_arg` could return `None` for duplicates so cleanup never targets a path that never ran. | completed |
 | F427 | LOCK-05 review | `tests/common/run_lock.rs` | The `#[cfg(test)]` module in the `#[path]`-shared file runs in every including binary; a dedicated module/bin would cut duplicated executions. | completed |
 | F428 | LOCK-05 review | `tests/common/run_lock.rs` | `lock_key_path` mis-keys an empty `--game-path` (anchors at cwd while production keys `""`); note it if empty paths ever matter. | completed |
-| F429 | INI-05 review | `src/util/ini.rs` tests | The junction test's `remove_dir` runs only after every assertion; a cleanup guard would tidy failure paths that leave a dangling junction. | todo |
-| F430 | INI-05 review | `src/util/ini.rs` tests | The dangling-symlink test leaves its link for `TempDir` cleanup while the junction test removes its own; share one reparse-point cleanup strategy. | todo |
-| F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | todo |
-| F432 | INI-05 review | `src/util/ini.rs` tests | The call-site test drives the private helper directly, so a refactor could bypass it; no practical alternative exists. | todo |
-| F433 | INI-05 review | `src/util/ini.rs` | `symlink_skip_reason` treats every `Unsupported` as a host skip; intended, but the set can broaden as std maps more codes there. | todo |
+| F429 | INI-05 review | `src/util/ini.rs` tests | The junction test's `remove_dir` runs only after every assertion; a cleanup guard would tidy failure paths that leave a dangling junction. | pending_review |
+| F430 | INI-05 review | `src/util/ini.rs` tests | The dangling-symlink test leaves its link for `TempDir` cleanup while the junction test removes its own; share one reparse-point cleanup strategy. | pending_review |
+| F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | pending_review |
+| F432 | INI-05 review | `src/util/ini.rs` tests | The call-site test drives the private helper directly, so a refactor could bypass it; no practical alternative exists. | pending_review |
+| F433 | INI-05 review | `src/util/ini.rs` | `symlink_skip_reason` treats every `Unsupported` as a host skip; intended, but the set can broaden as std maps more codes there. | pending_review |
 | F434 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | `1.89` is hardcoded in the workflow and README while `check-msrv.ps1` derives versions; the bench pin could lag when MSRV moves. | todo |
 | F435 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The `iot-bench` install step reimplements the script's toolchain install; factor out only if more toolchain jobs appear. | todo |
 | F436 | BUILD-05 review | `.github/workflows/msrv.yml` | rust-cache hashes every runner toolchain, so the bench cache key churns as images add toolchains; optional narrower keying. | todo |
@@ -644,7 +644,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-05 | F421, F422, F423 | done | Wave E; help_entry fixture constants and boundary edges; low; 976e65e |
 | LOGGING-05 | F424, F425 | done | Wave E; global-subscriber test preconditions; low; 9376cc6, 922053c |
 | LOCK-06 | F426, F427, F428 | done | Wave E; duplicate game-path, shared-module test volume, empty key; low; 27e28b8, 7b690c9 |
-| INI-06 | F429, F430, F431, F432, F433 | in_progress | Wave E; junction/symlink test cleanup and platform broadenings; low |
+| INI-06 | F429, F430, F431, F432, F433 | pending_review | Wave E; junction/symlink test cleanup and platform broadenings; low; f5135f1, 9426a7e, c4cf9bf |
 | BUILD-06 | F434, F435, F436 | todo | Wave E; MSRV pin derivation and cache keying; low |
 | BUILD-TOOLS-06 | F437 | todo | Wave E; capture comment wording; low |
 | TEMP-WRITER-06 | F438, F439, F440 | todo | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
