@@ -486,13 +486,20 @@ mod tests {
         );
         assert_eq!(second_plan.file_path(), Some(second_path.as_path()));
         let warnings = String::from_utf8(warnings).expect("the warnings are utf-8");
+        // The prefix is ours; the reason comes from the subscriber rejecting
+        // the second install. `try_init` hides that rejection behind an opaque
+        // error, so ask the public API for the same rejection as its concrete
+        // `SetGlobalDefaultError` and expect its rendering: reworded upstream
+        // text then still satisfies this assertion.
+        let already_set: tracing::subscriber::SetGlobalDefaultError =
+            tracing::subscriber::set_global_default(tracing::subscriber::NoSubscriber::default())
+                .expect_err("the global default is already installed");
         assert!(
-            warnings.contains("WARN cannot install the tracing subscriber"),
+            warnings.contains(&format!(
+                "WARN cannot install the tracing subscriber: {already_set}"
+            )),
             "{warnings:?}"
         );
-        // The prefix is ours; the reason is `tracing`'s. Pin only the stable
-        // claim that the global default is already set, not its exact wording.
-        assert!(warnings.contains("already been set"), "{warnings:?}");
 
         let after = FILE_SINK
             .lock()
