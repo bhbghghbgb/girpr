@@ -299,10 +299,11 @@ the completed `*_tmp` prefix and continuing it.
 ## Requirements / build / usage
 
 - Rust at the highest `rust-version` any workspace member declares, or newer
-  for the whole workspace (each member keeps its own minimum, and the root's
-  is today's high-water mark; the crates are `edition = "2024"`, and the
-  single-writer lock uses `File::try_lock`/`File::unlock`, which stabilised in
-  1.89); network to HoYoPlay + Sophon CDNs (production runs only). The
+  for the whole workspace (each member keeps its own minimum; the root is at
+  today's high-water mark, 1.89, alongside `girsync`; the crates are
+  `edition = "2024"`, and the single-writer lock uses
+  `File::try_lock`/`File::unlock`, both stable since 1.89); network to
+  HoYoPlay + Sophon CDNs (production runs only). The
   dev-only `girsync` cache pins `redb` to its 4.1 line, the newest that
   supports `girsync`'s minimum, so checking the whole workspace needs a
   toolchain at least as new as every member's minimum, not only the product's.
