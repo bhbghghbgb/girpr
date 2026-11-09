@@ -601,9 +601,9 @@ until the main tasks and rework are done.
 | F500 | CHECK-07 review | `src/repair/phases/check.rs` tests | The two harness waits repeat `before(deadline).unwrap_or_default()`; a named "remaining or zero" helper would make the zero-timeout intent explicit. | completed |
 | F501 | PATHHELPERS-07 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The other bridge recipes still append `--no-capture`, now disagreeing with the module doc; align them and mention the per-case override. | completed |
 | F502 | PATHHELPERS-07 review | `tests/artifact_bridge.rs` | Dropping `--no-capture` also drops its serial execution; the bundle/temp isolation has not been confirmed under parallel runs. | completed |
-| F503 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md` | §4.6 keys the manifest cache by `(bundle, tag, field)` while the test server keys it by the archive `PathBuf`; equivalent, but the document names a key the code does not use. | pending_review |
-| F504 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md`, `README.md` | `GIRPR_ARTIFACT_ROOT` is honoured by `artifacts_root()` but is absent from the documented resolution order. | pending_review |
-| F505 | DOCS-USER-06 review | `README.md`, `docs/06-artifact-bridge-spec.md` | "63 s for the six tests" is run wall time, not the sum of case durations; the wording could say "wall". | pending_review |
+| F503 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md` | §4.6 keys the manifest cache by `(bundle, tag, field)` while the test server keys it by the archive `PathBuf`; equivalent, but the document names a key the code does not use. | completed |
+| F504 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md`, `README.md` | `GIRPR_ARTIFACT_ROOT` is honoured by `artifacts_root()` but is absent from the documented resolution order. | completed |
+| F505 | DOCS-USER-06 review | `README.md`, `docs/06-artifact-bridge-spec.md` | "63 s for the six tests" is run wall time, not the sum of case durations; the wording could say "wall". | completed |
 | F506 | HYP-07 review | `src/repair/phases/metadata.rs` | The private `logs_of` copy still has the older doc and no runtime-flavor guard; bring it in line with the shared helper. | todo |
 | F507 | JOBS-06 review | `tests/cli_contract.rs` | `HELP_DESCRIPTION_INDENT` is documented as `HELP_OPTION_INDENT` + 4 but neither derived nor asserted, so the two can desync silently. | todo |
 | F508 | LOGGING-06 review | `src/logging.rs` tests | The full-line assertion couples to `TryInitError` forwarding the inner `Display` verbatim; no stable public accessor compares `source()`. | skipped (no stable public API exists to assert the typed source) |
@@ -660,7 +660,7 @@ until the main tasks and rework are done.
 | F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | todo |
 | F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | todo |
 | F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | todo |
-| F562 | DOCS-USER-07 implementer | `tests/artifact_bridge.rs` | The module docs still say "63 s for the six tests" and show a resolution order without `GIRPR_ARTIFACT_ROOT`, mirroring the old wording. | todo |
+| F562 | DOCS-USER-07 implementer | `tests/artifact_bridge.rs` | The module docs still say "63 s for the six tests" and show a resolution order without `GIRPR_ARTIFACT_ROOT`, mirroring the old wording. | completed |
 | F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the doc (~41 MiB of ~98 MiB). | todo |
 
 ## Follow-up batches
@@ -762,7 +762,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | done | Wave E; test-double warn pin and a named remaining-time helper; low; 753f063, c90d1c0 |
 | PATHHELPERS-08 | F501, F502 | done | Wave E; remaining bridge recipes and parallel-run isolation; low; 5c8839a |
-| DOCS-USER-07 | F503, F504, F505 | pending_review | Wave E; cache-key wording, artifact-root variable, wall-time wording; low; 2bc0239, 2b3d76b, ae20679 |
+| DOCS-USER-07 | F503, F504, F505 | done | Wave E; cache-key wording, artifact-root variable, wall-time wording; low; 2bc0239, 2b3d76b, 2bc0239, 2b3d76b, ae20679, dcc5874 |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
 | JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
 | LOGGING-07 | F508, F509 | done | Wave E; typed-rejection coupling and dispatch-construction note; low |
@@ -797,7 +797,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
-| DOCS-USER-08 | F562, F563 | todo | Wave E; bridge module docs and server comment accuracy; low |
+| DOCS-USER-08 | F562, F563 | in_progress | Wave E; bridge module docs and server comment accuracy; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
