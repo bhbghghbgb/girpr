@@ -539,9 +539,9 @@ until the main tasks and rework are done.
 | F438 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` | `ChunkFileSink` also serves the in-place download, so its reuse-copy comparison names only the temp path; mention `copy_within` charging likewise. | completed |
 | F439 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` tests | `write_calls == 2` relies on the first regular-file read returning exactly `COPY_BUF`; a read-counting source wrapper would remove the OS-read dependence. | completed |
 | F440 | TEMP-WRITER-05 review | `src/repair/file/temp.rs` tests | The ~12-line `ReuseCall` construction repeats across roughly nine tests; a small builder helper would reduce it. | completed |
-| F441 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` tests | The `!tmp.exists()` check uses the unresolved `missing/../.girpr_tmp`, so it is redundant beside the parent-dir assertion; assert the resolved fallback. | pending_review |
-| F442 | TEMP-PUBLISH-05 review | `src/util/path.rs` | `temp_sibling`'s doc names only `copy_publish_with` as the refusing caller; `atomic::publish` now refuses too. | pending_review |
-| F443 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` | `Path::file_name()` is `Some("dir")` for `dir/.`, so the new guard misses that spelling; the rename still fails and cleans up. | pending_review |
+| F441 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` tests | The `!tmp.exists()` check uses the unresolved `missing/../.girpr_tmp`, so it is redundant beside the parent-dir assertion; assert the resolved fallback. | completed |
+| F442 | TEMP-PUBLISH-05 review | `src/util/path.rs` | `temp_sibling`'s doc names only `copy_publish_with` as the refusing caller; `atomic::publish` now refuses too. | completed |
+| F443 | TEMP-PUBLISH-05 review | `src/util/atomic.rs` | `Path::file_name()` is `Some("dir")` for `dir/.`, so the new guard misses that spelling; the rename still fails and cleans up. | completed |
 | F444 | TEST-MANIFEST-05 review | `src/sophon/stream.rs`, `tools/capture` | `join_url` (`{prefix}/{id}`) conflicts with the capture tool's `{prefix}/{id}{suffix}`; decide the contract and test a non-empty suffix. | todo |
 | F445 | TEST-MANIFEST-05 review | `src/lib.rs` | The `test_support` doc groups `join_url` under helpers the offline server and peak-heap probe need, but the new consumer is `tests/repair_offline.rs`. | todo |
 | F446 | TEST-MANIFEST-05 review | `tests/repair_offline.rs` | `extra_manifest` is local; if another test binary describes extra latest manifests, move it into `tests/common`. | todo |
@@ -656,7 +656,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-06 | F434, F435, F436 | done | Wave E; MSRV pin derivation and cache keying; low; 0f466e0 |
 | BUILD-TOOLS-06 | F437 | done | Wave E; capture comment wording; low; 0fd58ab |
 | TEMP-WRITER-06 | F438, F439, F440 | done | Wave E; dual-mode sink doc, read wrapper, reuse builder; low; 683e227, 63004a5, 53cf1be, d20aeb6 |
-| TEMP-PUBLISH-06 | F441, F442, F443 | pending_review | Wave E; publish guard spelling and doc sync; low; 5e8075b, 9546194, b0d5c3c |
+| TEMP-PUBLISH-06 | F441, F442, F443 | done | Wave E; publish guard spelling and doc sync; low; 5e8075b, 9546194, b0d5c3c, 002dffa |
 | TEST-MANIFEST-06 | F444, F445, F446 | todo | Wave E; suffix contract, seam doc, helper placement; low |
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
