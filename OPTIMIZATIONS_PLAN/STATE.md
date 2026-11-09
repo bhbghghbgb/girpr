@@ -698,7 +698,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | JOBS-06 | F469, F470, F471 | done | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low; d3af585, d7c4b28, c989e28 |
 | LOGGING-06 | F472, F473 | done | Wave E; lock doc scope and typed rejection pin; low; e3a3cf3, b79ef56 |
 | LOCK-07 | F474, F475 | done | Wave E; run-lock cleanup hardening and module doc; low; 1d525d5, e5cde0b, 07c92d9 |
-| INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
+| INI-07 | F476, F477 | in_progress | Wave E; junction skip classification and guard removal order; low |
 | BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
