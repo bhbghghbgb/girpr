@@ -129,9 +129,10 @@ builds, diffs them, and assembles a **complete artifact**:
 | commands | `capture`, `verify`, `materialize`, `list` |
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
-The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
-`20261021T141336Z`, the one the tool writes today — **verifies 63/63, exit
-`0`**, and its own selfcheck is **93/93, `pass`**.
+The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` — the
+directory named `<UTC timestamp>Z`, the one the tool writes today — **verifies
+63/63, exit `0`**, and its own selfcheck is **93/93, `pass`**. Find the local
+bundle with `gircap list --root artifacts`.
 
 It holds **six** captures and answers **all six** patch shapes, one capture
 each: the class set is a partition on the content, so a file answers exactly
