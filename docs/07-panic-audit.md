@@ -1,14 +1,14 @@
 # Panic-site audit for `girpr`
 
-**Status: complete (2026-10-30, re-swept 2026-11-08).** Audit of the tree at
+**Status: complete (2026-10-30, re-swept 2026-11-09).** Audit of the tree at
 `1f4c3b2` plus the changes in this branch.
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
 value chosen by the server (or by a hostile local manifest) reaches arithmetic
-(the `saturating_*`/`checked_*` helpers, `+=`/`-=` updates), indexing, `as`
-casts, `unwrap`/`expect`, or `panic!`/`unreachable!`. Local CLI parsing,
-logging and test-only code are out of scope unless they feed one of those
-paths.
+(the `saturating_*`/`checked_*` helpers, `+=`/`-=` updates), indexing,
+integer-width `as` casts, `unwrap`/`expect`, or `panic!`/`unreachable!`. Local
+CLI parsing, logging and test-only code are out of scope unless they feed one
+of those paths.
 
 **Rule:** no `catch_unwind`. A server-derived value that can panic is converted
 into a refusal (a per-file `anyhow::Error`, usually exit `2` metadata or exit `3`
@@ -20,8 +20,8 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 ## 1. Method
 
 1. Enumerated every `.unwrap()`, `.expect()`, `panic!`, `unreachable!`, direct
-   `[]` index or slice, and arithmetic/`as` conversion in the production
-   regions of:
+   `[]` index or slice, and arithmetic/integer-width `as` conversion in the
+   production regions of:
    `src/sophon/{stream,proto,map,filter}.rs`, `src/hyp.rs`,
    `src/util/{path,ini,md5,atomic}.rs`,
    `src/repair/phases/{plan,check,manifest,metadata,post}.rs`,
@@ -36,11 +36,11 @@ invariant stays an `unwrap`/`expect`/direct index, with the invariant named.
 3. Classified each as **guarded** (checked/refused), **saturated** (bounded
    arithmetic), or **invariant** (no server input can break it), and named the
    test that pins the behaviour.
-4. `rg` checklist used for the sweep, re-run on 2026-11-08 against the current
+4. `rg` checklist used for the sweep, re-run on 2026-11-09 against the current
    tree:
 
    ```
-   rg -n '\.unwrap\(\)|\.expect\(|panic!|unreachable!|\[[a-zA-Z_][a-zA-Z0-9_.]*\]|\[[^\]]*\.\.[^\]]*\]| as usize| as u64| as i64|saturating|checked_| \+= | -= ' src
+   rg -n '\.unwrap\(\)|\.expect\(|panic!|unreachable!|\[[a-zA-Z_][a-zA-Z0-9_.]*\]|\[[^\]]*\.\.[^\]]*\]| as (u8|u16|u32|u64|u128|usize|i8|i16|i32|i64|i128|isize)|saturating|checked_| \+= | -= ' src
    ```
 
    followed by per-file reads of the production (pre-`#[cfg(test)]`) region.
