@@ -156,6 +156,18 @@ fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
 }
 
 #[test]
+fn help_description_indent_is_the_option_indent_plus_four_spaces() {
+    // The fixtures below build descriptions from this indent on the strength of
+    // the layout the documentation above claims. Pin the claim itself, so the
+    // two constants cannot be edited apart from one another.
+    assert_eq!(
+        HELP_DESCRIPTION_INDENT,
+        format!("{HELP_OPTION_INDENT}    "),
+        "a description continues four columns past the option's flag column"
+    );
+}
+
+#[test]
 fn help_entry_does_not_borrow_a_neighbours_annotations() {
     let help = format!(
         "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
