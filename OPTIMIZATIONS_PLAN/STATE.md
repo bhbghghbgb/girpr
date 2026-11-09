@@ -545,10 +545,10 @@ until the main tasks and rework are done.
 | F444 | TEST-MANIFEST-05 review | `src/sophon/stream.rs`, `tools/capture` | `join_url` (`{prefix}/{id}`) conflicts with the capture tool's `{prefix}/{id}{suffix}`; decide the contract and test a non-empty suffix. | skipped (documented contract is prefix-only; references agree; suffix semantics unmeasurable) |
 | F445 | TEST-MANIFEST-05 review | `src/lib.rs` | The `test_support` doc groups `join_url` under helpers the offline server and peak-heap probe need, but the new consumer is `tests/repair_offline.rs`. | completed |
 | F446 | TEST-MANIFEST-05 review | `tests/repair_offline.rs` | `extra_manifest` is local; if another test binary describes extra latest manifests, move it into `tests/common`. | skipped (only one test binary describes extra latest manifests) |
-| F447 | PURGE-PERF-07 review | `src/sophon/stream.rs` tests | `serve_status` shares the accept/count/one-shot-reply skeleton with `test_http::serve_bodies`; a status-aware parameter would remove a third copy. | pending_review |
-| F448 | PURGE-PERF-07 review | `src/util/counter.rs` tests | Both pause tests repeat `const RECEIVE_WAIT: Duration = Duration::from_secs(10)`; a module-level constant would keep the single hang guard in one place. | pending_review |
-| F449 | PURGE-PERF-07 review | `src/util/counter.rs` tests | On assertion failure the helper thread stays parked at the two-party barrier until process exit; worth a release path if the suite ever joins threads in-process. | pending_review |
-| F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | pending_review |
+| F447 | PURGE-PERF-07 review | `src/sophon/stream.rs` tests | `serve_status` shares the accept/count/one-shot-reply skeleton with `test_http::serve_bodies`; a status-aware parameter would remove a third copy. | completed |
+| F448 | PURGE-PERF-07 review | `src/util/counter.rs` tests | Both pause tests repeat `const RECEIVE_WAIT: Duration = Duration::from_secs(10)`; a module-level constant would keep the single hang guard in one place. | completed |
+| F449 | PURGE-PERF-07 review | `src/util/counter.rs` tests | On assertion failure the helper thread stays parked at the two-party barrier until process exit; worth a release path if the suite ever joins threads in-process. | completed |
+| F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | completed |
 | F451 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | On a pre-epoch host `stamp_ago` returns `now`, so fixtures silently lose their "older than one coarse tick" property and the guarded-reuse path is not exercised. | todo |
 | F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | todo |
 | F453 | TEST-OUTPUT-05 review | `tests/common/mod.rs`, `tests/cli_contract.rs`, `tests/repair_scan.rs` | Move `PLAN_SCAN_BYTES_KEY` into `tests/common` so `repair_scan.rs` shares the spelling instead of writing `scan_bytes=` literally. | todo |
@@ -667,7 +667,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-06 | F438, F439, F440 | done | Wave E; dual-mode sink doc, read wrapper, reuse builder; low; 683e227, 63004a5, 53cf1be, d20aeb6 |
 | TEMP-PUBLISH-06 | F441, F442, F443 | done | Wave E; publish guard spelling and doc sync; low; 5e8075b, 9546194, b0d5c3c, 002dffa |
 | TEST-MANIFEST-06 | F444, F445, F446 | done | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555, 9c1c400 |
-| PURGE-PERF-08 | F447, F448, F449, F450 | pending_review | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low; 798adc5, 952b7f3, 6c4dd61 |
+| PURGE-PERF-08 | F447, F448, F449, F450 | done | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low; 798adc5, 952b7f3, 6c4dd61, 29db786 |
 | TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
