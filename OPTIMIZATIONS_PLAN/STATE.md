@@ -589,6 +589,8 @@ until the main tasks and rework are done.
 | F488 | TEST-MANIFEST-06 review | `tools/capture` | Starward's unused `GameSophonManifestUrl.BuildUrl` reads `url_suffix` as a query string; informational unless reference parity is revisited. | skipped (external reference has no callers; no repo change) |
 | F489 | MANIFEST-07 review | `src/repair/file/inplace.rs` | The overlap guard is conservative: duplicate identical chunks count as overlapping and stay retryable; a post-redo rescan could recover the terminal classification at the cost of one extra read on the failure path. | todo |
 | F490 | MANIFEST-07 review | `tests/repair_scan.rs` | No end-to-end fixture with overlapping chunk offsets proves a retry eventually reaches the manifest digest; the current test pins the guard only. | todo |
+| F491 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | `Download::url_suffix` points two hops at the caveat through `archive_url`; a direct link is awkward because `join` is `pub(crate)`. | skipped (the two-hop chain is correct; no public target for a direct link) |
+| F492 | TEST-MANIFEST-07 review | `tools/capture/src/hyp/types.rs` | The shared caveat now covers the chunk join but names only the manifest-fetch paths of the reference clients. | skipped (accurate while every measured `url_suffix` is empty) |
 
 ## Follow-up batches
 
@@ -683,6 +685,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
 | MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
+| TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
