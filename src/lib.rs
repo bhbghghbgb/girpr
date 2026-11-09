@@ -216,9 +216,11 @@ pub mod test_support {
     mod tests {
         use super::*;
 
-        /// The age is exact on both sides of the epoch, and the clock itself
-        /// is never handed back as if it were older. A pre-epoch clock is the
-        /// case that used to silently lose the age.
+        /// The age is exact on both sides of the epoch and across it, and the
+        /// clock itself is never handed back as if it were older. A pre-epoch
+        /// clock is the case that used to silently lose the age, and a clock
+        /// shortly after the epoch is the other direction of the same
+        /// crossing.
         #[test]
         fn an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch() {
             let day = Duration::from_secs(24 * 60 * 60);
@@ -241,6 +243,22 @@ pub mod test_support {
             assert!(
                 aged < before_epoch,
                 "an ago stamp is never in the clock's future"
+            );
+
+            // A clock shortly after the epoch is the other way the age can
+            // cross it: the subtraction reaches back past the epoch, so a
+            // floor there would return a stamp younger than requested.
+            let after_epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
+            let aged = stamp_ago_from(after_epoch, day)
+                .expect("a clock a minute after the epoch has a day of history");
+            assert_eq!(
+                aged,
+                after_epoch - day,
+                "a clock less than the age past the epoch is aged past it, not clamped to it"
+            );
+            assert!(
+                aged < SystemTime::UNIX_EPOCH && aged < after_epoch,
+                "the backward crossing lands before the epoch and before the clock"
             );
         }
 
