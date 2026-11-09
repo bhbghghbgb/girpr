@@ -8,7 +8,7 @@ mod common;
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer,
     PLAN_SCAN_BYTES_KEY, build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field,
-    load_counters, read_game_file, run, run_binary, temp_dir, write_game_file,
+    load_counters, logs_of, read_game_file, run, run_binary, temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use std::sync::atomic::Ordering;
@@ -810,5 +810,67 @@ async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
         "metadata, not a write failure"
     );
     assert!(!dir.join("config.ini").exists(), "nothing was written");
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_overlapping_layout_reaches_the_manifest_digest_after_the_redo() {
+    // Two chunks share bytes 2..4. The manifest lays them out in order, so the
+    // file it describes is A's head followed by B (`B` wins the overlap). On
+    // disk, B is already correct where it belongs and only A's head is wrong:
+    // the whole-file digest therefore fails and the patch writes A — which
+    // clobbers part of B. The verify digest is what notices, its scan names B,
+    // and the redo downloads B so the file ends at the manifest's bytes.
+    //
+    // The test is deterministic: no timing and no failure injection. It pins
+    // the end-to-end path the overlap guard exists for — a retry that has to
+    // end at the manifest digest, not at the patch's last write.
+    let a = vec![0x41u8, 0x42, 0x43, 0x44];
+    let b = vec![0x51u8, 0x52, 0x53, 0x54];
+    let spec = FixtureSpec::new(vec![FileSpec::new(
+        "game/overlap.dat",
+        vec![
+            ChunkSpec::new("chunk_overlap_a", a.clone(), 0),
+            ChunkSpec::new("chunk_overlap_b", b.clone(), 2),
+        ],
+    )]);
+    let fx = build_fixture_spec(&spec);
+    let manifest = fx.files[0].data.clone();
+    // A's head is wrong; B's range [2,6) already holds B.
+    let on_disk = vec![0x00u8, 0x00, b[0], b[1], b[2], b[3]];
+    assert_ne!(on_disk, manifest, "the file starts damaged");
+    assert_eq!(
+        &on_disk[2..],
+        b.as_slice(),
+        "B is already correct where it belongs"
+    );
+
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("overlap_redo_digest");
+    write_game_file(&dir, "game/overlap.dat", &on_disk);
+
+    let (result, logs) = logs_of(run(ctx_for(dir.to_path_buf(), &mock, 1))).await;
+    let (summary, code) = result.expect("the overlap repairs");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(
+        summary.files_repaired.load(Ordering::Relaxed),
+        1,
+        "the file is repaired, not skipped"
+    );
+    assert_eq!(
+        read_game_file(&dir, "game/overlap.dat").as_deref(),
+        Some(manifest.as_slice()),
+        "the file ends at the manifest's bytes, not the patch's last write"
+    );
+    assert!(
+        logs.contains("final md5 mismatch -> redoing the mismatching chunks"),
+        "the whole-file digest gate is what drove the redo: {logs}"
+    );
+    assert_eq!(
+        mock.chunk_hits(),
+        vec!["chunk_overlap_a".to_string(), "chunk_overlap_b".to_string()],
+        "A is patched, and B is fetched again only because the digest failed"
+    );
+
     mock.stop();
 }
