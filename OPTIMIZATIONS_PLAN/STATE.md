@@ -494,9 +494,9 @@ until the main tasks and rework are done.
 | F393 | TEST-MANIFEST-04 review | `tests/repair_offline.rs` | The new assertions check status only, not that the `kept` `200` body equals the fixture bytes; optional hardening. | completed |
 | F394 | EXIT-06 review | `src/main.rs` tests | The macro's `fn(RunExit)` annotation and `RunExit::` paths hard-wire one type; parameterize the type path if a second enum needs the guard. | completed |
 | F395 | EXIT-06 review | `src/config.rs`, `src/main.rs` tests | The status list now exists twice (`RunExit::ALL` and the bin-test macro); a public read-only accessor would remove it but widens API. | completed |
-| F396 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The cross-cell gate test would hang rather than fail on a broken gate; charging on a helper thread with a bounded `recv_timeout` would fail CI cleanly. | todo |
-| F397 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The resume test uses `Barrier::new(1)`, so the "pause" half is vacuous; a 2-party barrier released from a helper thread would pin suspension too. | todo |
-| F398 | PURGE-PERF-06 review | `src/repair/mod.rs` tests | The new `serve_body` helper duplicates the loopback-stub idiom in `metadata`, `manifest`, and `hyp` tests; a shared `#[cfg(test)]` fixture would remove it. | todo |
+| F396 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The cross-cell gate test would hang rather than fail on a broken gate; charging on a helper thread with a bounded `recv_timeout` would fail CI cleanly. | completed |
+| F397 | PURGE-PERF-06 review | `src/util/counter.rs` tests | The resume test uses `Barrier::new(1)`, so the "pause" half is vacuous; a 2-party barrier released from a helper thread would pin suspension too. | completed |
+| F398 | PURGE-PERF-06 review | `src/repair/mod.rs` tests | The new `serve_body` helper duplicates the loopback-stub idiom in `metadata`, `manifest`, and `hyp` tests; a shared `#[cfg(test)]` fixture would remove it. | completed |
 | F399 | TEST-REGRESSION-04 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago` docs say it saturates at the Unix epoch, but a pre-epoch clock returns `now`; align doc and behavior or guard pre-epoch. | todo |
 | F400 | TEST-REGRESSION-04 review | `src/repair/file/inplace.rs` tests | `coarse_tick_of` still `expect`s a post-epoch clock and does epoch math; it is the last epoch-dependent helper. | todo |
 | F401 | TEST-OUTPUT-04 review | `tests/repair_scan.rs` | The emitted `scan_bytes=` value is still spelled literally; a shared spelling could be used if a test-support location exists. | todo |
@@ -588,7 +588,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | EXIT-05 | F301, F302, F303 | done | Wave E; ALL completeness, tautological test and visibility; low; 09f5730, d283472, 27813fc |
 | EXIT-06 | F331 | done | Wave E; binary exit-status list maintenance note; low; e51ef4f |
 | EXIT-07 | F394, F395 | done | Wave E; macro generality and duplicated status list; low; 3ffe754 |
-| PURGE-PERF-07 | F396, F397, F398 | pending_review | Wave E; counter-test failure modes and shared stub; low; 3b5ec92, 45a6136 |
+| PURGE-PERF-07 | F396, F397, F398 | done | Wave E; counter-test failure modes and shared stub; low; 3b5ec92, 45a6136 |
 | TEST-REGRESSION-05 | F399, F400 | todo | Wave E; remaining epoch assumptions in test helpers; low |
 | PURGE-PERF-06 | F332, F333 | done | Wave E; counter scoping and fetch-path coverage; low; af319a5, c581925 |
 | DRYRUN-02 | F196, F197, F198 | done | Wave D; dry-run end-to-end coverage and cleanup-line parity; low; b98cfa7, 8c10743, ca30361, a220f91, 55f8843 |
