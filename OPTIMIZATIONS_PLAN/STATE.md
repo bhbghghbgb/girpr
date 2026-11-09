@@ -652,6 +652,8 @@ until the main tasks and rework are done.
 | F551 | TEST-REGRESSION-07 review | `tests/repair_machinery.rs` | `MtimeAge` is local; if another test file needs the same named skip outcome it should live beside the shared clock helpers. | skipped (conditional; only one test file uses it today) |
 | F552 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | The other warn-site arms (`PathEscaped`, `Unreadable`, `Read`, `Absent`) are only indirect; one injected-outcome test could pin all six arms. | todo |
 | F553 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | `remaining_or_zero` could also serve the release wait if its `Some`/`None` branch were refactored. | skipped (would change the release-wait shape) |
+| F554 | CHECK-08 review | `src/repair/phases/check.rs` tests | `check_warnings` slices from `CHECK fail`, stripping the `WARN` level, so a regression from `warn!` to `info!` would still pass. | todo |
+| F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | todo |
 
 ## Follow-up batches
 
@@ -783,6 +785,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | CHECK-09 | F552 | todo | Wave E; pin the remaining check warn arms; low |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
+| CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
