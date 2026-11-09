@@ -355,11 +355,20 @@ mod tests {
     use crate::util::Md5;
     use std::time::{Duration, Instant};
 
-    /// How long the live-progress test waits on its gate and on a fold, and how
-    /// long the injected slow check waits for its release. One value keeps the
-    /// waits in step: a release that never comes expires instead of wedging the
-    /// suite, and the test fails on the recorded expiry.
+    /// The live-progress test's whole budget for a stuck gate. The harness
+    /// waits and the injected slow check's release wait all measure against one
+    /// absolute deadline derived from this, so a gate that never opens fails at
+    /// a single known point instead of granting each wait its own fresh
+    /// allowance. This bounds how long the test tolerates a broken gate; it is
+    /// not a timing assertion, because every wait wakes on its notify.
     const GATE_WAIT: Duration = Duration::from_secs(10);
+
+    /// Time left before `deadline`, or `None` once it has passed. Keeping the
+    /// expired case separate from a zero duration lets a wait record expiry
+    /// instead of merely waking immediately.
+    fn before(deadline: Instant) -> Option<Duration> {
+        deadline.checked_duration_since(Instant::now())
+    }
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
@@ -585,6 +594,11 @@ mod tests {
         // the signal instead of polling the counter, so it has no timing
         // assumption to violate on a single-core or heavily loaded host.
         let (folded_tx, folded_rx) = std::sync::mpsc::channel::<usize>();
+        // One absolute deadline for the whole test. The slow check's release
+        // wait and both harness waits measure against it, so on a stuck gate
+        // there is one expiry point to read in the failure, not three
+        // independent allowances that can race.
+        let deadline = Instant::now() + GATE_WAIT;
 
         let thread_summary = Arc::clone(&summary);
         let thread_gate = Arc::clone(&gate);
@@ -612,21 +626,31 @@ mod tests {
                         if f.rel == "slow.dat" {
                             state.slow_started = true;
                             cv.notify_all();
-                            // A release that never comes must fail the test
-                            // rather than wedge it. The wait is bounded by a
-                            // deadline, and the expiry is recorded for the
-                            // join below to report; the test still wakes on
-                            // the release notify, so this is a hang guard, not
-                            // a timing assertion.
-                            let deadline = Instant::now() + GATE_WAIT;
+                            // The release wait shares the test's deadline: a
+                            // release that never comes expires here and is
+                            // reported as a failed outcome, so a stuck gate
+                            // cannot be folded as a clean pass. It is a hang
+                            // guard, not a timing assertion: the wait wakes on
+                            // the release notify.
                             while !state.release_slow {
-                                let remaining = deadline.saturating_duration_since(Instant::now());
-                                if remaining.is_zero() {
-                                    state.slow_wait_expired = true;
-                                    cv.notify_all();
-                                    break;
+                                match before(deadline) {
+                                    Some(left) if !left.is_zero() => {
+                                        state = cv.wait_timeout(state, left).unwrap().0;
+                                    }
+                                    _ => {
+                                        state.slow_wait_expired = true;
+                                        cv.notify_all();
+                                        break;
+                                    }
                                 }
-                                state = cv.wait_timeout(state, remaining).unwrap().0;
+                            }
+                            if state.slow_wait_expired {
+                                // Deliberately not `clean()`: an expired
+                                // release must move the counters, so the
+                                // failure cannot read as a passing check.
+                                return CheckOutcome::failed(CheckFailure::Read(
+                                    "the slow check's gate wait expired before release".into(),
+                                ));
                             }
                         } else {
                             state.fast_done = true;
@@ -639,19 +663,20 @@ mod tests {
         });
 
         // Wait until both tasks have reached their gate: one is held, the
-        // other has returned and is ready to be folded. The deadline is only a
-        // guard against the suite hanging when a task never arrives; the wait
-        // still wakes on the notify, so it is not a timing bound.
+        // other has returned and is ready to be folded. This measures against
+        // the shared deadline, which only guards against the suite hanging
+        // when a task never arrives; the wait still wakes on the notify, so it
+        // is not a timing bound.
         let (lock, cv) = &*gate;
         let state = lock.lock().unwrap();
         let (state, _) = cv
-            .wait_timeout_while(state, GATE_WAIT, |state| {
+            .wait_timeout_while(state, before(deadline).unwrap_or_default(), |state| {
                 !(state.slow_started && state.fast_done)
             })
             .unwrap();
         assert!(
             state.slow_started && state.fast_done,
-            "the checks did not reach the live-progress gate within {GATE_WAIT:?}"
+            "the checks did not reach the live-progress gate before the shared {GATE_WAIT:?} deadline"
         );
         drop(state);
 
@@ -659,16 +684,20 @@ mod tests {
         // thread until the fold happens and turns a lost fold into a clear
         // failure instead of hanging the suite.
         assert_eq!(
-            folded_rx.recv_timeout(GATE_WAIT),
+            folded_rx.recv_timeout(before(deadline).unwrap_or_default()),
             Ok(1),
-            "the finished check was not folded while the slow task was held"
+            "the finished check was not folded before the shared {GATE_WAIT:?} deadline while the slow task was held"
         );
         assert_eq!(
             summary.files_skipped.load(Ordering::Relaxed),
             1,
             "only the finished task is folded so far"
         );
-        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            0,
+            "a failed fold here means the held check's wait expired instead of waiting"
+        );
 
         let (lock, cv) = &*gate;
         let mut state = lock.lock().unwrap();
@@ -676,14 +705,18 @@ mod tests {
         cv.notify_all();
         drop(state);
 
-        assert_eq!(thread.join().unwrap(), 0);
+        let joined = thread.join().expect("the check thread finishes");
         let (lock, _) = &*gate;
         let state = lock.lock().unwrap();
         assert!(
             !state.slow_wait_expired,
-            "the slow check was not released within {GATE_WAIT:?}; its bounded wait expired"
+            "the slow check's wait for release expired at the shared {GATE_WAIT:?} deadline"
         );
         drop(state);
+        assert_eq!(
+            joined, 0,
+            "the slow check reported damage instead of a clean result"
+        );
         assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
     }
 
