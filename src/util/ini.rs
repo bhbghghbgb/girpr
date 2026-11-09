@@ -1134,6 +1134,7 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_game_dir");
         let target = root.join("missing-target");
         let link = root.join("dangling-game-dir");
+        let mut cleanup = LinkGuard::new(&link);
         if let Err(e) = try_symlink_dir(&target, &link) {
             match symlink_skip_reason(&e) {
                 Some(why) => {
@@ -1159,6 +1160,7 @@ mod tests {
             !target.exists(),
             "the writer must not create the symlink target"
         );
+        cleanup.remove().expect("the symlink is removable");
     }
 
     /// A directory junction whose target does not exist is a name-surrogate
@@ -1172,6 +1174,7 @@ mod tests {
         let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_junction");
         let target = root.join("never-created-target");
         let link = root.join("dangling-game-dir");
+        let mut cleanup = LinkGuard::new(&link);
         if let Err(why) = try_junction_dir(&target, &link) {
             eprintln!("SKIP precondition: this host cannot create a directory junction: {why}");
             return;
@@ -1192,10 +1195,63 @@ mod tests {
             !target.exists(),
             "the writer must not create the junction target"
         );
+        cleanup.remove().expect("the junction is removable");
+    }
 
-        // Remove the reparse point itself, so the temp-dir cleanup does not
-        // walk a junction whose target is gone.
-        std::fs::remove_dir(&link).expect("the junction is removable");
+    /// Removes a link or junction — never its target — when the guard leaves
+    /// scope, so a failed assertion does not leave a dangling reparse point for
+    /// the temp-dir cleanup to walk.
+    ///
+    /// Armed before the link is created: a creation that fails partway leaves
+    /// nothing behind, and a host that skips the case is cleaned too.
+    struct LinkGuard<'a> {
+        link: &'a Path,
+        armed: bool,
+    }
+
+    impl<'a> LinkGuard<'a> {
+        fn new(link: &'a Path) -> Self {
+            Self { link, armed: true }
+        }
+
+        /// Remove the link now and report a failure. Disarms `Drop`, so the
+        /// cleanup is attempted once and the success path can assert it.
+        fn remove(&mut self) -> std::io::Result<()> {
+            self.armed = false;
+            remove_link(self.link)
+        }
+    }
+
+    impl Drop for LinkGuard<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                // Best effort: this is the failure path, and a cleanup error
+                // must not replace the test's own panic.
+                let _ = remove_link(self.link);
+            }
+        }
+    }
+
+    /// Remove the link itself, never its target. On Windows both a directory
+    /// symlink and a junction are removed with `remove_dir`; elsewhere the link
+    /// is removed with `remove_file`, which also covers a link to a directory.
+    fn remove_link(link: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(link) {
+            Ok(_) => remove_link_at(link),
+            // The creation may have failed before anything was left.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[cfg(windows)]
+    fn remove_link_at(link: &Path) -> std::io::Result<()> {
+        std::fs::remove_dir(link)
+    }
+
+    #[cfg(not(windows))]
+    fn remove_link_at(link: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(link)
     }
 
     /// Create a directory junction with `mklink /J`, which (unlike a symlink)
