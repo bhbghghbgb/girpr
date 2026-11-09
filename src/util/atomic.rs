@@ -36,9 +36,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 /// rename removes the temp and returns the original error with the temp path in
 /// its context; a rename failure removes the temp too.
 ///
-/// A `path` with no file name is refused before the parent is created or a temp
-/// is named: it has no location a file can be published to, and the temp
-/// helper's fallback would put the temp under the path's directories instead.
+/// A `path` that does not end in a file name is refused before the parent is
+/// created or a temp is named: a spelling like `dir/.` or `dir/` names the
+/// directory rather than a file, so there is no location a file can be
+/// published to, and the temp helper's fallback would put the temp under the
+/// path's directories instead.
 ///
 /// With `durable`, the temp file is `sync_all`ed before the rename and the
 /// parent directory is synced best-effort afterwards: a directory sync failure
@@ -69,6 +71,25 @@ impl DurableFile for File {
     }
 }
 
+/// Does `path` end in a file name rather than a directory spelling?
+///
+/// [`Path::file_name`] ignores a trailing `.`, so it reports `Some("dir")` for
+/// `dir/.` even though that spelling names the directory, not a file. Look at
+/// the raw spelling instead: an empty tail (a trailing separator, a root or an
+/// empty path) or a `.` tail names no file, while a real name — including a
+/// Unix name that ends in `.` — does.
+fn ends_in_a_file_name(path: &Path) -> bool {
+    if path.file_name().is_none() {
+        return false;
+    }
+    let raw = path.as_os_str().to_string_lossy();
+    let tail = raw
+        .rsplit(std::path::is_separator)
+        .next()
+        .unwrap_or_default();
+    !tail.is_empty() && tail != "."
+}
+
 /// The publish body, with creation and writing left to the caller.
 fn publish<F>(
     path: &Path,
@@ -79,12 +100,15 @@ fn publish<F>(
 where
     F: DurableFile,
 {
-    // A target that names no file cannot be replaced by one. The temp helper
-    // still names a fallback path under the target's directories (a trailing
-    // `..` survives), so the write would only fail at the rename, after the
-    // parent was created and the temp was written there. Refuse up front so the
-    // caller gets the reason instead of a rename error from another directory.
-    if path.file_name().is_none() {
+    // A target that does not end in a file name cannot be replaced by one.
+    // `file_name()` alone is not enough: it ignores a trailing `.`, so `dir/.`
+    // reports `Some("dir")` even though the spelling names the directory. The
+    // temp helper still names a fallback under the target's directories (a
+    // trailing `..` survives), so the write would only fail at the rename,
+    // after the parent was created and the temp was written there. Refuse up
+    // front so the caller gets the reason instead of a rename error from
+    // another directory.
+    if !ends_in_a_file_name(path) {
         anyhow::bail!("publish target has no file name: {}", path.display());
     }
     // A bare file name has no directory component; there is nothing to create.
@@ -256,6 +280,49 @@ mod tests {
             !d.join(".girpr_tmp").exists(),
             "no temp is written at the fallback location"
         );
+    }
+
+    /// `Path::file_name()` ignores a trailing `.`, so `dir/.` reports
+    /// `Some("dir")` even though the spelling names the directory. The guard
+    /// reads the spelling, so the target is refused before the parent is
+    /// created or a temp is written, rather than at the rename.
+    #[test]
+    fn a_directory_spelling_is_refused_before_anything_is_written() {
+        let d = dir("directory_spelling");
+        let target = d.join("game");
+        for path in [target.join("."), target.join("")] {
+            assert_eq!(
+                path.file_name(),
+                Some(std::ffi::OsStr::new("game")),
+                "the fixture exercises a spelling `file_name` cannot tell from a file"
+            );
+
+            let err = write_atomic(&path, b"{}", false).unwrap_err();
+
+            assert!(
+                format!("{err:#}").contains("publish target has no file name"),
+                "{err:#}"
+            );
+            assert!(
+                !target.exists(),
+                "the refusal happens before the parent directory is created"
+            );
+            assert!(
+                !d.join("game.girpr_tmp").exists(),
+                "no temp is written beside the directory spelling"
+            );
+        }
+    }
+
+    /// A name that legitimately ends in `.` is a file on Unix, so the guard
+    /// must not treat every trailing dot as a directory spelling.
+    #[cfg(unix)]
+    #[test]
+    fn a_unix_name_ending_in_a_dot_is_still_published() {
+        let d = dir("dot_name");
+        let path = d.join("file.");
+        write_atomic(&path, b"{}", false).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"{}");
     }
 
     /// A failing rename (a directory sits where the file should be) removes the
