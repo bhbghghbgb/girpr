@@ -597,6 +597,8 @@ until the main tasks and rework are done.
 | F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | todo |
 | F497 | TEST-OUTPUT-06 review | `README.md` | The `--output` row says "Stdout only; diagnostics stay on stderr" without mentioning that the log file carries the same rendered lines. | skipped (pre-existing gap, outside this batch's row; no test covers it) |
 | F498 | TEST-OUTPUT-06 review | `tests/common/mod.rs` | The shared constant's doc hard-codes the emitting function name, which a future rename would leave stale. | skipped (prose-only nit; the emitter is stable and covered by cli_contract) |
+| F499 | CHECK-07 review | `src/repair/phases/check.rs` tests | The new `CHECK fail: test double:` branch only runs on a genuine 10 s stall and has no test; feeding a `TestGateExpired` outcome through the warn site would pin it. | todo |
+| F500 | CHECK-07 review | `src/repair/phases/check.rs` tests | The two harness waits repeat `before(deadline).unwrap_or_default()`; a named "remaining or zero" helper would make the zero-timeout intent explicit. | todo |
 
 ## Follow-up batches
 
@@ -695,6 +697,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-09 | F493, F494 | todo | Wave E; release-guard race and the remaining wait constant; low |
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
+| CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
