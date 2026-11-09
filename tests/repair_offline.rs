@@ -618,7 +618,7 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
         },
     )
     .await;
-    let dir = temp_dir("branch_terminal_metadata");
+    let dir = temp_dir("branch_fatal_metadata");
     let fx2 = build_fixture();
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, &f.data);
@@ -626,7 +626,7 @@ async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
 
     let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
-        .expect_err("a terminal branch failure must stop the run");
+        .expect_err("a fatal branch failure must stop the run");
     assert_eq!(
         err.exit_code,
         RunExit::Metadata,
