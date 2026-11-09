@@ -597,8 +597,8 @@ mod tests {
     use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
     use crate::sleep::NoSleep;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::test_http::serve_status;
+    use std::sync::atomic::Ordering;
 
     /// A frame the differential runs over.
     fn frame(payload: &[u8]) -> Vec<u8> {
@@ -911,33 +911,6 @@ mod tests {
                 "{status} must stop the fetch"
             );
         }
-    }
-
-    /// A throwaway HTTP server that answers every request with `status`, and
-    /// counts the requests it saw.
-    async fn serve_status(status: &'static str) -> (String, Arc<AtomicUsize>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind the test server");
-        let addr = listener.local_addr().expect("the test server address");
-        let hits = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&hits);
-        tokio::spawn(async move {
-            while let Ok((mut socket, _)) = listener.accept().await {
-                counter.fetch_add(1, Ordering::Relaxed);
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 1024];
-                    let _ = socket.read(&mut buf).await;
-                    let response = format!(
-                        "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                    let _ = socket.flush().await;
-                });
-            }
-        });
-        (format!("http://{addr}"), hits)
     }
 
     fn manifest_meta(base: &str) -> ChunkManifestMeta {

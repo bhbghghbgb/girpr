@@ -1,9 +1,9 @@
 //! A canned-reply loopback origin shared by the unit tests.
 //!
-//! Several tests need an origin that answers with fixed bytes and counts the
-//! requests it saw. The server deliberately has no route logic: the tests that
-//! need per-target replies or a gated response own those servers themselves,
-//! because that routing is the thing they exercise.
+//! Several tests need an origin that answers with fixed bytes or a fixed
+//! status and counts the requests it saw. The server deliberately has no route
+//! logic: the tests that need per-target replies or a gated response own those
+//! servers themselves, because that routing is the thing they exercise.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,6 +16,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// closed connection, which is all the callers here need.
 pub(crate) async fn serve_bodies(bodies: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
     assert!(!bodies.is_empty(), "the server needs at least one body");
+    serve("200 OK", bodies).await
+}
+
+/// A throwaway HTTP server that answers every request with `status` and an
+/// empty body, and counts the requests it saw.
+///
+/// The return value is the base URL and the number of accepted connections.
+/// The status is fixed: this server never changes its mind between attempts.
+pub(crate) async fn serve_status(status: &'static str) -> (String, Arc<AtomicUsize>) {
+    serve(status, vec![""]).await
+}
+
+/// The accept/count/one-shot-reply loop the two servers above share.
+async fn serve(status: &'static str, bodies: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind the test server");
@@ -31,7 +45,7 @@ pub(crate) async fn serve_bodies(bodies: Vec<&'static str>) -> (String, Arc<Atom
                 let mut buf = [0u8; 4096];
                 let _ = socket.read(&mut buf).await;
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = socket.write_all(response.as_bytes()).await;
