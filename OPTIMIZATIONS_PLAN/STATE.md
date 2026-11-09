@@ -622,6 +622,8 @@ until the main tasks and rework are done.
 | F521 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1` | Other failures (toolchain install, member check) still omit exit codes, so they report less detail than the metadata failure now does. | todo |
 | F522 | BUILD-08 implementer | `tests/scripts/check-msrv.ps1`, `.github/workflows/msrv.yml` | The same `cargo metadata` command line and message now live in both files; a flag change must update both. | skipped (inherent to the YAML/PowerShell split; the duplication is two short lines) |
 | F523 | BUILD-10 implementer | `README.md` | The testing section names a concrete host toolchain (`clippy 0.1.99 / rustc 1.99.1`). | skipped (it records the measurement environment for the allowances, so it is intentionally concrete) |
+| F524 | BUILD-10 review | `README.md` | "The root's is today's high-water mark" reads as uniquely highest, while `tools/sync` is tied at 1.89. | todo |
+| F525 | BUILD-10 review | `tools/sync/Cargo.toml` | The pin comment says "supports the workspace's Rust 1.89", while the README now anchors the pin to `girsync`'s own minimum. | todo |
 
 ## Follow-up batches
 
@@ -734,6 +736,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
 | BUILD-11 | F521 | todo | Wave E; exit codes for the remaining MSRV script failures; low |
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
+| BUILD-13 | F524, F525 | todo | Wave E; high-water-mark wording and pin-comment consistency; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
