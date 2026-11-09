@@ -633,7 +633,7 @@ until the main tasks and rework are done.
 | F532 | BUILD-13 review | `README.md`, `tools/sync/Cargo.toml` | The MSRV prose literals duplicate manifest and registry facts, and `check-msrv.ps1` derives from `cargo metadata` so it cannot catch prose drift. | skipped (the literals are deliberate and named by the surrounding prose; a metadata-driven check would not cover prose either) |
 | F533 | TEMP-WRITER-07 implementer | `src/repair/file/temp.rs` | The copy-stage `ReuseCopy::ReadFailed` handle drop can only be tested end-to-end behind a reader/handle generic threaded through `ReuseCall`, `try_reuse_slice`, and the caller. | skipped (would change production types in three places; the helper-level pin is retained) |
 | F534 | TEMP-WRITER-07 implementer | `src/lib.rs` | `terminal_retcode` is exposed only through `#[doc(hidden)] test_support` yet documented as public; a real public API would need `SophonNotFound` exported to restore the link. | skipped (conditional on making it a real public API) |
-| F535 | TEMP-WRITER-07 review | `src/repair/file/temp.rs` tests | The new read-error test asserts sink emptiness only through `SeekRecording`, while sibling tests also check the on-disk length after a failed path. | pending_review |
+| F535 | TEMP-WRITER-07 review | `src/repair/file/temp.rs` tests | The new read-error test asserts sink emptiness only through `SeekRecording`, while sibling tests also check the on-disk length after a failed path. | completed |
 | F536 | TEMP-WRITER-07 review | `src/hyp.rs` | The reword dropped the pointer to the blob retry policy; linking `crate::sophon::stream::retryable` would restore it. | skipped (`sophon` is a private module, so that path is not publicly linkable and rustdoc rejects it) |
 | F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | todo |
 | F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | todo |
@@ -703,6 +703,7 @@ until the main tasks and rework are done.
 | F602 | BUILD-16 review | `README.md` | Registry-derived prose ("4.2 and later need 1.90") will drift with redb releases, and `check-msrv.ps1` reads only member `rust-version`s. | skipped (same as F532; prose literals are deliberate and not metadata-derivable) |
 | F603 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_reuse_copy_tells_a_read_error_from_a_short_slice` checks the copy outcome but not `out.bytes`/on-disk length after its `ReadFailed` and `Truncated` cases; the short-slice case writes a partial piece. | todo |
 | F604 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_missing_reuse_source_falls_back_to_download` asserts the recorder's `seeks`/`bytes` only, without the on-disk length its siblings use. | todo |
+| F605 | TEMP-WRITER-08 review | `src/repair/file/temp.rs` tests | The new assertion message calls the on-disk length "in the sink" while the siblings phrase it as bytes landing in the sink. | skipped (cosmetic; all three assert the same exact length and the message states its intent) |
 
 ## Follow-up batches
 
@@ -820,6 +821,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
 | TEMP-WRITER-10 | F603, F604 | todo | Wave E; on-disk assertions for the remaining fallback paths; low |
+| TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
@@ -831,7 +833,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-16 | F530, F531 | done | Wave E; 4.1.0 pin wording and root MSRV tie; low; 279628e, d5935af |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
-| TEMP-WRITER-08 | F535 | pending_review | Wave E; on-disk length after the failed read path; low; 3e38b4c |
+| TEMP-WRITER-08 | F535 | done | Wave E; on-disk length after the failed read path; low; 3e38b4c |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | todo | Wave E; alias-shaped directories and copy-path trailing dot/space; low |
 | MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
