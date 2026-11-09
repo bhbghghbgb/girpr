@@ -592,12 +592,17 @@ pub struct BuildManifest {
 }
 
 impl BuildManifest {
-    /// The archive's URL: `{url_prefix}/{url_suffix}` with the id appended.
+    /// The archive's URL: `{url_prefix}/{id}`, with `url_suffix` appended when it
+    /// is non-empty.
     ///
-    /// `{url_prefix}/{id}{url_suffix}` is the measured join order, and the suffix
-    /// is empty in every response seen so far — it is modelled anyway, because a
-    /// join that ignores a field the API sends is a join that breaks the day the
-    /// field is used.
+    /// The suffix is empty in every response measured so far. Both reference
+    /// Sophon clients build `{url_prefix}/{id}` and never read it — Starward's
+    /// `EnsureSophonManifestFileAsync` and Collapse's `ManifestFileUrl` — so
+    /// appending a non-empty suffix here is a conservative reading, not a
+    /// measured join order, and it is where this tool deliberately differs from
+    /// them. It is modelled anyway, because ignoring a field the API sends would
+    /// be wrong the day it is used, and the difference cannot be observed while
+    /// the field stays empty.
     pub fn archive_url(&self) -> String {
         join(&self.manifest_download, &self.manifest.id)
     }
@@ -660,7 +665,8 @@ pub struct Download {
     /// The CDN base, including the `build_id` as its last segment.
     #[serde(default)]
     pub url_prefix: String,
-    /// Appended after the id. Empty everywhere measured.
+    /// Appended after the id by this tool. Empty everywhere measured; the
+    /// reference Sophon clients never read it. See [`BuildManifest::archive_url`].
     #[serde(default)]
     pub url_suffix: String,
 }
