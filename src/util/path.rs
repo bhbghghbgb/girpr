@@ -267,10 +267,30 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// either trailing character names the same file as the stripped form. The
 /// check is lexical and runs on every host: the install is a Windows tree even
 /// when girpr itself runs elsewhere. [`contained_rel`] applies it to every
-/// component, and the atomic publisher applies it to a target that did not come
-/// through that validation.
+/// component, and [`any_component_has_windows_trailing_dot_or_space`] applies
+/// it to every component of a writer's target.
 pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
     part.ends_with('.') || part.ends_with(' ')
+}
+
+/// Does any component of `path` that names a file end in a Windows-trailing
+/// dot or space?
+///
+/// This is [`has_windows_trailing_dot_or_space`] over a whole path, for the
+/// writers whose target did not come through [`contained_rel`]: a caller-built
+/// path can carry the alias spelling in any directory component, not only in
+/// the final one. Windows strips the character when it resolves each
+/// component, so a directory spelled `dir.` aliases `dir` just as a file name
+/// does.
+///
+/// A prefix (a drive or a UNC share) and the root name a filesystem, not a
+/// file, so they are not checked. `components()` drops `.` and repeated
+/// separators, which name nothing either.
+pub(crate) fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
+    path.components().any(|c| match c {
+        Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
+        _ => false,
+    })
 }
 
 /// Is this component a name Windows reserves for a device in every directory?
@@ -395,11 +415,12 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
 /// current directory. A caller that must publish under the name it was given
 /// therefore refuses a target that names no file before calling this helper:
 /// `copy_publish_with` in the post-phase and `atomic::publish` both do.
-/// `atomic::publish` also refuses a target that spells a directory (`dir/.`,
-/// `dir/`) or ends in a Windows-trailing dot or space
-/// ([`has_windows_trailing_dot_or_space`]), because none of those is a name a
-/// file can be published under. This helper keeps the simple shape instead of
-/// inventing a directory for the temp.
+/// Both also refuse a target with a component that ends in a Windows-trailing
+/// dot or space ([`any_component_has_windows_trailing_dot_or_space`]), and
+/// `atomic::publish` additionally refuses a target that spells a directory
+/// (`dir/.`, `dir/`), because none of those is a name a file can be published
+/// under. This helper keeps the simple shape instead of inventing a directory
+/// for the temp.
 pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
     let mut name = path
         .file_name()

@@ -18,7 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::path::{has_windows_trailing_dot_or_space, temp_sibling};
+use super::path::{any_component_has_windows_trailing_dot_or_space, temp_sibling};
 
 /// Publish `bytes` to `path` through a temp sibling.
 ///
@@ -38,12 +38,15 @@ pub fn write_atomic(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
 ///
 /// A `path` that does not end in a usable file name is refused before the parent
 /// is created or a temp is named: a spelling like `dir/.` or `dir/` names the
-/// directory rather than a file, and a Windows-trailing dot or space
-/// (`config.`, `config `) aliases another name. There is no location a file can
-/// be published to under those spellings, and the temp helper's fallback would
-/// put the temp under the path's directories instead. The trailing dot/space
-/// rule is [`has_windows_trailing_dot_or_space`], shared with
-/// [`super::path::contained_rel`] and applied on every host.
+/// directory rather than a file. A Windows-trailing dot or space in **any**
+/// component (`config.`, `config `, `dir./config.ini`) aliases another name:
+/// Windows strips the character when it resolves each component, so a target
+/// whose directory was spelled `dir.` publishes under the aliased `dir` while
+/// the caller asked for something else. There is no location a file can be
+/// published to under those spellings, and the temp helper's fallback would put
+/// the temp under the path's directories instead. The rule is
+/// [`any_component_has_windows_trailing_dot_or_space`], built on the predicate
+/// shared with [`super::path::contained_rel`] and applied on every host.
 ///
 /// With `durable`, the temp file is `sync_all`ed before the rename and the
 /// parent directory is synced best-effort afterwards: a directory sync failure
@@ -116,12 +119,13 @@ where
         anyhow::bail!("publish target has no file name: {}", path.display());
     }
     // Windows strips a trailing dot or space when it resolves a name, so
-    // `config.` and `config ` would publish over `config`. The rule is shared
-    // with `contained_rel` and lexical, so it applies on every host: the
-    // install is a Windows tree even when girpr runs elsewhere.
-    if let Some(name) = path.file_name()
-        && has_windows_trailing_dot_or_space(&name.to_string_lossy())
-    {
+    // `config.` and `config ` would publish over `config`. The same holds for
+    // every directory component: `dir./config.ini` publishes under the
+    // aliased `dir`. The rule is shared with `contained_rel` and lexical, so
+    // it applies on every host: the install is a Windows tree even when girpr
+    // runs elsewhere. A prefix and a root name a filesystem, not a file, and
+    // are not checked.
+    if any_component_has_windows_trailing_dot_or_space(path) {
         anyhow::bail!(
             "publish target has a Windows-trailing dot or space: {}",
             path.display()
@@ -360,6 +364,38 @@ mod tests {
             assert!(
                 !parent.exists(),
                 "the refusal happens before the parent directory is created"
+            );
+        }
+    }
+
+    /// The alias rule is not only about the final name: a caller-built target
+    /// can spell an **intermediate** directory with a trailing dot or space,
+    /// and Windows resolves that component to the stripped directory too. The
+    /// refusal comes before the parent is created, so the aliased directory is
+    /// not created either.
+    #[test]
+    fn a_nested_windows_alias_component_is_refused_before_anything_is_written() {
+        let d = dir("windows_alias_nested");
+        for dir_name in ["dir.", "dir "] {
+            // Constructed lexically: such a directory is not created on any
+            // host, and the test never needs one to exist.
+            let parent = d.join(dir_name).join("missing");
+            let path = parent.join("config.ini");
+            assert_eq!(
+                path.file_name(),
+                Some(std::ffi::OsStr::new("config.ini")),
+                "only an intermediate component is an alias"
+            );
+
+            let err = write_atomic(&path, b"{}", false).unwrap_err();
+
+            assert!(
+                format!("{err:#}").contains("Windows-trailing dot or space"),
+                "{err:#}"
+            );
+            assert!(
+                !parent.exists() && !d.join("dir").exists(),
+                "no directory is created (or aliased) for {dir_name:?}"
             );
         }
     }
