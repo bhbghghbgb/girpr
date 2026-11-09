@@ -599,6 +599,8 @@ until the main tasks and rework are done.
 | F498 | TEST-OUTPUT-06 review | `tests/common/mod.rs` | The shared constant's doc hard-codes the emitting function name, which a future rename would leave stale. | skipped (prose-only nit; the emitter is stable and covered by cli_contract) |
 | F499 | CHECK-07 review | `src/repair/phases/check.rs` tests | The new `CHECK fail: test double:` branch only runs on a genuine 10 s stall and has no test; feeding a `TestGateExpired` outcome through the warn site would pin it. | todo |
 | F500 | CHECK-07 review | `src/repair/phases/check.rs` tests | The two harness waits repeat `before(deadline).unwrap_or_default()`; a named "remaining or zero" helper would make the zero-timeout intent explicit. | todo |
+| F501 | PATHHELPERS-07 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The other bridge recipes still append `--no-capture`, now disagreeing with the module doc; align them and mention the per-case override. | todo |
+| F502 | PATHHELPERS-07 review | `tests/artifact_bridge.rs` | Dropping `--no-capture` also drops its serial execution; the bundle/temp isolation has not been confirmed under parallel runs. | todo |
 
 ## Follow-up batches
 
@@ -698,6 +700,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | todo | Wave E; test-double warn pin and a named remaining-time helper; low |
+| PATHHELPERS-08 | F501, F502 | todo | Wave E; remaining bridge recipes and parallel-run isolation; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
