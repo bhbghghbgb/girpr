@@ -595,6 +595,8 @@ until the main tasks and rework are done.
 | F494 | PURGE-PERF-08 review | `src/repair/mod.rs` | A private 10 s `RECEIVE_WAIT` remains there; it is a candidate for the same single-constant hoist. | todo |
 | F495 | TEST-REGRESSION-06 review | `src/lib.rs` | The new helper pins cover an ordinary and a pre-epoch clock, but not a clock shortly *after* the epoch crossing backward, which was the removed test's other shape. | todo |
 | F496 | TEST-REGRESSION-06 review | `tests/repair_machinery.rs` | `age_mtime` encodes "skip" as a `bool`; a wrapper type would stop a future call site from ignoring it. | todo |
+| F497 | TEST-OUTPUT-06 review | `README.md` | The `--output` row says "Stdout only; diagnostics stay on stderr" without mentioning that the log file carries the same rendered lines. | skipped (pre-existing gap, outside this batch's row; no test covers it) |
+| F498 | TEST-OUTPUT-06 review | `tests/common/mod.rs` | The shared constant's doc hard-codes the emitting function name, which a future rename would leave stale. | skipped (prose-only nit; the emitter is stable and covered by cli_contract) |
 
 ## Follow-up batches
 
@@ -692,6 +694,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
 | PURGE-PERF-09 | F493, F494 | todo | Wave E; release-guard race and the remaining wait constant; low |
 | TEST-REGRESSION-07 | F495, F496 | todo | Wave E; post-epoch pin and skip-result type; low |
+| TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
