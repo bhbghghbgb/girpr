@@ -729,7 +729,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand before any release that changes the repair spec, and when a regression is suspected - cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
         async fn $name() {
             let bridge = bridge().await;
             drive_named(&bridge, $id).await;
