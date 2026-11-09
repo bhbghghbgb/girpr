@@ -812,8 +812,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
-| BUILD-18 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
-| BUILD-19 | F600 | todo | Wave E; shim harness for the MSRV script; low |
+| BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
+| BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
