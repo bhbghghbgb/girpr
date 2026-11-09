@@ -4,9 +4,11 @@
 `1f4c3b2` plus the changes in this branch.
 
 **Scope:** the manifest, parse, plan, scan and write paths — the places where a
-value chosen by the server (or by a hostile local manifest) reaches arithmetic,
-indexing, `unwrap` or `expect`. Local CLI parsing, logging and test-only code are
-out of scope unless they feed one of those paths.
+value chosen by the server (or by a hostile local manifest) reaches arithmetic
+(the `saturating_*`/`checked_*` helpers, `+=`/`-=` updates), indexing, `as`
+casts, `unwrap`/`expect`, or `panic!`/`unreachable!`. Local CLI parsing,
+logging and test-only code are out of scope unless they feed one of those
+paths.
 
 **Rule:** no `catch_unwind`. A server-derived value that can panic is converted
 into a refusal (a per-file `anyhow::Error`, usually exit `2` metadata or exit `3`
