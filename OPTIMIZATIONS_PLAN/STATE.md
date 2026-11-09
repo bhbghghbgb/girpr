@@ -567,6 +567,9 @@ until the main tasks and rework are done.
 | F466 | MANIFEST-06 follow-up | `src/repair/file/mod.rs`, `src/retry.rs` | A deterministic whole-file digest mismatch is retried 5× (~10 s of backoff) before reporting failure; it could be classified terminal or skipped when the plan has no download work. | todo |
 | F467 | MANIFEST-06 follow-up | `src/repair/phases/manifest.rs`, `tests/artifact_bridge/server.rs`, `tests/common` | If a shared gated-origin helper is ever attempted, `manifest.rs::TestServer` and `artifact_bridge/server.rs::Origins` are the real candidates, not the plain helpers. | todo |
 | F468 | MANIFEST-06 review | `tests/repair_scan.rs` | Exit 3 is asserted without pinning that the md5 gate (not another write failure) produced it; asserting the final-digest message would harden it. | todo |
+| F469 | JOBS-05 review | `tests/cli_contract.rs` | No test pins the panic message's "both shapes" wording; a `#[should_panic(expected = ...)]` test would lock it in. | todo |
+| F470 | JOBS-05 review | `tests/cli_contract.rs` | No fixture combines CRLF with the short-alias shape; the two paths are tested only separately. | todo |
+| F471 | JOBS-05 review | `tests/cli_contract.rs` | The four-space description suffix is still a literal in each `format!`; a `HELP_DESCRIPTION_INDENT` constant would remove the last layout literals. | todo |
 
 ## Follow-up batches
 
@@ -652,6 +655,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-COMMENTS-06 | F464 | todo | Wave E; sweep cast wording; low |
 | HYP-07 | F465 | todo | Wave E; multi-thread runtime caveat for the log helper; low |
 | MANIFEST-07 | F466, F467, F468 | todo | Wave E; digest-retry classification, gated-origin candidates, gate-message pin; low |
+| JOBS-06 | F469, F470, F471 | todo | Wave E; help_entry panic pin, CRLF short-alias fixture, indent constant; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
