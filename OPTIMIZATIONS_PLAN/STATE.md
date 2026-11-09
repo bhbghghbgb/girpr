@@ -657,6 +657,9 @@ until the main tasks and rework are done.
 | F556 | PATHHELPERS-08 implementer | `README.md`, `docs/06-artifact-bridge-spec.md` | The default parallel bridge run (69.4 s here) is not faster than the recorded serial 63 s on this 4-core host; a timing claim should say which mode it measured. | skipped (the docs say "roughly a minute", which both measurements support) |
 | F557 | PATHHELPERS-08 implementer | `tests/artifact_bridge.rs` | Parallel safety is stated in prose only; asserting that scratch paths differ would test the tempdir crate rather than the bridge. | skipped (the property belongs to the tempdir crate) |
 | F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | todo |
+| F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | todo |
+| F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | todo |
+| F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | todo |
 
 ## Follow-up batches
 
@@ -791,6 +794,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
+| PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
