@@ -309,6 +309,40 @@ fn help_entry_reads_a_crlf_capture() {
 }
 
 #[test]
+fn help_entry_reads_a_crlf_capture_behind_a_short_alias() {
+    // Both shapes at once: the long flag sits behind `-j, ` and every line
+    // ends `\r\n`. The flag's boundary is the space, and the entry must stop
+    // at its own line end rather than keeping the blank separator's `\r`.
+    let help = format!(
+        "{HELP_OPTION_INDENT}--first\r\n\
+         {HELP_DESCRIPTION_INDENT}first text\r\n\r\n\
+         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
+         {HELP_OPTION_INDENT}--last\r\n\
+         {HELP_DESCRIPTION_INDENT}last text\r\n"
+    );
+    let jobs = help_entry(&help, "--jobs");
+    let first_line = jobs.lines().next().expect("the entry has a line");
+    assert_eq!(
+        option_body(first_line),
+        Some("--jobs <JOBS>"),
+        "the entry starts at the long flag behind its short alias"
+    );
+    assert_eq!(
+        jobs,
+        format!(
+            "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"
+        ),
+        "the entry ends at its own line, without the separator's stray \\r"
+    );
+    assert_eq!(
+        jobs.as_bytes().last(),
+        Some(&b'\n'),
+        "the entry ends on a line feed, not a stray carriage return"
+    );
+}
+
+#[test]
 fn help_exits_zero() {
     // `Args` declares no `version`, so only `--help` gets the conventional 0.
     let (code, stdout, _) = run(&["--help"]);
