@@ -25,7 +25,9 @@ use walkdir::WalkDir;
 use crate::config::{RunCtx, RunFailure};
 use crate::report::Summary;
 use crate::util;
-use crate::util::path::{join_rel, rel_from_base, rel_pair_from_base};
+use crate::util::path::{
+    any_component_has_windows_trailing_dot_or_space, join_rel, rel_from_base, rel_pair_from_base,
+};
 
 use super::metadata::Meta;
 use crate::repair::purge;
@@ -469,6 +471,14 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 /// helper's no-file-name fallback would put the bytes somewhere else, so it is
 /// refused before any copy is attempted.
 ///
+/// The same refusal covers a target with a Windows-trailing dot or space in any
+/// component. Windows strips the character when it resolves a name, so `foo.`
+/// and `foo ` alias `foo` and a directory spelled `res.` aliases `res`; the
+/// install tree this writer feeds is a Windows tree, so the rule is lexical and
+/// applied on every host. It is
+/// [`any_component_has_windows_trailing_dot_or_space`], shared with the atomic
+/// publisher.
+///
 /// The caller creates the destination directory and removes `src` only after
 /// this returns `Ok`.
 fn copy_publish_with(
@@ -495,6 +505,16 @@ fn copy_publish_with(
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "audio cache destination has no file name",
+        ));
+    }
+    // Windows resolves `foo.` and `foo ` to `foo`, and the same holds for a
+    // directory component. The rule is the atomic publisher's, so the two
+    // writers refuse the same spellings; refuse before naming the temp or
+    // copying a byte.
+    if any_component_has_windows_trailing_dot_or_space(target) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "audio cache destination has a Windows-trailing dot or space",
         ));
     }
     let tmp = util::path::temp_sibling(target);
@@ -908,6 +928,58 @@ mod tests {
             b"cache bytes",
             "the refused publish keeps its source"
         );
+    }
+
+    /// Windows strips a trailing dot or space when it resolves a name, so a
+    /// destination named `foo.` or `foo ` would publish under the aliased
+    /// `foo`. The install tree is a Windows tree even on a Unix host, so the
+    /// rule is lexical; the refusal comes before the copy closure runs and
+    /// before a temp sibling is named.
+    #[test]
+    fn a_windows_trailing_dot_or_space_target_is_refused() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "windows_alias");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        let src = base.join("Audio/cache/a.pck");
+        std::fs::write(&src, b"cache bytes").unwrap();
+
+        for name in ["foo.", "foo "] {
+            // Lexical: such a destination never exists on any host, and the
+            // test never needs to create one.
+            let target = base.join("Audio/res").join(name);
+            let tmp = util::path::temp_sibling(&target);
+            assert!(
+                target.file_name().is_some(),
+                "the fixture has a file name; only the alias rule refuses it"
+            );
+
+            let copied = std::cell::Cell::new(false);
+            let err = copy_publish_with(&src, &target, |_, _| {
+                copied.set(true);
+                Ok(0)
+            })
+            .unwrap_err();
+
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(
+                err.to_string(),
+                "audio cache destination has a Windows-trailing dot or space"
+            );
+            assert!(
+                !copied.get(),
+                "the refusal happens before any copy is attempted"
+            );
+            assert!(
+                !base.join("Audio/res").exists(),
+                "no destination directory is created for {name:?}"
+            );
+            assert!(!tmp.exists(), "the refusal leaves no temp sibling");
+            assert_eq!(
+                std::fs::read(&src).unwrap(),
+                b"cache bytes",
+                "the refused publish keeps its source"
+            );
+        }
     }
 
     /// The other half of the same line: a relocation that did happen is
