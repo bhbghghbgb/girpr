@@ -560,7 +560,8 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::test_http::serve_bodies;
+    use std::sync::atomic::Ordering;
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -649,36 +650,6 @@ mod tests {
             Arc::new(crate::sleep::NoSleep),
         )
         .unwrap()
-    }
-
-    /// A throwaway HTTP server that answers the nth request with the nth body,
-    /// repeating the last one, and counts the requests it saw.
-    async fn serve_bodies(bodies: Vec<&'static str>) -> (String, Arc<AtomicUsize>) {
-        assert!(!bodies.is_empty(), "the server needs at least one body");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind the test server");
-        let addr = listener.local_addr().expect("the test server address");
-        let hits = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&hits);
-        tokio::spawn(async move {
-            while let Ok((mut socket, _)) = listener.accept().await {
-                let n = counter.fetch_add(1, Ordering::Relaxed);
-                let body = bodies[n.min(bodies.len() - 1)];
-                tokio::spawn(async move {
-                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                    let mut buf = [0u8; 1024];
-                    let _ = socket.read(&mut buf).await;
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                    let _ = socket.flush().await;
-                });
-            }
-        });
-        (format!("http://{addr}"), hits)
     }
 
     /// A retryable retcode on the first call and a real node on the second: the

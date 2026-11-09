@@ -57,6 +57,10 @@ mod sleep;
 mod sophon;
 mod util;
 
+// The canned-reply loopback origin the unit tests share.
+#[cfg(test)]
+mod test_http;
+
 // The log policy crate, re-exported so that a caller can name the type
 // [`init_tracing`] returns without adding a dependency of its own: the policy
 // is part of this crate's public signature, so it is part of this crate's
