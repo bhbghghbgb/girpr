@@ -828,7 +828,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-16 | F530, F531 | done | Wave E; 4.1.0 pin wording and root MSRV tie; low; 279628e, d5935af |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
-| TEMP-WRITER-08 | F535 | todo | Wave E; on-disk length after the failed read path; low |
+| TEMP-WRITER-08 | F535 | in_progress | Wave E; on-disk length after the failed read path; low |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | todo | Wave E; alias-shaped directories and copy-path trailing dot/space; low |
 | MANIFEST-09 | F539, F540 | todo | Wave E; single-pass digest and range scan on failure paths; low |
