@@ -424,11 +424,17 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
 /// The sink of a streamed chunk: the decoded bytes go straight into the
 /// target file, at the chunk's offset.
 ///
-/// **The write ceiling is charged per piece**, the way the temp mode's reuse
-/// copy charges it ([`try_reuse_slice`]): a chunk is written piece by piece, so
-/// a ceiling that trips in the middle of a chunk stops the run in the middle of
-/// a chunk. The README already documents that a runtime hard stop leaves the
-/// work done in place, and the next run re-verifies and continues.
+/// Both repair modes download through this sink: the temp path writes the
+/// `_tmp`, and the in-place path writes the target itself.
+///
+/// **The write ceiling is charged per piece**, the way each mode's reuse copy
+/// charges it: the temp path copies from a verified local slice in
+/// [`try_reuse_slice`], while the in-place path copies inside the file in
+/// [`copy_within`](super::copy_within). Both reserve every piece before it
+/// lands, so a chunk is written piece by piece and a ceiling that trips in the
+/// middle of a chunk stops the run in the middle of a chunk. The README
+/// already documents that a runtime hard stop leaves the work done in place,
+/// and the next run re-verifies and continues.
 struct ChunkFileSink<'a, W: Write + Seek> {
     ctx: &'a FileCtx,
     file: &'a mut W,
