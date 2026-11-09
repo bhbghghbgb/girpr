@@ -46,8 +46,10 @@ girpr-log = { path = "../../crates/log" }
 # (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
 # No source here calls `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`.
 # The graph still receives `net` and `sync` because `reqwest` enables them in
-# every build, and `io-util` through reqwest's h2/hyper tree, so the saving is
-# what this list does not ask for. `fs` is not in this package's own graph:
+# every build, and `io-util` through reqwest's h2/hyper tree. Those are
+# requests made by dependencies, not features this package asks for; the
+# saving is every feature that neither this list nor a dependency requests.
+# `fs` is not in this package's own graph:
 # `reqwest`'s `stream` feature is what pulls `tokio/fs`, and this manifest does
 # not enable it. A `--workspace` build unifies the repair binary's
 # `reqwest/stream` into the same tokio, and then it is.
