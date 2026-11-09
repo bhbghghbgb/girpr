@@ -298,13 +298,13 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- Rust at the workspace's declared minimum or newer (each manifest's
-  `rust-version`; the crates are `edition = "2024"`, and the single-writer
-  lock uses `File::try_lock`/`File::unlock`, which stabilised in 1.89);
-  network to HoYoPlay + Sophon CDNs (production runs only). The dev-only
-  `girsync` cache pins `redb` to its 4.1 line, the newest that supports the
-  workspace minimum, so checking the whole workspace needs the same toolchain
-  as the product.
+- Rust at the root package's `rust-version` or newer for the whole workspace
+  (each member declares its own minimum; the crates are `edition = "2024"`, and
+  the single-writer lock uses `File::try_lock`/`File::unlock`, which
+  stabilised in 1.89); network to HoYoPlay + Sophon CDNs (production runs
+  only). The dev-only `girsync` cache pins `redb` to its 4.1 line, the newest
+  that supports that minimum, so checking the whole workspace needs the same
+  toolchain as the product.
 - Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
