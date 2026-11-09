@@ -29,8 +29,10 @@
 //! Not "it would be rude under `cargo nextest run`". These cases are
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
 //! each run fetches four manifests — ~20 MB of real bundle bytes — before it
-//! can plan a single file. The whole suite is a handful of cases and **minutes**
-//! of wall-clock. That is a price worth paying **before a release that changes
+//! can plan a single file. The six cases take roughly two minutes of wall-clock
+//! in a debug build (measured: 139 s total on the host this was checked on);
+//! the figure depends on the profile and host, and a release build was not
+//! measured here. That is a price worth paying **before a release that changes
 //! the repair spec** and *after something has gone wrong*, and not worth paying
 //! on every `cargo nextest run`.
 //!
