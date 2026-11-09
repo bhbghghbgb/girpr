@@ -380,6 +380,14 @@ mod tests {
         deadline.checked_duration_since(Instant::now())
     }
 
+    /// Time left before `deadline`, or zero once it has passed. A passed
+    /// deadline means the wait that uses this expires immediately, which is
+    /// what the harness wants: the assertion after the wait reports the shared
+    /// deadline, so the wait itself only has to wake.
+    fn remaining_or_zero(deadline: Instant) -> Duration {
+        before(deadline).unwrap_or_default()
+    }
+
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
             rel: rel.into(),
@@ -682,7 +690,7 @@ mod tests {
         let (lock, cv) = &*gate;
         let state = lock.lock().unwrap();
         let (state, _) = cv
-            .wait_timeout_while(state, before(deadline).unwrap_or_default(), |state| {
+            .wait_timeout_while(state, remaining_or_zero(deadline), |state| {
                 !(state.slow_started && state.fast_done)
             })
             .unwrap();
@@ -696,7 +704,7 @@ mod tests {
         // thread until the fold happens and turns a lost fold into a clear
         // failure instead of hanging the suite.
         assert_eq!(
-            folded_rx.recv_timeout(before(deadline).unwrap_or_default()),
+            folded_rx.recv_timeout(remaining_or_zero(deadline)),
             Ok(1),
             "the finished check was not folded before the shared {GATE_WAIT:?} deadline while the slow task was held"
         );
