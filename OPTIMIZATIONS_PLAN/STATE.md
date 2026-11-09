@@ -599,8 +599,8 @@ until the main tasks and rework are done.
 | F498 | TEST-OUTPUT-06 review | `tests/common/mod.rs` | The shared constant's doc hard-codes the emitting function name, which a future rename would leave stale. | skipped (prose-only nit; the emitter is stable and covered by cli_contract) |
 | F499 | CHECK-07 review | `src/repair/phases/check.rs` tests | The new `CHECK fail: test double:` branch only runs on a genuine 10 s stall and has no test; feeding a `TestGateExpired` outcome through the warn site would pin it. | completed |
 | F500 | CHECK-07 review | `src/repair/phases/check.rs` tests | The two harness waits repeat `before(deadline).unwrap_or_default()`; a named "remaining or zero" helper would make the zero-timeout intent explicit. | completed |
-| F501 | PATHHELPERS-07 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The other bridge recipes still append `--no-capture`, now disagreeing with the module doc; align them and mention the per-case override. | todo |
-| F502 | PATHHELPERS-07 review | `tests/artifact_bridge.rs` | Dropping `--no-capture` also drops its serial execution; the bundle/temp isolation has not been confirmed under parallel runs. | todo |
+| F501 | PATHHELPERS-07 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The other bridge recipes still append `--no-capture`, now disagreeing with the module doc; align them and mention the per-case override. | pending_review |
+| F502 | PATHHELPERS-07 review | `tests/artifact_bridge.rs` | Dropping `--no-capture` also drops its serial execution; the bundle/temp isolation has not been confirmed under parallel runs. | pending_review |
 | F503 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md` | §4.6 keys the manifest cache by `(bundle, tag, field)` while the test server keys it by the archive `PathBuf`; equivalent, but the document names a key the code does not use. | todo |
 | F504 | DOCS-USER-06 review | `docs/06-artifact-bridge-spec.md`, `README.md` | `GIRPR_ARTIFACT_ROOT` is honoured by `artifacts_root()` but is absent from the documented resolution order. | todo |
 | F505 | DOCS-USER-06 review | `README.md`, `docs/06-artifact-bridge-spec.md` | "63 s for the six tests" is run wall time, not the sum of case durations; the wording could say "wall". | todo |
@@ -753,7 +753,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-07 | F495, F496 | done | Wave E; post-epoch pin and skip-result type; low; f6da824, 5556cc2 |
 | TEST-OUTPUT-07 | F497, F498 | done | Wave E; output-row log-file mention and constant doc; low |
 | CHECK-08 | F499, F500 | done | Wave E; test-double warn pin and a named remaining-time helper; low; 753f063, c90d1c0 |
-| PATHHELPERS-08 | F501, F502 | in_progress | Wave E; remaining bridge recipes and parallel-run isolation; low |
+| PATHHELPERS-08 | F501, F502 | pending_review | Wave E; remaining bridge recipes and parallel-run isolation; low; 5c8839a |
 | DOCS-USER-07 | F503, F504, F505 | todo | Wave E; cache-key wording, artifact-root variable, wall-time wording; low |
 | HYP-08 | F506 | todo | Wave E; align the metadata log helper with the shared one; low |
 | JOBS-07 | F507 | todo | Wave E; assert the help indent relationship; low |
