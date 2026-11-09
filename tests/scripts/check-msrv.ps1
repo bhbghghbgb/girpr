@@ -29,6 +29,11 @@ cost is one toolchain's dependency build per distinct rust-version.
 param()
 
 $ErrorActionPreference = 'Stop'
+# The checks below branch on $LASTEXITCODE to report their own messages. Pin
+# the preference that turns a non-zero native exit into a terminating error
+# (7.3+), so a host that sets it cannot bypass those branches. Assigning here
+# only affects this script's scope, which ends with the run.
+$PSNativeCommandUseErrorActionPreference = $false
 
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
