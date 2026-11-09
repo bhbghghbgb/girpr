@@ -532,7 +532,7 @@ until the main tasks and rework are done.
 | F431 | INI-05 review | `src/util/ini.rs` tests | `try_junction_dir` passes paths as argv to `cmd /C`; a single pre-quoted command line would harden unusual temp paths. | completed |
 | F432 | INI-05 review | `src/util/ini.rs` tests | The call-site test drives the private helper directly, so a refactor could bypass it; no practical alternative exists. | completed |
 | F433 | INI-05 review | `src/util/ini.rs` | `symlink_skip_reason` treats every `Unsupported` as a host skip; intended, but the set can broaden as std maps more codes there. | completed |
-| F434 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | `1.89` is hardcoded in the workflow and README while `check-msrv.ps1` derives versions; the bench pin could lag when MSRV moves. | pending_review |
+| F434 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/io-profile/iot-bench/Cargo.toml` | `1.89` is hardcoded in the workflow and README while `check-msrv.ps1` derives versions; the bench pin could lag when MSRV moves. | completed |
 | F435 | BUILD-05 review | `.github/workflows/msrv.yml`, `tests/scripts/check-msrv.ps1` | The `iot-bench` install step reimplements the script's toolchain install; factor out only if more toolchain jobs appear. | skipped (only two install sites; sharing needs an interface for one line) |
 | F436 | BUILD-05 review | `.github/workflows/msrv.yml` | rust-cache hashes every runner toolchain, so the bench cache key churns as images add toolchains; optional narrower keying. | skipped (rust-cache has no toolchain-exclusion input; raw actions/cache would be worse) |
 | F437 | BUILD-TOOLS-05 review | `tools/capture/Cargo.toml` | The comment's "so the saving is what this list does not ask for" clause sits after listing transitive features and could read more clearly. | todo |
@@ -647,7 +647,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-05 | F424, F425 | done | Wave E; global-subscriber test preconditions; low; 9376cc6, 922053c |
 | LOCK-06 | F426, F427, F428 | done | Wave E; duplicate game-path, shared-module test volume, empty key; low; 27e28b8, 7b690c9 |
 | INI-06 | F429, F430, F431, F432, F433 | done | Wave E; junction/symlink test cleanup and platform broadenings; low; f5135f1, 9426a7e, c4cf9bf, b4c6098 |
-| BUILD-06 | F434, F435, F436 | pending_review | Wave E; MSRV pin derivation and cache keying; low; 0f466e0 |
+| BUILD-06 | F434, F435, F436 | done | Wave E; MSRV pin derivation and cache keying; low; 0f466e0 |
 | BUILD-TOOLS-06 | F437 | todo | Wave E; capture comment wording; low |
 | TEMP-WRITER-06 | F438, F439, F440 | todo | Wave E; dual-mode sink doc, read wrapper, reuse builder; low |
 | TEMP-PUBLISH-06 | F441, F442, F443 | todo | Wave E; publish guard spelling and doc sync; low |
