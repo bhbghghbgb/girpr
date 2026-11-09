@@ -624,8 +624,8 @@ until the main tasks and rework are done.
 | F523 | BUILD-10 implementer | `README.md` | The testing section names a concrete host toolchain (`clippy 0.1.99 / rustc 1.99.1`). | skipped (it records the measurement environment for the allowances, so it is intentionally concrete) |
 | F524 | BUILD-10 review | `README.md` | "The root's is today's high-water mark" reads as uniquely highest, while `tools/sync` is tied at 1.89. | completed |
 | F525 | BUILD-10 review | `tools/sync/Cargo.toml` | The pin comment says "supports the workspace's Rust 1.89", while the README now anchors the pin to `girsync`'s own minimum. | completed |
-| F526 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The script relies on the host's `$PSNativeCommandUseErrorActionPreference`; if it is `$true`, native failures throw before the `$LASTEXITCODE` branches and the tailored messages are lost. | pending_review |
-| F527 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The `rustup run ... rustc --version` probe treats any failure as a missing toolchain (e.g. a corrupt one) and then tries to install. | pending_review |
+| F526 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The script relies on the host's `$PSNativeCommandUseErrorActionPreference`; if it is `$true`, native failures throw before the `$LASTEXITCODE` branches and the tailored messages are lost. | completed |
+| F527 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The `rustup run ... rustc --version` probe treats any failure as a missing toolchain (e.g. a corrupt one) and then tries to install. | completed |
 | F528 | BUILD-13 implementer | `tools/sync/Cargo.toml` | Line 5 still justifies the crate's `rust-version` with "redb 4.1 needs 1.89". | skipped (accurate and complementary to the reworded pin comment; no conflict) |
 | F529 | BUILD-13 implementer | `README.md` | The root's requirement is attributed to `File::try_lock`/`File::unlock`, matching the root manifest comment; both need the same edit if that API's MSRV changes. | skipped (cross-file coupling is inherent; both places agree today) |
 | F530 | BUILD-13 review | `README.md` | "pins `redb` to its 4.1 line" reads as the whole 4.1 series while the manifest pins exactly `=4.1.0`. | todo |
@@ -696,6 +696,9 @@ until the main tasks and rework are done.
 | F595 | INI-10 review | `src/util/ini.rs` | The ini junction test ignores `GIRPR_TEST_REQUIRE_JUNCTION` while the path test honours it, so ini's junction case can silently skip under the require switch. | todo |
 | F596 | INI-10 review | `src/util/junction_support.rs` | The inner `mod tests` relies on the module's `#[cfg(all(test, windows))]` gate instead of carrying `#[cfg(test)]` like the rest of the crate. | skipped (redundant under the module gate; not a behaviour difference) |
 | F597 | INI-10 review | `src/util/mod.rs` | Unix compilation of the `#[cfg(all(test, windows))]` gate was not exercised on this host. | skipped (gating is structurally sound; a Unix CI run confirms it) |
+| F598 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The install-failure throw drops rustup's installer output, so mirror/network errors are silent. | todo |
+| F599 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The absence regex matches any toolchain name, not the requested `$ver`, so a bad `rust-version` still triggers an install attempt. | todo |
+| F600 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The script has no automated test; its branches were verified with throwaway `PATH` shims only. | todo |
 
 ## Follow-up batches
 
@@ -809,13 +812,15 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
+| BUILD-18 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
+| BUILD-19 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
 | BUILD-11 | F521 | done | Wave E; exit codes for the remaining MSRV script failures; low; 24ec32c |
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
 | BUILD-13 | F524, F525 | done | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
-| BUILD-14 | F526, F527 | pending_review | Wave E; native-command preference and probe failure classification; low; 3927ccf, 67606f6 |
+| BUILD-14 | F526, F527 | done | Wave E; native-command preference and probe failure classification; low; 3927ccf, 67606f6 |
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
 | BUILD-16 | F530, F531 | todo | Wave E; 4.1.0 pin wording and root MSRV tie; low |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
