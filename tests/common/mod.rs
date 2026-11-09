@@ -104,6 +104,14 @@ pub fn field(line: &str, name: &str) -> u64 {
         .unwrap_or_else(|| panic!("no {name} in {line}"))
 }
 
+/// The conditional `PLAN` key a `--scan` run adds, between `est_extra_bytes`
+/// and `purge_files`.
+///
+/// The plan's line builder is the only writer (`plan_record` in
+/// `src/repair/scope/report.rs`); this is the test side's spelling of it, so a
+/// scan case and the output contract cannot drift apart on the name.
+pub const PLAN_SCAN_BYTES_KEY: &str = "scan_bytes";
+
 /// A game dir that does not exist yet, pointed at by `parent/missing`.
 pub fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
     parent.join("not-created-yet")

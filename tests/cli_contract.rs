@@ -34,8 +34,8 @@ use girpr_tempdir::TempDir;
 use std::process::Command;
 
 use common::{
-    MockOpts, MockServer, build_fixture, read_game_file, remove_run_lock_for_args, temp_dir,
-    write_game_file,
+    MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
+    remove_run_lock_for_args, temp_dir, write_game_file,
 };
 
 fn run(args: &[&str]) -> (i32, String, String) {
@@ -1096,10 +1096,6 @@ const PLAN_KEYS: &[&str] = &[
     "max_chunk_bytes",
     "scoped",
 ];
-
-/// The conditional `PLAN` key: present only on a `--scan` run, between
-/// `est_extra_bytes` and `purge_files`.
-const PLAN_SCAN_BYTES_KEY: &str = "scan_bytes";
 
 /// The keys `PROGRESS` carries, in order. A short run may emit none.
 const PROGRESS_KEYS: &[&str] = &[

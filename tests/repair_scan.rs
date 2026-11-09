@@ -7,8 +7,8 @@ mod common;
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, LOCAL_TAG, Lies, MockOpts, MockServer,
-    build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field, load_counters,
-    read_game_file, run, run_binary, temp_dir, write_game_file,
+    PLAN_SCAN_BYTES_KEY, build_fixture, build_fixture_spec, build_moved_fixture, ctx_for, field,
+    load_counters, read_game_file, run, run_binary, temp_dir, write_game_file,
 };
 use girpr::RunExit;
 use std::sync::atomic::Ordering;
@@ -325,7 +325,7 @@ async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
         "the scan knows the intact chunk is kept: {scanned} vs {unscanned}"
     );
     assert!(
-        plan_line.contains(&format!("scan_bytes={}", 128 + 48)),
+        plan_line.contains(&format!("{PLAN_SCAN_BYTES_KEY}={}", 128 + 48)),
         "the scan reports the bytes it read: {plan_line}"
     );
     let written = std::fs::read_to_string(&out).expect("--plan-out file");
