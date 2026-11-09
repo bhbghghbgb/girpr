@@ -738,7 +738,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
 | BUILD-11 | F521 | done | Wave E; exit codes for the remaining MSRV script failures; low; 24ec32c |
 | BUILD-12 | F523 | done | Wave E; concrete toolchain in the testing section; low |
-| BUILD-13 | F524, F525 | todo | Wave E; high-water-mark wording and pin-comment consistency; low |
+| BUILD-13 | F524, F525 | in_progress | Wave E; high-water-mark wording and pin-comment consistency; low |
 | BUILD-14 | F526, F527 | todo | Wave E; native-command preference and probe failure classification; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
