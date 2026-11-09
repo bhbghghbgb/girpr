@@ -549,6 +549,8 @@ until the main tasks and rework are done.
 | F448 | PURGE-PERF-07 review | `src/util/counter.rs` tests | Both pause tests repeat `const RECEIVE_WAIT: Duration = Duration::from_secs(10)`; a module-level constant would keep the single hang guard in one place. | todo |
 | F449 | PURGE-PERF-07 review | `src/util/counter.rs` tests | On assertion failure the helper thread stays parked at the two-party barrier until process exit; worth a release path if the suite ever joins threads in-process. | todo |
 | F450 | PURGE-PERF-07 review | `src/lib.rs` | `mod test_http;` sits after the alphabetical module list; cosmetic placement fix. | todo |
+| F451 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | On a pre-epoch host `stamp_ago` returns `now`, so fixtures silently lose their "older than one coarse tick" property and the guarded-reuse path is not exercised. | todo |
+| F452 | TEST-REGRESSION-05 review | `src/repair/file/inplace.rs` tests, `tests/repair_machinery.rs` | `stamp_ago_from`/`stamp_ago` and `coarse_tick_of` are duplicated between the unit-test module and the integration test; a shared test-support module would remove it. | todo |
 
 ## Follow-up batches
 
@@ -626,6 +628,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-06 | F441, F442, F443 | todo | Wave E; publish guard spelling and doc sync; low |
 | TEST-MANIFEST-06 | F444, F445, F446 | todo | Wave E; suffix contract, seam doc, helper placement; low |
 | PURGE-PERF-08 | F447, F448, F449, F450 | todo | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low |
+| TEST-REGRESSION-06 | F451, F452 | todo | Wave E; pre-epoch fixture ageing and shared stamp helpers; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
