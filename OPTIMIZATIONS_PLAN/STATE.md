@@ -505,8 +505,8 @@ until the main tasks and rework are done.
 | F404 | CHECK-05 review | `src/repair/phases/check.rs` tests | On expiry the injected closure returns `CheckOutcome::clean()` so counters still read 2; a distinct outcome or comment would read clearer. | completed |
 | F405 | CHECK-05 review | `src/repair/phases/check.rs` tests | Three waits each get a full `GATE_WAIT` from their own start; one absolute test deadline shared by all would make failure ordering unambiguous. | completed |
 | F406 | CHECK-05 review | `src/repair/phases/check.rs` tests | The shared 10 s constant conflates "how long the test waits" with "how long release may take"; splitting the two is a cleanup if touched again. | skipped (only one real wait duration; the release wait is the same absolute deadline) |
-| F407 | PATHHELPERS-05 review | `tests/repair_post.rs`, `src/util/path.rs` tests | The injected `*_skips_without_the_switch` tests print a `SKIP precondition:` line though nothing was skipped; distinguish the simulated refusal. | pending_review |
-| F408 | PATHHELPERS-05 review | `tests/artifact_bridge.rs` | The `gircap`-absent skip still relies on `--no-capture`; a matching `success-output` override could surface it under a plain run. | pending_review |
+| F407 | PATHHELPERS-05 review | `tests/repair_post.rs`, `src/util/path.rs` tests | The injected `*_skips_without_the_switch` tests print a `SKIP precondition:` line though nothing was skipped; distinguish the simulated refusal. | completed |
+| F408 | PATHHELPERS-05 review | `tests/artifact_bridge.rs` | The `gircap`-absent skip still relies on `--no-capture`; a matching `success-output` override could surface it under a plain run. | completed |
 | F409 | DOCS-USER-04 review | `tools/capture/README.md` | Its bridge run recipe (`--test-threads=1` variant) omits the `cargo build -p gircap` precondition step. | todo |
 | F410 | DOCS-USER-04 review | `tests/artifact_bridge.rs` | The `#[ignore]` reason strings name only the nextest command; they could mention the verifier build so the listing is self-sufficient. | todo |
 | F411 | DOCS-USER-04 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge.rs` | Cost wording disagrees on profile ("well under a minute in release" vs "minutes of wall-clock" for debug); state the profile explicitly. | todo |
@@ -617,7 +617,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-OUTPUT-04 | F357, F358, F359 | done | Wave E; text-grammar ambiguity and shared schema vocabulary; low; f38bf2b, e5d1a3d |
 | TEST-OUTPUT-05 | F401, F402, F403 | done | Wave E; remaining text-plane vocabulary notes; low; 9eaefe7, f74ec88, 73374f5 |
 | CHECK-06 | F404, F405, F406 | done | Wave E; gate-test failure reporting and deadline unification; low; 3dc4247 |
-| PATHHELPERS-06 | F407, F408 | pending_review | Wave E; simulated-skip wording and bridge skip visibility; low; 9488a01, 2edf394 |
+| PATHHELPERS-06 | F407, F408 | done | Wave E; simulated-skip wording and bridge skip visibility; low; 9488a01, 2edf394 |
 | DOCS-USER-05 | F409, F410, F411 | todo | Wave E; bridge recipe alignment and profile wording; low |
 | DOCS-COMMENTS-05 | F412, F413 | todo | Wave E; panic-audit region list and sweep vocabulary; low |
 | HYP-06 | F414, F415 | todo | Wave E; shared log-helper wording and duplication decision; low |
