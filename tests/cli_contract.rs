@@ -946,6 +946,10 @@ fn a_zero_ram_budget_is_a_budget_not_a_usage_error() {
 // The goldens are deliberately compact: an event name and its field keys, in
 // report order. They cannot fail on a value or a human wording change, and they
 // do fail when a record moves, repeats, or loses/renames a key.
+//
+// The key lists below are the test-side copy of the output vocabulary: there is
+// no production key manifest to derive them from, so a change to a key name or
+// its order is a deliberate edit here as well.
 
 /// The keys `REPORT` carries, in order.
 ///
