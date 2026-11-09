@@ -55,8 +55,15 @@ try {
         $ver = $pkg.rust_version
         Write-Host "==> $($pkg.name) requires Rust $ver"
 
-        & rustup run $ver rustc --version 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        $probeOutput = & rustup run $ver rustc --version 2>&1
+        $probeExit = $LASTEXITCODE
+        if ($probeExit -ne 0) {
+            $probeText = ($probeOutput | Out-String).Trim()
+            # rustup exits 1 both for a toolchain it does not have and for a
+            # broken one, so install only when rustup names it as absent.
+            if ($probeText -notmatch "toolchain '[^']*' is not installed") {
+                throw "the $ver toolchain probe failed (exit code $probeExit): $probeText"
+            }
             Write-Host "    installing the $ver toolchain"
             & rustup toolchain install $ver --profile minimal --no-self-update
             $installExit = $LASTEXITCODE
