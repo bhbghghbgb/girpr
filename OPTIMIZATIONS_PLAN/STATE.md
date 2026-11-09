@@ -606,8 +606,8 @@ until the main tasks and rework are done.
 | F505 | DOCS-USER-06 review | `README.md`, `docs/06-artifact-bridge-spec.md` | "63 s for the six tests" is run wall time, not the sum of case durations; the wording could say "wall". | todo |
 | F506 | HYP-07 review | `src/repair/phases/metadata.rs` | The private `logs_of` copy still has the older doc and no runtime-flavor guard; bring it in line with the shared helper. | todo |
 | F507 | JOBS-06 review | `tests/cli_contract.rs` | `HELP_DESCRIPTION_INDENT` is documented as `HELP_OPTION_INDENT` + 4 but neither derived nor asserted, so the two can desync silently. | todo |
-| F508 | LOGGING-06 review | `src/logging.rs` tests | The full-line assertion couples to \`TryInitError\` forwarding the inner \`Display\` verbatim; no stable public accessor compares \`source()\`. | skipped (no stable public API exists to assert the typed source) |
-| F509 | LOGGING-06 review | `src/logging.rs` tests | \`set_global_default(NoSubscriber::default())\` builds a \`Dispatch\` only to elicit the error; a comment could note that. | skipped (purely cosmetic; the construct is idiomatic for eliciting the error) |
+| F508 | LOGGING-06 review | `src/logging.rs` tests | The full-line assertion couples to `TryInitError` forwarding the inner `Display` verbatim; no stable public accessor compares `source()`. | skipped (no stable public API exists to assert the typed source) |
+| F509 | LOGGING-06 review | `src/logging.rs` tests | `set_global_default(NoSubscriber::default())` builds a `Dispatch` only to elicit the error; a comment could note that. | skipped (purely cosmetic; the construct is idiomatic for eliciting the error) |
 
 ## Follow-up batches
 
