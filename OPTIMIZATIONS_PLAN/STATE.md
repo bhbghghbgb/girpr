@@ -673,7 +673,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-MANIFEST-06 | F444, F445, F446 | done | Wave E; suffix contract, seam doc, helper placement; low; 0dd1bbe, a9f4555, 9c1c400 |
 | PURGE-PERF-08 | F447, F448, F449, F450 | done | Wave E; stub status variant, shared hang-guard constant, thread release, module order; low; 798adc5, 952b7f3, 6c4dd61, 29db786 |
 | TEST-REGRESSION-06 | F451, F452 | done | Wave E; pre-epoch fixture ageing and shared stamp helpers; low; 562af2a, 90fb7c5, 9d256ab, 82b8942, c668aa6 |
-| TEST-OUTPUT-06 | F453, F454 | todo | Wave E; shared scan-bytes key and README layout; low |
+| TEST-OUTPUT-06 | F453, F454 | in_progress | Wave E; shared scan-bytes key and README layout; low |
 | CHECK-07 | F455, F456, F457 | todo | Wave E; gate-test expiry wording and deadline comment; low |
 | PATHHELPERS-07 | F458, F459, F460 | todo | Wave E; bridge flag docs, stale config comment, refusal dedup; low |
 | DOCS-USER-06 | F461, F462, F463 | todo | Wave E; bridge recipe unification and cost provenance; low |
