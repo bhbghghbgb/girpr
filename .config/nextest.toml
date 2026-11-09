@@ -103,8 +103,7 @@ success-output = "immediate"
 # optional sibling binary. When it is not built, `assert_bundle_verifies`
 # prints the same kind of host-dependent skip and the case still passes. The
 # run command in `tests/artifact_bridge.rs` carries `--no-capture` only to make
-# that line visible, so show it for these cases too; the binary's other tests
-# (the run-lock helpers) stay captured.
+# that line visible, so show it for these cases too.
 [[profile.default.overrides]]
 filter = """
     test(=the_identical_capture_fetches_nothing)
