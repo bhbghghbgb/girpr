@@ -455,18 +455,32 @@ fn set_mtime(path: &Path, stamp: SystemTime) {
         .expect("set mtime");
 }
 
+/// Whether a fixture's mtime carries the age the reuse guard needs.
+///
+/// A named type rather than a `bool`: a call site has to handle the
+/// [`Unrepresentable`](MtimeAge::Unrepresentable) arm instead of discarding
+/// it, because running with a younger stamp would stop exercising the guarded
+/// reuse without saying so.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MtimeAge {
+    /// The file carries the requested age.
+    Aged,
+    /// The host clock cannot represent a stamp that old; skip the case.
+    Unrepresentable,
+}
+
 /// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
 /// so a `--scan` run can still exercise the guarded plan-scan reuse.
 ///
-/// Returns `false` when the host clock cannot represent a stamp that old. The
-/// caller must then skip the case: running it with a younger stamp would stop
-/// exercising the guarded reuse without saying so.
-fn age_mtime(path: &Path) -> bool {
+/// Returns [`MtimeAge::Unrepresentable`] when the host clock cannot represent
+/// a stamp that old. The caller must then skip the case.
+fn age_mtime(path: &Path) -> MtimeAge {
     let Some(stamp) = stamp_ago(Duration::from_secs(24 * 60 * 60)) else {
-        return false;
+        return MtimeAge::Unrepresentable;
     };
     set_mtime(path, stamp);
-    true
+    MtimeAge::Aged
 }
 
 /// A `--scan` repair and an unscanned repair of the same damage are the same
@@ -497,13 +511,13 @@ async fn a_scanned_repair_and_an_unscanned_repair_agree() {
 
     let scanned_rig = Rig::start(&spec).await;
     scanned_rig.at_local_version();
-    if !age_mtime(&scanned_rig.game().join("game/parity.dat")) {
+    let MtimeAge::Aged = age_mtime(&scanned_rig.game().join("game/parity.dat")) else {
         eprintln!(
             "skipping a_scanned_repair_and_an_unscanned_repair_agree: the host clock \
              cannot represent a stamp a day old"
         );
         return;
-    }
+    };
     let mut scanned_args = vec!["--scan"];
     scanned_args.extend_from_slice(&args);
     let scanned = scanned_rig.run(&scanned_args).await;
@@ -605,13 +619,13 @@ async fn a_file_changed_after_the_plan_scan_is_read_again() {
 
     let rig = Rig::start_with(&spec, opts).await;
     *target_path.lock().expect("hook path lock") = Some(rig.game().join("game/z_target.dat"));
-    if !age_mtime(&rig.game().join("game/z_target.dat")) {
+    let MtimeAge::Aged = age_mtime(&rig.game().join("game/z_target.dat")) else {
         eprintln!(
             "skipping a_file_changed_after_the_plan_scan_is_read_again: the host clock \
              cannot represent a stamp a day old"
         );
         return;
-    }
+    };
 
     let run = rig.run(&["--scan"]).await;
     assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
