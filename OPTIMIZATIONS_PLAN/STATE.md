@@ -582,6 +582,9 @@ until the main tasks and rework are done.
 | F481 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | The read-error handle-drop path is pinned only at helper level; an end-to-end `try_reuse_slice` test would need a reader seam over the `File` handle. | todo |
 | F482 | TEMP-WRITER-06 review | `src/repair/file/temp.rs` tests | `ExactReads` and `FailingReads` are local doubles; more copy-path tests may warrant a shared reader fixture. | todo |
 | F483 | TEMP-WRITER-06 follow-up | `src/hyp.rs` | A pre-existing broken intra-doc link (`crate::sophon::retryable`) makes `cargo doc -p girpr --no-deps` fail under `-D warnings`. | todo |
+| F484 | TEMP-PUBLISH-06 review | `src/repair/phases/post.rs` | `copy_publish_with` still guards only with `file_name()`, so it would accept a `dir/.` target; share `ends_in_a_file_name` if that writer becomes reachable. | todo |
+| F485 | TEMP-PUBLISH-06 review | `src/util/atomic.rs` | Windows targets ending in a dot or space (e.g. `config.`) are accepted and alias another name; `contained_rel` already refuses those, the atomic writer does not. | todo |
+| F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | todo |
 
 ## Follow-up batches
 
@@ -673,6 +676,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-07 | F476, F477 | todo | Wave E; junction skip classification and guard removal order; low |
 | BUILD-07 | F478, F479, F480 | todo | Wave E; metadata failure message, MSRV literals, installer helper threshold; low |
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
+| TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
