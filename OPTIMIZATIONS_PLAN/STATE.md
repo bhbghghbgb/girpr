@@ -587,6 +587,8 @@ until the main tasks and rework are done.
 | F486 | TEMP-PUBLISH-06 review | `src/util/path.rs` | The doc says `atomic::publish` refuses "a target with no file name"; it also refuses directory spellings, so the wording could be broadened. | todo |
 | F487 | TEST-MANIFEST-06 review | `tools/capture/src/manifest/mod.rs` | `CapturedManifest::url` and `chunk_url` append `url_suffix` without the new "unmeasured conservative reading" note. | pending_review |
 | F488 | TEST-MANIFEST-06 review | `tools/capture` | Starward's unused `GameSophonManifestUrl.BuildUrl` reads `url_suffix` as a query string; informational unless reference parity is revisited. | skipped (external reference has no callers; no repo change) |
+| F489 | MANIFEST-07 review | `src/repair/file/inplace.rs` | The overlap guard is conservative: duplicate identical chunks count as overlapping and stay retryable; a post-redo rescan could recover the terminal classification at the cost of one extra read on the failure path. | todo |
+| F490 | MANIFEST-07 review | `tests/repair_scan.rs` | No end-to-end fixture with overlapping chunk offsets proves a retry eventually reaches the manifest digest; the current test pins the guard only. | todo |
 
 ## Follow-up batches
 
@@ -680,6 +682,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-07 | F481, F482, F483 | todo | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low |
 | TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | pending_review | Wave E; capture suffix note consistency; low; bf0ad72 |
+| MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
