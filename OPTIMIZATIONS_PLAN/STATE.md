@@ -726,7 +726,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-07 | F476, F477 | done | Wave E; junction skip classification and guard removal order; low; 8483c89, d3dba86 |
 | BUILD-07 | F478, F479, F480 | done | Wave E; metadata failure message, MSRV literals, installer helper threshold; low; a6d34b0, 3b29885, e34a8b2 |
 | TEMP-WRITER-07 | F481, F482, F483 | done | Wave E; end-to-end read-error seam, reader fixture, broken doc link; low; 8fab9f8, a60f278 |
-| TEMP-PUBLISH-07 | F484, F485, F486 | todo | Wave E; shared spelling guard, Windows aliases, doc wording; low |
+| TEMP-PUBLISH-07 | F484, F485, F486 | in_progress | Wave E; shared spelling guard, Windows aliases, doc wording; low |
 | TEST-MANIFEST-07 | F487 | done | Wave E; capture suffix note consistency; low; bf0ad72 |
 | MANIFEST-08 | F489, F490 | todo | Wave E; overlap-guard precision and end-to-end overlapping fixture; low |
 | TEST-MANIFEST-08 | F491, F492 | done | Wave E; suffix-note cross-reference and client-coverage wording; low |
