@@ -635,6 +635,8 @@ until the main tasks and rework are done.
 | F534 | TEMP-WRITER-07 implementer | `src/lib.rs` | `terminal_retcode` is exposed only through `#[doc(hidden)] test_support` yet documented as public; a real public API would need `SophonNotFound` exported to restore the link. | skipped (conditional on making it a real public API) |
 | F535 | TEMP-WRITER-07 review | `src/repair/file/temp.rs` tests | The new read-error test asserts sink emptiness only through `SeekRecording`, while sibling tests also check the on-disk length after a failed path. | todo |
 | F536 | TEMP-WRITER-07 review | `src/hyp.rs` | The reword dropped the pointer to the blob retry policy; linking `crate::sophon::stream::retryable` would restore it. | skipped (`sophon` is a private module, so that path is not publicly linkable and rustdoc rejects it) |
+| F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | todo |
+| F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | todo |
 
 ## Follow-up batches
 
@@ -755,6 +757,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
 | TEMP-WRITER-08 | F535 | todo | Wave E; on-disk length after the failed read path; low |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
+| TEMP-PUBLISH-08 | F537, F538 | todo | Wave E; alias-shaped directories and copy-path trailing dot/space; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
 | INPLACE-04 | F285 | done | Wave E; fixed far-future stamp in the age-branch test; low; 9a38ddb |
 | CHECK-03 | F222, F223 | done | Wave E; test timeout and tally field visibility; low; 852fb0a, ccec3a3 |
