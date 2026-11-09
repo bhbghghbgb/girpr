@@ -157,6 +157,13 @@ cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 ```
 
+The cases run in parallel — one scratch tree and one set of listeners per
+capture — so no `--test-threads=1` is needed; `girpr`'s
+`.config/nextest.toml` shows each case's output through a per-case
+`success-output` override, so no `--no-capture` is needed either. Narrow a run
+to one failure with nextest's filter, for example
+`-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
 the two tools. The spec is `girpr`'s `docs/06-artifact-bridge-spec.md`, and the

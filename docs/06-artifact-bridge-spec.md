@@ -168,6 +168,13 @@ cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 ```
 
+The cases run in parallel: each capture has its own scratch tree and its own
+listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
+`success-output` override in `.config/nextest.toml` prints each case's
+precondition and summary lines even though it passes, so `--no-capture` is not
+needed either. To reproduce one failure, narrow the run with nextest's filter,
+for example `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+
 Nothing else runs it. `cargo nextest run` still *compiles* the file, which is
 what keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`
 contract: a broken bridge fails to build rather than failing silently.

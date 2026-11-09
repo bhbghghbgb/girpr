@@ -593,6 +593,12 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
   cargo nextest run -p girpr --test artifact_bridge --run-ignored only
   ```
+  The six cases run in parallel — each capture gets its own scratch tree and its
+  own listeners — so neither `--no-capture` nor `--test-threads=1` is needed:
+  the per-case `success-output` override in `.config/nextest.toml` prints each
+  case's precondition and summary lines even though it passes. To reproduce one
+  failure, narrow the run with nextest's filter, for example
+  `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
   It still *compiles* under `cargo nextest run`, so a broken bridge fails to
   build rather than failing silently. And because it only ever runs
   deliberately, a **missing prerequisite is an error**: no bundle under
