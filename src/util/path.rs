@@ -110,7 +110,7 @@ fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
                     .to_str()
                     .with_context(|| format!("path is not UTF-8: {rel}"))?;
                 anyhow::ensure!(
-                    !part.ends_with('.') && !part.ends_with(' '),
+                    !has_windows_trailing_dot_or_space(part),
                     "path has a Windows-trailing dot or space: {rel}"
                 );
                 anyhow::ensure!(
@@ -258,6 +258,19 @@ pub(crate) fn path_key(rel: &str) -> String {
     } else {
         rel.to_string()
     }
+}
+
+/// Does this name end in a dot or a space, which Windows strips when it
+/// resolves the name?
+///
+/// Windows aliases `config.` and `config ` to `config`, so a spelling with
+/// either trailing character names the same file as the stripped form. The
+/// check is lexical and runs on every host: the install is a Windows tree even
+/// when girpr itself runs elsewhere. [`contained_rel`] applies it to every
+/// component, and the atomic publisher applies it to a target that did not come
+/// through that validation.
+pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
+    part.ends_with('.') || part.ends_with(' ')
 }
 
 /// Is this component a name Windows reserves for a device in every directory?
