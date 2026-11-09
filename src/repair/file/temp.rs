@@ -392,7 +392,7 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
     // it: `write_downloaded_chunk` builds a `ChunkFileSink`, whose constructor
     // seeks this same file to the chunk's offset before the stream starts.
     call.out.seek(SeekFrom::Start(c.offset as u64))?;
-    if !copy_reuse_pieces(
+    match copy_reuse_pieces(
         call.ctx,
         &mut *call.writes,
         &mut sf,
@@ -400,20 +400,39 @@ fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<Chunk
         &mut *call.scratch,
         c,
     )? {
-        // A read error or a short slice falls through to the download, which
-        // re-seeks to `c.offset` and overwrites the partial copy.
-        *call.src_handle = Some(sf);
-        return Ok(ChunkOutcome::Download);
+        ReuseCopy::Complete => {
+            *call.src_handle = Some(sf);
+            Ok(ChunkOutcome::Reused)
+        }
+        // A short slice falls through to the download, which re-seeks to
+        // `c.offset` and overwrites the partial copy. The handle is still
+        // usable, so the next chunk keeps it.
+        ReuseCopy::Truncated => {
+            *call.src_handle = Some(sf);
+            Ok(ChunkOutcome::Download)
+        }
+        // A failed read leaves the slot empty, so the next chunk tries a fresh
+        // open once rather than holding on to a handle known to be unusable.
+        ReuseCopy::ReadFailed => Ok(ChunkOutcome::Download),
     }
-    *call.src_handle = Some(sf);
-    Ok(ChunkOutcome::Reused)
+}
+
+/// How far the copy of a verified reuse slice got.
+enum ReuseCopy {
+    /// Every byte of the slice landed in the sink.
+    Complete,
+    /// The source ended before the slice did; the caller falls back to the
+    /// download with the handle still usable.
+    Truncated,
+    /// A read failed; the caller falls back to the download and drops the
+    /// handle so the next chunk opens the path once more.
+    ReadFailed,
 }
 
 /// Copy a verified reuse slice into the sink, one piece at a time.
 ///
-/// Returns `false` on a read error or a short slice, leaving the caller to fall
-/// back to the download. Each piece is reserved before it lands, so the write
-/// ceiling is charged at the same granularity as the download sink.
+/// Each piece is reserved before it lands, so the write ceiling is charged at
+/// the same granularity as the download sink.
 fn copy_reuse_pieces<R: Read, W: Write>(
     ctx: &FileCtx,
     writes: &mut FileWrites,
@@ -421,7 +440,7 @@ fn copy_reuse_pieces<R: Read, W: Write>(
     out: &mut W,
     scratch: &mut Vec<u8>,
     c: &SophonChunk,
-) -> Result<bool> {
+) -> Result<ReuseCopy> {
     let mut remaining = c.uncompressed_size as u64;
     let buf = scratch_slice(scratch, COPY_BUF);
     while remaining > 0 {
@@ -430,12 +449,12 @@ fn copy_reuse_pieces<R: Read, W: Write>(
             Ok(n) => n,
             Err(e) => {
                 tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-                return Ok(false);
+                return Ok(ReuseCopy::ReadFailed);
             }
         };
         if n == 0 {
             tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
-            return Ok(false);
+            return Ok(ReuseCopy::Truncated);
         }
         // The write ceiling counts *this* copy: it goes into `*_tmp` and
         // appears in neither `download_bytes` nor the plan's estimate.
@@ -444,7 +463,7 @@ fn copy_reuse_pieces<R: Read, W: Write>(
         note_write(ctx, writes, n as u64)?;
         remaining -= n as u64;
     }
-    Ok(true)
+    Ok(ReuseCopy::Complete)
 }
 
 /// The sink of a streamed chunk: the decoded bytes go straight into the
@@ -925,6 +944,16 @@ mod tests {
         }
     }
 
+    /// A reader that fails every read, standing in for an I/O error in the
+    /// middle of a reuse copy.
+    struct FailingReads;
+
+    impl Read for FailingReads {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("read failed"))
+        }
+    }
+
     /// A sink that can be written but not positioned: every seek is refused,
     /// the way a stream that cannot be rewound presents itself. It records
     /// what the writer attempted, so a test can tell a refused seek from a
@@ -1095,7 +1124,10 @@ mod tests {
         let copied =
             copy_reuse_pieces(&ctx, &mut writes, &mut src, &mut out, &mut scratch, &c).unwrap();
 
-        assert!(copied, "the whole slice is available");
+        assert!(
+            matches!(copied, ReuseCopy::Complete),
+            "the whole slice is available"
+        );
         assert_eq!(
             src.reads, 2,
             "the loop asks for COPY_BUF and then the remainder"
@@ -1107,6 +1139,32 @@ mod tests {
         );
         out.flush().unwrap();
         assert_eq!(std::fs::read(&out_path).unwrap(), source);
+    }
+
+    /// A read error and a short slice both send the chunk to the download, but
+    /// only the short slice leaves a handle the caller can keep. The copy
+    /// helper reports them apart so the caller can drop a handle whose read
+    /// failed.
+    #[test]
+    fn a_reuse_copy_tells_a_read_error_from_a_short_slice() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_copy_errors");
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let c = chunk_at("c0", "", 0, 4);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+
+        let mut failing = FailingReads;
+        let failed =
+            copy_reuse_pieces(&ctx, &mut writes, &mut failing, &mut out, &mut scratch, &c).unwrap();
+        assert!(matches!(failed, ReuseCopy::ReadFailed));
+
+        let mut short = ExactReads::new(vec![0; 2]);
+        let truncated =
+            copy_reuse_pieces(&ctx, &mut writes, &mut short, &mut out, &mut scratch, &c).unwrap();
+        assert!(matches!(truncated, ReuseCopy::Truncated));
     }
 
     /// The source is one file for the whole attempt: the first reuse opens it,
