@@ -149,11 +149,13 @@ depend on the reader — so the reader is not what they use.
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
 four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
-The six cases take roughly two minutes of wall-clock in a debug build (measured:
-139 s total on the host this was checked on); the figure depends on the profile
-and host, and a release build was not measured here. That is a price worth
-paying **before a release that changes the repair spec** and *after something has
-gone wrong*, and not worth paying on every `cargo nextest run`.
+The six cases take roughly a minute of wall-clock in a debug build (measured:
+63 s for the six tests, 67 s wall including the rebuild, on a 4-core Windows
+x86_64 host with `cargo nextest run -p girpr --test artifact_bridge
+--run-ignored only` against one 7.0.0 → 7.1.0 bundle). The figure depends on the
+profile and host, and a release build was not measured here. That is a price
+worth paying **before a release that changes the repair spec** and *after
+something has gone wrong*, and not worth paying on every `cargo nextest run`.
 
 So it runs **by hand, deliberately: before any release that changes the repair
 spec, and whenever that spec is suspected to have regressed**. A pre-release run
