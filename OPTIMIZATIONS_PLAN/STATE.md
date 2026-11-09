@@ -628,8 +628,8 @@ until the main tasks and rework are done.
 | F527 | BUILD-11 implementer | `tests/scripts/check-msrv.ps1` | The `rustup run ... rustc --version` probe treats any failure as a missing toolchain (e.g. a corrupt one) and then tries to install. | completed |
 | F528 | BUILD-13 implementer | `tools/sync/Cargo.toml` | Line 5 still justifies the crate's `rust-version` with "redb 4.1 needs 1.89". | skipped (accurate and complementary to the reworded pin comment; no conflict) |
 | F529 | BUILD-13 implementer | `README.md` | The root's requirement is attributed to `File::try_lock`/`File::unlock`, matching the root manifest comment; both need the same edit if that API's MSRV changes. | skipped (cross-file coupling is inherent; both places agree today) |
-| F530 | BUILD-13 review | `README.md` | "pins `redb` to its 4.1 line" reads as the whole 4.1 series while the manifest pins exactly `=4.1.0`. | pending_review |
-| F531 | BUILD-13 review | `Cargo.toml` | The root comment explains the 1.89 floor without noting `girsync` ties at 1.89. | pending_review |
+| F530 | BUILD-13 review | `README.md` | "pins `redb` to its 4.1 line" reads as the whole 4.1 series while the manifest pins exactly `=4.1.0`. | completed |
+| F531 | BUILD-13 review | `Cargo.toml` | The root comment explains the 1.89 floor without noting `girsync` ties at 1.89. | completed |
 | F532 | BUILD-13 review | `README.md`, `tools/sync/Cargo.toml` | The MSRV prose literals duplicate manifest and registry facts, and `check-msrv.ps1` derives from `cargo metadata` so it cannot catch prose drift. | skipped (the literals are deliberate and named by the surrounding prose; a metadata-driven check would not cover prose either) |
 | F533 | TEMP-WRITER-07 implementer | `src/repair/file/temp.rs` | The copy-stage `ReuseCopy::ReadFailed` handle drop can only be tested end-to-end behind a reader/handle generic threaded through `ReuseCall`, `try_reuse_slice`, and the caller. | skipped (would change production types in three places; the helper-level pin is retained) |
 | F534 | TEMP-WRITER-07 implementer | `src/lib.rs` | `terminal_retcode` is exposed only through `#[doc(hidden)] test_support` yet documented as public; a real public API would need `SophonNotFound` exported to restore the link. | skipped (conditional on making it a real public API) |
@@ -699,6 +699,8 @@ until the main tasks and rework are done.
 | F598 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The install-failure throw drops rustup's installer output, so mirror/network errors are silent. | todo |
 | F599 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The absence regex matches any toolchain name, not the requested `$ver`, so a bad `rust-version` still triggers an install attempt. | todo |
 | F600 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The script has no automated test; its branches were verified with throwaway `PATH` shims only. | todo |
+| F601 | BUILD-16 review | `tools/sync/Cargo.toml` | The pin comment says "redb 4.1 needs 1.89", series wording next to the exact `=4.1.0` pin. | todo |
+| F602 | BUILD-16 review | `README.md` | Registry-derived prose ("4.2 and later need 1.90") will drift with redb releases, and `check-msrv.ps1` reads only member `rust-version`s. | skipped (same as F532; prose literals are deliberate and not metadata-derivable) |
 
 ## Follow-up batches
 
@@ -814,6 +816,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
+| BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
@@ -822,7 +825,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-13 | F524, F525 | done | Wave E; high-water-mark wording and pin-comment consistency; low; 7b28bdb, bd94e50 |
 | BUILD-14 | F526, F527 | done | Wave E; native-command preference and probe failure classification; low; 3927ccf, 67606f6 |
 | BUILD-15 | F528, F529 | done | Wave E; pin justification and MSRV attribution coupling; low |
-| BUILD-16 | F530, F531 | pending_review | Wave E; 4.1.0 pin wording and root MSRV tie; low; 279628e, d5935af |
+| BUILD-16 | F530, F531 | done | Wave E; 4.1.0 pin wording and root MSRV tie; low; 279628e, d5935af |
 | BUILD-17 | F532 | done | Wave E; MSRV prose literal duplication; low |
 | BUILD-18 | F533, F534 | done | Wave E; copy-stage read-error seam and doc-hidden export note; low |
 | TEMP-WRITER-08 | F535 | todo | Wave E; on-disk length after the failed read path; low |
