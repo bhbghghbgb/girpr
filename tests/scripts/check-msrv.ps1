@@ -60,15 +60,21 @@ try {
         if ($probeExit -ne 0) {
             $probeText = ($probeOutput | Out-String).Trim()
             # rustup exits 1 both for a toolchain it does not have and for a
-            # broken one, so install only when rustup names it as absent.
-            if ($probeText -notmatch "toolchain '[^']*' is not installed") {
+            # broken one, so install only when rustup names the requested
+            # toolchain as absent. It appends the host triple to a version
+            # channel; accept that suffix but no other toolchain name.
+            if ($probeText -notmatch "toolchain '$([regex]::Escape($ver))(-[^']*)?' is not installed") {
                 throw "the $ver toolchain probe failed (exit code $probeExit): $probeText"
             }
             Write-Host "    installing the $ver toolchain"
-            & rustup toolchain install $ver --profile minimal --no-self-update
+            $installOutput = & rustup toolchain install $ver --profile minimal --no-self-update 2>&1
             $installExit = $LASTEXITCODE
+            $installText = ($installOutput | Out-String).Trim()
             if ($installExit -ne 0) {
-                throw "could not install the $ver toolchain (exit code $installExit)"
+                throw "could not install the $ver toolchain (exit code $installExit): $installText"
+            }
+            if ($installText) {
+                Write-Host $installText
             }
         }
 

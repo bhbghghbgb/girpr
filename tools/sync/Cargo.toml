@@ -2,7 +2,7 @@
 name = "girsync"
 version = "0.1.0"
 edition = "2024"
-# redb 4.1 needs 1.89; nothing else in its tree needs more.
+# redb 4.1.0 needs 1.89; nothing else in its tree needs more.
 rust-version = "1.89"
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with redb hash cache"
 
