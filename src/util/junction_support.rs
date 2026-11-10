@@ -71,6 +71,10 @@ pub(super) enum JunctionOutcome {
 /// not a reparse point is refused as the wrong fixture, and an inspection
 /// that fails for another reason keeps that cause, so a permission or
 /// transient I/O failure is never reported as missing.
+///
+/// The inspection proves that the link path is a name-surrogate reparse
+/// point, which is the kind a junction is; it cannot prove more, because
+/// `std` exposes no public reparse tag.
 pub(super) fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     try_junction_dir_with(target, link, run_command_line)
 }
@@ -177,6 +181,11 @@ fn run_command_line(command: &str) -> std::io::Result<std::process::Output> {
 /// reason keeps that cause, so a permission or transient I/O failure is
 /// never reported as missing.
 ///
+/// The inspection proves that the link path is a name-surrogate reparse
+/// point, which is the kind a junction is. `std` exposes no public reparse
+/// tag, so it cannot also prove that the entry is a junction rather than
+/// another name surrogate.
+///
 /// Every failure stays `Other`, so none of them can be mistaken for a proven
 /// host refusal by [`junction_skip_reason`].
 pub(super) fn junction_result(outcome: &JunctionOutcome, link: &Path) -> std::io::Result<()> {
@@ -202,12 +211,28 @@ pub(super) fn junction_result_with(
         )));
     }
     match inspect(link) {
-        // A junction is a name-surrogate reparse point, so std reports it as
-        // a link: the link itself is what the case needs.
+        // The guard proves one thing: the link path is a name-surrogate
+        // reparse point, which is what a junction is, so std reports it as a
+        // link and the link itself is what the case needs.
+        //
+        // It proves exactly that much. It does not prove the entry is a
+        // junction rather than another name surrogate — a symbolic link at
+        // the same path would pass too — because `std` exposes no public
+        // reparse tag to tell the two apart. A case that needs a junction's
+        // own behaviour asks the filesystem, not this guard.
+        //
+        // The guard leans on std's name-surrogate reparse-tag test: on
+        // Windows `FileType::is_symlink` is true when the entry carries
+        // `FILE_ATTRIBUTE_REPARSE_POINT` and its reparse tag has the
+        // name-surrogate bit, which a junction's tag does. `std` has read
+        // the tag that way since well before the crate's 1.89 floor, so
+        // every supported toolchain reports a junction as a link; a
+        // toolchain that did not would refuse a good fixture here, which is
+        // why the floor is part of this fixture's contract.
         Ok(md) if md.file_type().is_symlink() => Ok(()),
-        // Something is there, but it is not the junction `mklink` claimed: a
-        // plain directory would stand in for the fixture and satisfy a later
-        // assertion for the wrong reason.
+        // Something is there, but it is not the reparse point `mklink`
+        // claimed: a plain directory would stand in for the fixture and
+        // satisfy a later assertion for the wrong reason.
         Ok(_) => Err(junction_not_a_reparse_point_error(link)),
         Err(e) => Err(junction_inspection_error(link, e)),
     }
