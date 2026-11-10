@@ -222,7 +222,7 @@ pub mod test_support {
         /// shortly after the epoch is the other direction of the same
         /// crossing.
         #[test]
-        fn an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch() {
+        fn an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch_and_across_it_backward() {
             let day = Duration::from_secs(24 * 60 * 60);
 
             let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * day.as_secs());
