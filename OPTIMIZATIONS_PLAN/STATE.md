@@ -871,7 +871,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
-| TEST-REGRESSION-08 | F548, F549 | todo | Wave E; pin name and checked pre-epoch construction; low |
+| TEST-REGRESSION-08 | F548, F549 | in_progress | Wave E; pin name and checked pre-epoch construction; low |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | CHECK-09 | F552 | todo | Wave E; pin the remaining check warn arms; low |
