@@ -650,7 +650,7 @@ until the main tasks and rework are done.
 | F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | completed |
 | F550 | TEST-REGRESSION-07 implementer | `OPTIMIZATIONS_PLAN` gates | Positional nextest filters like `girpr lib` or `girpr machinery` select zero tests; `--lib` / `--test <name>` are the working spellings. | skipped (harness/nextest filter behaviour, not repo code) |
 | F551 | TEST-REGRESSION-07 review | `tests/repair_machinery.rs` | `MtimeAge` is local; if another test file needs the same named skip outcome it should live beside the shared clock helpers. | skipped (conditional; only one test file uses it today) |
-| F552 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | The other warn-site arms (`PathEscaped`, `Unreadable`, `Read`, `Absent`) are only indirect; one injected-outcome test could pin all six arms. | todo |
+| F552 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | The other warn-site arms (`PathEscaped`, `Unreadable`, `Read`, `Absent`) are only indirect; one injected-outcome test could pin all six arms. | pending_review |
 | F553 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | `remaining_or_zero` could also serve the release wait if its `Some`/`None` branch were refactored. | skipped (would change the release-wait shape) |
 | F554 | CHECK-08 review | `src/repair/phases/check.rs` tests | `check_warnings` slices from `CHECK fail`, stripping the `WARN` level, so a regression from `warn!` to `info!` would still pass. | todo |
 | F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | todo |
@@ -734,6 +734,10 @@ until the main tasks and rework are done.
 | F633 | TEST-REGRESSION-08 review | `.config/nextest.toml` | The renamed epoch test has no `success-output = "immediate"` override, so its skip line would be invisible under the plain gate, unlike every other skip-printing test. | todo |
 | F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | todo |
 | F635 | TEST-REGRESSION-08 review | `src/lib.rs` | The pre-epoch reference value is now the same expression the helper uses, so the assertion no longer pins "the platform's unchecked subtraction does not panic"; a short comment would stop a reader mistaking it for a tautology. | todo |
+| F636 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `parallel_checks_match_one_job_and_stay_in_plan_order` still asserts the md5/size lines only by substring, and the new exact test now subsumes it. | todo |
+| F637 | CHECK-09 implementer | `src/repair/phases/check.rs` | `CheckOutcome`/`CheckFailure` are not `Clone`, so the test helper rebuilds outcomes per rel instead of holding a shared table. | todo |
+| F638 | CHECK-09 implementer | `src/repair/phases/check.rs`, `src/util/` | `check_one` still has no deterministic path to `PathEscaped`/`Unreadable`/`Read`; an injectable seam at `util::file_len`/`util::md5::md5_file_digest` could make those shapes reachable from `check_one`, not only by outcome injection. | todo |
+| F639 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `check_warnings` strips the timestamp/level/target prefix, so no test can assert a full raw log line including the `WARN` level and the module target. | skipped (duplicate of F554, which CHECK-11 already covers) |
 
 ## Follow-up batches
 
@@ -878,13 +882,15 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
 | DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
+| CHECK-12 | F636, F637 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
+| CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | TEST-REGRESSION-08 | F548, F549 | done | Wave E; pin name and checked pre-epoch construction; low; b7bbfbf, 30f4b7f |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
-| CHECK-09 | F552 | in_progress | Wave E; pin the remaining check warn arms; low |
+| CHECK-09 | F552 | pending_review | Wave E; pin the remaining check warn arms; low; 63bd985 |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
 | CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
