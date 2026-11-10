@@ -749,8 +749,8 @@ until the main tasks and rework are done.
 | F645 | CHECK-11 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Two more copies of the async log-capture implementation duplicate `src/repair/test_support.rs`. | skipped (duplicate of F572/HYP-09; consolidating needs a public async test helper) |
 | F646 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor scans the whole prefix for the first level-looking token, and `Level::from_str` also accepts bare numbers ("2" is `WARN`), so the parse relies on the level preceding the target rather than on its position. | completed |
 | F647 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor assumes one log record per line; a multi-line message would be split and its continuation dropped, and that assumption is undocumented. | completed |
-| F648 | PATHHELPERS-10 implementer | `.config/nextest.toml` | The sibling override block names three host-skip tests without a binary qualifier, and those names are far more collision-prone than the bridge ones. | pending_review |
-| F649 | PATHHELPERS-10 implementer | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | `cargo nextest list` silently lists nothing for `#[ignore]`d tests without `--run-ignored all`, so the documented filter-narrowing hint should say so. | pending_review |
+| F648 | PATHHELPERS-10 implementer | `.config/nextest.toml` | The sibling override block names three host-skip tests without a binary qualifier, and those names are far more collision-prone than the bridge ones. | completed |
+| F649 | PATHHELPERS-10 implementer | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | `cargo nextest list` silently lists nothing for `#[ignore]`d tests without `--run-ignored all`, so the documented filter-narrowing hint should say so. | completed |
 | F650 | PATHHELPERS-10 implementer | `tests/` across `girpr`, `gircap`, `girsync` | Duplicate test leaf names already exist across three binaries, which is the mechanism that makes the unqualified override risky. | skipped (informational; qualifying the filter removes the consequence) |
 | F651 | PATHHELPERS-10 review | `.config/nextest.toml` | The sibling override block still names three host-skip tests by bare `test(=...)` without a binary qualifier. | skipped (duplicate of F648, which PATHHELPERS-12 covers) |
 | F652 | PATHHELPERS-10 review | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not covered by either `success-output = "immediate"` override, so a future host skip there would be invisible under the plain gate. | skipped (duplicate of F593, which INI-15 covers) |
@@ -758,7 +758,7 @@ until the main tasks and rework are done.
 | F654 | PATHHELPERS-11 implementer | `tools/capture/README.md` | The bridge command there lacks the `cargo build -p gircap` line both the README and the spec carry, so a reader following only the capture tool's README gets a `gircap verify` skip instead of the precondition. | todo |
 | F655 | PATHHELPERS-11 implementer | `README.md`, `tests/artifact_bridge.rs` | The "run in parallel" wording could be read as intra-process threads, although nextest runs each case in its own process. | skipped (noting only; the wording is correct as written) |
 | F656 | PATHHELPERS-11 review | `README.md`, `tools/capture/README.md` | Those recipes describe the scratch tree and listeners without section numbers, unlike the spec and module doc which now cite §6.3 and §6.2. | dropped (generic improvement, not a problem that needs attention) |
-| F657 | PATHHELPERS-11 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The recipes show the filter only as a fragment next to the `--run-ignored only` command, so a reader who types just the fragment selects zero tests because nextest's default filter excludes the ignored cases. | pending_review |
+| F657 | PATHHELPERS-11 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The recipes show the filter only as a fragment next to the `--run-ignored only` command, so a reader who types just the fragment selects zero tests because nextest's default filter excludes the ignored cases. | completed |
 | F658 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | The module docs still summarise the order as "gircap list --root <root>, then a directory scan" without saying the scan is a fallback for an unavailable or failing listing. | todo |
 | F659 | DOCS-USER-10 implementer | `docs/06-artifact-bridge-spec.md` | §3.2 step 3 says `gircap list` "reports one `bundle` record per bundle on stdout", naming only the text form although the bridge also accepts the JSON form's `"event":"bundle"`. | todo |
 | F660 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `scan_for_bundles` is fixed-depth while `gircap`'s own consistency test scans recursively, so a bundle outside the fixed layout would be missed by the bridge's scan. | skipped (conditional; only bundles outside the documented layout are affected) |
@@ -973,13 +973,13 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-13 | F638 | skipped | Wave E; merged into CHECK-15; low |
 | DOCS-USER-15 | F641 | skipped | Wave E; merged into CHECK-15; low |
 | CHECK-14 | F642, F643, F646, F647 | skipped | Wave E; merged into CHECK-15; low |
-| PATHHELPERS-12 | F648, F649, F657 (F633, F696 stale) | pending_review | Wave E; the skip overrides and the ignored-test filter guidance; low; 3a975635 |
+| PATHHELPERS-12 | F648, F649, F657 (F633, F696 stale) | done | Wave E; the skip overrides and the ignored-test filter guidance; low; 3a975635, c5b96cb8; reviewer: two completed-with-fixes, list wording corrected; bridge suite run, 6 passed |
 | DOCS-CAPTURE-21 | F654, F664, F666, F671 | todo | Wave E; the capture tool's docs; low |
 | DOCS-BRIDGE-20 | F653, F658, F659, F667, F669, F670 | todo | Wave E; the bridge spec, module doc and server comment; low |
 | DOCS-USER-17 | F658, F659, F662 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
 | DOCS-USER-18 | F664, F666, F667, F671 | skipped | Wave E; merged into DOCS-BRIDGE-20 and DOCS-CAPTURE-21; low |
 | DOCS-USER-19 | F669, F670 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
-| HYP-12 | F673 | todo | Wave E; document the spawn_blocking_traced contract; low |
+| HYP-12 | F673 | in_progress | Wave E; document the spawn_blocking_traced contract; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
