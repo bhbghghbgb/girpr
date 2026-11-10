@@ -402,7 +402,7 @@ until the main tasks and rework are done.
 | F301 | EXIT-04 review | `src/config.rs` | `RunExit::ALL`'s completeness is not compile-enforced; a macro defining enum, discriminants and `ALL` from one list would be airtight. | completed |
 | F302 | EXIT-04 review | `src/main.rs` | `every_documented_exit_code_fits_in_a_process_status` is now near-tautological; drop it or reduce it to a note. | completed |
 | F303 | EXIT-04 review | `src/config.rs` | `RunExit::ALL` is new public API surface; `pub(crate)` would keep the published surface smaller if only tests use it. | completed |
-| F304 | DRYRUN-04 review | `tests/repair_purge.rs` | The purge-before plan-out test only asserts the document is non-empty; parsing it and checking it describes the same repair plan would be stronger. | todo |
+| F304 | DRYRUN-04 review | `tests/repair_purge.rs` | The purge-before plan-out test only asserts the document is non-empty; parsing it and checking it describes the same repair plan would be stronger. | dropped (generic improvement, not a problem that needs attention) |
 | F305 | PURGE-PERF-04 review | `src/repair/mod.rs` | `fetch_deprecated`'s normalization/drop-with-warning paths have no focused test; a backslash or absolute deprecated name would pin the `retain_mut` semantics. | completed |
 | F306 | PURGE-PERF-04 review | `src/repair/mod.rs` | The "one Arc allocation" claim relies on std's in-place collect specialization; confirm with an allocator counter if it matters. | completed |
 | F307 | PURGE-PERF-04 review | `src/util/counter.rs` | The shared test pause barrier is thread-local and process-wide; a test pausing then hitting a different counter on the same thread would pause unexpectedly. | completed |
@@ -690,23 +690,23 @@ until the main tasks and rework are done.
 | F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | completed |
 | F590 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `junction_skip_reason`'s doc says the raw-code arm "belongs to the spawn path", but spawning `cmd` never needs `SeCreateSymbolicLinkPrivilege`; "defensive" is the accurate framing. | completed |
 | F591 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir` verifies only that something exists at the link path, not that it is a reparse point, so a mis-created directory would be reported later with a less direct message. | completed |
-| F592 | INI-10 implementer | `src/util/ini.rs` | `link_creation_denied`'s doc says it classifies "a directory symlink or a junction", but junction classification now lives in the shared module. | todo |
-| F593 | INI-10 implementer | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not in the `success-output = "immediate"` override, so a future host skip there would be invisible under the default gate. | todo |
-| F594 | INI-10 implementer | `src/util/ini.rs` | The ini junction test prints its skip manually while the path test routes through `skip_fixture_refusal`; the two styles still differ. | todo |
-| F595 | INI-10 review | `src/util/ini.rs` | The ini junction test ignores `GIRPR_TEST_REQUIRE_JUNCTION` while the path test honours it, so ini's junction case can silently skip under the require switch. | todo |
+| F592 | INI-10 implementer | `src/util/ini.rs` | `link_creation_denied`'s doc says it classifies "a directory symlink or a junction", but junction classification now lives in the shared module. | completed |
+| F593 | INI-10 implementer | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not in the `success-output = "immediate"` override, so a future host skip there would be invisible under the default gate. | completed |
+| F594 | INI-10 implementer | `src/util/ini.rs` | The ini junction test prints its skip manually while the path test routes through `skip_fixture_refusal`; the two styles still differ. | completed |
+| F595 | INI-10 review | `src/util/ini.rs` | The ini junction test ignores `GIRPR_TEST_REQUIRE_JUNCTION` while the path test honours it, so ini's junction case can silently skip under the require switch. | completed |
 | F596 | INI-10 review | `src/util/junction_support.rs` | The inner `mod tests` relies on the module's `#[cfg(all(test, windows))]` gate instead of carrying `#[cfg(test)]` like the rest of the crate. | skipped (redundant under the module gate; not a behaviour difference) |
 | F597 | INI-10 review | `src/util/mod.rs` | Unix compilation of the `#[cfg(all(test, windows))]` gate was not exercised on this host. | skipped (gating is structurally sound; a Unix CI run confirms it) |
 | F598 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The install-failure throw drops rustup's installer output, so mirror/network errors are silent. | todo |
 | F599 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The absence regex matches any toolchain name, not the requested `$ver`, so a bad `rust-version` still triggers an install attempt. | todo |
-| F600 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The script has no automated test; its branches were verified with throwaway `PATH` shims only. | todo |
+| F600 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The script has no automated test; its branches were verified with throwaway `PATH` shims only. | dropped (generic improvement, not a problem that needs attention) |
 | F601 | BUILD-16 review | `tools/sync/Cargo.toml` | The pin comment says "redb 4.1 needs 1.89", series wording next to the exact `=4.1.0` pin. | todo |
 | F602 | BUILD-16 review | `README.md` | Registry-derived prose ("4.2 and later need 1.90") will drift with redb releases, and `check-msrv.ps1` reads only member `rust-version`s. | skipped (same as F532; prose literals are deliberate and not metadata-derivable) |
-| F603 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_reuse_copy_tells_a_read_error_from_a_short_slice` checks the copy outcome but not `out.bytes`/on-disk length after its `ReadFailed` and `Truncated` cases; the short-slice case writes a partial piece. | todo |
-| F604 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_missing_reuse_source_falls_back_to_download` asserts the recorder's `seeks`/`bytes` only, without the on-disk length its siblings use. | todo |
+| F603 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_reuse_copy_tells_a_read_error_from_a_short_slice` checks the copy outcome but not `out.bytes`/on-disk length after its `ReadFailed` and `Truncated` cases; the short-slice case writes a partial piece. | dropped (generic improvement, not a problem that needs attention) |
+| F604 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_missing_reuse_source_falls_back_to_download` asserts the recorder's `seeks`/`bytes` only, without the on-disk length its siblings use. | dropped (generic improvement, not a problem that needs attention) |
 | F605 | TEMP-WRITER-08 review | `src/repair/file/temp.rs` tests | The new assertion message calls the on-disk length "in the sink" while the siblings phrase it as bytes landing in the sink. | skipped (cosmetic; all three assert the same exact length and the message states its intent) |
 | F606 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | `move_audio_cache_with` tries `std::fs::rename` before the copy fallback, so on Unix a cache file named `foo.` can still be published as `res/foo.` without reaching the new refusal. | todo |
 | F607 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | The copy alias refusal message omits the path; the caller's warn line supplies both paths. | skipped (informational only; the caller names both paths) |
-| F608 | TEMP-PUBLISH-08 review | `src/repair/phases/post.rs` tests | The copy test's "no destination directory" assertion is vacuous because `copy_publish_with` never creates directories; an integration test through `move_audio_cache_with` would cover the real sequence. | todo |
+| F608 | TEMP-PUBLISH-08 review | `src/repair/phases/post.rs` tests | The copy test's "no destination directory" assertion is vacuous because `copy_publish_with` never creates directories; an integration test through `move_audio_cache_with` would cover the real sequence. | dropped (generic improvement, not a problem that needs attention) |
 | F609 | TEMP-PUBLISH-08 review | `src/util/path.rs`, `src/util/atomic.rs` | Windows verbatim targets (`\\?\…`) do not strip dot/space, so the lexical rule can refuse a spelling verbatim would accept. | skipped (conditional; no caller produces verbatim publish targets) |
 | F610 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` tests | No end-to-end test drives a real post-redo terminal mismatch through `verify_and_retry`; it would need a zstd origin whose redo still mismatches. | skipped (conditional; the unit test already covers the terminal decision) |
 | F611 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` | The verify success path hashes chunk ranges whose verdicts are unused, which is inherent to deciding the outcome in one pass. | skipped (inherent to the one-pass design; only worth revisiting if a profile shows it) |
@@ -717,7 +717,7 @@ until the main tasks and rework are done.
 | F616 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | `overlapping_ranges` re-derives the contested offsets from `Layout::overlaps` and allocates a `Vec` per call. | skipped (cost is negligible; once per attempt) |
 | F617 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The narrowing leans on `PlannedFile::layout()` skipping negative-offset chunks, so a hand-built plan with a negative offset would leave that chunk unchecked. | skipped (defence in depth; `validate_chunk_ranges` refuses such a plan twice) |
 | F618 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The terminal predicate reads exactly `expected` verdicts, so a scan returning more verdicts than asked for would go unnoticed. | todo |
-| F619 | MANIFEST-10 review | `src/repair/file/inplace.rs` tests | The invariant test pins one fixed layout; a generated sweep over layouts would pin the narrowed-set property far more broadly. | todo |
+| F619 | MANIFEST-10 review | `src/repair/file/inplace.rs` tests | The invariant test pins one fixed layout; a generated sweep over layouts would pin the narrowed-set property far more broadly. | dropped (generic improvement, not a problem that needs attention) |
 | F620 | MANIFEST-10 review | `src/repair/phases/plan.rs` | The narrowing's soundness rests on `Layout::overlaps` naming both sides of every overlap; a unit test in `plan.rs` stating that property would make the dependency explicit. | todo |
 | F621 | MANIFEST-10 review | `src/repair/file/inplace.rs` | `overlapping_ranges` recomputes `file.layout()` although `patch_chunks` already computed it. | skipped (negligible next to the read; not worth the churn) |
 | F622 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::arrive_and_wait` opens the gate only on the exact transition `arrived == 2`; a third arrival while the gate is closed would never open it. | skipped (unreachable today; arrivals increase by one, so the count passes through 2) |
@@ -730,15 +730,15 @@ until the main tasks and rework are done.
 | F629 | TEST-REGRESSION-08 implementer | `src/repair/file/inplace.rs` tests | The local `ago()` helper calls `stamp_ago(age).expect(...)`, so that unit test fails loudly instead of skipping on a host that cannot represent the age. | todo |
 | F630 | TEST-REGRESSION-08 implementer | `src/lib.rs` | The ordinary-clock assertion's `now - day` is the only remaining unchecked subtraction in the clock tests. | todo |
 | F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | completed |
-| F632 | TEST-REGRESSION-08 implementer | `README.md`, `.config/nextest.toml` | The skip-switch bullet and the `success-output` override only cover the two existing switches; a skip line from an unlisted test is invisible under the plain gate. | todo |
+| F632 | TEST-REGRESSION-08 implementer | `README.md`, `.config/nextest.toml` | The skip-switch bullet and the `success-output` override only cover the two existing switches; a skip line from an unlisted test is invisible under the plain gate. | dropped (generic improvement, not a problem that needs attention) |
 | F633 | TEST-REGRESSION-08 review | `.config/nextest.toml` | The renamed epoch test has no `success-output = "immediate"` override, so its skip line would be invisible under the plain gate, unlike every other skip-printing test. | todo |
 | F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | todo |
-| F635 | TEST-REGRESSION-08 review | `src/lib.rs` | The pre-epoch reference value is now the same expression the helper uses, so the assertion no longer pins "the platform's unchecked subtraction does not panic"; a short comment would stop a reader mistaking it for a tautology. | todo |
-| F636 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `parallel_checks_match_one_job_and_stay_in_plan_order` still asserts the md5/size lines only by substring, and the new exact test now subsumes it. | todo |
-| F637 | CHECK-09 implementer | `src/repair/phases/check.rs` | `CheckOutcome`/`CheckFailure` are not `Clone`, so the test helper rebuilds outcomes per rel instead of holding a shared table. | todo |
+| F635 | TEST-REGRESSION-08 review | `src/lib.rs` | The pre-epoch reference value is now the same expression the helper uses, so the assertion no longer pins "the platform's unchecked subtraction does not panic"; a short comment would stop a reader mistaking it for a tautology. | dropped (generic improvement, not a problem that needs attention) |
+| F636 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `parallel_checks_match_one_job_and_stay_in_plan_order` still asserts the md5/size lines only by substring, and the new exact test now subsumes it. | dropped (generic improvement, not a problem that needs attention) |
+| F637 | CHECK-09 implementer | `src/repair/phases/check.rs` | `CheckOutcome`/`CheckFailure` are not `Clone`, so the test helper rebuilds outcomes per rel instead of holding a shared table. | dropped (generic improvement, not a problem that needs attention) |
 | F638 | CHECK-09 implementer | `src/repair/phases/check.rs`, `src/util/` | `check_one` still has no deterministic path to `PathEscaped`/`Unreadable`/`Read`; an injectable seam at `util::file_len`/`util::md5::md5_file_digest` could make those shapes reachable from `check_one`, not only by outcome injection. | todo |
 | F639 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `check_warnings` strips the timestamp/level/target prefix, so no test can assert a full raw log line including the `WARN` level and the module target. | skipped (duplicate of F554, which CHECK-11 already covers) |
-| F640 | CHECK-09 review | `src/repair/phases/check.rs` tests | The rel label `scanned_md5.dat` carries a chunk count while the run passes `scan = None`, so the label suggests the scanned digest path although the shape is injected directly. | todo |
+| F640 | CHECK-09 review | `src/repair/phases/check.rs` tests | The rel label `scanned_md5.dat` carries a chunk count while the run passes `scan = None`, so the label suggests the scanned digest path although the shape is injected directly. | dropped (generic improvement, not a problem that needs attention) |
 | F641 | CHECK-09 review | `tools/capture/docs/00-spec.md` | The capture tool's spec shows an abbreviated log shape (no `file=` field) and cites the stale path `src/repair/check.rs`; the runtime prints `file=` first and lives in `src/repair/phases/check.rs`. | todo |
 | F642 | CHECK-11 implementer | `src/repair/phases/check.rs` tests | The extractor drops a line whose prefix holds no parseable level, so a subscriber that stopped printing the level would shrink the list rather than fail loudly; a fallible extractor would make that explicit. | todo |
 | F643 | CHECK-11 implementer | `src/repair/phases/check.rs` tests | The phase's other log line (`info!("check-only: total=… bad=…")`) is still asserted by content only, not by level. | todo |
@@ -754,13 +754,13 @@ until the main tasks and rework are done.
 | F653 | PATHHELPERS-11 implementer | `docs/06-artifact-bridge-spec.md` | §5's driver table intro cites §6.3 for the per-capture listeners, whose rationale is §6.2. | todo |
 | F654 | PATHHELPERS-11 implementer | `tools/capture/README.md` | The bridge command there lacks the `cargo build -p gircap` line both the README and the spec carry, so a reader following only the capture tool's README gets a `gircap verify` skip instead of the precondition. | todo |
 | F655 | PATHHELPERS-11 implementer | `README.md`, `tests/artifact_bridge.rs` | The "run in parallel" wording could be read as intra-process threads, although nextest runs each case in its own process. | skipped (noting only; the wording is correct as written) |
-| F656 | PATHHELPERS-11 review | `README.md`, `tools/capture/README.md` | Those recipes describe the scratch tree and listeners without section numbers, unlike the spec and module doc which now cite §6.3 and §6.2. | todo |
+| F656 | PATHHELPERS-11 review | `README.md`, `tools/capture/README.md` | Those recipes describe the scratch tree and listeners without section numbers, unlike the spec and module doc which now cite §6.3 and §6.2. | dropped (generic improvement, not a problem that needs attention) |
 | F657 | PATHHELPERS-11 review | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | The recipes show the filter only as a fragment next to the `--run-ignored only` command, so a reader who types just the fragment selects zero tests because nextest's default filter excludes the ignored cases. | todo |
 | F658 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | The module docs still summarise the order as "gircap list --root <root>, then a directory scan" without saying the scan is a fallback for an unavailable or failing listing. | todo |
 | F659 | DOCS-USER-10 implementer | `docs/06-artifact-bridge-spec.md` | §3.2 step 3 says `gircap list` "reports one `bundle` record per bundle on stdout", naming only the text form although the bridge also accepts the JSON form's `"event":"bundle"`. | todo |
 | F660 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `scan_for_bundles` is fixed-depth while `gircap`'s own consistency test scans recursively, so a bundle outside the fixed layout would be missed by the bridge's scan. | skipped (conditional; only bundles outside the documented layout are affected) |
 | F661 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `gircap list` can exit non-zero (for example an unreadable root), in which case the bridge silently falls back to the scan and never surfaces the reason. | skipped (the fallback is the documented behaviour; surfacing it would change the bridge's contract) |
-| F662 | DOCS-USER-10 review | `tests/artifact_bridge.rs` | `scan_for_bundles` has no comment stating the fixed-depth layout the spec now names, although the recursive listing can find a root one level deeper. | todo |
+| F662 | DOCS-USER-10 review | `tests/artifact_bridge.rs` | `scan_for_bundles` has no comment stating the fixed-depth layout the spec now names, although the recursive listing can find a root one level deeper. | dropped (generic improvement, not a problem that needs attention) |
 | F663 | DOCS-USER-11 implementer | `tests/artifact_bridge.rs`, `README.md` | Those two still say "~20 MB of real bundle bytes" where §3.1 now says "~19 MiB", so one figure appears in two unit systems. | completed |
 | F664 | DOCS-USER-11 implementer | `tools/capture/README.md`, `tools/capture/docs/03-design-notes.md`, `tools/capture/src/manifest/fetch.rs` | They still quote the four archives as "~20 MB" and `manifests/` as "≈41 MiB" without the served-archives split §4.6 now draws. | todo |
 | F665 | DOCS-USER-11 implementer | `tests/artifact_bridge/server.rs` | The cache comment says the cache is shared across the six per-capture bridges and that every capture pays the read once, which holds for `cargo test` but not for nextest's one-process-per-test. | skipped (duplicate of F569 and F570, which DOCS-USER-13 covers) |
@@ -774,40 +774,40 @@ until the main tasks and rework are done.
 | F673 | HYP-10 implementer | `src/repair/mod.rs` | Nothing documents at `spawn_blocking_traced`'s definition that it must be called from the thread carrying the dispatcher; a future refactor into a spawned task would silently lose its log lines. | todo |
 | F674 | HYP-10 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The two async `logs_of` copies are still duplicated. | skipped (duplicate of F572 and F645; consolidating needs a public async test helper) |
 | F675 | HYP-10 implementer | `src/repair/scan.rs`, `src/repair/phases/check.rs`, `src/repair/mod.rs` | Raw `tokio::task::spawn_blocking` calls produce lines no scoped subscriber can capture. | skipped (conditional; only matters if a test ever needs those lines) |
-| F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | todo |
-| F677 | JOBS-08 implementer | `tests/cli_contract.rs` | `-h` (short help) renders a different layout, with descriptions beside the flags, and nothing in the suite pins it. | todo |
-| F678 | JOBS-08 implementer | `tests/cli_contract.rs` | The new tests sample one option line and one description line; a sweep over every entry would pin each column. | todo |
+| F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | dropped (generic improvement, not a problem that needs attention) |
+| F677 | JOBS-08 implementer | `tests/cli_contract.rs` | `-h` (short help) renders a different layout, with descriptions beside the flags, and nothing in the suite pins it. | dropped (generic improvement, not a problem that needs attention) |
+| F678 | JOBS-08 implementer | `tests/cli_contract.rs` | The new tests sample one option line and one description line; a sweep over every entry would pin each column. | dropped (generic improvement, not a problem that needs attention) |
 | F679 | JOBS-08 implementer | `tests/cli_contract.rs` | `option_body` requires the short alias to be exactly one char followed by ", ", so a clap change to the separator would silently stop matching rather than fail loudly. | todo |
-| F680 | JOBS-08 review | `tests/cli_contract.rs` | The `real_help()` doc comment says "they all read the same capture", which is true under `cargo test` but not under nextest's process-per-test. | todo |
-| F681 | JOBS-08 review | `tests/cli_contract.rs` | The description test pins the wording "Game install directory", so rewording `--game-path`'s doc comment would break a layout test. | todo |
-| F682 | JOBS-08 review | `tests/cli_contract.rs` | `help_entry_finds_the_help_option_behind_its_short_alias` spawns its own `--help` instead of reusing `real_help()`, so the file can spawn the binary twice per process. | todo |
+| F680 | JOBS-08 review | `tests/cli_contract.rs` | The `real_help()` doc comment says "they all read the same capture", which is true under `cargo test` but not under nextest's process-per-test. | dropped (generic improvement, not a problem that needs attention) |
+| F681 | JOBS-08 review | `tests/cli_contract.rs` | The description test pins the wording "Game install directory", so rewording `--game-path`'s doc comment would break a layout test. | dropped (generic improvement, not a problem that needs attention) |
+| F682 | JOBS-08 review | `tests/cli_contract.rs` | `help_entry_finds_the_help_option_behind_its_short_alias` spawns its own `--help` instead of reusing `real_help()`, so the file can spawn the binary twice per process. | dropped (generic improvement, not a problem that needs attention) |
 | F683 | INI-12 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch ("could not be inspected") still has no direct end-to-end drive; the seam could inject the inspection error. | completed |
 | F684 | INI-12 implementer | `src/util/ini.rs` | `util::ini` uses the same shared helper but not the new seam, so its equivalent branch is still only covered indirectly. | completed |
 | F685 | INI-12 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | The two callers classify differently: path uses a local `JunctionFixture`/`classify_junction_fixture` while ini still uses an inline `match`, which is the drift the shared module exists to prevent. | completed |
-| F686 | INI-12 review | `src/util/path.rs` | The containment case's panic arm is still only driven indirectly; driving it directly needs the skip/panic decision lifted into a shared helper. | todo |
+| F686 | INI-12 review | `src/util/path.rs` | The containment case's panic arm is still only driven indirectly; driving it directly needs the skip/panic decision lifted into a shared helper. | pending_review |
 | F687 | INI-12 review | `OPTIMIZATIONS_PLAN/GUIDE.md` | The commit-shape convention asks for an `opt(<task-id>):` prefix while another rule forbids a task id in commit messages. | skipped (the no-task-id rule wins; the commit message satisfies it) |
-| F688 | INI-13 implementer | `src/util/junction_support.rs` | `reject_percent_path` renders components lossily, which matches what `cmd` receives; the coupling between the check and the command deserves a one-line note in the doc. | todo |
+| F688 | INI-13 implementer | `src/util/junction_support.rs` | `reject_percent_path` renders components lossily, which matches what `cmd` receives; the coupling between the check and the command deserves a one-line note in the doc. | dropped (generic improvement, not a problem that needs attention) |
 | F689 | INI-13 implementer | `src/util/junction_support.rs` | A host whose temp path contains a percent can no longer run the junction fixtures at all; a future relaxation could allow a percent that provably cannot form a pair. | skipped (conditional; failing loudly with the offending path named is the intended trade) |
-| F690 | INI-13 review | `tests/` | Nothing pins cmd's per-argument pairing, so the corrected doc claim rests on measurement rather than a test; a probe could keep it honest. | todo |
-| F691 | INI-13 review | `src/util/junction_support.rs` | `junction_command` spells `Result<String, std::io::Error>` where the file uses `std::io::Result<String>`, and an assertion message claims more than the flag proves. | todo |
+| F690 | INI-13 review | `tests/` | Nothing pins cmd's per-argument pairing, so the corrected doc claim rests on measurement rather than a test; a probe could keep it honest. | dropped (generic improvement, not a problem that needs attention) |
+| F691 | INI-13 review | `src/util/junction_support.rs` | `junction_command` spells `Result<String, std::io::Error>` where the file uses `std::io::Result<String>`, and an assertion message claims more than the flag proves. | dropped (generic improvement, not a problem that needs attention) |
 | F692 | INI-14 implementer | `src/util/junction_support.rs` | `tools/sync` notes that `FileType::is_symlink` was false for a junction on some toolchains, so the new reparse-point check relies on std's name-surrogate reparse-tag test alone and could refuse a good fixture on an older toolchain. | todo |
 | F693 | INI-14 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch still has no direct end-to-end drive. | skipped (duplicate of F683, which INI-17 covers) |
 | F694 | INI-14 review | `src/util/junction_support.rs` | The guard proves "is a name-surrogate reparse point", not "is a junction": a symbolic link at the link path would also pass, and std exposes no reparse tag publicly. | todo |
-| F695 | INI-15 implementer | `src/util/path.rs`, `src/util/junction_support.rs` | `path.rs` keeps private copies of `require_junction()` and `skip_junction()`; the junction fixture support could have one home in the shared module. | todo |
+| F695 | INI-15 implementer | `src/util/path.rs`, `src/util/junction_support.rs` | `path.rs` keeps private copies of `require_junction()` and `skip_junction()`; the junction fixture support could have one home in the shared module. | pending_review |
 | F696 | INI-15 implementer | `.config/nextest.toml` | The ini symlink case's host skip is still invisible under the plain gate; it is in no `success-output` override even though it can skip on a host without symlink privilege. | todo |
 | F697 | INI-15 implementer | `src/util/ini.rs`, `src/util/path.rs` | The injected-refusal probes print "simulated refusal" to stderr but are covered by no `success-output` override. | skipped (consistent with the path module's equivalents; the output is diagnostic only) |
-| F698 | INI-15 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | Both test modules keep a private `skip_junction` wrapper with identical arguments; the wrapper could live in the shared module once. | todo |
+| F698 | INI-15 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | Both test modules keep a private `skip_junction` wrapper with identical arguments; the wrapper could live in the shared module once. | pending_review |
 | F699 | INI-15 review | `src/lib.rs` | `skip_fixture_refusal`'s panic message says "this host cannot create …" even for `FixtureRefusal::Injected`, where no host was consulted; the printed skip line distinguishes the two but the panic does not. | todo |
 | F700 | INI-15 review | `.config/nextest.toml` | The first override (`test(=a_non_utf8_audio_cache_name_moves_*)`) is still unqualified by package/binary. | skipped (duplicate of F648, which PATHHELPERS-12 covers) |
-| F701 | INI-16 implementer | `src/util/ini.rs` | `link_creation_denied` and `symlink_skip_reason` are Unix-relevant but live beside the extracted junction classifier; a symlink home for them would need a different module or a widened gate. | todo |
+| F701 | INI-16 implementer | `src/util/ini.rs` | `link_creation_denied` and `symlink_skip_reason` are Unix-relevant but live beside the extracted junction classifier; a symlink home for them would need a different module or a widened gate. | pending_review |
 | F702 | INI-16 implementer | `tools/sync/tests/symlink.rs` | That crate has its own `skip_if_no_link!` macro with a different skip-line format; the girpr test-support seam is not reachable from girsync's integration tests. | skipped (separate crate; a shared seam would need its own design) |
 | F703 | INI-16 implementer | `src/util/ini.rs` | The shared helper's panic message reads "this host cannot create …" even for `FixtureRefusal::Injected`. | skipped (duplicate of F699, which TEST-REGRESSION-12 covers) |
-| F704 | INI-16 implementer | `src/lib.rs` | `skip_pre_epoch` prints its own `SKIP precondition:` line, the last self-printed one in the crate; the shared fixture helper does not fit a clock subject. | todo |
+| F704 | INI-16 implementer | `src/lib.rs` | `skip_pre_epoch` prints its own `SKIP precondition:` line, the last self-printed one in the crate; the shared fixture helper does not fit a clock subject. | dropped (generic improvement, not a problem that needs attention) |
 | F705 | INI-16 review | `src/util/path.rs`, `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink fixtures `unwrap()` the symlink creation, so on a Unix host that refuses symlinks they panic instead of skipping; they need their own skip reason and a `GIRPR_TEST_REQUIRE_SYMLINK` path. | todo |
 | F706 | INI-16 review | `src/util/ini.rs` | The Unix `link_creation_denied` treats `EPERM`/`EACCES` as a host refusal, but the `Unsupported`-means-skip rule leans on std's platform mapping, which could widen and let a broken environment skip. | todo |
-| F707 | INI-17 implementer | `src/util/junction_support.rs` | The classification's `HostRefused` arm is reachable only from a real spawn-level refusal, so unlike `Broken` it cannot be driven through the seam; the callers' injected-refusal cases cover the skip path separately. | todo |
-| F708 | INI-17 review | `src/util/ini.rs`, `src/util/path.rs` | The new broken-fixture cases re-implement the caller's own `match classify_junction_fixture(..)` instead of driving the caller's decision code, so a caller that flipped the `Broken` arm to skip would still leave them green; lift the decision into one shared helper (the goal F686 also names). | todo |
-| F709 | INI-17 review | `src/util/junction_support.rs` | `junction_skip_reason` is still `pub(super)` although no sibling module imports it any more; it could be a private `fn`. | todo |
+| F707 | INI-17 implementer | `src/util/junction_support.rs` | The classification's `HostRefused` arm is reachable only from a real spawn-level refusal, so unlike `Broken` it cannot be driven through the seam; the callers' injected-refusal cases cover the skip path separately. | pending_review |
+| F708 | INI-17 review | `src/util/ini.rs`, `src/util/path.rs` | The new broken-fixture cases re-implement the caller's own `match classify_junction_fixture(..)` instead of driving the caller's decision code, so a caller that flipped the `Broken` arm to skip would still leave them green; lift the decision into one shared helper (the goal F686 also names). | pending_review |
+| F709 | INI-17 review | `src/util/junction_support.rs` | `junction_skip_reason` is still `pub(super)` although no sibling module imports it any more; it could be a private `fn`. | dropped (generic improvement, not a problem that needs attention) |
 
 ## Follow-up batches
 
@@ -921,12 +921,12 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
 | INI-15 | F592, F593, F594, F595 | done | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1, 430566d |
-| BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
-| BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
-| BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
-| TEMP-WRITER-10 | F603, F604 | todo | Wave E; on-disk assertions for the remaining fallback paths; low |
+| BUILD-20 | F598, F599, F601 | todo | Wave E; MSRV script failure output and the redb pin comment; low |
+| BUILD-21 | F600 | skipped | Wave E; the only item was a generic test-harness addition; low |
+| BUILD-22 | F601 | skipped | Wave E; merged into BUILD-20; low |
+| TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
 | TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
-| TEMP-PUBLISH-09 | F606, F607, F608 | todo | Wave E; guard the rename target against alias spellings and cover it end to end; low |
+| TEMP-PUBLISH-09 | F606 | todo | Wave E; the rename path must reach the alias refusal; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
@@ -943,34 +943,34 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
 | MANIFEST-09 | F539, F540 | done | Wave E; single-pass digest and range scan on failure paths; low; 1481a45, 98b58de |
 | MANIFEST-10 | F541, F542 | done | Wave E; overlap-only rescan and verdict-length guard; low; a5b0d6f, df5b20f, 6b22854 |
-| MANIFEST-11 | F612 | todo | Wave E; measure the one-pass hashing trade; low |
-| MANIFEST-12 | F613, F618 | todo | Wave E; keep the terminal rule's no-overlap invariant with the predicate; low |
-| MANIFEST-13 | F615 | todo | Wave E; narrow the post-redo pass to the rewritten chunks; low |
-| MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
+| MANIFEST-15 | F612, F613, F615, F618, F620 | todo | Wave E; the post-redo pass, the terminal rule and the overlap property; low |
+| MANIFEST-12 | F613, F618 | skipped | Wave E; merged into MANIFEST-15; low |
+| MANIFEST-13 | F615 | skipped | Wave E; merged into MANIFEST-15; low |
+| MANIFEST-14 | F619, F620 | skipped | Wave E; merged into MANIFEST-15; low |
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
 | PURGE-PERF-14 | F626, F628 | todo | Wave E; pin the gate's blocking contract directly; low |
-| TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
-| TEST-REGRESSION-12 | F699, F704 | todo | Wave E; skip reporting wording in the shared helper; low |
+| TEST-REGRESSION-11 | F629, F630, F634, F699 | todo | Wave E; panic-free clock fixtures and the skip wording; low |
+| TEST-REGRESSION-12 | F699, F704 | skipped | Wave E; merged into TEST-REGRESSION-11; low |
 | INI-16 | F631 | done | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
 | INI-17 | F683, F684 | done | Wave E; drive the uninspectable-link branch for both callers; low; 3a22365 |
-| INI-18 | F686, F695, F698, F701, F707, F708 | todo | Wave E; one classification shape and a directly driven panic arm; low |
-| INI-23 | F709 | todo | Wave E; narrow the shared classifier's unused visibility; low |
-| INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
-| INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
-| INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
-| INI-22 | F705, F706 | todo | Wave E; Unix symlink fixture skips and classifier framing; low |
-| DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
-| CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
-| CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
-| DOCS-USER-15 | F641 | todo | Wave E; capture spec log shape and path; low |
-| CHECK-14 | F642, F643, F646, F647 | todo | Wave E; fallible level extraction and the info line's level; low |
-| PATHHELPERS-12 | F648, F649, F657, F696 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
-| PATHHELPERS-13 | F654 | todo | Wave E; capture README bridge command completeness; low |
-| DOCS-USER-16 | F653, F656 | todo | Wave E; spec section citation for the listeners; low |
-| DOCS-USER-17 | F658, F659, F662 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
-| DOCS-USER-18 | F664, F666, F667, F671 | todo | Wave E; harmonise the bundle-size figures; low |
-| DOCS-USER-19 | F669, F670 | todo | Wave E; cache scope wording in the spec and the comment; low |
-| HYP-12 | F673, F676 | todo | Wave E; document the spawn_blocking_traced contract; low |
+| INI-18 | F686, F695, F698, F701, F707, F708 | pending_review | Wave E; one classification shape and a directly driven panic arm; low; ac4227dc |
+| INI-23 | F709 | skipped | Wave E; the only item was a generic visibility tidy; low |
+| INI-19 | F688 | skipped | Wave E; the only item was a doc nit; low |
+| INI-20 | F690, F691 | skipped | Wave E; the items were generic coverage and style nits; low |
+| INI-21 | F692, F694, F705, F706 | todo | Wave E; the junction and symlink fixture guards; low |
+| INI-22 | F705, F706 | skipped | Wave E; merged into INI-21; low |
+| DOCS-USER-14 | F632, F633, F634 | skipped | Wave E; merged into PATHHELPERS-12 and TEST-REGRESSION-11; low |
+| CHECK-15 | F638, F641, F642, F643, F646, F647 | todo | Wave E; the check phase's failure shapes and its log assertions; low |
+| CHECK-13 | F638 | skipped | Wave E; merged into CHECK-15; low |
+| DOCS-USER-15 | F641 | skipped | Wave E; merged into CHECK-15; low |
+| CHECK-14 | F642, F643, F646, F647 | skipped | Wave E; merged into CHECK-15; low |
+| PATHHELPERS-12 | F633, F648, F649, F657, F696 | todo | Wave E; the skip overrides and the ignored-test filter guidance; low |
+| DOCS-CAPTURE-21 | F654, F664, F666, F671 | todo | Wave E; the capture tool's docs; low |
+| DOCS-BRIDGE-20 | F653, F658, F659, F667, F669, F670 | todo | Wave E; the bridge spec, module doc and server comment; low |
+| DOCS-USER-17 | F658, F659, F662 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
+| DOCS-USER-18 | F664, F666, F667, F671 | skipped | Wave E; merged into DOCS-BRIDGE-20 and DOCS-CAPTURE-21; low |
+| DOCS-USER-19 | F669, F670 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
+| HYP-12 | F673 | todo | Wave E; document the spawn_blocking_traced contract; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -993,7 +993,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-10 | F573, F574 | done | Wave E; runtime-flavor doc scoping in both log helpers; low; 9f68fd5 |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
 | JOBS-08 | F576, F577 | done | Wave E; real help output indent pins; low; 43d336b, 2c0f279 |
-| JOBS-09 | F677, F678, F679, F680, F681, F682 | todo | Wave E; short-help layout and full help sweep; low |
+| JOBS-09 | F679 | todo | Wave E; the help matcher must fail loudly on a clap change; low |
 | LOCK-09 | F578, F579, F580 | done | Wave E; argv terminator, lock-scan arity, hyphen values; low |
 | LOCK-10 | F581, F582 | done | Wave E; inline-value validation and conflict shapes; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
@@ -1087,6 +1087,13 @@ Dropped follow-ups are marked in the table above with the reason.
 - `reverted` means the original work was undone and a rework row was added.
 - `skipped` means the task was stale or no longer applicable; record why.
 - Task ordering is the report's overall ordering; do not reorder the table.
+- Follow-up policy (closing directive): record a follow-up only when it is an
+  actual problem that needs attention - a wrong behaviour, a real risk of
+  failure, flaky or misleading output, or a documented contract that is false.
+  Generic improvements (style, wording, extra coverage nothing depends on,
+  refactors that only remove duplication) are dropped, not scheduled. The
+  remaining batches were consolidated by area under this policy; the dropped
+  rows keep their reason.
 - T26 skipped with evidence: path resolution measured ~1.5% of wall clock warm
   (~1.9% cold) on a 10k-file install, below the 2-3% gate, and a parent-prefix
   cache cannot remove the leaf `canonicalize`, so the containment window would
