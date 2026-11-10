@@ -91,7 +91,8 @@
 //!
 //! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then the search
 //! root (`GIRPR_ARTIFACT_ROOT` when set, else `artifacts/`), then
-//! `gircap list --root <root>`, then a directory scan.
+//! `gircap list --root <root>`, and a directory scan only as the fallback when
+//! that listing is unavailable or fails.
 //!
 //! # What this file is allowed to touch
 //!

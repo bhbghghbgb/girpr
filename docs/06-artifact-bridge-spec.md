@@ -206,7 +206,8 @@ Resolution order:
    `artifacts/` beside the package manifest. The variable names the root, not a
    bundle, and it outranks the default root only — (1) still wins over it;
 3. then, under that root, `gircap list --root <root>`, which reports one
-   `bundle` record per bundle on stdout;
+   bundle record per bundle on stdout — a `BUNDLE` line in the text form and a
+   `{"event":"bundle"}` object in the JSON form;
 4. otherwise — and **only** when (3) is unavailable or fails, that is when
    `gircap` is not built next to `CARGO_BIN_EXE_girpr`, cannot be started, or
    exits non-zero — a **directory scan** under `<root>` for
@@ -410,18 +411,24 @@ visibly rather than after fifteen seconds of silence.
 
 Each run fetches four manifests (§4.5) — the `game` and `en-us` archives of the
 latest build and of the local build — and those four `.manifest.zst` files are
-~19 MiB of the ~98 MiB bundle. The `manifests/` **directory** is ~41 MiB, but
+~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB, but
 the cache holds the archives and nothing else: the rest of that directory is
 the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv` sidecars,
-which the server never serves. Across the suite's runs the served archives are
-over a hundred megabytes re-read for nothing. They are immutable per bundle, so
-cache them.
+which the server never serves. The suite makes twelve `girpr` runs — six cases,
+each a `--print-plan` pre-pass plus a real run — so it re-reads ≈228 MiB of
+served archives for nothing. They are immutable per bundle, so cache them.
 
-The cache is process-global, keyed by the archive's own path —
-`<bundle>/manifests/<tag>/<field>.manifest.zst`, the `(bundle, tag, field)`
-triple spelled as a path, so only the `.manifest.zst` archives are ever in it —
-and shared by every listener: it holds bytes that are a function of the bundle
-alone, so nothing about per-capture isolation is lost by sharing it.
+The cache is **outside the listeners and process-global within one test
+binary** — one static per binary, not per bridge and not per capture — keyed by
+the archive's own path — `<bundle>/manifests/<tag>/<field>.manifest.zst`, the
+`(bundle, tag, field)` triple spelled as a path, so only the `.manifest.zst`
+archives are ever in it — and shared by every listener in that process: it
+holds bytes that are a function of the bundle alone, so nothing about
+per-capture isolation is lost by sharing it. The server module is compiled into
+both `tests/artifact_bridge.rs` and `tests/artifact_server.rs`, so each binary
+has its own static and the two never share one. Under `cargo test` all six
+bridge cases run in one process and share the cache; under `cargo nextest` each
+case gets a process of its own, so there the cache is per case.
 
 ### 4.7 The request log is not optional, and it is the primary source
 
@@ -466,8 +473,8 @@ could not say which run downloaded what.
 **One run per capture.** That is what makes a byte total attributable: a single
 run over all of them sums to the same number but cannot be compared per capture.
 
-Per capture, against a **fresh scratch copy of that capture's file** and **its own
-listeners** (§6.3 for why):
+Per capture, against a **fresh scratch copy of that capture's file** (§6.3) and
+**its own listeners** (§6.2 for why):
 
 | flag | why | which runs |
 |---|---|---|
@@ -554,8 +561,10 @@ So, **per capture:**
   origins), so the `build_id` invariant of §4.1 is per-capture too;
 - **its own request log** and **its own log file** for the pre-pass.
 
-**The served-bytes cache stays shared** (§4.6) because it holds nothing
-capture-specific.
+**The served-bytes cache stays shared within a process** (§4.6) because it holds
+nothing capture-specific. Under `cargo test` the six per-capture bridges share
+one process and so one cache; under `cargo nextest` each case is a process of
+its own and gets its own.
 
 ### 6.3 The bundle is the fixture; a copy is the working tree
 

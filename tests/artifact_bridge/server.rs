@@ -743,20 +743,22 @@ fn last_two(path: &str) -> Option<(String, String)> {
 
 /// Manifest archives are immutable per bundle, and the four a run fetches —
 /// `game` and `en-us` for the latest build and for the local build — are
-/// ~19 MiB of the ~98 MiB bundle. The `manifests/` **directory** is ~41 MiB,
+/// ~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB,
 /// but the rest of it is the `.manifest.json.gz` copies and the `.meta.json` /
 /// `.paths.tsv` sidecars, which the server never serves: the cache holds the
-/// archives and nothing else. So every run re-reading them is over a hundred
-/// megabytes across the suite's six captures — twelve `girpr` runs, a
-/// `--print-plan` pre-pass and a real run each — for nothing.
+/// archives and nothing else. So re-reading them is ≈228 MiB across the
+/// suite's twelve `girpr` runs — six cases, each a `--print-plan` pre-pass and
+/// a real run — for nothing.
 ///
-/// The cache is **outside the listeners and process-global** — one static for
-/// the whole process, not per bridge and not per capture. Under `cargo test`
-/// the six per-capture bridges share one process, so they share the cache;
-/// under `cargo nextest` every case gets a process of its own, so there the
-/// cache is per case. Sharing it is safe either way, because it holds bytes
-/// that are a function of the bundle alone: nothing about per-capture
-/// isolation (`docs/06` §6.2) is lost by sharing it.
+/// The cache is **outside the listeners and process-global within one test
+/// binary** — one static per binary, not per bridge and not per capture. Both
+/// `tests/artifact_bridge.rs` and `tests/artifact_server.rs` compile this
+/// module, so each binary has its own static and the two never share one.
+/// Within the bridge binary, `cargo test` runs the six per-capture bridges in
+/// one process, so they share the cache; under `cargo nextest` every case gets
+/// a process of its own, so there the cache is per case. Sharing it is safe
+/// either way, because it holds bytes that are a function of the bundle alone:
+/// nothing about per-capture isolation (`docs/06` §6.2) is lost by sharing it.
 ///
 /// What the cache saves is the **read**, not the request: each of the four
 /// archives is read from disk once per process instead of once per request,
