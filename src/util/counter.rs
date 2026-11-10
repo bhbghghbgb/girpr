@@ -36,6 +36,7 @@ pub(crate) mod test_support {
     use std::cell::RefCell;
     use std::sync::atomic::AtomicU64;
     use std::sync::{Arc, Barrier, Condvar, Mutex};
+    use std::time::{Duration, Instant};
 
     /// A two-party rendezvous that a panic guard can open early.
     ///
@@ -49,6 +50,7 @@ pub(crate) mod test_support {
     pub(crate) struct Gate {
         state: Mutex<GateState>,
         opened: Condvar,
+        arrivals: Condvar,
     }
 
     #[derive(Default)]
@@ -63,6 +65,7 @@ pub(crate) mod test_support {
             Self {
                 state: Mutex::new(GateState::default()),
                 opened: Condvar::new(),
+                arrivals: Condvar::new(),
             }
         }
 
@@ -70,6 +73,7 @@ pub(crate) mod test_support {
         pub(crate) fn arrive_and_wait(&self) {
             let mut state = self.state.lock().unwrap();
             state.arrived += 1;
+            self.arrivals.notify_all();
             if state.arrived == 2 {
                 state.open = true;
                 self.opened.notify_all();
@@ -102,6 +106,30 @@ pub(crate) mod test_support {
         /// that left the gate's state unchanged.
         pub(crate) fn release_count(&self) -> usize {
             self.state.lock().unwrap().releases
+        }
+
+        /// Whether the gate is open.
+        pub(crate) fn is_open(&self) -> bool {
+            self.state.lock().unwrap().open
+        }
+
+        /// Wait until at least `n` parties have arrived, or `timeout` elapses.
+        ///
+        /// Returns whether the parties arrived. This is how a test observes a
+        /// party parked at the gate without sleeping or polling the count:
+        /// the arrival notifies the wait directly.
+        pub(crate) fn wait_for_arrivals(&self, n: usize, timeout: Duration) -> bool {
+            let deadline = Instant::now() + timeout;
+            let mut state = self.state.lock().unwrap();
+            while state.arrived < n {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return false;
+                }
+                let (next, _) = self.arrivals.wait_timeout(state, remaining).unwrap();
+                state = next;
+            }
+            true
         }
     }
 
@@ -405,6 +433,76 @@ mod tests {
         assert!(
             passed.load(Ordering::Acquire),
             "the helper recorded passed after the guard drop"
+        );
+    }
+
+    /// The panic-release path must also open a gate that still has a party
+    /// parked at it, not only a gate that is already open.
+    ///
+    /// The party parks at the gate with the gate closed, the guard releases
+    /// it while unwinding, and the party must come out of the gate. The test
+    /// waits for the arrival on the gate's own condition variable, so it
+    /// neither sleeps nor polls, and the receive has a deadline, so a guard
+    /// that failed to release the party fails the test instead of hanging it.
+    #[test]
+    fn a_panic_guard_releases_a_party_parked_at_the_gate() {
+        let gate = Arc::new(Gate::new());
+        let passed = Arc::new(AtomicBool::new(false));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let party = {
+            let gate = Arc::clone(&gate);
+            let passed = Arc::clone(&passed);
+            std::thread::spawn(move || {
+                gate.arrive_and_wait();
+                passed.store(true, Ordering::Release);
+                done_tx.send(()).expect("the test receiver is alive");
+            })
+        };
+
+        assert!(
+            gate.wait_for_arrivals(1, RECEIVE_WAIT),
+            "the party parks at the gate"
+        );
+        assert_eq!(
+            gate.arrival_count(),
+            1,
+            "the parked party is the gate's first arrival"
+        );
+        assert!(
+            !gate.is_open(),
+            "the gate is closed while a party is parked at it"
+        );
+        assert_eq!(
+            gate.release_count(),
+            0,
+            "the gate has not been released before the guard fires"
+        );
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _release = ReleaseOnPanic {
+                gate: Arc::clone(&gate),
+                passed: Arc::clone(&passed),
+            };
+            panic!("simulated failure with a party parked at the gate");
+        }));
+        assert!(panicked.is_err(), "the simulated failure unwinds");
+
+        done_rx
+            .recv_timeout(RECEIVE_WAIT)
+            .expect("the guard releases the party parked at the gate");
+        party.join().expect("the released party finishes");
+
+        assert_eq!(gate.release_count(), 1, "the guard releases the gate once");
+        assert_eq!(
+            gate.arrival_count(),
+            1,
+            "the release adds no party to the gate"
+        );
+        assert!(gate.is_open(), "the gate stays open after the release");
+        assert!(
+            passed.load(Ordering::Acquire),
+            "the released party recorded passed"
         );
     }
 }
