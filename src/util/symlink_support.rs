@@ -86,16 +86,19 @@ pub(super) fn link_creation_denied(e: &std::io::Error) -> bool {
 /// `EOPNOTSUPP`, the filesystem cannot hold symlinks.
 ///
 /// The numbers are the platform's own, not Rust's, and the Unix flavours
-/// number them differently, so each target names its own pair: 38 and 95 in
-/// Linux's asm-generic errno table, which Android shares; 78 and 102 on
-/// Apple platforms; 78 and 45 on the BSDs. A Unix target this table does not
+/// number them differently, so each target names its own values: 38 and 95 in
+/// Linux's asm-generic errno table, which Android shares; 78 and 45 on the
+/// BSDs; and 78, 45 and 102 on Apple platforms, which number the two
+/// "not supported" errors separately: 45 is `ENOTSUP`, the answer a
+/// filesystem that cannot hold the entry gives, and 102 is `EOPNOTSUPP`, the
+/// socket spelling of the same refusal. A Unix target this table does not
 /// name — the MIPS and SPARC Linux targets, which number their errors
 /// differently, and every other flavour — names no code at all, so its
 /// refusals fail closed instead of skipping.
 #[cfg(unix)]
 fn unix_unsupported_codes() -> &'static [i32] {
     if cfg!(target_vendor = "apple") {
-        &[78, 102]
+        &[78, 45, 102]
     } else if cfg!(any(
         target_os = "freebsd",
         target_os = "dragonfly",
@@ -128,9 +131,9 @@ fn unix_unsupported_codes() -> &'static [i32] {
 ///
 /// The codes are the platform's own "there is no symlink here" answers:
 ///
-/// - Unix: `ENOSYS` and `EOPNOTSUPP`, as [`unix_unsupported_codes`] numbers
-///   them for this target. A Unix target that table does not name names no
-///   code.
+/// - Unix: `ENOSYS` and `EOPNOTSUPP`/`ENOTSUP`, as
+///   [`unix_unsupported_codes`] numbers them for this target. A Unix target
+///   that table does not name names no code.
 /// - Windows: `ERROR_CALL_NOT_IMPLEMENTED` (1201).
 ///
 /// An `Unsupported` error that carries no raw code did not come from a
@@ -314,8 +317,8 @@ mod tests {
             #[cfg(target_vendor = "apple")]
             assert_eq!(
                 unix_unsupported_codes(),
-                [78, 102],
-                "ENOSYS and EOPNOTSUPP on Apple platforms"
+                [78, 45, 102],
+                "ENOSYS, ENOTSUP and EOPNOTSUPP on Apple platforms"
             );
             #[cfg(any(
                 target_os = "freebsd",
