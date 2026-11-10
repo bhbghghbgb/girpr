@@ -309,6 +309,25 @@ impl CheckOutcome {
     }
 }
 
+/// The filesystem reads a check makes.
+///
+/// Production always uses [`CheckIo::REAL`]. Naming the two reads lets a test
+/// hand the real check a failing length read or digest, so the failure shapes
+/// a host will not produce on demand are reached through the check itself
+/// rather than by injecting its result.
+struct CheckIo {
+    file_len: fn(&Path) -> util::FileLen,
+    md5_file: fn(&Path) -> anyhow::Result<util::Md5>,
+}
+
+impl CheckIo {
+    /// The reads every production check uses.
+    const REAL: Self = Self {
+        file_len: util::file_len,
+        md5_file: util::md5::md5_file_digest,
+    };
+}
+
 /// Check one planned file against the manifest.
 ///
 /// Presence and length are checked for both digest sources: the scan is a
@@ -321,13 +340,24 @@ fn check_one(
     path: &anyhow::Result<PathBuf>,
     digest: DigestSource<'_>,
 ) -> CheckOutcome {
+    check_one_with(f, path, digest, CheckIo::REAL)
+}
+
+/// [`check_one`] with its filesystem reads named, for tests that need a read
+/// the host cannot be made to fail.
+fn check_one_with(
+    f: &PlannedFile,
+    path: &anyhow::Result<PathBuf>,
+    digest: DigestSource<'_>,
+    io: CheckIo,
+) -> CheckOutcome {
     let path = match path {
         Ok(path) => path,
         Err(e) => {
             return CheckOutcome::failed(CheckFailure::PathEscaped(format!("{e:#}")));
         }
     };
-    let actual_size = match util::file_len(path) {
+    let actual_size = match (io.file_len)(path) {
         util::FileLen::Present(n) => n,
         util::FileLen::Unreadable(e) => {
             return CheckOutcome::failed(CheckFailure::Unreadable(e.to_string()));
@@ -339,7 +369,7 @@ fn check_one(
     }
     let actual = match digest {
         DigestSource::Scanned(v) => v.file_md5,
-        DigestSource::Read => match util::md5::md5_file_digest(path) {
+        DigestSource::Read => match (io.md5_file)(path) {
             Ok(digest) => digest,
             Err(e) => return CheckOutcome::failed(CheckFailure::Read(format!("{e:#}"))),
         },
@@ -410,23 +440,71 @@ mod tests {
         }
     }
 
-    /// The failure lines from a captured log, each with the level it was
-    /// logged at, so two runs can be compared for the same warning set and
+    /// The level a captured line was logged at, read from its place in the
+    /// record prefix rather than by searching for the first token that parses.
+    ///
+    /// The subscriber writes `<timestamp> <LEVEL> <target>: <message>`, so the
+    /// level is the token immediately before the target. That matters because
+    /// `tracing::Level` also parses bare numbers (`"2"` is `WARN`): a numeric
+    /// token anywhere earlier in the record must not be taken for the level.
+    fn logged_level(line: &str) -> Result<Level, String> {
+        let (prefix, _) = line
+            .split_once(": ")
+            .ok_or_else(|| format!("the log line has no `<target>: ` prefix: {line:?}"))?;
+        let mut tokens = prefix.split_whitespace().rev();
+        let target = tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no target: {line:?}"))?;
+        let level = tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no level before {target:?}: {line:?}"))?;
+        tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no timestamp before its level: {line:?}"))?;
+        level
+            .parse()
+            .map_err(|_| format!("the log line has no level before {target:?}: {line:?}"))
+    }
+
+    /// One captured record per line, as `(level, message)`.
+    ///
+    /// The subscriber writes every event as one line, with the fields inline
+    /// after the message. A message that itself contains a newline would be
+    /// printed as a second, level-less line; parsing every line means such a
+    /// continuation is an error instead of being silently dropped.
+    fn log_records(logs: &str) -> Result<Vec<(Level, &str)>, String> {
+        logs.lines()
+            .map(|line| Ok((logged_level(line)?, line)))
+            .collect()
+    }
+
+    /// The `CHECK fail` records from a captured log, each with the level it
+    /// was logged at, so two runs can be compared for the same warning set and
     /// order and a failure line that stops being a warning is caught too.
     ///
-    /// The level is taken from the line's own prefix — the subscriber prints
-    /// it ahead of the target — so the message and the level it was logged at
-    /// are one thing to assert.
-    fn check_warnings(logs: &str) -> Vec<(Level, &str)> {
-        logs.lines()
-            .filter_map(|line| {
+    /// A line that is not a record — one whose prefix holds no level, or the
+    /// continuation of a multi-line message — fails instead of shrinking the
+    /// list.
+    fn check_warnings(logs: &str) -> Result<Vec<(Level, &str)>, String> {
+        Ok(log_records(logs)?
+            .into_iter()
+            .filter_map(|(level, line)| {
                 let at = line.find("CHECK fail")?;
-                let level = line[..at]
-                    .split_whitespace()
-                    .find_map(|token| token.parse::<Level>().ok())?;
                 Some((level, &line[at..]))
             })
-            .collect()
+            .collect())
+    }
+
+    /// The one `check-only: total=` record, with the level it was logged at.
+    fn check_summary(logs: &str) -> Result<(Level, &str), String> {
+        let mut found = log_records(logs)?
+            .into_iter()
+            .filter(|(_, line)| line.contains("check-only: total="));
+        match (found.next(), found.next()) {
+            (Some(record), None) => Ok(record),
+            (None, _) => Err("the check summary line was not logged".to_string()),
+            (Some(_), Some(_)) => Err("the check summary line was logged twice".to_string()),
+        }
     }
 
     /// Run one verify on a current-thread runtime and return its counters and
@@ -504,10 +582,11 @@ mod tests {
             "jobs must not change the verdict or the counters"
         );
         assert_eq!((one.0, one.1, one.2, one.3), (2, 1, 2, 2));
-        let one_warnings = check_warnings(&one.4);
+        let one_warnings =
+            check_warnings(&one.4).expect("every captured line is a record with a level");
         assert_eq!(
             one_warnings,
-            check_warnings(&many.4),
+            check_warnings(&many.4).expect("every captured line is a record with a level"),
             "the warning set and its plan order are jobs-independent"
         );
         assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
@@ -527,10 +606,16 @@ mod tests {
             "{:?}",
             one_warnings
         );
+        let (summary_level, summary_line) =
+            check_summary(&one.4).expect("the check summary line is logged once");
+        assert_eq!(
+            summary_level,
+            Level::INFO,
+            "the check summary is informational"
+        );
         assert!(
-            one.4.contains("damaged_chunks=2"),
-            "the scan's damaged-chunk total is folded once: {}",
-            one.4
+            summary_line.contains("damaged_chunks=2"),
+            "the scan's damaged-chunk total is folded once: {summary_line}"
         );
     }
 
@@ -643,7 +728,7 @@ mod tests {
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
         let expected = format!("CHECK fail: test double: {why} file={rel}");
         assert_eq!(
-            check_warnings(&logs),
+            check_warnings(&logs).expect("every captured line is a record with a level"),
             vec![(Level::WARN, expected.as_str())],
             "the expired gate is logged once, through the one warn site"
         );
@@ -733,7 +818,7 @@ mod tests {
         });
 
         assert_eq!(
-            check_warnings(&logs),
+            check_warnings(&logs).expect("every captured line is a record with a level"),
             vec![
                 (
                     Level::WARN,
@@ -772,6 +857,106 @@ mod tests {
             summary.check_damaged_chunks(),
             Some(2),
             "only the scanned mismatch carries a chunk count"
+        );
+    }
+
+    /// A containment failure is a diagnostic the check itself makes: the
+    /// escaping path is the input, so no filesystem failure has to be faked.
+    #[test]
+    fn an_escaped_path_is_a_check_failure() {
+        let f = planned("..\\outside.dat", 4, "00000000000000000000000000000000");
+        let path: anyhow::Result<PathBuf> = Err(anyhow::anyhow!("the rel escapes the game dir"));
+
+        let outcome = check_one(&f, &path, DigestSource::Read);
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::PathEscaped(ref e)) if e == "the rel escapes the game dir"
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// A stat that fails for a reason other than absence is unreadable, not
+    /// absent and not a length mismatch. The injected probe stands in for the
+    /// denied stat a test host will not grant on demand.
+    #[test]
+    fn an_unreadable_length_probe_is_a_check_failure() {
+        let f = planned("f.dat", 4, "00000000000000000000000000000000");
+        let path: anyhow::Result<PathBuf> = Ok(PathBuf::from("f.dat"));
+
+        let outcome = check_one_with(
+            &f,
+            &path,
+            DigestSource::Read,
+            CheckIo {
+                file_len: |_| {
+                    util::FileLen::Unreadable(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "attribute read denied",
+                    ))
+                },
+                md5_file: |_| panic!("an unreadable file is never hashed"),
+            },
+        );
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::Unreadable(ref e)) if e.contains("attribute read denied")
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// A digest read that fails after the presence and length checks is its
+    /// own failure shape. The injected digest probe stands in for a read the
+    /// test cannot make fail after a successful stat.
+    #[test]
+    fn a_failed_digest_read_is_a_check_failure() {
+        let expected = util::md5::md5_digest(b"aaaa").to_hex();
+        let f = planned("f.dat", 4, &expected);
+        let path: anyhow::Result<PathBuf> = Ok(PathBuf::from("f.dat"));
+
+        let outcome = check_one_with(
+            &f,
+            &path,
+            DigestSource::Read,
+            CheckIo {
+                file_len: |_| util::FileLen::Present(4),
+                md5_file: |_| Err(anyhow::anyhow!("the digest read failed")),
+            },
+        );
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::Read(ref e)) if e == "the digest read failed"
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// The extractor reads the level from its place in the record, not from
+    /// the first token that happens to parse as one: a bare numeric token
+    /// earlier in the prefix is not the level. A record with no level, and a
+    /// continuation line from a multi-line message, are errors rather than
+    /// silently dropped lines.
+    #[test]
+    fn the_log_extractor_reads_the_level_by_position() {
+        let numeric_before_level =
+            "2026-01-01T00:00:00.000000Z 2 INFO girpr::check: CHECK fail: md5 file=a";
+        assert_eq!(logged_level(numeric_before_level), Ok(Level::INFO));
+
+        let no_level = "2026-01-01T00:00:00.000000Z girpr::check: CHECK fail: md5 file=a";
+        assert!(
+            check_warnings(no_level).is_err(),
+            "a record without a level must not be dropped"
+        );
+
+        let continued =
+            "2026-01-01T00:00:00.000000Z WARN girpr::check: CHECK fail: md5 file=a\ncontinuation";
+        assert!(
+            check_warnings(continued).is_err(),
+            "a continuation line is not a record"
         );
     }
 

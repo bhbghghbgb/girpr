@@ -992,13 +992,14 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    What it names is what makes it useful:
 
    ```
-   CHECK fail: md5 expect_md5=d992a789… actual_md5=1e210ff1…
+   CHECK fail: md5 file=GenshinImpact_Data/… expect_md5=d992a789… actual_md5=1e210ff1…
    ```
 
    this capture's `new.md5` and `old.md5`. Those two come from `tracing::warn!`
-   in `src/repair/check.rs`, so they reach **stderr and the log file only, never
-   stdout** — on the data plane the only signal is `exit 4`. A mismatch means
-   the fixture and the tool disagree about the file before a single byte moves.
+   in `src/repair/phases/check.rs`, so they reach **stderr and the log file
+   only, never stdout** — on the data plane the only signal is `exit 4`. A
+   mismatch means the fixture and the tool disagree about the file before a
+   single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
    path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
