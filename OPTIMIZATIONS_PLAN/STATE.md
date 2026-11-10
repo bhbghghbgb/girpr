@@ -664,8 +664,8 @@ until the main tasks and rework are done.
 | F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the measured 97.7 MiB bundle and 41.4 MiB of manifests. | completed |
 | F564 | DOCS-USER-07 review | `tests/artifact_bridge/server.rs` | Manifests are described as "~40 MB of a ~130 MB bundle" and "~320 MB across eight runs"; the bundle is 97.7 MiB with 41.4 MiB under `manifests/`, and there are six tests. | skipped (duplicate of F563, which now carries these measurements) |
 | F565 | DOCS-USER-07 review | `docs/06-artifact-bridge-spec.md` | §3.2 step 4 says "otherwise a directory scan" though the scan runs only when `gircap list` is unavailable or fails, and step 5's `--out <root>` text covers the zero-bundle failure while the multiple-bundle failure points at `GIRPR_ARTIFACT_BUNDLE`. | completed |
-| F566 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs` | The comments say "a `getBuild` body declares five manifests and the bundle stores two", while §4.6 says "four manifests per run"; both can be true but read as a contradiction. | pending_review |
-| F567 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs`, `docs/06-artifact-bridge-spec.md` | The cache holds only the served `.manifest.zst` archives (~19.0 MiB), not the whole 41.4 MiB `manifests/` tree both texts cite for scale. | pending_review |
+| F566 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs` | The comments say "a `getBuild` body declares five manifests and the bundle stores two", while §4.6 says "four manifests per run"; both can be true but read as a contradiction. | completed |
+| F567 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs`, `docs/06-artifact-bridge-spec.md` | The cache holds only the served `.manifest.zst` archives (~19.0 MiB), not the whole 41.4 MiB `manifests/` tree both texts cite for scale. | completed |
 | F568 | DOCS-USER-08 implementer | `tests/artifact_bridge.rs` | The `#[ignore]` reason mentions the `.config/nextest.toml` success-output override. | skipped (the override exists and was exercised in the parallel bridge run) |
 | F569 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | The cache is a per-process `static`, and nextest gives each test its own process, so "shared by all of them — including across the six per-capture bridges" only holds in a single-process run. | todo |
 | F570 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "every capture pays the disk read once instead of six times" mixes a per-capture subject with a suite-wide count. | todo |
@@ -761,9 +761,12 @@ until the main tasks and rework are done.
 | F660 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `scan_for_bundles` is fixed-depth while `gircap`'s own consistency test scans recursively, so a bundle outside the fixed layout would be missed by the bridge's scan. | skipped (conditional; only bundles outside the documented layout are affected) |
 | F661 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `gircap list` can exit non-zero (for example an unreadable root), in which case the bridge silently falls back to the scan and never surfaces the reason. | skipped (the fallback is the documented behaviour; surfacing it would change the bridge's contract) |
 | F662 | DOCS-USER-10 review | `tests/artifact_bridge.rs` | `scan_for_bundles` has no comment stating the fixed-depth layout the spec now names, although the recursive listing can find a root one level deeper. | todo |
-| F663 | DOCS-USER-11 implementer | `tests/artifact_bridge.rs`, `README.md` | Those two still say "~20 MB of real bundle bytes" where §3.1 now says "~19 MiB", so one figure appears in two unit systems. | todo |
-| F664 | DOCS-USER-11 implementer | `tools/capture/README.md`, `tools/capture/docs/03-design-notes.md` | Both quote "`manifests/` ≈41 MiB" without saying the served archives are ~19 MiB, the same looseness §4.6 just lost. | todo |
+| F663 | DOCS-USER-11 implementer | `tests/artifact_bridge.rs`, `README.md` | Those two still say "~20 MB of real bundle bytes" where §3.1 now says "~19 MiB", so one figure appears in two unit systems. | completed |
+| F664 | DOCS-USER-11 implementer | `tools/capture/README.md`, `tools/capture/docs/03-design-notes.md`, `tools/capture/src/manifest/fetch.rs` | They still quote the four archives as "~20 MB" and `manifests/` as "≈41 MiB" without the served-archives split §4.6 now draws. | todo |
 | F665 | DOCS-USER-11 implementer | `tests/artifact_bridge/server.rs` | The cache comment says the cache is shared across the six per-capture bridges and that every capture pays the read once, which holds for `cargo test` but not for nextest's one-process-per-test. | skipped (duplicate of F569 and F570, which DOCS-USER-13 covers) |
+| F666 | DOCS-USER-11 review | `tools/capture/README.md` | Its directory breakdown does not reproduce on this bundle: `chunks/` is 15.83 MiB (says ≈17 MiB) and `expected/` is 18.66 MiB (says ≈20 MiB). | todo |
+| F667 | DOCS-USER-11 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge/server.rs` | "Over a hundred megabytes across the suite's six runs" is loose: the suite runs six cases, each a pre-pass plus a real run, so the real figure is ~228 MiB. | todo |
+| F668 | DOCS-USER-11 review | `docs/06-artifact-bridge-spec.md`, `tests/artifact_bridge/server.rs` | The sidecars are named `.meta.json`/`.paths.tsv` in the new text while the files are `<field>.manifest.meta.json`/`<field>.paths.tsv`. | skipped (consistent with the repo's existing `manifests/*/*.meta.json` shorthand) |
 
 ## Follow-up batches
 
@@ -916,7 +919,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-13 | F654 | todo | Wave E; capture README bridge command completeness; low |
 | DOCS-USER-16 | F653, F656 | todo | Wave E; spec section citation for the listeners; low |
 | DOCS-USER-17 | F658, F659, F662 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
-| DOCS-USER-18 | F663, F664 | todo | Wave E; harmonise the bundle-size figures; low |
+| DOCS-USER-18 | F664, F666, F667 | todo | Wave E; harmonise the bundle-size figures; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -932,7 +935,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
 | DOCS-USER-10 | F565 | done | Wave E; bundle-search failure wording; low; 236cffa, f6a3777 |
-| DOCS-USER-11 | F566, F567 | pending_review | Wave E; manifest-count wording and served-archive scale; low; 0fb4cc4, 503b823 |
+| DOCS-USER-11 | F566, F567 | done | Wave E; manifest-count wording and served-archive scale; low; 0fb4cc4, 503b823, cd6ae9b |
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | DOCS-USER-13 | F569, F570, F571 | todo | Wave E; cache comment scope and count wording; low |
 | HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
