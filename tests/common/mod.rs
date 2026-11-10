@@ -822,21 +822,28 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
 /// **Precondition: the caller must run on a current-thread runtime**, which is
 /// what a plain `#[tokio::test]` provides. `set_default` installs the
 /// subscriber on the calling thread only, so `f` is polled on the thread that
-/// installed it. On a multi-thread runtime the future and any task it spawns
-/// may be polled on worker threads without the subscriber, and their lines
-/// (everything not routed through `spawn_blocking_traced`) would be silently
+/// installed it. A multi-thread runtime does not move `f` itself: `block_on`
+/// keeps polling the awaited future on the calling thread, so the lines `f`
+/// emits are captured there too. What a multi-thread runtime does move is the
+/// work `f` spawns: a task started with `tokio::spawn` runs on a worker
+/// thread that carries no subscriber, and that task's lines are silently
 /// missing from the returned text. A debug build asserts the runtime flavor so
 /// that misuse fails instead of returning partial logs.
 ///
 /// The blocking tasks whose lines a test asserts use `spawn_blocking_traced`,
 /// which installs the same dispatcher on the pool thread, so their lines
-/// (including the post-phase's listing) are captured too. The async form is
-/// duplicated in the metadata tests: sharing it would require exporting a
-/// public test helper. The stdout data plane (`REPORT`/`SUMMARY`) is separate
-/// and is asserted through the returned `Summary`, not through these lines.
+/// (including the post-phase's listing) are captured too — provided the spawn
+/// site already carries the subscriber. The helper takes the dispatcher at
+/// **spawn time**, so a `spawn_blocking_traced` call made from a spawned task
+/// captures the worker's dispatcher instead, and its blocking lines are lost
+/// the same way. The async form is duplicated in the metadata tests: sharing
+/// it would require exporting a public test helper. The stdout data plane
+/// (`REPORT`/`SUMMARY`) is separate and is asserted through the returned
+/// `Summary`, not through these lines.
 pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
-    // See the precondition above: a multi-thread runtime would poll `f` on
-    // worker threads without the thread-local subscriber and lose their lines.
+    // See the precondition above: a multi-thread runtime would move the work
+    // `f` spawns to worker threads without the thread-local subscriber and
+    // lose their lines.
     debug_assert_eq!(
         tokio::runtime::Handle::current().runtime_flavor(),
         tokio::runtime::RuntimeFlavor::CurrentThread,
