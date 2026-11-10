@@ -656,7 +656,7 @@ until the main tasks and rework are done.
 | F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | completed |
 | F556 | PATHHELPERS-08 implementer | `README.md`, `docs/06-artifact-bridge-spec.md` | The default parallel bridge run (69.4 s here) is not faster than the recorded serial 63 s on this 4-core host; a timing claim should say which mode it measured. | skipped (the docs say "roughly a minute", which both measurements support) |
 | F557 | PATHHELPERS-08 implementer | `tests/artifact_bridge.rs` | Parallel safety is stated in prose only; asserting that scratch paths differ would test the tempdir crate rather than the bridge. | skipped (the property belongs to the tempdir crate) |
-| F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | todo |
+| F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | pending_review |
 | F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | todo |
 | F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | todo |
 | F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | todo |
@@ -746,6 +746,9 @@ until the main tasks and rework are done.
 | F645 | CHECK-11 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Two more copies of the async log-capture implementation duplicate `src/repair/test_support.rs`. | skipped (duplicate of F572/HYP-09; consolidating needs a public async test helper) |
 | F646 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor scans the whole prefix for the first level-looking token, and `Level::from_str` also accepts bare numbers ("2" is `WARN`), so the parse relies on the level preceding the target rather than on its position. | todo |
 | F647 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor assumes one log record per line; a multi-line message would be split and its continuation dropped, and that assumption is undocumented. | todo |
+| F648 | PATHHELPERS-10 implementer | `.config/nextest.toml` | The sibling override block names three host-skip tests without a binary qualifier, and those names are far more collision-prone than the bridge ones. | todo |
+| F649 | PATHHELPERS-10 implementer | `README.md`, `docs/06-artifact-bridge-spec.md`, `tools/capture/README.md` | `cargo nextest list` silently lists nothing for `#[ignore]`d tests without `--run-ignored all`, so the documented filter-narrowing hint should say so. | todo |
+| F650 | PATHHELPERS-10 implementer | `tests/` across `girpr`, `gircap`, `girsync` | Duplicate test leaf names already exist across three binaries, which is the mechanism that makes the unqualified override risky. | skipped (informational; qualifying the filter removes the consequence) |
 
 ## Follow-up batches
 
@@ -894,6 +897,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
 | DOCS-USER-15 | F641 | todo | Wave E; capture spec log shape and path; low |
 | CHECK-14 | F642, F643, F646, F647 | todo | Wave E; fallible level extraction and the info line's level; low |
+| PATHHELPERS-12 | F648, F649 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -904,7 +908,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
 | CHECK-11 | F554, F555 | done | Wave E; pin the warn level and trim the helper doc; low; 3f7f1e0, e0bf1fe |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
-| PATHHELPERS-10 | F558 | in_progress | Wave E; qualify the bridge override filter; low |
+| PATHHELPERS-10 | F558 | pending_review | Wave E; qualify the bridge override filter; low; 4fdce0e |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
