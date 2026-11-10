@@ -6,8 +6,9 @@ description = "Microbenchmarks of the file-system operations the test suite perf
 
 [dependencies]
 # Pinned to the version the workspace resolves (`tools/sync`), so the
-# microbenchmark measures the same redb the cache uses.
-redb = "=4.3.0"
+# microbenchmark measures the same redb the cache uses. That line stays on
+# 4.1 because 4.2 and later require Rust 1.90, above the workspace MSRV.
+redb = "=4.1.0"
 
 [profile.release]
 opt-level = 2

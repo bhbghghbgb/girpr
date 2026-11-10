@@ -2,7 +2,20 @@
 name = "girsync"
 version = "0.1.0"
 edition = "2024"
+# redb 4.1.0 needs 1.89; nothing else in its tree needs more.
+rust-version = "1.89"
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with redb hash cache"
+
+# A tools-only subset of the shared policy. The dev tools do not inherit the
+# workspace table because `unwrap_used`/`expect_used` are deliberate there for
+# the repair path and would be noise here: a panic in a dev tool is a failed
+# developer run, not a failed repair of a user's install. What is checked is
+# `clippy::all` plus denied `unsafe_code`, the same as the product otherwise.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
 
 [lib]
 name = "girsync"
@@ -29,7 +42,7 @@ walkdir = "2"
 sled = "0.34"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-md5 = "0.7"
+md-5 = "0.10"
 sha2 = "0.10"
 glob = "0.3"
 chrono = { version = "0.4", features = ["clock"] }
@@ -37,7 +50,9 @@ rayon = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"
-redb = "4.3.0"
+# Pinned to the last 4.x release that supports this crate's declared minimum
+# of Rust 1.89: 4.2 and later require 1.90.
+redb = "=4.1.0"
 
 # Hard-link count for the copy guard. `std` exposes `nlink` on Unix but Windows'
 # `MetadataExt::number_of_links` is still unstable (`windows_by_handle`) on the
@@ -53,7 +68,7 @@ windows-sys = { version = "0.61", features = [
 # Integration tests in tests/ only see the lib's public API plus dev-deps,
 # so the crate the tests poke at directly is repeated here.
 [dev-dependencies]
-md5 = "0.7"
+md-5 = "0.10"
 # The stdout assertions read `--output json` records, so they build the expected
 # ones with `json!` rather than comparing rendered text.
 serde_json = "1"

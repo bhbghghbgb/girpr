@@ -87,3 +87,122 @@ failure-output = "final"
 # the bundle-backed suites are legitimately slow, and a killed test is a false
 # alarm dressed up as a hang.
 slow-timeout = { period = "60s" }
+
+# These cases report a host-dependent skip on stderr and then pass. Nextest's
+# default profile discards a passing test's captured output, so the skip would
+# be invisible under the plain gate; show it for these tests only.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters below do: a `test(=name)` predicate on its own matches the same name
+# in *any* binary, so a test elsewhere that happened to share one of these
+# names would silently inherit the override. `package(=girpr)` and
+# `binary(=repair_post)` pin the two cases to the integration test they live in.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=repair_post)
+    and (
+        test(=a_non_utf8_audio_cache_name_moves_byte_for_byte)
+        or test(=a_non_utf8_audio_cache_name_moves_through_the_binary)
+    )
+"""
+success-output = "immediate"
+
+# The junction cases report a host-dependent skip on stderr and then pass, so
+# their skip line must be visible under the plain gate too.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# bridge filter below does: a `test(=name)` predicate on its own matches the
+# same name in *any* binary, so a test elsewhere that happened to share one of
+# these names would silently inherit the override. `package(=girpr)` and
+# `binary(=girpr)` pin the two cases to the library's own test binary.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=util::ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
+        or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
+    )
+"""
+success-output = "immediate"
+
+# The dangling-symlink case reports a host-dependent skip on stderr and then
+# passes, so its skip line must be visible under the plain gate too: it names
+# the switch that turns that skip into a failure.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and test(=util::ini::tests::config_bump_refuses_a_dangling_symlink_game_dir)
+"""
+success-output = "immediate"
+
+# The Unix symlink cases report the same host-dependent skip on stderr and then
+# pass, so their skip lines must be visible under the plain gate too. A host
+# that refuses a symlink cannot run them, and a silent pass would read as
+# coverage the run never had.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters above do.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=util::path::tests::contained_join_resolves_a_symlink_and_refuses_the_escape)
+        or test(=repair::scope::report::tests::publishing_over_a_symlink_replaces_the_link_not_its_target)
+        or test(=repair::file::tests::a_symlink_resolves_to_the_temp_mode)
+        or test(=repair::lock::tests::a_preexisting_symlink_target_is_not_truncated)
+        or test(=repair::lock::tests::a_path_swapped_after_open_is_not_written_through_the_old_handle)
+    )
+"""
+success-output = "immediate"
+
+# The clock fixtures that need a moment before the Unix epoch report a
+# host-dependent skip on stderr and then pass, so their skip line must be
+# visible under the plain gate too: it names the switch that turns that skip
+# into a failure.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters above do.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=test_support::tests::an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch_and_across_it_backward)
+        or test(=repair::file::inplace::tests::a_stale_damaged_verdict_never_makes_the_writer_skip)
+        or test(=repair::file::inplace::tests::the_guard_rejects_a_verdict_that_does_not_describe_the_file)
+        or test(=repair::file::inplace::tests::the_guard_reuses_only_an_unchanged_plan_scan)
+        or test(=repair::file::inplace::tests::the_reuse_age_rule_requires_more_than_one_coarse_tick)
+    )
+"""
+success-output = "immediate"
+
+# The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
+# optional sibling binary. When it is not built, `assert_bundle_verifies`
+# prints the same kind of host-dependent skip and the case still passes. Nextest
+# discards a passing test's captured output by default, so show it for this
+# filter: that is what lets the hand-run command in `tests/artifact_bridge.rs`
+# leave `--no-capture` off.
+#
+# The filter names the binary as well as the cases. A `test(=name)` predicate
+# on its own matches the same name in *any* binary, so a test elsewhere that
+# happened to share one of these names would silently inherit the override.
+# `package(=girpr) and binary(=artifact_bridge)` pins the six cases to the
+# integration test they live in.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=artifact_bridge)
+    and (
+        test(=the_identical_capture_fetches_nothing)
+        or test(=the_no_reuse_capture_fetches_the_whole_file)
+        or test(=the_reuse_in_place_capture_fetches_only_what_it_must)
+        or test(=the_reuse_moved_capture_fetches_only_what_it_must)
+        or test(=the_added_capture_writes_the_new_file)
+        or test(=the_removed_capture_purges_the_file)
+    )
+"""
+success-output = "immediate"

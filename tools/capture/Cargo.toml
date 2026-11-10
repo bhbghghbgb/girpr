@@ -2,6 +2,8 @@
 name = "gircap"
 version = "0.1.0"
 edition = "2024"
+# Its dependency tree needs 1.88 (the capture code also uses `slice::as_chunks`).
+rust-version = "1.88"
 description = "Dev-only live-artifact capture tool: builds self-contained fixture bundles (real game_dir, real API bodies, real chunk blobs) plus offline ground truth, for testing the repair binary"
 
 # gircap shares no code with the repair binary: no path dep on the `girpr`
@@ -12,6 +14,17 @@ description = "Dev-only live-artifact capture tool: builds self-contained fixtur
 # default paths) and `girpr-tempdir` (the scratch-directory policy, a
 # dev-dependency, so the tree a test writes into is named and removed the same
 # way in all three projects).
+
+# A tools-only subset of the shared policy. The dev tools do not inherit the
+# workspace table because `unwrap_used`/`expect_used` are deliberate there for
+# the repair path and would be noise here: a panic in a dev tool is a failed
+# developer run, not a failed repair of a user's install. What is checked is
+# `clippy::all` plus denied `unsafe_code`, the same as the product otherwise.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
 
 [lib]
 name = "gircap"
@@ -29,7 +42,22 @@ clap = { version = "4", features = ["derive"] }
 # §2, "no shared contracts": the flag *names* and defaults are shared on
 # purpose now, the behaviour is not).
 girpr-log = { path = "../../crates/log" }
-tokio = { version = "1", features = ["full"] }
+# The runtime (`#[tokio::main]` runs the multi-threaded one), its macros
+# (`#[tokio::main]`, `#[tokio::test]`) and the timers the retry backoff awaits.
+# No source here calls `tokio::fs`, `io`, `process`, `net`, `sync` or `signal`.
+# The graph still receives `net` and `sync` because `reqwest` enables them in
+# every build, and `io-util` through reqwest's h2/hyper tree. Those are
+# requests made by dependencies, not features this package asks for; the
+# saving is every feature that neither this list nor a dependency requests.
+# `fs` is not in this package's own graph:
+# `reqwest`'s `stream` feature is what pulls `tokio/fs`, and this manifest does
+# not enable it. A `--workspace` build unifies the repair binary's
+# `reqwest/stream` into the same tokio, and then it is.
+# `default-features = false` keeps the request to exactly this list; reqwest's
+# dependency tree still enables tokio's empty `default` feature, which adds
+# nothing. `spawn`/`spawn_blocking`/`JoinSet` come with `rt`, which
+# `rt-multi-thread` already includes.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # No `json` and no `stream`: every body is decoded with `serde_json::from_slice`
 # or handed on as raw bytes, and nothing reads a streaming body. The `stream`
 # feature is what a future "hash the blob as it lands" would ask for.
@@ -38,7 +66,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 prost = "0.13"
 zstd = "0.13"
-md5 = "0.7"
+md-5 = "0.10"
 sha2 = "0.10"
 flate2 = "1"
 tracing = "0.1"

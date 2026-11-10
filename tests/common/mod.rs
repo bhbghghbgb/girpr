@@ -22,11 +22,143 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use girpr::sophon::{SophonChunk, SophonChunkFile, SophonChunkManifest};
+use girpr::test_support::{
+    Limits, NoSleep, PathScope, RepairMode, SophonChunk, SophonChunkFile, SophonChunkManifest,
+    terminal_retcode,
+};
+// Host-relative fixture timestamps. The implementation lives behind the
+// crate's test seam so the unit tests and the integration tests share one
+// definition; this re-export is the integration side's way in. Each binary
+// uses one of the two helpers, so the other is unused here.
+#[allow(unused_imports)]
+pub use girpr::test_support::{stamp_ago, stamp_ahead};
+use girpr::{Biz, OutputFormat, RunCtx, RunExit, RunFailure, Summary};
 use prost::Message as _;
+
+// ---------------------------------------------------------------------------
+// shared test harness
+// ---------------------------------------------------------------------------
+
+/// Compile a path scope for a test, the way `Args::into_ctx` does.
+pub fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
+    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
+    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
+    PathScope::new(&inc, &exc).expect("test globs must compile")
+}
+
+pub fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
+    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
+}
+
+pub fn ctx_for_biz(
+    game_dir: std::path::PathBuf,
+    mock: &MockServer,
+    jobs: usize,
+    biz: Biz,
+) -> RunCtx {
+    RunCtx {
+        game_dir,
+        biz,
+        audio: HashSet::new(),
+        audio_explicit: false,
+        path_scope: PathScope::default(),
+        limits: Limits::default(),
+        repair_mode: RepairMode::Auto,
+        repair_mode_explicit: false,
+        jobs,
+        check_only: false,
+        scan: false,
+        purge_only: false,
+        fail_fast: false,
+        dry_run: false,
+        print_plan: false,
+        plan_out: None,
+        purge_after: false,
+        purge_before: false,
+        output: OutputFormat::Text,
+        hyp_base_override: Some(mock.hyp_base.clone()),
+        sophon_base_override: Some(mock.sophon_base.clone()),
+        // Tests skip retry backoff: a failed fetch is retried immediately.
+        sleep: Arc::new(NoSleep),
+    }
+}
+
+pub fn load_counters(s: &Summary) -> (u64, u64, u64, u64, u64) {
+    (
+        s.files_skipped.load(Ordering::Relaxed),
+        s.files_repaired.load(Ordering::Relaxed),
+        s.files_failed.load(Ordering::Relaxed),
+        s.download.settled(),
+        s.deleted_extra_bytes.load(Ordering::Relaxed),
+    )
+}
+
+/// The value of one `key=value` field on a `key=value` line.
+pub fn field(line: &str, name: &str) -> u64 {
+    line.split_whitespace()
+        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or_else(|| panic!("no {name} in {line}"))
+}
+
+/// The conditional `PLAN` key a `--scan` run adds, between `est_extra_bytes`
+/// and `purge_files`.
+///
+/// The plan's line builder is the only writer (`plan_record` in
+/// `src/repair/scope/report.rs`); this is the test side's spelling of it, so a
+/// scan case and the output contract cannot drift apart on the name.
+pub const PLAN_SCAN_BYTES_KEY: &str = "scan_bytes";
+
+/// A game dir that does not exist yet, pointed at by `parent/missing`.
+pub fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
+    parent.join("not-created-yet")
+}
+
+mod run_lock;
+
+// Each test binary uses one of the two helpers, so the other is unused here.
+#[allow(unused_imports)]
+pub use run_lock::{remove_run_lock, remove_run_lock_for_args};
+
+/// Run the library's entry point, then remove the lock file it leaves in the
+/// shared temp directory. See [`remove_run_lock`].
+///
+/// A read-only run takes no lock, so cleanup is skipped for it rather than
+/// acquiring a lock just to find and delete the file that acquisition created.
+pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
+    let game_dir = ctx.game_dir.clone();
+    let takes_lock = run_lock::mode_takes_lock(ctx.readonly(), ctx.check_only, ctx.print_plan);
+    let result = girpr::run(ctx).await;
+    if takes_lock {
+        run_lock::remove_run_lock(&game_dir);
+    }
+    result
+}
+
+/// Run the shipped binary. The endpoint overrides are the only seam a
+/// *binary-level* test can use, and this is where that seam is exercised: the
+/// library tests inject `RunCtx::hyp_base_override` directly,
+/// which proves nothing about whether a flag reaches `HypClient`.
+///
+/// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
+/// the single runtime thread the mock server needs to answer on.
+pub async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
+    cmd.args(args);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = cmd.output().await.expect("run girpr");
+    remove_run_lock_for_args(args);
+    (
+        out.status.code().expect("process must exit normally"),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // tiny deterministic game fixture (2 files, 3 chunks, all in-memory)
@@ -61,6 +193,9 @@ pub struct GameFixture {
     /// for a non-latest tag. `None` = the server does not serve the local tag
     /// at all (`getBuild(local)` answers -202), which is the default.
     pub local_manifest: Option<FixtureManifest>,
+    /// Additional manifests in the **latest** build, after the primary `game`
+    /// one. Their metadata is part of `getBuild`'s answer, in this order.
+    pub extra_latest_manifests: Vec<FixtureLatestManifest>,
     /// The old file's bytes — the thing the repair has to move — for the
     /// fixtures that have one.
     pub old_data: Option<(String, Vec<u8>)>,
@@ -80,15 +215,43 @@ pub struct FixtureManifest {
     pub checksum: String,
 }
 
+/// Another manifest in the same latest build, with its own fields and file
+/// list. `served = false` advertises it in `getBuild` but answers `404` for its
+/// body, which is what a build whose manifest is gone looks like.
+pub struct FixtureLatestManifest {
+    pub matching_field: String,
+    pub category_id: String,
+    pub id: String,
+    pub zstd: Vec<u8>,
+    pub checksum: String,
+    pub served: bool,
+}
+
 /// The fixture's latest tag. The mock serves the chunk manifest for
 /// `getBuild?tag=<LATEST_TAG>` and returns `retcode -202` for any other tag, so
 /// writing this into `config.ini` is how a test says "the local build's
 /// manifests are available" (i.e. chunk reuse is available).
 pub const LATEST_TAG: &str = "9.9.9-test";
 
-fn md5hex(data: &[u8]) -> String {
-    format!("{:x}", md5::compute(data))
-}
+/// The local version a test writes into `config.ini` when its fixture has an
+/// old side.
+///
+/// The mock answers `getBuild?tag=<requested>` with the local manifest tagged
+/// with the **requested** tag, so any version a test writes resolves to a
+/// matching local build. This name is the conventional choice, not a tag the
+/// mock hardcodes.
+pub const LOCAL_TAG: &str = "9.9.8-test";
+
+/// A local version the standard fixture has no build for.
+///
+/// Any tag other than [`LATEST_TAG`] resolves to the fixture's local side when
+/// it has one; the standard fixture has none, so this tag makes
+/// `getBuild(local)` answer `-202` and the run fall back to a full fetch.
+pub const UNSERVED_TAG: &str = "1.0.0-long-gone";
+
+mod digest;
+
+pub use digest::md5hex;
 
 fn zstd_bytes(data: &[u8]) -> Vec<u8> {
     zstd::stream::encode_all(std::io::Cursor::new(data), 3).expect("zstd encode fixture")
@@ -190,9 +353,54 @@ pub struct Lies {
     ///
     /// The bytes on disk are unchanged, so the size gate passes and the digest
     /// gate is what has to refuse. On a zero-length entry the honest digest is
-    /// [`girpr::util::EMPTY_MD5`]; the lie is a non-empty digest, which a real
+    /// [`girpr::test_support::EMPTY_MD5`]; the lie is a non-empty digest, which a real
     /// server would never publish for a file with no bytes.
     pub wrong_file_md5: Vec<String>,
+}
+
+/// Another manifest in the latest build, beyond the primary `game` one.
+#[derive(Clone, Debug)]
+pub struct ExtraManifestSpec {
+    /// The `matching_field` the build advertises.
+    pub matching_field: String,
+    /// The `category_id` the build advertises. Defaults to `matching_field`
+    /// for the fixtures that model the two as one value; [`Self::with_category_id`]
+    /// is how a fixture names the excluded category independently.
+    pub category_id: String,
+    /// The files this manifest describes.
+    pub files: Vec<FileSpec>,
+    /// Whether the mock serves the body. `false` models a build whose manifest
+    /// is advertised but no longer exists at the origin (a `404`).
+    pub served: bool,
+}
+
+impl ExtraManifestSpec {
+    /// An extra latest-build manifest with the given field and files.
+    pub fn new(matching_field: &str, files: Vec<FileSpec>) -> Self {
+        Self {
+            matching_field: matching_field.to_string(),
+            category_id: matching_field.to_string(),
+            files,
+            served: true,
+        }
+    }
+
+    /// The same manifest, advertised by `getBuild` but `404` when fetched.
+    pub fn not_served(mut self) -> Self {
+        self.served = false;
+        self
+    }
+
+    /// The same manifest, advertised under a `category_id` other than its
+    /// `matching_field`.
+    ///
+    /// The `res_category_dir` ignore set is matched against both fields, so
+    /// this is how a fixture models a category the user excluded without
+    /// also changing the field the manifest is selected by.
+    pub fn with_category_id(mut self, category_id: &str) -> Self {
+        self.category_id = category_id.to_string();
+        self
+    }
 }
 
 /// A whole fixture: the new side, the old side, and what is on disk.
@@ -200,6 +408,8 @@ pub struct Lies {
 pub struct FixtureSpec {
     /// The files the **latest** manifest describes — the repair's target.
     pub new: Vec<FileSpec>,
+    /// Additional latest-build manifests, in build order after the primary one.
+    pub extra_manifests: Vec<ExtraManifestSpec>,
     /// The files the **local** build's manifest describes — the reuse map's
     /// sources. `None` = the server does not serve the local tag at all,
     /// which is what "no chunk reuse" looks like.
@@ -224,6 +434,12 @@ impl FixtureSpec {
     /// sources.
     pub fn with_old(mut self, files: Vec<FileSpec>) -> Self {
         self.old = Some(files);
+        self
+    }
+
+    /// The same fixture, with another manifest in the latest build.
+    pub fn with_extra_manifest(mut self, extra: ExtraManifestSpec) -> Self {
+        self.extra_manifests.push(extra);
         self
     }
 
@@ -258,18 +474,20 @@ pub fn lay_out(chunks: &[ChunkSpec]) -> Vec<u8> {
     out
 }
 
-/// Build the mock's fixture from a description.
+/// Build one manifest's files and protobuf view, filling the chunk stores.
 ///
-/// The two sides are two lists of files and the bytes on disk are a third, so
-/// every shape the repair has a branch for is a description rather than a
-/// builder.
-pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
-    let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
-    let mut files: Vec<FixtureFile> = Vec::new();
-
+/// The primary manifest and extra latest-build manifests share this so a
+/// multi-manifest fixture cannot describe its files differently from a
+/// single-manifest one.
+fn build_new_side(
+    files_spec: &[FileSpec],
+    lies: &Lies,
+    chunk_store: &mut HashMap<String, Vec<u8>>,
+    corrupt_chunk_store: &mut HashMap<String, Vec<u8>>,
+) -> (Vec<FixtureFile>, Vec<SophonChunkFile>) {
     // The new side, as the mock's own view of it.
-    for f in &spec.new {
+    let mut files: Vec<FixtureFile> = Vec::new();
+    for f in files_spec {
         let data = lay_out(&f.chunks);
         files.push(FixtureFile {
             rel: f.rel.clone(),
@@ -296,7 +514,7 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             // A chunk the store serves as something that is not a zstd frame
             // is served **raw**: the decode is what has to fail, and a
             // well-formed frame with wrong bytes would fail somewhere else.
-            let served = if spec.lies.not_zstd.contains(&c.id) {
+            let served = if lies.not_zstd.contains(&c.id) {
                 c.data.clone()
             } else {
                 compressed.clone()
@@ -310,22 +528,22 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             corrupt_chunk_store.insert(c.id.clone(), zstd_bytes(&bad));
             pb_chunks.push(SophonChunk {
                 id: c.id.clone(),
-                uncompressed_md5: if spec.lies.wrong_chunk_md5.contains(&c.id) {
+                uncompressed_md5: if lies.wrong_chunk_md5.contains(&c.id) {
                     // A digest no payload can have: the chunk must be refused.
                     "00000000000000000000000000000000".to_string()
                 } else {
                     md5hex(&c.data)
                 },
-                offset: if spec.lies.huge_offset.contains(&c.id) {
+                offset: if lies.huge_offset.contains(&c.id) {
                     // Past `i64::MAX` once the chunk's length is added: the
                     // layout of the file on disk is unchanged, only the claim.
                     i64::MAX
                 } else {
                     c.offset
                 },
-                compressed_size: if spec.lies.wrong_chunk_size.contains(&c.id) {
+                compressed_size: if lies.wrong_chunk_size.contains(&c.id) {
                     compressed.len() as i64 + 7
-                } else if spec.lies.huge_compressed_size.contains(&c.id) {
+                } else if lies.huge_compressed_size.contains(&c.id) {
                     // The blob on the wire is still a normal frame; only the
                     // manifest's claim about its length is hostile.
                     i64::MAX
@@ -341,14 +559,14 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             file: f.rel.clone(),
             chunks: pb_chunks,
             is_folder: false,
-            size: if spec.lies.huge_file_size.contains(&f.rel) {
+            size: if lies.huge_file_size.contains(&f.rel) {
                 // The bytes on disk are the fixture's real layout; only the
                 // manifest's claim about the file's length is hostile.
                 i64::MAX
             } else {
                 f.data.len() as i64
             },
-            md5: if spec.lies.wrong_file_md5.contains(&f.rel) {
+            md5: if lies.wrong_file_md5.contains(&f.rel) {
                 // A digest no payload can have. The layout on disk is
                 // unchanged; only the manifest's claim about the file is
                 // hostile.
@@ -358,7 +576,61 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
             },
         });
     }
+    (files, pb_files)
+}
+
+/// Build the mock's fixture from a description.
+///
+/// The two sides are two lists of files and the bytes on disk are a third, so
+/// every shape the repair has a branch for is a description rather than a
+/// builder.
+pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
+    let mut chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut corrupt_chunk_store: HashMap<String, Vec<u8>> = HashMap::new();
+    let (files, pb_files) = build_new_side(
+        &spec.new,
+        &spec.lies,
+        &mut chunk_store,
+        &mut corrupt_chunk_store,
+    );
     let (manifest_zstd, manifest_checksum) = encode_manifest(&pb_files);
+
+    // Extra manifests in the same latest build, in the order the fixture
+    // described them. The mock's own build answer lists them after `game`, so
+    // selection-order tests can rely on that order.
+    let extra_latest_manifests: Vec<FixtureLatestManifest> = spec
+        .extra_manifests
+        .iter()
+        .enumerate()
+        .map(|(index, extra)| {
+            // A manifest the build advertises but does not serve is a `404`
+            // for its body, so no plan can ever name one of its chunks. Build
+            // those chunks into a throwaway store: publishing bytes under ids
+            // no reachable manifest names would make an "absent manifest"
+            // fixture indistinguishable from a served one at the chunk route.
+            let mut extra_chunks: HashMap<String, Vec<u8>> = HashMap::new();
+            let mut extra_corrupt_chunks: HashMap<String, Vec<u8>> = HashMap::new();
+            let (_, extra_pb) = build_new_side(
+                &extra.files,
+                &Lies::default(),
+                &mut extra_chunks,
+                &mut extra_corrupt_chunks,
+            );
+            if extra.served {
+                chunk_store.extend(extra_chunks);
+                corrupt_chunk_store.extend(extra_corrupt_chunks);
+            }
+            let (zstd, checksum) = encode_manifest(&extra_pb);
+            FixtureLatestManifest {
+                matching_field: extra.matching_field.clone(),
+                category_id: extra.category_id.clone(),
+                id: format!("manifest_test_extra_{index}_001"),
+                zstd,
+                checksum,
+                served: extra.served,
+            }
+        })
+        .collect();
 
     // The local build's manifest: the old side's chunk layout, and nothing
     // else. Its chunks are never fetched — the local manifest only ever feeds
@@ -413,6 +685,7 @@ pub fn build_fixture_spec(spec: &FixtureSpec) -> GameFixture {
         chunk_store,
         corrupt_chunk_store,
         local_manifest,
+        extra_latest_manifests,
         old_data,
         disk: spec.disk.clone(),
     }
@@ -543,12 +816,121 @@ pub fn read_game_file(game_dir: &std::path::Path, rel: &str) -> Option<Vec<u8>> 
     std::fs::read(game_dir.join(rel_fs)).ok()
 }
 
+/// Drive `f` under a debug-level scoped subscriber and return its result with
+/// the log lines the run emitted.
+///
+/// **Precondition: the caller must run on a current-thread runtime**, which is
+/// what a plain `#[tokio::test]` provides. `set_default` installs the
+/// subscriber on the calling thread only, so `f` is polled on the thread that
+/// installed it. A multi-thread runtime does not move `f` itself: `block_on`
+/// keeps polling the awaited future on the calling thread, so the lines `f`
+/// emits are captured there too. What a multi-thread runtime does move is the
+/// work `f` spawns: a task started with `tokio::spawn` runs on a worker
+/// thread that carries no subscriber, and that task's lines are silently
+/// missing from the returned text. A debug build asserts the runtime flavor so
+/// that misuse fails instead of returning partial logs.
+///
+/// The blocking tasks whose lines a test asserts use `spawn_blocking_traced`,
+/// which installs the same dispatcher on the pool thread, so their lines
+/// (including the post-phase's listing) are captured too — provided the spawn
+/// site already carries the subscriber. The helper takes the dispatcher at
+/// **spawn time**, so a `spawn_blocking_traced` call made from a spawned task
+/// captures the worker's dispatcher instead, and its blocking lines are lost
+/// the same way. The async form is duplicated in the metadata tests: sharing
+/// it would require exporting a public test helper. The stdout data plane
+/// (`REPORT`/`SUMMARY`) is separate and is asserted through the returned
+/// `Summary`, not through these lines.
+pub async fn logs_of<F: std::future::Future>(f: F) -> (F::Output, String) {
+    // See the precondition above: a multi-thread runtime would move the work
+    // `f` spawns to worker threads without the thread-local subscriber and
+    // lose their lines.
+    debug_assert_eq!(
+        tokio::runtime::Handle::current().runtime_flavor(),
+        tokio::runtime::RuntimeFlavor::CurrentThread,
+        "logs_of requires a current-thread runtime; use a plain #[tokio::test]",
+    );
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("captured log lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let buf = Captured::default();
+    let writer = buf.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    let out = f.await;
+    drop(guard);
+    let text = String::from_utf8(buf.0.lock().expect("captured log lock").clone())
+        .expect("tracing writes UTF-8");
+    (out, text)
+}
+
 // ---------------------------------------------------------------------------
 // mock server
 // ---------------------------------------------------------------------------
 
+/// How `getGameBranches` fails.
+///
+/// The retry classifier reads the body, not the HTTP status: a JSON wrapper
+/// with a retryable `retcode` is retried, a terminal one ends the call, and a
+/// body that is not JSON fails to parse on the first attempt. These variants
+/// are the three bodies a test can ask the mock to serve.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BranchFailure {
+    /// Answer normally.
+    #[default]
+    None,
+    /// Answer every request with a non-JSON `500` body. The wrapper parse
+    /// fails, which the client classifies as fatal: one attempt, no retry.
+    NonJson,
+    /// Answer the first `calls` requests with a JSON wrapper carrying a
+    /// retryable `retcode`, then the normal branch answer. Use a value at or
+    /// above the client's attempt count (five) to exercise exhaustion.
+    Retryable { calls: u32 },
+    /// Answer every request with a JSON wrapper carrying this terminal
+    /// `retcode`. The client ends the call after the first answer.
+    Terminal { retcode: i64 },
+}
+
+impl BranchFailure {
+    /// A terminal failure carrying a `retcode` the client classifies as
+    /// terminal.
+    ///
+    /// Panics on any other code: such a fixture would be a retryable failure
+    /// wearing the terminal name.
+    pub fn terminal(retcode: i64) -> Self {
+        assert!(
+            terminal_retcode(retcode),
+            "retcode {retcode} is not terminal; expected -201, -202 or -1001"
+        );
+        Self::Terminal { retcode }
+    }
+}
+
 #[derive(Default)]
 pub struct MockOpts {
+    /// The launcher this fixture describes. `None` serves `hk4e_global`.
+    ///
+    /// The response's `game` object carries this biz and game id, so a run for
+    /// another launcher is not silently answered with the global identity.
+    pub biz: Option<Biz>,
     pub deprecated_files: Vec<String>,
     pub scan_dir: String,
     pub res_dir: String,
@@ -567,6 +949,19 @@ pub struct MockOpts {
     /// which is what exercises the retry/backoff paths (`--fail-fast`) without
     /// a dead host and its connection timeouts.
     pub fail_chunks: bool,
+    /// How `getGameBranches` answers, while `getGameConfigs` still answers.
+    /// Models the branch endpoint failing after the first wave has already
+    /// been issued, so error precedence and the client's retry classification
+    /// are testable.
+    pub branch_failure: BranchFailure,
+    /// Hold the `getGameConfigs` answer until `getGameBranches` has been served.
+    ///
+    /// The first wave issues both calls concurrently, so without this the
+    /// request that is merely *issued* is not deterministic. Holding the config
+    /// answer pins the branch as the first of the two to settle, which lets a
+    /// test assert on a branch error that is already in hand rather than on
+    /// polling order.
+    pub config_after_branches: bool,
     /// Serve every chunk request as `404`. Models the blob routes' real answer
     /// to an id they do not have: the live CDN (`autopatchhk.yuanshen.com`,
     /// `Server: AliyunOSS`) answers `404` with an `application/xml` `NoSuchKey`
@@ -605,6 +1000,12 @@ pub struct MockOpts {
     pub truncate_first_chunks: u32,
     /// How many bytes of a truncated body to write before closing.
     pub truncate_bytes: usize,
+    /// Called in the server task just before the **first** chunk body is sent.
+    ///
+    /// The request necessarily arrives after the plan phase has finished, so a
+    /// test can use this to change the install between the plan scan and the
+    /// repair loop without racing a timer.
+    pub on_first_chunk: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 pub struct MockServer {
@@ -697,12 +1098,29 @@ struct Responses {
     build_latest: Vec<u8>,
     build_not_found: Vec<u8>,
     /// The `getBuild` answer for a **local** tag, when the server serves one.
-    /// `None` = the local tag is not served, which is the default.
-    build_local: Option<Vec<u8>>,
+    /// The template's `data.tag` is replaced with the tag the request asked
+    /// for, so the served build always matches the local version. `None` = the
+    /// local tag is not served, which is the default.
+    build_local: Option<serde_json::Value>,
     /// The local manifest's body, by id.
     local_manifest: Option<(String, Vec<u8>)>,
+    /// Extra latest-build manifest bodies, by id. A manifest advertised by
+    /// `getBuild` but absent here is a `404`.
+    extra_manifests: Vec<(String, Vec<u8>)>,
     latest_tag: String,
     fail_chunks: bool,
+    branch_failure: BranchFailure,
+    /// Branch requests served so far, so `BranchFailure::Retryable` can answer
+    /// the first `calls` of them with a retryable retcode.
+    branch_calls: AtomicU64,
+    /// Hold the config answer until the branch answer has been served.
+    config_after_branches: bool,
+    /// Signalled once the branch answer has been served.
+    ///
+    /// A watch (not a one-shot permit) so a *retried* config call still sees
+    /// that the branch was already served instead of waiting forever for a
+    /// permit that the first call consumed.
+    branches_served: tokio::sync::watch::Sender<bool>,
     not_found_chunks: bool,
     not_found_manifests: bool,
     corrupt_first_chunks: u32,
@@ -720,6 +1138,10 @@ struct Responses {
     /// deliver `truncate_bytes` of it.
     truncate_first_chunks: u32,
     truncate_bytes: usize,
+    /// Runs once, before the first chunk body is sent.
+    on_first_chunk: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Whether `on_first_chunk` has already run.
+    first_chunk_seen: AtomicBool,
     /// The ids whose first response was already served corrupt. An id is in
     /// here from its first corrupt response onwards, so the second request for
     /// the same id gets the good bytes: a flaky origin, not a broken one.
@@ -735,6 +1157,19 @@ fn build_responses(
     manifest_prefix: &str,
     chunk_prefix: &str,
 ) -> Responses {
+    // The variant stays constructible directly, so check the knob here as well
+    // as in `BranchFailure::terminal`: a debug build must not silently serve a
+    // "terminal" failure the client would retry. Release keeps the fixture
+    // usable because this is only a self-check.
+    if let BranchFailure::Terminal { retcode } = opts.branch_failure {
+        debug_assert!(
+            terminal_retcode(retcode),
+            "retcode {retcode} is not terminal; expected -201, -202 or -1001"
+        );
+    }
+    let biz = opts.biz.unwrap_or(Biz::Hk4eGlobal);
+    let (_, _, game_id) = biz.endpoints();
+    let game_biz = biz.as_str();
     let raw_manifest_len = zstd::stream::decode_all(std::io::Cursor::new(fx.manifest_zstd.clone()))
         .expect("decode fixture manifest")
         .len();
@@ -743,7 +1178,7 @@ fn build_responses(
         "message": "OK",
         "data": {
             "launch_configs": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "exe_file_name": "GenshinImpact.exe",
                 "audio_pkg_scan_dir": opts.scan_dir,
                 "audio_pkg_res_dir": opts.res_dir,
@@ -763,7 +1198,7 @@ fn build_responses(
         "message": "OK",
         "data": {
             "game_branches": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "main": {
                     "package_id": "pkg_test",
                     "branch": "main",
@@ -785,36 +1220,55 @@ fn build_responses(
         "message": "OK",
         "data": {
             "deprecated_file_configs": [{
-                "game": {"id": "gopR6Cufr3", "biz": "hk4e_global"},
+                "game": {"id": game_id, "biz": game_biz},
                 "deprecated_files": deprecated_files
             }]
         }
     });
+    let mut latest_manifests = vec![serde_json::json!({
+        "category_id": "10016",
+        "category_name": "game-test",
+        "matching_field": "game",
+        "manifest": {
+            "id": fx.manifest_id,
+            "checksum": if opts.wrong_manifest_checksum {
+                // A checksum no blob can have: the manifest must be
+                // refused, and the run must fail as metadata.
+                "00000000000000000000000000000000".to_string()
+            } else {
+                fx.manifest_checksum.clone()
+            },
+            "compressed_size": fx.manifest_zstd.len() as i64,
+            "uncompressed_size": raw_manifest_len as i64
+        },
+        "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
+        "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
+    })];
+    for m in &fx.extra_latest_manifests {
+        let raw_len = zstd::stream::decode_all(std::io::Cursor::new(m.zstd.clone()))
+            .expect("decode extra fixture manifest")
+            .len();
+        latest_manifests.push(serde_json::json!({
+            "category_id": m.category_id,
+            "category_name": m.matching_field,
+            "matching_field": m.matching_field,
+            "manifest": {
+                "id": m.id,
+                "checksum": m.checksum,
+                "compressed_size": m.zstd.len() as i64,
+                "uncompressed_size": raw_len as i64
+            },
+            "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
+            "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
+        }));
+    }
     let build_latest = serde_json::json!({
         "retcode": 0,
         "message": "OK",
         "data": {
             "build_id": "build_test_001",
             "tag": fx.latest_tag,
-            "manifests": [{
-                "category_id": "10016",
-                "category_name": "game-test",
-                "matching_field": "game",
-                "manifest": {
-                    "id": fx.manifest_id,
-                    "checksum": if opts.wrong_manifest_checksum {
-                        // A checksum no blob can have: the manifest must be
-                        // refused, and the run must fail as metadata.
-                        "00000000000000000000000000000000".to_string()
-                    } else {
-                        fx.manifest_checksum.clone()
-                    },
-                    "compressed_size": fx.manifest_zstd.len() as i64,
-                    "uncompressed_size": raw_manifest_len as i64
-                },
-                "chunk_download": {"url_prefix": chunk_prefix, "url_suffix": ""},
-                "manifest_download": {"url_prefix": manifest_prefix, "url_suffix": ""}
-            }]
+            "manifests": latest_manifests
         }
     });
     // The local build, when the server serves one: a different manifest, and
@@ -826,7 +1280,7 @@ fn build_responses(
             "message": "OK",
             "data": {
                 "build_id": "build_test_old",
-                "tag": "9.9.8-test",
+                "tag": LOCAL_TAG,
                 "manifests": [{
                     "category_id": "10016",
                     "category_name": "game-test",
@@ -847,22 +1301,35 @@ fn build_responses(
         .local_manifest
         .as_ref()
         .map(|m| (m.id.clone(), m.zstd.clone()));
+    let extra_manifests = fx
+        .extra_latest_manifests
+        .iter()
+        .filter(|m| m.served)
+        .map(|m| (m.id.clone(), m.zstd.clone()))
+        .collect();
     Responses {
         configs: serde_json::to_vec(&configs).unwrap(),
         branches: serde_json::to_vec(&branches).unwrap(),
         deprecated: serde_json::to_vec(&deprecated).unwrap(),
         build_latest: serde_json::to_vec(&build_latest).unwrap(),
         build_not_found: br#"{"retcode":-202,"message":"not found","data":null}"#.to_vec(),
-        build_local: build_local.map(|b| serde_json::to_vec(&b).unwrap()),
+        build_local,
         local_manifest,
+        extra_manifests,
         latest_tag: fx.latest_tag.clone(),
         fail_chunks: opts.fail_chunks,
+        branch_failure: opts.branch_failure,
+        branch_calls: AtomicU64::new(0),
+        config_after_branches: opts.config_after_branches,
+        branches_served: tokio::sync::watch::channel(false).0,
         not_found_chunks: opts.not_found_chunks,
         not_found_manifests: opts.not_found_manifests,
         corrupt_first_chunks: opts.corrupt_first_chunks,
         corrupt_chunks: opts.corrupt_chunks.clone(),
         truncate_first_chunks: opts.truncate_first_chunks,
         truncate_bytes: opts.truncate_bytes,
+        on_first_chunk: opts.on_first_chunk.clone(),
+        first_chunk_seen: AtomicBool::new(false),
         corrupt_served: Mutex::new(HashSet::new()),
         served: AtomicU64::new(0),
     }
@@ -914,17 +1381,60 @@ async fn serve_one(
     // A body that is cut short is written in full-length header terms and then
     // abandoned, which is what a transport that dies mid-body looks like.
     let mut cut: Option<usize> = None;
+    // Set when this response is the first successful chunk body.
+    let mut first_chunk_body = false;
+    let is_branch = target.contains("getGameBranches");
     let (status, ctype, body): (&str, &str, Vec<u8>) = if target.contains("getGameConfigs") {
+        if r.config_after_branches {
+            // `wait_for` returns immediately when the retained value is
+            // already true, so a retried config call cannot hang.
+            let mut served = r.branches_served.subscribe();
+            let _ = served.wait_for(|served| *served).await;
+        }
         ("200 OK", "application/json", r.configs.clone())
-    } else if target.contains("getGameBranches") {
-        ("200 OK", "application/json", r.branches.clone())
+    } else if is_branch {
+        let n = r.branch_calls.fetch_add(1, Ordering::Relaxed);
+        match r.branch_failure {
+            BranchFailure::NonJson => (
+                "500 Internal Server Error",
+                "text/plain",
+                b"branch endpoint unavailable".to_vec(),
+            ),
+            BranchFailure::Retryable { calls } if n < u64::from(calls) => (
+                "200 OK",
+                "application/json",
+                br#"{"retcode":-1,"message":"busy","data":null}"#.to_vec(),
+            ),
+            BranchFailure::Terminal { retcode } => (
+                "200 OK",
+                "application/json",
+                serde_json::to_vec(&serde_json::json!({
+                    "retcode": retcode,
+                    "message": "invalid params",
+                    "data": null
+                }))
+                .expect("serialize branch failure"),
+            ),
+            _ => ("200 OK", "application/json", r.branches.clone()),
+        }
     } else if target.contains("getGameDeprecatedFileConfigs") {
         ("200 OK", "application/json", r.deprecated.clone())
     } else if target.contains("getBuild") {
         match query_tag(&target) {
             Some(t) if t != r.latest_tag => match &r.build_local {
-                // The local build, when the server serves one.
-                Some(b) => ("200 OK", "application/json", b.clone()),
+                // The local build, when the server serves one. It is tagged
+                // with the version the request asked for, so a test that
+                // changes its local version gets a matching build instead of
+                // silently falling back to a full fetch.
+                Some(b) => {
+                    let mut body = b.clone();
+                    body["data"]["tag"] = serde_json::Value::String(t);
+                    (
+                        "200 OK",
+                        "application/json",
+                        serde_json::to_vec(&body).expect("serialize local build"),
+                    )
+                }
                 None => ("200 OK", "application/json", r.build_not_found.clone()),
             },
             _ => ("200 OK", "application/json", r.build_latest.clone()),
@@ -948,6 +1458,8 @@ async fn serve_one(
         } else if let Some((local_id, body)) = &r.local_manifest
             && id == local_id
         {
+            ("200 OK", "application/octet-stream", body.clone())
+        } else if let Some((_, body)) = r.extra_manifests.iter().find(|(mid, _)| mid == id) {
             ("200 OK", "application/octet-stream", body.clone())
         } else {
             ("404 Not Found", "text/plain", b"no such manifest".to_vec())
@@ -983,6 +1495,7 @@ async fn serve_one(
         } else {
             match fx.chunk_store.get(id) {
                 Some(bytes) => {
+                    first_chunk_body = true;
                     log.lock().unwrap().push(id.to_string());
                     let n = r.served.fetch_add(1, Ordering::Relaxed);
                     // The named ids are corrupt on their **first** request
@@ -1022,6 +1535,27 @@ async fn serve_one(
     } else {
         ("404 Not Found", "text/plain", b"unknown route".to_vec())
     };
+
+    // The branch answer is chosen; let a held config answer proceed. The
+    // request itself was already logged above, so a test can assert it was
+    // issued regardless of when the client reads either response.
+    if is_branch {
+        // `send_replace` updates even when no config request is waiting yet:
+        // a one-shot `send` would fail with no receiver, leaving a later
+        // config call waiting forever.
+        r.branches_served.send_replace(true);
+    }
+
+    // The plan phase is over by the time a chunk is requested, so this is the
+    // deterministic seam for "the install changed between planning and
+    // repair". It runs before the body, so the change is visible when the
+    // repair loop reaches the next file.
+    if first_chunk_body
+        && let Some(hook) = &r.on_first_chunk
+        && !r.first_chunk_seen.swap(true, Ordering::Relaxed)
+    {
+        hook();
+    }
 
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",

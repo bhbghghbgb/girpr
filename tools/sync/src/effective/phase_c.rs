@@ -5,7 +5,7 @@
 //! [`resolve_folder`] reads, [`resolve_record`] does not have anything to read,
 //! and [`resolve_side`] picks between them.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, trace};
@@ -111,7 +111,8 @@ pub fn resolve_folder(
         last_prog: std::time::Instant::now(),
     });
     let total = pending.len();
-    let outcome = rw.pool().install(|| {
+    let pool = rw.pool()?;
+    let outcome = pool.install(|| {
         use rayon::prelude::*;
         pending.par_iter().try_for_each(|rel| -> Result<()> {
             // The permit covers the read. The row write is cache work, which the
@@ -133,7 +134,9 @@ pub fn resolve_folder(
             };
             let e = &phase_a.map[*rel];
             let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
-            let mut sink = sink.lock().expect("resolve lock is never poisoned");
+            let mut sink = sink
+                .lock()
+                .map_err(|_| anyhow!("resolve lock is poisoned"))?;
             if let Some(w) = sink.batch.as_mut() {
                 w.put(rel, &row)?;
             }
@@ -175,7 +178,9 @@ pub fn resolve_folder(
         mut map,
         hashed: n_hashed,
         ..
-    } = sink.into_inner().expect("resolve lock is never poisoned");
+    } = sink
+        .into_inner()
+        .map_err(|_| anyhow!("resolve lock is poisoned"))?;
     if let Some(w) = batch {
         w.commit()?;
     }

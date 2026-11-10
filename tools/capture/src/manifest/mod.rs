@@ -27,6 +27,7 @@ use crate::hash;
 use crate::hash::Encoding;
 use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
 use crate::hyp::GetBuild;
+use crate::hyp::types::join;
 
 pub mod diff;
 pub mod dump;
@@ -335,11 +336,16 @@ impl CapturedManifest {
     }
 
     /// The archive URL it came from.
+    ///
+    /// Joined through the same helper as
+    /// [`crate::hyp::BuildManifest::archive_url`], which documents why a
+    /// non-empty `url_suffix` is appended even though the reference Sophon
+    /// clients ignore the field.
     pub fn url(&self) -> String {
-        self.meta.declared.manifest_download.url_prefix.to_owned()
-            + "/"
-            + &self.meta.manifest.id
-            + &self.meta.declared.manifest_download.url_suffix
+        join(
+            &self.meta.declared.manifest_download,
+            &self.meta.manifest.id,
+        )
     }
 
     /// The base its **chunk** blobs are served from.
@@ -353,11 +359,12 @@ impl CapturedManifest {
     }
 
     /// The URL of one of its chunks.
+    ///
+    /// Uses the same join as [`crate::hyp::BuildManifest::archive_url`]: every
+    /// measured response has an empty `url_suffix`, so appending one is a
+    /// conservative reading the reference Sophon clients do not make.
     pub fn chunk_url(&self, chunk_id: &str) -> String {
-        self.meta.declared.chunk_download.url_prefix.clone()
-            + "/"
-            + chunk_id
-            + &self.meta.declared.chunk_download.url_suffix
+        join(&self.meta.declared.chunk_download, chunk_id)
     }
 }
 

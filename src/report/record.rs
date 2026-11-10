@@ -139,14 +139,6 @@ impl Record {
         self.label
     }
 
-    /// The JSON `event` name: the text label lowercased, so `SUMMARY`/`summary`
-    /// and `PLAN`/`plan` cannot be spelled two ways.
-    pub fn event(&self) -> String {
-        let mut event = String::with_capacity(self.label.len());
-        push_lowercase(&mut event, self.label);
-        event
-    }
-
     /// The fields, in report order, without the `event` name.
     pub fn fields(&self) -> &[(&'static str, Val)] {
         &self.fields

@@ -104,15 +104,14 @@ async fn repair_attempt_inner(
         .metadata()
         .with_context(|| format!("stat tmp {}", tmp_path.display()))?
         .len();
+    let mut tmp_len = have;
     if have > file.size as u64 {
         tracing::debug!(tmp_bytes = have, "tmp oversize -> truncate");
         f.set_len(file.size as u64)?;
+        tmp_len = file.size as u64;
     }
     tracing::debug!(
-        tmp_bytes = f
-            .metadata()
-            .with_context(|| format!("stat tmp {}", tmp_path.display()))?
-            .len(),
+        tmp_bytes = tmp_len,
         expect_size = file.size,
         "tmp resume point"
     );
@@ -120,21 +119,40 @@ async fn repair_attempt_inner(
     // One scratch buffer for this file: every reuse hash and copy reuses it
     // instead of allocating a fresh 512 KiB buffer per chunk.
     let mut scratch = Vec::new();
+    // The reuse source is the same file for every chunk, so one lazily opened
+    // handle serves them all. A failed read drops it, and the next chunk may
+    // open the path once more instead of failing the file.
+    let mut src_handle: Option<File> = None;
     for c in &file.chunks {
-        match try_reuse_slice(
+        let end = chunk_end(c)?;
+        let outcome = try_reuse_slice(&mut ReuseCall {
             ctx,
-            final_path,
+            src: final_path,
             c,
+            end,
             reuse_entries,
-            &mut f,
-            &mut scratch,
-            tmp_path,
-            writes,
-        )? {
+            out: &mut f,
+            scratch: &mut scratch,
+            src_handle: &mut src_handle,
+            tmp_len: &mut tmp_len,
+            writes: &mut *writes,
+        })?;
+        match outcome {
             ChunkOutcome::Resumed => stats.chunks_resumed += 1,
-            ChunkOutcome::Reused => stats.chunks_reused += 1,
+            ChunkOutcome::Reused => {
+                stats.chunks_reused += 1;
+                tmp_len = tmp_len.max(end);
+            }
             ChunkOutcome::Download => {
-                if let Err(e) = write_downloaded_chunk(ctx, prefix, c, &mut f, stats, writes).await
+                if let Err(e) = write_downloaded_chunk(DownloadedChunk {
+                    ctx,
+                    prefix,
+                    c,
+                    out: &mut f,
+                    stats: &mut *stats,
+                    writes: &mut *writes,
+                })
+                .await
                 {
                     // The chunk's bytes may have landed in the `_tmp` before
                     // its digest was known, and the temp mode resumes by
@@ -144,16 +162,25 @@ async fn repair_attempt_inner(
                     // chunk's offset makes the resume honest — the chunks
                     // before it were each digest-checked when they were
                     // written, and everything from it on is gone.
-                    if let Err(rollback) = rollback_tmp(&mut f, tmp_path, c.offset.max(0) as u64) {
+                    if let Err(rollback) = rollback_failed_chunk(&mut f, tmp_path, c, &mut tmp_len)
+                    {
                         return Err(chunk_failure_after_rollback(tmp_path, rollback, e));
                     }
                     return Err(e);
                 }
+                tmp_len = tmp_len.max(end);
             }
         }
     }
     f.flush()?;
     drop(f);
+    // The reuse source is the same file the promote renames over. On Windows
+    // `std` opens it with `FILE_SHARE_DELETE` among its default share flags
+    // (this code never narrows them through `OpenOptionsExt`), so this handle
+    // alone would not block the rename. Release it before promoting anyway:
+    // it costs nothing and keeps the code independent of that default instead
+    // of leaning on it.
+    drop(src_handle);
     promote_tmp(file, tmp_path, final_path, stats, writes)
 }
 
@@ -164,6 +191,24 @@ enum ChunkOutcome {
     Resumed,
     Reused,
     Download,
+}
+
+/// The exclusive end of a chunk in the target file, validated against the
+/// manifest's signed fields.
+///
+/// The manifest controls both numbers; a corrupt pair must fail this file
+/// normally rather than panic (release builds would wrap here).
+fn chunk_end(c: &SophonChunk) -> Result<u64> {
+    u64::try_from(c.offset)
+        .ok()
+        .zip(u64::try_from(c.uncompressed_size).ok())
+        .and_then(|(offset, size)| offset.checked_add(size))
+        .with_context(|| {
+            format!(
+                "chunk {} has an invalid offset/size: {} + {}",
+                c.id, c.offset, c.uncompressed_size
+            )
+        })
 }
 
 /// Truncate the `_tmp` back to `offset`, so a chunk that failed cannot be
@@ -208,6 +253,31 @@ fn rollback_tmp(f: &mut File, tmp_path: &std::path::Path, offset: u64) -> Result
     Ok(())
 }
 
+/// Roll a failed chunk out of the `_tmp` and move the tracked resume point
+/// back with it.
+///
+/// The truncation and the counter update belong together: the next chunk's
+/// resume check reads `tmp_len`, so the tracked point must never claim bytes
+/// the rollback removed. The order matters — a failed rollback leaves both the
+/// `_tmp` and the counter as they were, and the caller reports the combined
+/// failure.
+fn rollback_failed_chunk(
+    f: &mut File,
+    tmp_path: &std::path::Path,
+    c: &SophonChunk,
+    tmp_len: &mut u64,
+) -> Result<()> {
+    let offset = c.offset.max(0) as u64;
+    rollback_tmp(f, tmp_path, offset)?;
+    *tmp_len = offset;
+    tracing::debug!(
+        tmp_bytes = *tmp_len,
+        chunk = %c.id,
+        "tmp resume point after rollback"
+    );
+    Ok(())
+}
+
 /// Compose the two failures of one chunk attempt: the chunk error stays the
 /// reported cause, and a rollback failure is attached as context.
 ///
@@ -225,9 +295,28 @@ fn chunk_failure_after_rollback(
     ))
 }
 
+/// One chunk's reuse attempt and the per-file state it shares.
+///
+/// The chunk, its manifest pair, and its validated end are per chunk; `out`,
+/// `scratch`, `src_handle`, `tmp_len`, and `writes` live across the file's
+/// chunks. Naming them keeps the copy path's inputs readable at the call site.
+struct ReuseCall<'a, W: Write + Seek> {
+    ctx: &'a FileCtx,
+    src: &'a std::path::Path,
+    c: &'a SophonChunk,
+    end: u64,
+    reuse_entries: Option<&'a FileReuse>,
+    out: &'a mut W,
+    scratch: &'a mut Vec<u8>,
+    src_handle: &'a mut Option<File>,
+    tmp_len: &'a mut u64,
+    writes: &'a mut FileWrites,
+}
+
 /// S2: copy `c` from a hash-verified slice of the same local file. Returns
-/// `false` when there is no candidate or the slice does not verify, so the
-/// caller falls back to downloading.
+/// [`ChunkOutcome::Reused`] when the copy lands, and
+/// [`ChunkOutcome::Download`] when there is no candidate or the slice does not
+/// verify, so the caller falls back to downloading.
 ///
 /// V1-SIMPLIFICATION (S2, see README): same-file-only reuse. Starward maps each
 /// chunk to any local file via `OriginalFileFullPath/Offset` (cross-file dedup);
@@ -235,124 +324,181 @@ fn chunk_failure_after_rollback(
 /// fraction of the bookkeeping.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallFile.cs#L100-L131
 /// and https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L347-L360
-#[allow(clippy::too_many_arguments)] // the per-file scratch is one more input; a bundle would churn both callers
-fn try_reuse_slice(
-    ctx: &FileCtx,
-    src: &std::path::Path,
-    c: &SophonChunk,
-    reuse_entries: Option<&FileReuse>,
-    out: &mut File,
-    scratch: &mut Vec<u8>,
-    tmp_path: &std::path::Path,
-    writes: &mut FileWrites,
-) -> Result<ChunkOutcome> {
-    // The manifest controls both numbers; a corrupt pair must fail this file
-    // normally rather than panic (release builds would wrap here).
-    let end = u64::try_from(c.offset)
-        .ok()
-        .zip(u64::try_from(c.uncompressed_size).ok())
-        .and_then(|(offset, size)| offset.checked_add(size))
-        .with_context(|| {
-            format!(
-                "chunk {} has an invalid offset/size: {} + {}",
-                c.id, c.offset, c.uncompressed_size
-            )
-        })?;
-    let cur_len = out
-        .metadata()
-        .with_context(|| format!("stat tmp {} before reuse", tmp_path.display()))?
-        .len();
+fn try_reuse_slice<W: Write + Seek>(call: &mut ReuseCall<'_, W>) -> Result<ChunkOutcome> {
+    let c = call.c;
     // Resume-by-length: the temp mode's resume property (see README). A
     // completed prefix is kept without per-chunk re-verification; the final
     // whole-file MD5 gates promotion, so a corrupt prefix only wastes work
     // before failing shut. Mirrors Starward's
     // `if (fs.Length < chunk.Offset + chunk.UncompressedSize)` skip.
     // See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L342-L343
-    if cur_len >= end {
+    if *call.tmp_len >= call.end {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "chunk already complete -> keep");
         return Ok(ChunkOutcome::Resumed);
     }
-    out.seek(SeekFrom::Start(c.offset as u64))?;
 
-    let candidate = reuse_entries.and_then(|reuse| reuse.get(c));
+    let candidate = call.reuse_entries.and_then(|reuse| reuse.get(c));
     let Some(entry) = candidate else {
         tracing::trace!(chunk = %c.id, offset = c.offset, size = c.uncompressed_size, "no local reuse candidate -> download");
         return Ok(ChunkOutcome::Download);
     };
     let ro = entry.offset;
 
-    let mut sf = match File::open(src).with_context(|| format!("open {}", src.display())) {
-        Ok(sf) => sf,
+    // Take the file out while it is in use. A failed read leaves the slot
+    // empty, so the next chunk tries a fresh open once rather than holding on
+    // to a handle that is known to be unusable.
+    let mut sf = match call.src_handle.take() {
+        Some(sf) => sf,
+        None => {
+            match File::open(call.src).with_context(|| format!("open {}", call.src.display())) {
+                Ok(sf) => sf,
+                Err(e) => {
+                    tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                    return Ok(ChunkOutcome::Download);
+                }
+            }
+        }
+    };
+    let digest = match util::md5::md5_reader_slice_digest(
+        &mut sf,
+        ro as u64,
+        c.uncompressed_size as u64,
+        &mut *call.scratch,
+    ) {
+        Ok(h) => h,
         Err(e) => {
             tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
             return Ok(ChunkOutcome::Download);
         }
     };
-    match util::md5::md5_reader_slice_digest(
+    if !digest.matches_hex(&c.uncompressed_md5) {
+        *call.src_handle = Some(sf);
+        tracing::debug!(chunk = %c.id, slice_md5 = %digest, "reuse slice md5 mismatch -> download");
+        return Ok(ChunkOutcome::Download);
+    }
+    tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
+    // The same handle: seek back to the slice start and copy the bytes that
+    // were just verified, instead of opening `src` again.
+    if let Err(e) = sf.seek(SeekFrom::Start(ro as u64)) {
+        // Leave the handle slot empty, the way a failed read does: a seek that
+        // failed means this handle cannot be trusted to position the next
+        // slice, so the next chunk opens the path once more rather than
+        // reusing a bad handle. Restoring it here would only change the retry
+        // path, not the outcome — the chunk is downloaded either way.
+        tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+        return Ok(ChunkOutcome::Download);
+    }
+    // Position the sink only on the copy path. The download path does not need
+    // it: `write_downloaded_chunk` builds a `ChunkFileSink`, whose constructor
+    // seeks this same file to the chunk's offset before the stream starts.
+    call.out.seek(SeekFrom::Start(c.offset as u64))?;
+    match copy_reuse_pieces(
+        call.ctx,
+        &mut *call.writes,
         &mut sf,
-        ro as u64,
-        c.uncompressed_size as u64,
-        scratch,
-    ) {
-        Ok(h) if h.matches_hex(&c.uncompressed_md5) => {
-            tracing::trace!(chunk = %c.id, src_offset = ro, "reuse slice md5 ok -> copy");
-            // The same handle: seek back to the slice start and copy the
-            // bytes that were just verified, instead of opening `src` again.
-            sf.seek(SeekFrom::Start(ro as u64))?;
-            let mut remaining = c.uncompressed_size as u64;
-            let buf = scratch_slice(scratch, COPY_BUF);
-            while remaining > 0 {
-                let want = (remaining as usize).min(buf.len());
-                let n = sf.read(&mut buf[..want])?;
-                if n == 0 {
-                    // Short slice: fall through to the download, which re-seeks
-                    // to `c.offset` and overwrites the partial copy.
-                    tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
-                    return Ok(ChunkOutcome::Download);
-                }
-                // The write ceiling counts *this* copy: it goes into `*_tmp` and
-                // appears in neither `download_bytes` nor the plan's estimate.
-                reserve_write(ctx, n as u64)?;
-                out.write_all(&buf[..n])?;
-                note_write(ctx, writes, n as u64)?;
-                remaining -= n as u64;
-            }
+        &mut *call.out,
+        &mut *call.scratch,
+        c,
+    )? {
+        ReuseCopy::Complete => {
+            *call.src_handle = Some(sf);
             Ok(ChunkOutcome::Reused)
         }
-        Ok(h) => {
-            tracing::debug!(chunk = %c.id, slice_md5 = %h, "reuse slice md5 mismatch -> download");
+        // A short slice falls through to the download, which re-seeks to
+        // `c.offset` and overwrites the partial copy. The handle is still
+        // usable, so the next chunk keeps it.
+        ReuseCopy::Truncated => {
+            *call.src_handle = Some(sf);
             Ok(ChunkOutcome::Download)
         }
-        Err(e) => {
-            tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
-            Ok(ChunkOutcome::Download)
-        }
+        // A failed read leaves the slot empty, so the next chunk tries a fresh
+        // open once rather than holding on to a handle known to be unusable.
+        ReuseCopy::ReadFailed => Ok(ChunkOutcome::Download),
     }
+}
+
+/// How far the copy of a verified reuse slice got.
+enum ReuseCopy {
+    /// Every byte of the slice landed in the sink.
+    Complete,
+    /// The source ended before the slice did; the caller falls back to the
+    /// download with the handle still usable.
+    Truncated,
+    /// A read failed; the caller falls back to the download and drops the
+    /// handle so the next chunk opens the path once more.
+    ReadFailed,
+}
+
+/// Copy a verified reuse slice into the sink, one piece at a time.
+///
+/// Each piece is reserved before it lands, so the write ceiling is charged at
+/// the same granularity as the download sink.
+fn copy_reuse_pieces<R: Read, W: Write>(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    src: &mut R,
+    out: &mut W,
+    scratch: &mut Vec<u8>,
+    c: &SophonChunk,
+) -> Result<ReuseCopy> {
+    let mut remaining = c.uncompressed_size as u64;
+    let buf = scratch_slice(scratch, COPY_BUF);
+    while remaining > 0 {
+        let want = (remaining as usize).min(buf.len());
+        let n = match src.read(&mut buf[..want]) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::debug!(chunk = %c.id, "reuse slice unreadable ({e:#}) -> download");
+                return Ok(ReuseCopy::ReadFailed);
+            }
+        };
+        if n == 0 {
+            tracing::debug!(chunk = %c.id, "reuse slice truncated -> download");
+            return Ok(ReuseCopy::Truncated);
+        }
+        // The write ceiling counts *this* copy: it goes into `*_tmp` and
+        // appears in neither `download_bytes` nor the plan's estimate.
+        reserve_write(ctx, n as u64)?;
+        out.write_all(&buf[..n])?;
+        note_write(ctx, writes, n as u64)?;
+        remaining -= n as u64;
+    }
+    Ok(ReuseCopy::Complete)
 }
 
 /// The sink of a streamed chunk: the decoded bytes go straight into the
 /// target file, at the chunk's offset.
 ///
-/// **The write ceiling is charged per piece**, the way the reuse copy charges
-/// it (`copy_within`): a chunk is written piece by piece, so a ceiling that
-/// trips in the middle of a chunk stops the run in the middle of a chunk. The
-/// README already documents that a runtime hard stop leaves the work done in
-/// place, and the next run re-verifies and continues.
-struct ChunkFileSink<'a> {
+/// Both repair modes download through this sink: the temp path writes the
+/// `_tmp`, and the in-place path writes the target itself.
+///
+/// **The write ceiling is charged per piece**, the way each mode's reuse copy
+/// charges it: the temp path copies from a verified local slice in
+/// [`try_reuse_slice`], while the in-place path copies inside the file in
+/// [`copy_within`](super::copy_within). Both reserve every piece before it
+/// lands, so a chunk is written piece by piece and a ceiling that trips in the
+/// middle of a chunk stops the run in the middle of a chunk. The README
+/// already documents that a runtime hard stop leaves the work done in place,
+/// and the next run re-verifies and continues.
+struct ChunkFileSink<'a, W: Write + Seek> {
     ctx: &'a FileCtx,
-    file: &'a mut File,
+    file: &'a mut W,
     offset: u64,
     written: u64,
 }
 
-impl<'a> ChunkFileSink<'a> {
-    fn new(ctx: &'a FileCtx, file: &'a mut File, offset: u64) -> Self {
-        Self {
+impl<'a, W: Write + Seek> ChunkFileSink<'a, W> {
+    /// Position the file at the chunk's offset once. The sink then writes
+    /// sequentially: it holds the only `&mut W` for the stream, so no other
+    /// writer can move the cursor behind it.
+    fn new(ctx: &'a FileCtx, file: &'a mut W, offset: u64) -> std::io::Result<Self> {
+        file.seek(SeekFrom::Start(offset))?;
+        Ok(Self {
             ctx,
             file,
             offset,
             written: 0,
-        }
+        })
     }
 
     /// How many bytes have landed in the file.
@@ -361,17 +507,14 @@ impl<'a> ChunkFileSink<'a> {
     }
 }
 
-impl Write for ChunkFileSink<'_> {
+impl<W: Write + Seek> Write for ChunkFileSink<'_, W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         // The write ceiling counts this piece: it goes into the install, and
         // the ceiling counts what lands there.
         reserve_write(self.ctx, buf.len() as u64).map_err(std::io::Error::other)?;
-        // The seek is per piece, and it is deliberate: the sink is
-        // position-independent, so the caller cannot get it wrong by having
-        // left the file's cursor somewhere else. A syscall per 32 KB is
-        // nothing next to the decode.
-        self.file
-            .seek(SeekFrom::Start(self.offset + self.written))?;
+        // The cursor was placed at the chunk's offset in `new`, and this sink
+        // is the only writer for the stream, so the piece lands where the
+        // previous one ended. `restart` is what repositions it.
         self.file.write_all(buf)?;
         self.written += buf.len() as u64;
         Ok(buf.len())
@@ -382,7 +525,7 @@ impl Write for ChunkFileSink<'_> {
     }
 }
 
-impl sophon::ChunkSink for ChunkFileSink<'_> {
+impl<W: Write + Seek> sophon::ChunkSink for ChunkFileSink<'_, W> {
     fn restart(&mut self) -> std::io::Result<()> {
         // A retry starts the chunk over. The failed attempt's bytes are in the
         // file, and they are about to be overwritten by the same chunk's
@@ -391,6 +534,17 @@ impl sophon::ChunkSink for ChunkFileSink<'_> {
         self.file.seek(SeekFrom::Start(self.offset))?;
         Ok(())
     }
+}
+
+/// One chunk to download into a file: where it comes from, where its decoded
+/// bytes land, and the per-file counters the write updates.
+pub(super) struct DownloadedChunk<'a, W: Write + Seek> {
+    pub(super) ctx: &'a FileCtx,
+    pub(super) prefix: &'a str,
+    pub(super) c: &'a SophonChunk,
+    pub(super) out: &'a mut W,
+    pub(super) stats: &'a mut ChunkStats,
+    pub(super) writes: &'a mut FileWrites,
 }
 
 /// Download → zstd decode → digest → write at the chunk offset.
@@ -404,18 +558,21 @@ impl sophon::ChunkSink for ChunkFileSink<'_> {
 /// NOTE(starward-parity): Starward writes the decompressed chunk straight into
 /// the file and gates on the whole-file MD5; this is the same shape.
 /// See https://github.com/Scighost/Starward/blob/3e2da5ffecde252211edb74b850ee13d6b93f6dd/src/Starward.RPC/GameInstall/GameInstallHelper.cs#L374-L412
-pub(super) async fn write_downloaded_chunk(
-    ctx: &FileCtx,
-    prefix: &str,
-    c: &SophonChunk,
-    out: &mut File,
-    stats: &mut ChunkStats,
-    writes: &mut FileWrites,
+pub(super) async fn write_downloaded_chunk<W: Write + Seek>(
+    chunk: DownloadedChunk<'_, W>,
 ) -> Result<()> {
+    let DownloadedChunk {
+        ctx,
+        prefix,
+        c,
+        out,
+        stats,
+        writes,
+    } = chunk;
     // Reserve before fetching, not after: the pre-flight estimate is a *lower
     // bound* (a reuse slice whose MD5 fails falls back to a download), so this
     // compare-and-swap is what actually bounds the run. Reserving the manifest's
-    // `compressed_size` keeps the stop exact under `--io-threads N` instead of
+    // `compressed_size` keeps the stop exact under `--jobs N` instead of
     // overshooting by up to N-1 chunks, and the real byte count is folded back
     // in below so `SUMMARY download_bytes` stays the true figure.
     let reserved = c.compressed_size.max(0) as u64;
@@ -429,23 +586,30 @@ pub(super) async fn write_downloaded_chunk(
         anyhow::bail!("download-bytes ceiling reached before chunk {}", c.id);
     }
     let expected = c.uncompressed_size.max(0) as u64;
-    let mut sink = ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64);
+    // The seek is the only thing that can fail before the fetch starts. It
+    // happens after the reservation, so a failure refunds it: no byte crossed
+    // the wire, and a leaked reservation would count against the ceiling for
+    // the rest of the run.
+    let mut sink = match ChunkFileSink::new(ctx, &mut *out, c.offset.max(0) as u64) {
+        Ok(sink) => sink,
+        Err(e) => return Err(settle_seek_failure(ctx, reserved, &c.id, e)),
+    };
     // What the fetch really spent, across every attempt: the checks below run
     // after the stream ends, so on failure the bytes of the attempt that died
     // mid-body would otherwise be lost. They crossed the wire, and the
     // ceiling is a ceiling: a settle that pushes the live figure past it trips
     // the stop right there, even if this was the run's last chunk.
     let mut consumed = 0u64;
-    let digest = match sophon::stream_chunk_to(
-        &ctx.http,
-        ctx.sleep.as_ref(),
-        prefix,
-        &c.id,
+    let digest = match sophon::stream_chunk_to(sophon::ChunkFetch {
+        client: &ctx.http,
+        sleep: ctx.sleep.as_ref(),
+        url_prefix: prefix,
+        id: &c.id,
         expected,
-        reserved,
-        &mut consumed,
-        &mut sink,
-    )
+        max_compressed: reserved,
+        consumed: &mut consumed,
+        sink: &mut sink,
+    })
     .await
     {
         Ok(d) => d,
@@ -485,6 +649,23 @@ pub(super) async fn write_downloaded_chunk(
     note_write(ctx, writes, sink.written())?;
     stats.chunks_downloaded += 1;
     Ok(())
+}
+
+/// Settle a chunk whose sink could not be positioned, then report the seek
+/// failure.
+///
+/// The reservation is taken before the seek, so a failed seek must give it
+/// back whole: no byte crossed the wire, and a reservation left behind would
+/// count against the ceiling for the rest of the run. Keeping the refund and
+/// the error together is what makes that invariant hold on this path.
+fn settle_seek_failure(
+    ctx: &FileCtx,
+    reserved: u64,
+    chunk: &str,
+    error: std::io::Error,
+) -> anyhow::Error {
+    settle_reservation(ctx, reserved, 0);
+    anyhow::Error::new(error).context(format!("seek to chunk {chunk} offset"))
 }
 
 /// Fold the bytes a fetch really spent into the live download meter.
@@ -581,6 +762,247 @@ fn promote_tmp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use crate::config::RepairMode;
+    use crate::repair::phases::manifest::LocalChunkMap;
+    use crate::repair::phases::plan::RepairPlan;
+    use crate::report::Summary;
+    use crate::sleep::NoSleep;
+    use crate::sophon::{ChunkSink, ReuseEntry};
+    use crate::util::Md5;
+
+    /// A context with no network activity: the tests below only reach the
+    /// reuse/no-candidate branches, where nothing is fetched.
+    fn test_ctx() -> FileCtx {
+        FileCtx {
+            game_dir: std::path::PathBuf::new(),
+            root: None,
+            http: reqwest::Client::new(),
+            plan: Arc::new(RepairPlan::from_files("", Vec::new())),
+            local_map: Arc::new(LocalChunkMap::new()),
+            scan: None,
+            summary: Arc::new(Summary::new()),
+            dry_run: false,
+            repair_mode: RepairMode::Temp,
+            sleep: Arc::new(NoSleep),
+        }
+    }
+
+    fn chunk_at(id: &str, md5: &str, offset: i64, size: i64) -> SophonChunk {
+        SophonChunk {
+            id: id.into(),
+            uncompressed_md5: md5.into(),
+            offset,
+            compressed_size: size,
+            uncompressed_size: size,
+            unknown: 0,
+            compressed_md5: String::new(),
+        }
+    }
+
+    fn reuse_at(md5: &str, size: i64, offset: i64) -> FileReuse {
+        FileReuse::new(vec![ReuseEntry {
+            md5: Md5::parse_hex(md5).unwrap(),
+            size,
+            offset,
+        }])
+    }
+
+    fn temp_out(path: &std::path::Path) -> File {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .unwrap()
+    }
+
+    /// The per-file state a reuse test shares across its calls: one scratch
+    /// buffer, the lazily opened source handle, the tracked resume point, and
+    /// the write counter. Bundling it keeps each call down to the pieces the
+    /// test varies.
+    struct ReuseState<'a> {
+        ctx: &'a FileCtx,
+        scratch: Vec<u8>,
+        src_handle: Option<File>,
+        tmp_len: u64,
+        writes: FileWrites,
+    }
+
+    impl<'a> ReuseState<'a> {
+        fn new(ctx: &'a FileCtx) -> Self {
+            Self {
+                ctx,
+                scratch: Vec::new(),
+                src_handle: None,
+                tmp_len: 0,
+                writes: FileWrites::default(),
+            }
+        }
+
+        /// A call for `c` against `src` and `out`. The chunk's end is derived
+        /// from its offset and size, and there is no reuse entry until a test
+        /// adds one with [`ReuseCall::with_reuse`].
+        fn call<'b, W: Write + Seek>(
+            &'b mut self,
+            src: &'b std::path::Path,
+            c: &'b SophonChunk,
+            out: &'b mut W,
+        ) -> ReuseCall<'b, W> {
+            ReuseCall {
+                ctx: self.ctx,
+                src,
+                c,
+                end: chunk_end(c).expect("test chunk has a valid offset and size"),
+                reuse_entries: None,
+                out,
+                scratch: &mut self.scratch,
+                src_handle: &mut self.src_handle,
+                tmp_len: &mut self.tmp_len,
+                writes: &mut self.writes,
+            }
+        }
+    }
+
+    impl<'a, W: Write + Seek> ReuseCall<'a, W> {
+        /// Point the lookup at `entries`.
+        fn with_reuse(mut self, entries: &'a FileReuse) -> Self {
+            self.reuse_entries = Some(entries);
+            self
+        }
+    }
+
+    /// A sink that records every seek it is asked for, so a test can assert
+    /// that a path did not position the file instead of inferring it from the
+    /// final cursor value.
+    struct SeekRecording<'a> {
+        file: &'a mut File,
+        seeks: Vec<SeekFrom>,
+        write_calls: usize,
+        bytes: usize,
+    }
+
+    impl<'a> SeekRecording<'a> {
+        fn new(file: &'a mut File) -> Self {
+            Self {
+                file,
+                seeks: Vec::new(),
+                write_calls: 0,
+                bytes: 0,
+            }
+        }
+    }
+
+    impl Write for SeekRecording<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let n = self.file.write(buf)?;
+            self.write_calls += 1;
+            self.bytes += n;
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.file.flush()
+        }
+    }
+
+    impl Seek for SeekRecording<'_> {
+        fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks.push(pos);
+            self.file.seek(pos)
+        }
+    }
+
+    /// A reader that hands back exactly what the caller asked for, up to what
+    /// is left. The copy loop's piece boundaries then come from the loop
+    /// itself, not from how the OS chose to split a regular-file read.
+    struct ExactReads {
+        data: Vec<u8>,
+        pos: usize,
+        reads: usize,
+    }
+
+    impl ExactReads {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                pos: 0,
+                reads: 0,
+            }
+        }
+    }
+
+    impl Read for ExactReads {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            let n = buf.len().min(self.data.len() - self.pos);
+            buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    /// A reader that fails every read, standing in for an I/O error in the
+    /// middle of a reuse copy.
+    struct FailingReads;
+
+    impl Read for FailingReads {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("read failed"))
+        }
+    }
+
+    /// A sink that can be written but not positioned: every seek is refused,
+    /// the way a stream that cannot be rewound presents itself. It records
+    /// what the writer attempted, so a test can tell a refused seek from a
+    /// path that never ran.
+    ///
+    /// Each refused seek also records the live download figure it saw. That
+    /// pins the order: the figure after the failure is zero whether the chunk
+    /// was reserved and then refunded or never reserved at all, so only the
+    /// value *while the seek runs* tells the two apart.
+    struct RefusingSeek {
+        bytes: Vec<u8>,
+        seeks: usize,
+        summary: Arc<Summary>,
+        live_at_seek: Vec<u64>,
+    }
+
+    impl RefusingSeek {
+        /// Refuse every seek while watching `summary`'s download figure.
+        fn watching(summary: Arc<Summary>) -> Self {
+            Self {
+                bytes: Vec::new(),
+                seeks: 0,
+                summary,
+                live_at_seek: Vec::new(),
+            }
+        }
+    }
+
+    impl Write for RefusingSeek {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Seek for RefusingSeek {
+        fn seek(&mut self, _pos: SeekFrom) -> std::io::Result<u64> {
+            self.seeks += 1;
+            self.live_at_seek.push(self.summary.download.live());
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "seek refused",
+            ))
+        }
+    }
 
     /// A stat failure on the `_tmp` must name the stat and the path:
     /// `foo.dat_tmp` under a **regular file** is `ENOTDIR` on every platform,
@@ -596,6 +1018,7 @@ mod tests {
             rel: "game/foo.dat".into(),
             size: 64,
             md5: String::new(),
+            url_prefix: Arc::from(""),
             chunks: Vec::new(),
         };
 
@@ -642,6 +1065,484 @@ mod tests {
         assert!(
             chain.contains(&tmp.display().to_string()) && chain.contains("rolling the tmp back"),
             "the rollback failure must be attached with the path: {chain}"
+        );
+    }
+
+    /// The recorder's byte count is the bytes that landed, not the writes that
+    /// carried them: a chunk larger than one copy piece is written in two
+    /// pieces, and the count is still the chunk's size.
+    #[test]
+    fn a_reused_slice_is_counted_by_the_bytes_it_writes() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_bytes");
+        let src = dir.join("source.bin");
+        let size = COPY_BUF + 4;
+        let source: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&src, &source).unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 0, size as u64).unwrap();
+        let reuse = reuse_at(&md5, size as i64, 0);
+        let c = chunk_at("c0", &md5, 0, size as i64);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert!(
+            out.write_calls >= 2,
+            "a chunk larger than one copy piece takes more than one write"
+        );
+        assert_eq!(
+            out.bytes, size,
+            "the count is the bytes written, not the number of writes"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), source);
+    }
+
+    /// The copy loop asks for one piece at a time and writes each piece it
+    /// reads. This source returns exactly the requested length, so the pieces
+    /// come from the loop's `COPY_BUF` boundary rather than from how a
+    /// regular-file read happened to split.
+    #[test]
+    fn a_reuse_copy_writes_one_piece_per_read() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_pieces");
+        let size = COPY_BUF + 4;
+        let source: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let mut src = ExactReads::new(source.clone());
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let c = chunk_at("c0", "", 0, size as i64);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+
+        let copied =
+            copy_reuse_pieces(&ctx, &mut writes, &mut src, &mut out, &mut scratch, &c).unwrap();
+
+        assert!(
+            matches!(copied, ReuseCopy::Complete),
+            "the whole slice is available"
+        );
+        assert_eq!(
+            src.reads, 2,
+            "the loop asks for COPY_BUF and then the remainder"
+        );
+        assert_eq!(out.write_calls, 2, "one write per read piece");
+        assert_eq!(
+            out.bytes, size,
+            "the count is the bytes written, not the number of writes"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), source);
+    }
+
+    /// A read error and a short slice both send the chunk to the download, but
+    /// only the short slice leaves a handle the caller can keep. The copy
+    /// helper reports them apart so the caller can drop a handle whose read
+    /// failed.
+    #[test]
+    fn a_reuse_copy_tells_a_read_error_from_a_short_slice() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_copy_errors");
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let c = chunk_at("c0", "", 0, 4);
+        let ctx = test_ctx();
+        let mut scratch = Vec::new();
+        let mut writes = FileWrites::default();
+
+        let mut failing = FailingReads;
+        let failed =
+            copy_reuse_pieces(&ctx, &mut writes, &mut failing, &mut out, &mut scratch, &c).unwrap();
+        assert!(matches!(failed, ReuseCopy::ReadFailed));
+
+        let mut short = ExactReads::new(vec![0; 2]);
+        let truncated =
+            copy_reuse_pieces(&ctx, &mut writes, &mut short, &mut out, &mut scratch, &c).unwrap();
+        assert!(matches!(truncated, ReuseCopy::Truncated));
+    }
+
+    /// The source is one file for the whole attempt: the first reuse opens it,
+    /// and later chunks are served from the same handle. Removing the path is
+    /// allowed to fail while the handle is open; either way the bytes come out
+    /// the same.
+    #[test]
+    fn a_held_source_handle_serves_later_chunks() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_handle");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 8, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 8);
+        let tmp_path = dir.join("out.bin");
+        let mut out = temp_out(&tmp_path);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+
+        let first = chunk_at("c0", &md5, 0, 4);
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &first, &mut out).with_reuse(&reuse)).unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert!(
+            state.src_handle.is_some(),
+            "the first reuse keeps the source handle"
+        );
+
+        // The removal is allowed to fail on a platform that will not unlink an
+        // open file; the held handle is what the next chunk must use either way.
+        let _ = std::fs::remove_file(&src);
+        let second = chunk_at("c1", &md5, 4, 4);
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &second, &mut out).with_reuse(&reuse)).unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Reused),
+            "the held handle serves the later chunk"
+        );
+        out.flush().unwrap();
+        assert_eq!(std::fs::read(&tmp_path).unwrap(), b"89ab89ab");
+    }
+
+    /// A read error while hashing the held source drops the handle, the same
+    /// way one during the copy does: the chunk falls back to the download and
+    /// the next chunk opens the readable path again instead of trusting a
+    /// handle whose read already failed.
+    ///
+    /// The fault is a handle opened without read access: it seeks fine and
+    /// refuses every read, which is a deterministic read error on a regular
+    /// file on every host. The digest-mismatch case keeps the handle; this one
+    /// must not.
+    #[test]
+    fn a_read_error_on_the_held_source_drops_it() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_read_error");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        let md5 = util::md5::md5_file_slice(&src, 0, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 0);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+        state.src_handle = Some(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&src)
+                .expect("the source exists"),
+        );
+        let first = chunk_at("c0", &md5, 0, 4);
+
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &first, &mut out).with_reuse(&reuse)).unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            state.src_handle.is_none(),
+            "a failed read leaves no handle for the next chunk"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the read fails before the download path positions the sink"
+        );
+        assert_eq!(out.bytes, 0, "a failed read must not write to the sink");
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "a failed read must not leave bytes behind in the sink"
+        );
+
+        // The dropped handle costs one open, not the file's reuse: the next
+        // chunk takes the same readable path and copies from it.
+        let second = chunk_at("c1", &md5, 4, 4);
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &second, &mut out).with_reuse(&reuse)).unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Reused));
+        assert!(
+            state.src_handle.is_some(),
+            "the reopened handle is kept for later chunks"
+        );
+        out.flush().unwrap();
+        let written = std::fs::read(&out_path).unwrap();
+        assert_eq!(written.len(), 8);
+        assert_eq!(&written[4..], b"0123");
+    }
+
+    /// A source that cannot be opened is not a file failure: the chunk is
+    /// downloaded, and the empty slot lets the next chunk try a fresh open.
+    #[test]
+    fn a_missing_reuse_source_falls_back_to_download() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_missing");
+        let src = dir.join("never-written.bin");
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let reuse = reuse_at(md5, 4, 8);
+        let c = chunk_at("c0", md5, 4, 4);
+        let mut file = temp_out(&dir.join("out.bin"));
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            state.src_handle.is_none(),
+            "a failed open leaves no handle behind"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the download path must not position the sink; the streaming sink places it"
+        );
+        assert_eq!(
+            out.bytes, 0,
+            "the download path must not write into the sink"
+        );
+    }
+
+    /// A chunk with no local reuse candidate is downloaded, and the failed
+    /// lookup must not touch the sink: the download path builds its own
+    /// streaming sink, which positions the file when it starts.
+    #[test]
+    fn a_chunk_with_no_reuse_candidate_falls_back_without_touching_the_sink() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_none");
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        // An entry for a different chunk identity: the lookup finds nothing.
+        let reuse = reuse_at("00000000000000000000000000000000", 4, 0);
+        let c = chunk_at("c0", md5, 0, 4);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+
+        let outcome = try_reuse_slice(
+            &mut state
+                .call(&dir.join("never-written.bin"), &c, &mut out)
+                .with_reuse(&reuse),
+        )
+        .unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            state.src_handle.is_none(),
+            "there is no source to hold open"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the download path must not position the sink for a missing candidate"
+        );
+        assert_eq!(
+            out.bytes, 0,
+            "the download path must not write into the sink"
+        );
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "nothing may land in the sink before the download starts"
+        );
+    }
+
+    /// A reuse candidate whose local slice does not hash to the chunk's digest
+    /// is downloaded. The mismatch is found before the sink is positioned, so
+    /// the sink must not move or receive bytes — and the verified handle is
+    /// kept for the next chunk, since the file itself is readable.
+    #[test]
+    fn a_reuse_slice_digest_mismatch_falls_back_without_touching_the_sink() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "reuse_mismatch");
+        let src = dir.join("source.bin");
+        std::fs::write(&src, b"0123456789abcdef").unwrap();
+        // The chunk claims the first slice's digest, but the candidate points
+        // at the fourth slice, which hashes differently.
+        let md5 = util::md5::md5_file_slice(&src, 0, 4).unwrap();
+        let reuse = reuse_at(&md5, 4, 8);
+        let c = chunk_at("c0", &md5, 0, 4);
+        let out_path = dir.join("out.bin");
+        let mut file = temp_out(&out_path);
+        let mut out = SeekRecording::new(&mut file);
+        let ctx = test_ctx();
+        let mut state = ReuseState::new(&ctx);
+
+        let outcome =
+            try_reuse_slice(&mut state.call(&src, &c, &mut out).with_reuse(&reuse)).unwrap();
+
+        assert!(matches!(outcome, ChunkOutcome::Download));
+        assert!(
+            state.src_handle.is_some(),
+            "a readable source stays open for the next chunk when only the slice digest failed"
+        );
+        assert!(
+            out.seeks.is_empty(),
+            "the mismatch must be found before the sink is positioned"
+        );
+        assert_eq!(out.bytes, 0, "a mismatching slice must not be written");
+        assert_eq!(
+            std::fs::metadata(&out_path).unwrap().len(),
+            0,
+            "nothing may land in the sink when the slice does not verify"
+        );
+    }
+
+    /// Resume-by-length reads the tracked counter, so a chunk the failed
+    /// download rolled back out of the `_tmp` must be downloaded again rather
+    /// than kept as complete.
+    #[test]
+    fn a_rollback_moves_the_resume_point_back_to_the_failed_chunk() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "rollback_resume");
+        let tmp = dir.join("foo.dat_tmp");
+        std::fs::write(&tmp, b"01234567").unwrap();
+        let mut out = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&tmp)
+            .unwrap();
+        let ctx = test_ctx();
+        let md5 = "d41d8cd98f00b204e9800998ecf8427e";
+        let c = chunk_at("c1", md5, 4, 4);
+        let missing = dir.join("never-written.bin");
+        let mut state = ReuseState::new(&ctx);
+        state.tmp_len = 8;
+
+        let outcome = try_reuse_slice(&mut state.call(&missing, &c, &mut out)).unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Resumed),
+            "the chunk's end is inside the tmp"
+        );
+
+        // The rollback and the tracked resume point move together; the update
+        // is the caller's, not a value the test sets by hand.
+        rollback_failed_chunk(&mut out, &tmp, &c, &mut state.tmp_len).unwrap();
+        assert_eq!(state.tmp_len, 4, "the tracked point follows the truncation");
+        let outcome = try_reuse_slice(&mut state.call(&missing, &c, &mut out)).unwrap();
+        assert!(
+            matches!(outcome, ChunkOutcome::Download),
+            "the rolled-back chunk must not be resumed"
+        );
+        assert_eq!(std::fs::metadata(&tmp).unwrap().len(), 4);
+    }
+
+    /// The seek is the only failure between the download reservation and the
+    /// fetch, so it must give the whole reservation back: no byte crossed the
+    /// wire. The seam is the production helper, driven with a synthetic seek
+    /// error instead of a file whose cursor cannot move.
+    #[test]
+    fn a_sink_that_cannot_be_positioned_refunds_its_reservation() {
+        let mut summary = Summary::new();
+        summary.set_download_limit(Some(1_000));
+        let mut ctx = test_ctx();
+        ctx.summary = Arc::new(summary);
+        assert!(ctx.summary.reserve_download_bytes(400));
+        assert_eq!(ctx.summary.download.live(), 400);
+
+        let err = settle_seek_failure(
+            &ctx,
+            400,
+            "c7",
+            std::io::Error::new(std::io::ErrorKind::Unsupported, "seek refused"),
+        );
+
+        assert_eq!(
+            ctx.summary.download.live(),
+            0,
+            "no byte crossed the wire, so the whole reservation comes back"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("seek to chunk c7 offset") && chain.contains("seek refused"),
+            "the seek failure is still named with its chunk: {chain}"
+        );
+    }
+
+    /// The whole download path over a sink that refuses to be positioned: the
+    /// reservation is taken, the seek fails, and no byte is fetched, written,
+    /// or left reserved. The sink reads the ledger at seek time, so the test
+    /// asserts the reservation was live *before* the seek and gone after it —
+    /// a final figure of zero alone would also fit a path that never reserved.
+    /// The seek failure is named with its chunk.
+    #[tokio::test]
+    async fn a_download_into_an_unseekable_sink_refunds_and_writes_nothing() {
+        let mut summary = Summary::new();
+        summary.set_download_limit(Some(1_000));
+        let mut ctx = test_ctx();
+        ctx.summary = Arc::new(summary);
+        let c = chunk_at("c9", "d41d8cd98f00b204e9800998ecf8427e", 8, 16);
+        let mut out = RefusingSeek::watching(Arc::clone(&ctx.summary));
+        let mut stats = ChunkStats::default();
+        let mut writes = FileWrites::default();
+
+        let err = write_downloaded_chunk(DownloadedChunk {
+            ctx: &ctx,
+            prefix: "",
+            c: &c,
+            out: &mut out,
+            stats: &mut stats,
+            writes: &mut writes,
+        })
+        .await
+        .expect_err("the sink refuses to be positioned");
+
+        assert_eq!(out.seeks, 1, "the writer asks to position the sink once");
+        assert_eq!(
+            out.live_at_seek,
+            vec![c.compressed_size as u64],
+            "the chunk's reservation is live before the seek is attempted"
+        );
+        assert!(
+            out.bytes.is_empty(),
+            "no byte may be written after the seek fails"
+        );
+        assert_eq!(
+            ctx.summary.download.live(),
+            0,
+            "the reservation is given back after the seek fails, with no byte fetched"
+        );
+        assert_eq!(stats.chunks_downloaded, 0);
+        assert_eq!(stats.download_bytes, 0);
+        assert_eq!(writes.settled, 0);
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("seek to chunk c9 offset") && chain.contains("seek refused"),
+            "the seek failure is still named with its chunk: {chain}"
+        );
+    }
+
+    /// The sink positions the file once and then writes sequentially: two
+    /// pieces land at `offset..offset+len`, and `written` reports their total.
+    /// A retry restarts the chunk at its offset instead of appending to what
+    /// the failed attempt left behind.
+    #[test]
+    fn the_sink_writes_from_its_offset_and_restarts_over_it() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp", "sink_offset");
+        let path = dir.join("out.bin");
+        std::fs::write(&path, b"0123456789abcdef").unwrap();
+        let mut out = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let ctx = test_ctx();
+
+        let mut sink = ChunkFileSink::new(&ctx, &mut out, 4).expect("seek to the chunk offset");
+        sink.write_all(b"ab").unwrap();
+        sink.write_all(b"cd").unwrap();
+        assert_eq!(sink.written(), 4, "the count is the bytes that landed");
+        sink.flush().unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"0123abcd89abcdef",
+            "the two pieces are contiguous from the chunk offset"
+        );
+
+        sink.restart().unwrap();
+        assert_eq!(sink.written(), 0, "a retry starts the chunk over");
+        sink.write_all(b"XY").unwrap();
+        assert_eq!(sink.written(), 2);
+        sink.flush().unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"0123XYcd89abcdef",
+            "the retry overwrites from the offset rather than appending"
         );
     }
 }

@@ -27,8 +27,8 @@ default when omitted: keep currently selected, else `en-us`, see Step 1). `--aud
 matched case-insensitively, `_` is accepted for `-`, and the display names `chinese` /
 `english` / `english(us)` / `japanese` / `korean` are aliases; anything else is a usage error
 (exit 1), as is mixing `none` with a language. Unknown flags, missing/duplicate-incompatible
-values and `io_threads = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
-`io_threads ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
+values and `jobs = 0` are also exit 1 (clap-level errors included); `--help` is exit 0.
+`jobs ≥ 1` (default 4; HDD → 1–2, SSD → 4–8), flags `--purge-before`, `--purge-after`,
 `--check-only`, `--dry-run`.
 Outputs: game at latest version; `config.ini:game_version=<latest>`; exit `0` ok,
 `1` usage/config error, `2` metadata/network error (including a malformed manifest
@@ -97,8 +97,9 @@ failures are the exception: they continue across files and return `Ok(summary, 3
    the calls above — API-sourced, not from config). Under `--output json` this is
    a JSON object instead.
  6. `GET getGameDeprecatedFileConfigs?...&channel=&sub_channel=` → deprecated file names
-   list. This is the lazy call: fetched best-effort during the post-phase (Step 8), never in
-   `--check-only`/`--dry-run`; a failure only warns. `channel`/`sub_channel` are the
+   list. This call is fetched best-effort during the plan phase, never in
+   `--check-only`/`--print-plan`, and in `--dry-run` only because the post-phase (Step 7)
+   lists the deletes it would make; a failure only warns. `channel`/`sub_channel` are the
    **per-launcher** pair (cn `1/1`, global `1/0`, bili `14/0`, i.e. `LauncherConfig.Channel` /
    `.SubChannel`) — the list is filtered by them, so sending the global pair for cn/bilibili
    returns the wrong set. It is the only one of the three APIs that carries them.
@@ -152,10 +153,12 @@ Optional `--purge-before` (Collapse `GenshinInstall.GetUnusedFileInfoList` parit
 §Step-7 cleanup *now* — after the plan exists, before any repair — to free space
 for the repair itself. Same file set as `--purge-after`; only the timing differs.
 Counts to `deleted_extra_bytes`; `--dry-run` only logs; skipped entirely in
-`--check-only` (verification must not delete).
+`--check-only` (verification must not delete). In `--dry-run` the two purge
+passes share their listing: because nothing was deleted, the after pass names
+only candidates the before pass did not, so each candidate is reported once.
 
 ### Step 6 — Repair files (bounded parallelism, resume-safe, idempotent)
-Concurrency: semaphore of `io_threads` over **files**; chunks within a file strictly sequential
+Concurrency: semaphore of `jobs` over **files**; chunks within a file strictly sequential
 (HDD-friendly). Retries: 5× per file.
 
 Two ways to write a file, chosen per file by `--repair-mode` (default `auto`):
@@ -214,7 +217,7 @@ Per file `F`:
    | mixed re-flow | some | some | the sum over those chunks |
 
    So the common repair case stages **nothing**. The budget is **run-level**, reserved per
-   file the way `--max-write-bytes` reserves, because `io_threads` files are in flight at
+   file the way `--max-write-bytes` reserves, because `jobs` files are in flight at
    once. A file that cannot get its reservation does not fail: it is written in the ordered
    direction instead, which produces the same file with less reuse.
 3. **Patch** — the wrong chunks are written, ascending in the RAM-staged tier and in the
@@ -227,12 +230,13 @@ Per file `F`:
    the attempt and retries the whole file (up to 5×).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
-5. **Verify** — one more read: `if md5==F.md5` the file is good, and the structured `repaired`
-   event is logged (`chunks_total`/`chunks_reused`/`chunks_downloaded`/`chunks_kept`,
-   `download_bytes`, `final_md5`). Else the per-chunk verdicts name the culprit and only
-   those are redone; if they still do not match, the file is counted as failed and the run
-   continues — after all files, `Ok(summary, 3)` (skips the post-phase so `config.ini` is
-   not bumped while damaged) — not `Err(RunFailure::write)`.
+5. **Verify** — one read answers the gate: the whole-file digest. `if md5==F.md5` the file is
+   good, and the structured `repaired` event is logged (`chunks_total`/`chunks_reused`/
+   `chunks_downloaded`/`chunks_kept`, `download_bytes`, `final_md5`). Else a second read
+   supplies the per-chunk verdicts that name the culprit, and only those are redone; if they
+   still do not match, the file is counted as failed and the run continues — after all files,
+   `Ok(summary, 3)` (skips the post-phase so `config.ini` is not bumped while damaged) — not
+   `Err(RunFailure::write)`.
 6. A target that cannot be opened for writing is written the temp way, loudly: write
    `{path}_tmp` (kept, not truncated), work only on chunks with
    `offset+uncompressed_size > have` (the already-complete prefix is kept; the final
@@ -354,10 +358,11 @@ optimization).
 `GenshinInstall.GetUnusedFileInfoList` parity, v1 scope: expected set is
 `{latest Sophon manifest paths}` only, no SDK/WPF/dispatcher union):
 1. Build expected set = `{latest manifest paths}` ∪ `{config.ini}` ∪
-   `{the single-writer lock}` ∪ `{blacklisted paths}`. `config.ini` and the
-   single-writer lock are the only metadata keeps: neither appears in a chunk
-   manifest, and `config.ini` lives inside `game_dir` but the tool rewrites it
-   after patching. The exe needs no keep (the game flags unknown
+   `{the legacy in-install girpr.lock}` ∪ `{blacklisted paths}`. `config.ini`
+   and the legacy lock are the only metadata keeps: neither appears in a chunk
+   manifest. The run's own lock lives outside `game_dir`, so only a leftover
+   from an older run is kept. `config.ini` lives inside `game_dir` and the tool
+   rewrites it after patching. The exe needs no keep (the game flags unknown
    exes in the folder, so the tool binary must live elsewhere). `audio_lang_*`
    + `Audio_*_pkg_version` are kept by filename pattern (Collapse
    `GenshinInstall.cs:232-241`); everything else not in the manifest purges —
@@ -368,10 +373,24 @@ optimization).
    set, then remove emptied dirs (dir sweep runs whenever a purge runs with writes
    enabled, i.e. both `--purge-before` and `--purge-after`; skipped in `--dry-run`).
    `--dry-run` only logs candidates + bytes and leaves `deleted_extra_bytes` at 0 by design.
+   Its final `purge dry-run: N bytes would be freed` line is per pass and is
+   emitted even when `N = 0`, so a pass that ran and found nothing stays
+   distinguishable from one that was skipped or deduplicated.
+   When the before pass already ran in the same dry run, this pass lists only the
+   candidates the before pass did not name.
    Counts to the single `deleted_extra_bytes` counter (shared with deprecated-file
    deletes above). `--purge-before` runs
    this same cleanup at Step 5. Manifests are never cached inside `game_dir`; the only
    in-`game_dir` transient is the atomic `config.ini.girpr_tmp` used by the `config.ini` bump.
+   An in-install `--plan-out` document is an ordinary unexpected file: the
+   `--purge-after`/`--purge-only` re-plan runs after it is written and deletes
+   it. `--purge-before` acts on the cleanup plan built before the document
+   exists, so it leaves the document in place. That order is deliberate: the
+   cleanup plan is part of the pre-flight decision, so every candidate is known
+   before the first write and the delete ceilings are asserted against exactly
+   that set. Publishing the document first would add a file the run created to
+   the delete set after the ceilings had been checked. Write it outside
+   `game_dir` when combining it with `--purge-after`/`--purge-only`.
 
 ### Step 8 — Report
 Log + stdout summary: `{files_total, files_skipped, files_repaired, files_failed,
@@ -382,13 +401,14 @@ are already right where they belong, the temp path resumes the `*_tmp` prefix).
 
 ## 3. Disk-usage argument (why minimal)
 
-- Pre/post files-cleanup bounds "before/after" to exactly the live file set + `config.ini`.
+- Pre/post files-cleanup bounds "before/after" to exactly the live file set plus
+  the metadata keeps (`config.ini` and a legacy in-install lock) and the blacklist.
 - During: transient per active file = the file's **growth** under the in-place path
   (`≤ 1 × file size` under `--repair-mode temp`, where the `_tmp` grows beside the old
   file) plus pipe buffers; no `chunk_collapse/` blob store, no `ldiff/` store, no zip
-  staging, no in-game manifest cache. Peak ≈ `io_threads × largest growth`, which is 0
+  staging, no in-game manifest cache. Peak ≈ `jobs × largest growth`, which is 0
   for a same-size repair. Under `--repair-mode temp` the peak is
-  `io_threads × largest_file`, and with `io_threads=1` the tool needs only
+  `jobs × largest_file`, and with `jobs=1` the tool needs only
   `max_file_size` free bytes beyond the game (vs 2× game for zip-based installers).
 - Network-optimal without extra disk: unchanged files skipped (0 bytes), changed files fetch only
   missing chunks (dedup via local manifest), reused slices copied locally (no download, no extra file).
@@ -435,7 +455,7 @@ bytes were kept, and the run would report touching fewer bytes than it had.
 | Power loss mid-repair | the whole-file MD5 fails on the next run, which re-verifies and continues |
 | The volume fills while a file grows | the file fails, is counted, retried and reported; `--repair-mode temp` is the mode for a volume with no room for the growth |
 | A read-only attribute on a game file | cleared before the write, the way the launcher does it |
-| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 1) by name and by pid |
+| Two `girpr` runs against one install | the single-writer lock refuses the second one (exit 1) by name, and by pid when the body is readable (an exclusive lock can hide it on Windows) |
 
 ## 5. What was deliberately excluded (and when to add)
 

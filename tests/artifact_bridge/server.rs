@@ -249,9 +249,15 @@ struct ManifestEntry {
     field: String,
     tag: String,
     build_id: String,
-    /// `manifests/<tag>/<field>.manifest.zst`, if the bundle carries it. A
-    /// `getBuild` body declares five manifests and the bundle stores two, so
-    /// this is `None` more often than not — and that is the `404` a
+    /// `manifests/<tag>/<field>.manifest.zst`, if the bundle carries it.
+    ///
+    /// Three counts, three different things: one `getBuild` body **declares
+    /// five** manifest entries (`game` plus four audio languages), the bundle
+    /// stores the **two** the capture kept (`game` and `en-us`) per tag, and
+    /// a run **selects two** of them per build — so it fetches **four**
+    /// archives per run, the latest build's two and the local build's two.
+    ///
+    /// So this is `None` more often than not — and that is the `404` a
     /// `--audio` widening would hit (`docs/06` §4.5).
     archive: Option<PathBuf>,
 }
@@ -404,9 +410,13 @@ impl Bridge {
     /// whether the bundle actually carries that field's archive.
     ///
     /// The last element is the `docs/06` §4.5 fact stated as data: a `getBuild`
-    /// body declares five manifests and the bundle stores two, so three ids
-    /// resolve to an archive that does not exist — and that is exactly what a
-    /// widened `--audio` would ask for.
+    /// body declares five manifest entries and the bundle stores two of them,
+    /// so three of that body's five ids resolve to an archive that does not
+    /// exist — and that is exactly what a widened `--audio` would ask for.
+    ///
+    /// Those are the *bundle's* counts, not a run's: a run selects two of the
+    /// five per build (`game` and `en-us`) and fetches **four** archives per
+    /// run, the latest build's two and the local build's two.
     pub fn manifest_resolution(&self, id: &str) -> Option<(String, String, String, bool)> {
         self.served.manifest_index.get(id).map(|e| {
             (
@@ -492,10 +502,11 @@ impl Served {
                     id.clone(),
                     ManifestEntry {
                         id,
-                        // A `getBuild` body declares five manifests and the
-                        // bundle stores the two the capture kept, so `archive`
-                        // is `None` more often than not. That is the `404` a
-                        // widened `--audio` hits (`docs/06` §4.5).
+                        // One `getBuild` body declares five manifest entries
+                        // and the bundle stores the two the capture kept
+                        // (`game` and `en-us`), so `archive` is `None` for
+                        // three of the five. That is the `404` a widened
+                        // `--audio` hits (`docs/06` §4.5).
                         archive: bundle.manifest_archive(tag, &field),
                         field,
                         tag: tag.to_string(),
@@ -686,7 +697,7 @@ fn xml_escape(s: &str) -> String {
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    format!("{:x}", md5::compute(key.as_bytes()))
+    super::digest::md5hex(key.as_bytes())
         .to_uppercase()
         .chars()
         .take(24)
@@ -730,14 +741,28 @@ fn last_two(path: &str) -> Option<(String, String)> {
 // served-manifest bytes cache (`docs/06` §4.6)
 // ---------------------------------------------------------------------------
 
-/// Manifest archives are immutable per bundle and ~40 MB of a ~130 MB bundle,
-/// so every run re-reading them is ~320 MB across eight runs for nothing.
+/// Manifest archives are immutable per bundle, and the four a run fetches —
+/// `game` and `en-us` for the latest build and for the local build — are
+/// ~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB,
+/// but the rest of it is the `.manifest.json.gz` copies and the `.meta.json` /
+/// `.paths.tsv` sidecars, which the server never serves: the cache holds the
+/// archives and nothing else. So re-reading them is ≈228 MiB across the
+/// suite's twelve `girpr` runs — six cases, each a `--print-plan` pre-pass and
+/// a real run — for nothing.
 ///
-/// The cache is **outside the listeners and shared by all of them** — including
-/// across the eight per-capture bridges — because it holds bytes that are a
-/// function of the bundle alone, so nothing about per-capture isolation
-/// (`docs/06` §6.2) is lost by sharing it, and every capture pays the disk read
-/// once instead of eight times.
+/// The cache is **outside the listeners and process-global within one test
+/// binary** — one static per binary, not per bridge and not per capture. Both
+/// `tests/artifact_bridge.rs` and `tests/artifact_server.rs` compile this
+/// module, so each binary has its own static and the two never share one.
+/// Within the bridge binary, `cargo test` runs the six per-capture bridges in
+/// one process, so they share the cache; under `cargo nextest` every case gets
+/// a process of its own, so there the cache is per case. Sharing it is safe
+/// either way, because it holds bytes that are a function of the bundle alone:
+/// nothing about per-capture isolation (`docs/06` §6.2) is lost by sharing it.
+///
+/// What the cache saves is the **read**, not the request: each of the four
+/// archives is read from disk once per process instead of once per request,
+/// and every run asks for all four.
 static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 
 fn manifest_bytes(path: &Path) -> Arc<Vec<u8>> {

@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use crate::effective::EffRec;
 use crate::hash::{AlgoSet, DigestSet};
 use crate::planner::{CasePairing, Required, StatTrust};
+use crate::util::path_key;
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -141,14 +142,14 @@ pub fn pair_verdict(
     let trusted = stat.trusted_differs(s.size, s.mtime_ns, t.size, t.mtime_ns);
     if trusted.any() {
         let mut fields = trusted.fields();
-        // `trusted.any()` guarantees at least one field, and `fields()` yields size
-        // first — so the first is the one that settles the pair and `both` says
-        // whether the other does too.
-        let field = fields.next().expect("trusted.any() implies one field");
-        return Verdict::Stat {
-            field,
-            both: fields.next().is_some(),
-        };
+        // `trusted.any()` guarantees at least one field; the `if let` keeps a
+        // disagreement between the two predicates from becoming a panic.
+        if let Some(field) = fields.next() {
+            return Verdict::Stat {
+                field,
+                both: fields.next().is_some(),
+            };
+        }
     }
     let need = required.of(key);
     let differs = hashes_differ(&s.hashes, &t.hashes, need);
@@ -298,11 +299,11 @@ pub fn diff_maps(
         // well defined.
         let mut slow: HashMap<String, &String> = HashMap::new();
         for k in src.keys() {
-            slow.insert(k.to_lowercase(), k);
+            slow.insert(path_key(k), k);
         }
         let mut dlow: HashMap<String, &String> = HashMap::new();
         for k in dst.keys() {
-            dlow.insert(k.to_lowercase(), k);
+            dlow.insert(path_key(k), k);
         }
         let classify = |lk: &str, d: &mut Diff| match (slow.get(lk), dlow.get(lk)) {
             (Some(srel), None) => d.missing.push((*srel).clone()),
@@ -477,6 +478,40 @@ mod tests {
             4,
             "the case-only pair is counted once, not twice"
         );
+    }
+
+    /// The lowercase key folds ASCII case only, so a non-ASCII case variant is a
+    /// different path: each spelling is missing on one side and extra on the
+    /// other, never a `CASE-MISMATCH`. The byte-identical non-ASCII path still
+    /// pairs and compares equal, which is what tells "outside the fold" apart
+    /// from "never paired at all".
+    #[test]
+    fn a_non_ascii_case_variant_is_not_a_case_only_pair() {
+        let src = side(vec![
+            ("Ärger.txt", file(10, 100)),
+            ("Привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let dst = side(vec![
+            ("ärger.txt", file(10, 100)),
+            ("привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let d = run(&src, &dst, false, true);
+        assert_eq!(
+            d.missing,
+            vec!["Ärger.txt".to_string(), "Привет.txt".to_string()]
+        );
+        assert_eq!(
+            d.extra,
+            vec!["ärger.txt".to_string(), "привет.txt".to_string()]
+        );
+        assert!(
+            d.case_mismatch.is_empty(),
+            "the filesystem keeps these spellings apart, so there is no casing difference"
+        );
+        assert_eq!(d.identical, vec!["café.txt".to_string()]);
+        assert_eq!(d.total(), 4);
     }
 
     /// The join is over *keys*, so a src-only path absent from dst must still be

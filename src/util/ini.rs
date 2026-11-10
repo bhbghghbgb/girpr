@@ -1,12 +1,10 @@
 use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
-use std::fs::File;
-use std::io::Write;
 use std::path::Path;
-use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 
+use super::atomic::write_atomic;
 use super::path::clean_rel;
 
 /// Parse `config.ini` last `game_version=` match.
@@ -26,25 +24,36 @@ pub fn read_game_version(game_dir: &Path) -> anyhow::Result<Option<String>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e).with_context(|| format!("read {}", p.display())),
     };
-    Ok(game_version_re()
-        .captures_iter(&text)
-        .last()
-        .map(|c| c[1].trim().to_string()))
+    Ok(text.lines().filter_map(game_version_line).next_back())
 }
 
-/// The `game_version` line pattern, compiled once per process.
+/// The value of one `game_version` line, if it has the documented shape.
 ///
-/// The pattern is a literal, so parsing it once is enough; it is called per run
-/// in production but often in tests. Semantics are fixed: `^` anchors at the
-/// line start (no leading whitespace before `game_version`), `\s*` around `=`,
-/// at least one character of value, trailing whitespace trimmed, and the caller
-/// takes the **last** match.
-fn game_version_re() -> &'static regex::Regex {
-    static GAME_VERSION: OnceLock<regex::Regex> = OnceLock::new();
-    GAME_VERSION.get_or_init(|| {
-        regex::Regex::new(r"(?m)^game_version\s*=\s*(.+?)\s*$")
-            .expect("the game_version pattern is a literal")
-    })
+/// The key must start the line exactly (no leading whitespace) and be exactly
+/// `game_version`; optional whitespace may surround the first `=`, and the
+/// value is everything after it, trimmed of surrounding whitespace. A later
+/// `=` stays in the value. A line with nothing after `=` is not a match; the
+/// caller keeps the **last** match.
+fn game_version_line(line: &str) -> Option<String> {
+    let (key, rest) = split_first_eq(line)?;
+    if key.trim_end() != "game_version" {
+        return None;
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.trim().to_string())
+}
+
+/// Split an INI line at its **first** `=`.
+///
+/// This is the single spelling of the shared boundary rule: both the config
+/// loader and the `game_version` scan treat the first `=` as the key/value
+/// boundary, so a later `=` belongs to the value. Only that boundary is shared;
+/// the callers keep their own key anchoring, trimming and empty-value rules,
+/// which deliberately differ.
+fn split_first_eq(line: &str) -> Option<(&str, &str)> {
+    line.split_once('=')
 }
 
 /// Read res_category ignore file: JSON-lines {"category":"...","is_delete":true}.
@@ -225,7 +234,68 @@ fn test_no_fsync() -> bool {
     })
 }
 
+/// The refusal for a game dir that cannot hold `config.ini`.
+///
+/// A missing path, a path that exists as something other than a directory, and
+/// a link whose target is missing are different mistakes: the message must
+/// name the one that happened instead of calling every case "does not exist".
+///
+/// `Ok(Some(_))` is that refusal. `Ok(None)` means the path could not be
+/// classified without swallowing a different error (for example the target of
+/// an existing link could not be resolved); the caller then surfaces the
+/// original I/O error rather than inventing a refusal. `Err` is a failure to
+/// inspect the path itself: the `NotFound` caller surfaces it, with the path
+/// named, because calling an unreadable path "missing" would be a guess. The
+/// `NotADirectory` caller keeps its own error instead: that kind already names
+/// the real condition, so nothing is being guessed there.
+///
+/// A Windows junction is a reparse point, but Rust's `FileType::is_symlink`
+/// reports name-surrogate reparse tags (symlinks and mount points/junctions)
+/// as links, so a dangling junction is classified here too. Other reparse
+/// points (cloud placeholders, for example) are not name surrogates and stable
+/// `std` does not expose them as links; a dangling one therefore reads as "is
+/// not a directory". Detecting those needs the Windows reparse-point APIs,
+/// which this crate deliberately does not take on.
+fn game_dir_refusal(game_dir: &Path) -> std::io::Result<Option<anyhow::Error>> {
+    // `Path::exists()` follows links, so it reads a dangling link as absent.
+    // `symlink_metadata` inspects the link itself and tells the two apart.
+    let state = match std::fs::symlink_metadata(game_dir) {
+        Ok(md) if md.file_type().is_symlink() => match std::fs::metadata(game_dir) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "is a dangling symlink",
+            Ok(_) => "is not a directory",
+            Err(_) => return Ok(None),
+        },
+        Ok(_) => "is not a directory",
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "does not exist",
+        // A path component is not a directory, so the game dir cannot be one
+        // either (the `ENOTDIR` answer some platforms give for
+        // `<non-directory>/config.ini`).
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => "is not a directory",
+        Err(e) => return Err(e),
+    };
+    Ok(Some(anyhow::anyhow!(
+        "game dir {} {state}",
+        game_dir.display()
+    )))
+}
+
+/// The `NotFound` caller's error for a game dir that could not be inspected.
+///
+/// The inspection error keeps its kind (a caller can still tell the failure
+/// apart) but gains the path context the call site adds, so the caller is not
+/// left with a bare OS error.
+fn inspect_game_dir_error(game_dir: &Path, inspection: std::io::Error) -> anyhow::Error {
+    anyhow::Error::from(inspection).context(format!("inspect game dir {}", game_dir.display()))
+}
+
 /// Bump (or create) game-dir `config.ini` with latest version + channel fields.
+///
+/// The game directory must already exist as a directory; only `config.ini`
+/// itself may be missing (the fresh-install input). A missing directory, or a
+/// path that exists but is not a directory, is an error and is not created,
+/// even though the shared atomic writer would create a parent: this writer
+/// repairs an existing install, so a wrong path must be reported rather than
+/// turned into a stray file tree.
 ///
 /// Collapse parity (`GameVersionBase.UpdateGameVersion` /
 /// `UpdateGameChannels` and `Hi3Helper.Data.IniFile` load/save):
@@ -266,66 +336,118 @@ pub fn write_config_ini(
     latest: &str,
     biz: &str,
     channel: (&str, &str, &str),
-    dry_run: bool,
 ) -> Result<()> {
-    struct Section {
-        /// First-seen spelling (e.g. `General`); `General` when created.
-        name: String,
-        lower: String,
-        /// (first-seen spelling, lowercase key, value).
-        keys: Vec<(String, String, String)>,
-    }
-    impl Section {
-        fn find_key(&self, lower: &str) -> Option<usize> {
-            self.keys.iter().position(|(_, l, _)| l == lower)
-        }
-        /// Last-wins insert: update value, keep first-seen spelling.
-        fn insert(&mut self, key: &str, value: &str) {
-            let lower = key.to_ascii_lowercase();
-            match self.find_key(&lower) {
-                Some(i) => self.keys[i].2 = value.to_string(),
-                None => self.keys.push((key.to_string(), lower, value.to_string())),
-            }
-        }
-        /// Forced-key upsert in `[General]`: overwrite value, keep first-seen
-        /// spelling when the key already exists (matches Collapse's
-        /// case-insensitive indexer); create with canonical spelling otherwise.
-        fn force(&mut self, key: &str, value: &str) {
-            self.insert(key, value);
-            // `insert` keeps the existing spelling on overwrite and uses the
-            // canonical spelling on create — exactly the two cases needed.
-        }
-    }
-
-    let mut sections: Vec<Section> = Vec::new();
-    let find_section = |sections: &[Section], lower: &str| -> Option<usize> {
-        sections.iter().position(|s| s.lower == lower)
-    };
-    // Header-less keys land in `[General]` (see doc comment).
-    let mut current: Option<usize> = None;
-    let ensure_general = |sections: &mut Vec<Section>| -> usize {
-        match find_section(sections, "general") {
-            Some(i) => i,
-            None => {
-                sections.push(Section {
-                    name: "General".to_string(),
-                    lower: "general".to_string(),
-                    keys: Vec::new(),
-                });
-                sections.len() - 1
-            }
-        }
-    };
-
     let path = game_dir.join("config.ini");
     // One read: `exists()` then `read_to_string` would stat twice and leave a
     // TOCTOU window. Absent is the documented fresh-install input; any other
     // read error is refused rather than silently treated as an empty config.
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // `NotFound` covers both "no config.ini yet" (fresh install, a
+            // supported input) and a game dir that is missing or not a
+            // directory. This writer only updates an existing install, so the
+            // latter stays an error: the post phase runs after the game dir was
+            // scanned, and creating a tree for a wrong path would hide the
+            // mistake instead of reporting it.
+            if !game_dir.is_dir() {
+                return match game_dir_refusal(game_dir) {
+                    Ok(Some(refusal)) => Err(refusal),
+                    Ok(None) => Err(e.into()),
+                    // The original error was `NotFound`, so an inspection
+                    // failure (a permission denial on the way to the path, for
+                    // example) is the honest answer; reporting the path as
+                    // missing would be a guess.
+                    Err(inspection) => Err(inspect_game_dir_error(game_dir, inspection)),
+                };
+            }
+            String::new()
+        }
+        Err(e) => {
+            // Some platforms answer `ENOTDIR` for `<non-directory>/config.ini`
+            // instead of `NotFound`; name the real condition there too rather
+            // than passing the nested read through as an unreadable file.
+            // Only that kind means the path is not a directory: any other
+            // error (a permission failure on a parent, say) keeps its own kind
+            // and message instead of being relabelled.
+            // An inspection failure falls through to the original
+            // `NotADirectory`, which already names the real condition; unlike
+            // the `NotFound` arm, nothing is being guessed.
+            if e.kind() == std::io::ErrorKind::NotADirectory
+                && let Ok(Some(refusal)) = game_dir_refusal(game_dir)
+            {
+                return Err(refusal);
+            }
+            return Err(e.into());
+        }
     };
+    let mut sections = parse_ini(&text);
+    merge_ini(&mut sections, latest, biz, channel);
+    let out = render_ini(&mut sections);
+    publish_ini(&path, out.as_bytes())
+}
+
+/// One `[section]` of a `config.ini`, in first-seen order.
+struct Section {
+    /// First-seen spelling (e.g. `General`); `General` when created.
+    name: String,
+    lower: String,
+    /// (first-seen spelling, lowercase key, value).
+    keys: Vec<(String, String, String)>,
+}
+
+impl Section {
+    fn find_key(&self, lower: &str) -> Option<usize> {
+        self.keys.iter().position(|(_, l, _)| l == lower)
+    }
+    /// Last-wins insert: update value, keep first-seen spelling.
+    fn insert(&mut self, key: &str, value: &str) {
+        let lower = key.to_ascii_lowercase();
+        match self.find_key(&lower) {
+            Some(i) => self.keys[i].2 = value.to_string(),
+            None => self.keys.push((key.to_string(), lower, value.to_string())),
+        }
+    }
+    /// Forced-key upsert in `[General]`: overwrite value, keep first-seen
+    /// spelling when the key already exists (matches Collapse's
+    /// case-insensitive indexer); create with canonical spelling otherwise.
+    fn force(&mut self, key: &str, value: &str) {
+        self.insert(key, value);
+        // `insert` keeps the existing spelling on overwrite and uses the
+        // canonical spelling on create — exactly the two cases needed.
+    }
+}
+
+/// The index of the first section with this lowercase name.
+fn find_section(sections: &[Section], lower: &str) -> Option<usize> {
+    sections.iter().position(|s| s.lower == lower)
+}
+
+/// The `[General]` index, created when it is not there yet.
+fn ensure_general(sections: &mut Vec<Section>) -> usize {
+    match find_section(sections, "general") {
+        Some(i) => i,
+        None => {
+            sections.push(Section {
+                name: "General".to_string(),
+                lower: "general".to_string(),
+                keys: Vec::new(),
+            });
+            sections.len() - 1
+        }
+    }
+}
+
+/// Load the existing text into sections, preserving every `[section]` and
+/// merging duplicates by their case-insensitive name.
+///
+/// Comment (`;` / `#`, no-`=` lines) and blank lines are dropped on load;
+/// header-less keys land in `[General]` (a deliberate deviation from
+/// Collapse's generic `[default]` bucket, since game-dir files are
+/// `[General]`-scoped).
+fn parse_ini(text: &str) -> Vec<Section> {
+    let mut sections: Vec<Section> = Vec::new();
+    let mut current: Option<usize> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -350,18 +472,15 @@ pub fn write_config_ini(
             }
             continue;
         }
-        let Some(eq) = line.find('=') else {
+        let Some((key, rest)) = split_first_eq(line) else {
             continue;
         };
-        if eq < 1 {
-            continue;
-        }
-        let key = line[..eq].trim_end();
+        let key = key.trim_end();
         if key.is_empty() {
             continue;
         }
         // Collapse: value is trimmed, surrounding `"` stripped.
-        let value = line[eq + 1..].trim().trim_matches('"');
+        let value = rest.trim().trim_matches('"');
         let target = match current {
             Some(i) => i,
             None => {
@@ -372,8 +491,20 @@ pub fn write_config_ini(
         };
         sections[target].insert(key, value);
     }
+    sections
+}
 
-    let g = ensure_general(&mut sections);
+/// Force the version and channel keys in `[General]`.
+///
+/// Forced: `game_version=<latest>`, `channel` / `sub_channel` / `cps` per biz
+/// and `game_biz` — a deliberate Starward carryover (`SetGameConfigIniAsync`
+/// writes it, Collapse never does; game/launcher interop expects it, so it
+/// stays forced). `sdk_version`: Collapse parity — preserved when present,
+/// created empty when missing (Collapse only ever holds the empty
+/// `DefaultIniVersion` default; the real SDK version lives in
+/// `plugin_sdk_version`, which girpr never touches).
+fn merge_ini(sections: &mut Vec<Section>, latest: &str, biz: &str, channel: (&str, &str, &str)) {
+    let g = ensure_general(sections);
     sections[g].force("game_version", latest);
     sections[g].force("channel", channel.0);
     sections[g].force("sub_channel", channel.1);
@@ -386,58 +517,49 @@ pub fn write_config_ini(
             String::new(),
         ));
     }
+}
 
-    // Collapse `SaveInner`: sections in first-seen order, keys sorted
-    // alphabetically (case-insensitive), blank line after each section.
+/// Render the loaded and merged sections in Collapse `SaveInner`'s save shape:
+/// sections in first-seen order, keys sorted alphabetically
+/// (case-insensitive), and a blank line after each section.
+fn render_ini(sections: &mut [Section]) -> String {
     let mut out = String::new();
-    for s in &mut sections {
+    for s in sections.iter_mut() {
         s.keys.sort_by(|a, b| a.1.cmp(&b.1));
     }
     // Writing to a `String` is infallible, so the `fmt::Result` is ignored;
     // the blank line after each section is still pushed by hand.
-    for s in &sections {
+    for s in sections.iter() {
         let _ = writeln!(out, "[{}]", s.name);
         for (k, _, v) in &s.keys {
             let _ = writeln!(out, "{k}={v}");
         }
         out.push('\n');
     }
-    if dry_run {
-        tracing::info!("would write config.ini game_version={}", latest);
-        return Ok(());
-    }
-    let tmp = path.with_extension("ini.girpr_tmp");
-    let write = (|| -> Result<()> {
-        let mut f = File::create(&tmp)?;
-        f.write_all(out.as_bytes())?;
-        if !test_no_fsync() {
-            // `write_all` only reaches the page cache. Publishing the rename
-            // over a config whose version bump is not durable is exactly the
-            // failure this sync exists to prevent, so its error is fatal.
-            f.sync_all()
-                .with_context(|| format!("sync {}", tmp.display()))?;
-        }
-        Ok(())
-    })();
-    if let Err(e) = write {
-        match std::fs::remove_file(&tmp) {
-            Ok(()) => {}
-            Err(cleanup) if cleanup.kind() == std::io::ErrorKind::NotFound => {}
-            Err(cleanup) => tracing::debug!(
-                path = %tmp.display(),
-                error = %cleanup,
-                "could not remove the config.ini temp after a failed write"
-            ),
-        }
-        return Err(e);
-    }
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    out
+}
+
+/// Write the rendered INI through the shared atomic writer.
+///
+/// The version bump must survive a power loss, so the temp is synced before
+/// the rename; the test hook skips only that sync, never the write or rename.
+fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
+    write_atomic(path, bytes, !test_no_fsync())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::FixtureRefusal;
+    #[cfg(windows)]
+    use crate::util::junction_support::{
+        JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
+        junction_result_with, require_junction, skip_junction, try_junction_dir,
+    };
+    use crate::util::path::temp_sibling;
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
     use std::collections::HashSet;
 
     #[test]
@@ -451,7 +573,7 @@ mod tests {
         assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
     }
 
-    /// The cached pattern keeps the documented shape: no leading whitespace
+    /// The line scan keeps the documented shape: no leading whitespace
     /// before the key, whitespace allowed around `=`, a value of at least one
     /// character, trailing whitespace trimmed, and the last match wins.
     #[test]
@@ -467,6 +589,30 @@ mod tests {
             "5.1.0",
             "the indented and the empty-value lines must not match"
         );
+    }
+
+    #[test]
+    fn version_line_shapes() {
+        let cases = [
+            ("game_version=1.0.0", Some("1.0.0")),
+            (" game_version=1.0.0", None),
+            ("\tgame_version=1.0.0", None),
+            ("game_version=", None),
+            ("game_version", None),
+            ("game_version_extra=1.0.0", None),
+            ("Game_version=1.0.0", None),
+            ("game_version\t=\t1.0.0\t", Some("1.0.0")),
+            ("game_version = 1.0.0   ", Some("1.0.0")),
+            ("game_version=1=2=3", Some("1=2=3")),
+            ("game_version=   ", Some("")),
+        ];
+        for (line, expected) in cases {
+            assert_eq!(
+                game_version_line(line).as_deref(),
+                expected,
+                "line {line:?}"
+            );
+        }
     }
 
     #[test]
@@ -764,14 +910,7 @@ mod tests {
             "[General]\ngame_version=4.0.0\nfps=120\nsdk_version=9.9.9\nchannel=5\n",
         )
         .unwrap();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
         let lines: Vec<&str> = text.lines().collect();
@@ -797,14 +936,7 @@ mod tests {
         assert_eq!(sorted, expected, "{text}");
         // Rerun is byte-identical (no duplicate keys, stable order).
         let snapshot = text.clone();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert_eq!(text2, snapshot, "rerun must be byte-identical");
         for key in [
@@ -853,14 +985,7 @@ mod tests {
              cps=old\n",
         )
         .unwrap();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         // Sections survive: [General] + [Launcher], nothing flattened.
         assert!(
@@ -897,14 +1022,7 @@ mod tests {
         assert_eq!(read_game_version(&dir).unwrap().unwrap(), "5.1.0");
         // Rerun byte-identical.
         let snapshot = text.clone();
-        write_config_ini(
-            &dir,
-            "5.1.0",
-            "hk4e_global",
-            ("1", "0", "hyp_hoyoverse"),
-            false,
-        )
-        .unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_global", ("1", "0", "hyp_hoyoverse")).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join("config.ini")).unwrap(),
             snapshot
@@ -916,7 +1034,7 @@ mod tests {
     #[test]
     fn config_bump_creates_missing_and_handles_headerless() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "headerless");
-        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
         let text = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text.starts_with("[General]\n"), "{text}");
         assert!(text.contains("game_version=5.1.0"), "{text}");
@@ -925,10 +1043,526 @@ mod tests {
         assert!(text.contains("sdk_version=\n"), "{text}");
 
         std::fs::write(dir.join("config.ini"), "fps=60\ngame_version=1.0.0\n").unwrap();
-        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"), false).unwrap();
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
         let text2 = std::fs::read_to_string(dir.join("config.ini")).unwrap();
         assert!(text2.contains("fps=60"), "{text2}");
         assert!(text2.contains("game_version=5.1.0"), "{text2}");
         assert_eq!(text2.matches("[General]").count(), 1, "{text2}");
+    }
+
+    /// The writer updates an existing install: an absent `config.ini` inside an
+    /// existing game dir is the fresh-install input and is created, but an
+    /// absent game dir is an error and must not be created by the shared atomic
+    /// writer's parent creation.
+    #[test]
+    fn config_bump_requires_an_existing_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "missing_game_dir");
+        let missing = root.join("not-installed");
+        let err = write_config_ini(&missing, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a missing game dir must be reported, not created");
+        assert!(
+            format!("{err:#}").contains("does not exist"),
+            "the refusal names the missing game dir: {err:#}"
+        );
+        assert!(!missing.exists(), "the writer must not create the game dir");
+    }
+
+    /// An inspection failure other than `NotFound`/`NotADirectory` is returned
+    /// to the caller rather than being discarded in favour of a missing-path
+    /// answer. An embedded NUL makes the metadata call fail with
+    /// `InvalidInput` on every supported platform.
+    #[test]
+    fn game_dir_inspection_errors_are_not_reported_as_missing() {
+        let err = game_dir_refusal(Path::new("bad\0path"))
+            .expect_err("a path that cannot be inspected must be an error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
+    }
+
+    /// The `NotFound` arm surfaces a failed game-dir inspection with the name
+    /// of the path it could not inspect, and keeps the I/O error's kind so the
+    /// caller can still tell a permission failure from a malformed path. A NUL
+    /// makes `symlink_metadata` fail with `InvalidInput` on every supported
+    /// platform, so the inspection failure comes from the real syscall
+    /// boundary; the context is applied exactly as the caller applies it.
+    /// A NUL read fails with `InvalidInput` before `write_config_ini` reaches
+    /// the `NotFound` arm, so the private helper is driven directly here: there
+    /// is no call-site path that can reach that arm with an unreadable path.
+    #[test]
+    fn a_failed_game_dir_inspection_keeps_its_kind_and_names_the_path() {
+        let game_dir = Path::new("uninspected\0game-dir");
+        let inspection = game_dir_refusal(game_dir).expect_err("a NUL path cannot be inspected");
+        assert_eq!(
+            inspection.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{inspection}"
+        );
+
+        let err = inspect_game_dir_error(game_dir, inspection);
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("inspect game dir uninspected"),
+            "the call site names the path: {msg}"
+        );
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("the inspection error survives the context");
+        assert_eq!(io.kind(), std::io::ErrorKind::InvalidInput, "{err:#}");
+    }
+
+    /// A path that exists as a file is a different mistake from a missing
+    /// game dir, and the refusal says which one happened; it still does not
+    /// touch the path.
+    #[test]
+    fn config_bump_refuses_a_game_path_that_is_not_a_directory() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "game_path_is_file");
+        let path = root.join("not-a-dir");
+        std::fs::write(&path, b"not a game dir").unwrap();
+
+        let err = write_config_ini(&path, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a non-directory game path must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("is not a directory") && msg.contains("not-a-dir"),
+            "the refusal names the real condition: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "a present path must not be reported as missing: {msg}"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"not a game dir",
+            "the writer must not replace the path it refused"
+        );
+    }
+
+    /// A game path that is a symlink to a missing target exists as a link but
+    /// not as a directory. `Path::exists()` follows the link and would call it
+    /// missing; the refusal must name the dangling link instead. Symlink
+    /// creation needs a privilege or developer mode on Windows, so the test
+    /// skips where the link cannot be made. A host that provably refuses the
+    /// symlink cannot confirm the refusal here, so that case is skipped rather
+    /// than failed unless `GIRPR_TEST_REQUIRE_SYMLINK` is present.
+    #[test]
+    fn config_bump_refuses_a_dangling_symlink_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_game_dir");
+        let target = root.join("missing-target");
+        let link = root.join("dangling-game-dir");
+        let mut cleanup = LinkGuard::new(&link);
+        if let Err(e) = try_symlink_dir(&target, &link) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
+
+        let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a dangling symlink must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("dangling symlink") && msg.contains("dangling-game-dir"),
+            "the refusal names the dangling link: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "an existing link must not be reported as missing: {msg}"
+        );
+        assert!(
+            !target.exists(),
+            "the writer must not create the symlink target"
+        );
+        cleanup.remove().expect("the symlink is removable");
+    }
+
+    /// A directory junction whose target does not exist is a name-surrogate
+    /// reparse point, so `FileType::is_symlink` reports it as a link and the
+    /// refusal must name the dangling link instead of "does not exist".
+    /// Junctions need no privilege, so only a proven host refusal (an
+    /// unsupported platform or the known privilege denial) skips; any other
+    /// failure is a broken test environment and must fail loudly. A host that
+    /// provably refuses the junction cannot confirm the refusal here, so that
+    /// case is skipped rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION`
+    /// is present.
+    #[cfg(windows)]
+    #[test]
+    fn config_bump_refuses_a_dangling_junction_game_dir() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "dangling_junction");
+        let target = root.join("never-created-target");
+        let link = root.join("dangling-game-dir");
+        let mut cleanup = LinkGuard::new(&link);
+        if let Err(e) = try_junction_dir(&target, &link) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            junction_fixture_decision(e, require_junction(), FixtureRefusal::Host);
+            return;
+        }
+
+        let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("a dangling junction must be reported, not written through");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("dangling symlink") && msg.contains("dangling-game-dir"),
+            "the refusal names the dangling link: {msg}"
+        );
+        assert!(
+            !msg.contains("does not exist"),
+            "an existing junction must not be reported as missing: {msg}"
+        );
+        assert!(
+            !target.exists(),
+            "the writer must not create the junction target"
+        );
+        cleanup.remove().expect("the junction is removable");
+    }
+
+    /// A junction `mklink` claims but that cannot be inspected is a broken
+    /// fixture, not a host refusal: the config writer's case must fail loudly
+    /// instead of skipping, so a run meant to prove the dangling-junction
+    /// refusal cannot pass having checked nothing.
+    ///
+    /// The shared helper's inspection is injected and the shared decision is
+    /// driven with its result, so the case runs on every host — no `mklink` is
+    /// run, and no host skip is needed. The decision is the caller's own, so a
+    /// decision that turned the broken arm into a skip would fail this case
+    /// instead of leaving it green.
+    #[cfg(windows)]
+    #[test]
+    fn an_uninspectable_junction_fails_instead_of_skipping() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "uninspectable_junction");
+        let link = root.join("dangling-game-dir");
+
+        let err = junction_result_with(&JunctionOutcome::Success, &link, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the link could not be read",
+            ))
+        })
+        .expect_err("a junction that cannot be inspected must fail");
+
+        // The failure names its own cause — an unreadable link is not a
+        // missing one.
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert!(err.raw_os_error().is_none(), "{err}");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("could not be inspected"),
+            "the failure names the inspection's cause: {msg}"
+        );
+        assert!(
+            msg.contains("the link could not be read"),
+            "the cause survives: {msg}"
+        );
+        assert!(
+            !msg.contains("is missing"),
+            "an unreadable junction is not a missing one: {msg}"
+        );
+
+        match drive_junction_decision(err, false, FixtureRefusal::Host) {
+            JunctionDecision::Skipped => {
+                panic!("an uninspectable junction is not a host refusal")
+            }
+            JunctionDecision::Failed(message) => {
+                // The case fails loudly here, exactly as it does for a link
+                // that never appeared.
+                assert!(
+                    message.contains("could not create the test directory junction"),
+                    "the failure names the fixture: {message}"
+                );
+                assert!(
+                    message.contains("could not be inspected"),
+                    "the failure names the inspection's cause: {message}"
+                );
+                assert!(
+                    message.contains("the link could not be read"),
+                    "the cause survives: {message}"
+                );
+                assert!(
+                    !message.contains("is missing"),
+                    "an unreadable junction is not a missing one: {message}"
+                );
+            }
+        }
+    }
+
+    /// Without the switch, a proven host refusal skips the junction case out
+    /// loud instead of failing it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_fixture_refusal_skips_without_the_switch() {
+        skip_junction("injected refusal", false, FixtureRefusal::Injected);
+    }
+
+    /// The same refusal is a failure when the switch is set, whatever its
+    /// value: the case must not pass having proved nothing.
+    #[cfg(windows)]
+    #[test]
+    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
+    fn a_junction_fixture_refusal_fails_with_the_switch() {
+        skip_junction("injected refusal", true, FixtureRefusal::Injected);
+    }
+
+    /// Removes a link or junction — never its target — when the guard leaves
+    /// scope, so a failed assertion does not leave a dangling reparse point for
+    /// the temp-dir cleanup to walk.
+    ///
+    /// Armed before the link is created: a creation that fails partway leaves
+    /// nothing behind, and a host that skips the case is cleaned too.
+    struct LinkGuard<'a> {
+        link: &'a Path,
+        armed: bool,
+    }
+
+    impl<'a> LinkGuard<'a> {
+        fn new(link: &'a Path) -> Self {
+            Self { link, armed: true }
+        }
+
+        /// Remove the link now and report a failure. `Drop` stays armed until
+        /// the removal succeeds, so a failed success-path removal is retried
+        /// there instead of leaving the link behind; a successful removal is
+        /// not repeated.
+        fn remove(&mut self) -> std::io::Result<()> {
+            let result = remove_link(self.link);
+            if result.is_ok() {
+                self.armed = false;
+            }
+            result
+        }
+    }
+
+    impl Drop for LinkGuard<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                // Best effort: this is the failure path, and a cleanup error
+                // must not replace the test's own panic.
+                let _ = remove_link(self.link);
+            }
+        }
+    }
+
+    /// Remove the link itself, never its target. On Windows both a directory
+    /// symlink and a junction are removed with `remove_dir`; elsewhere the link
+    /// is removed with `remove_file`, which also covers a link to a directory.
+    fn remove_link(link: &Path) -> std::io::Result<()> {
+        match std::fs::symlink_metadata(link) {
+            Ok(_) => remove_link_at(link),
+            // The creation may have failed before anything was left.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[cfg(windows)]
+    fn remove_link_at(link: &Path) -> std::io::Result<()> {
+        std::fs::remove_dir(link)
+    }
+
+    #[cfg(not(windows))]
+    fn remove_link_at(link: &Path) -> std::io::Result<()> {
+        std::fs::remove_file(link)
+    }
+
+    /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`
+    /// retries it. A non-empty directory makes the first removal fail; clearing
+    /// it lets the retry succeed, and the link must then be gone.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn link_guard_retries_a_failed_explicit_removal_on_drop() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "guard_retry");
+        let link = root.join("link");
+
+        #[cfg(windows)]
+        {
+            // `remove_dir` refuses a non-empty directory.
+            std::fs::create_dir(&link).unwrap();
+            std::fs::write(link.join("blocker"), b"x").unwrap();
+            {
+                let mut guard = LinkGuard::new(&link);
+                assert!(
+                    guard.remove().is_err(),
+                    "a non-empty directory is not removable"
+                );
+                std::fs::remove_file(link.join("blocker")).unwrap();
+            }
+        }
+        #[cfg(unix)]
+        {
+            // `remove_file` refuses a directory.
+            std::fs::create_dir(&link).unwrap();
+            {
+                let mut guard = LinkGuard::new(&link);
+                assert!(guard.remove().is_err(), "a directory is not a file");
+                std::fs::remove_dir(&link).unwrap();
+                std::fs::write(&link, b"x").unwrap();
+            }
+        }
+
+        assert!(
+            std::fs::symlink_metadata(&link).is_err(),
+            "the guard must retry the failed removal when it drops"
+        );
+    }
+
+    /// A parent that cannot be traversed is a permission failure, not a
+    /// missing or non-directory game dir: the refusal must not relabel it.
+    /// Hosts that ignore the mode (root, some containers) cannot exercise the
+    /// denial, so the test skips there.
+    #[cfg(unix)]
+    #[test]
+    fn config_bump_surfaces_a_parent_permission_error_unchanged() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "parent_permission");
+        let locked = root.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let game = locked.join("game");
+        // The denial must be observable before the test can exercise it: a
+        // host that ignores the mode (root, some containers) can still read
+        // the directory, and then the game dir is merely missing rather than
+        // unreachable.
+        if std::fs::read_dir(&locked).is_ok() {
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+            return;
+        }
+
+        let err = write_config_ini(&game, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
+            .expect_err("an unreachable game dir must not be treated as a fresh install");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("the permission failure keeps its I/O error");
+        assert_eq!(io.kind(), std::io::ErrorKind::PermissionDenied, "{err:#}");
+        assert!(
+            !format!("{err:#}").contains("is not a directory"),
+            "a permission failure must not be relabelled: {err:#}"
+        );
+    }
+
+    /// An accepted config write and a failed one both leave no temp sibling:
+    /// the shared temp name is the only place this writer creates one, and
+    /// publishing always renames it away or removes it.
+    #[test]
+    fn config_writes_leave_no_temp_sibling() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_cfg", "no_temp_sibling");
+        let path = dir.join("config.ini");
+        let tmp = temp_sibling(&path);
+
+        write_config_ini(&dir, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo")).unwrap();
+        assert!(path.is_file(), "the accepted write publishes config.ini");
+        assert!(
+            !tmp.exists(),
+            "an accepted write renames the temp away instead of leaving it"
+        );
+
+        // A directory at the target makes the publish rename fail after the
+        // temp was written; the failure cleanup removes it.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let err = publish_ini(&path, b"[General]\n").unwrap_err();
+        assert!(format!("{err:#}").contains("publish"), "{err:#}");
+        assert!(
+            path.is_dir(),
+            "the failed publish leaves the target untouched"
+        );
+        assert!(
+            !tmp.exists(),
+            "a failed write removes the temp instead of leaving it"
+        );
+    }
+
+    /// Both readers take the first `=`. `parse_ini` keeps its raw key/value
+    /// shape (key trimmed at the end only, value trimmed and unquoted, an
+    /// empty value allowed), while the version scan stays anchored.
+    #[test]
+    fn readers_split_on_the_first_equals() {
+        let sections = parse_ini(
+            "k e y= raw = value \n\
+             empty=\n\
+             quoted=  \"a=b\"  \n\
+             =value\n\
+                =value\n\
+             spaced   =1\n",
+        );
+        assert_eq!(sections.len(), 1, "header-less keys land in [General]");
+        let general = &sections[0];
+        assert_eq!(general.name, "General");
+        let keys: Vec<(&str, &str)> = general
+            .keys
+            .iter()
+            .map(|(k, _, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                ("k e y", "raw = value"),
+                ("empty", ""),
+                ("quoted", "a=b"),
+                ("spaced", "1"),
+            ],
+            "keys split at the first '=', only end-trimmed; a leading '=' is not a key"
+        );
+
+        for (line, expected) in [
+            ("game_version=1=2=3", Some("1=2=3")),
+            ("game_version==x", Some("=x")),
+            (" game_version=1.0.0", None),
+            ("game_version_extra=1.0.0", None),
+            ("game_version=   ", Some("")),
+        ] {
+            assert_eq!(
+                game_version_line(line).as_deref(),
+                expected,
+                "line {line:?}"
+            );
+        }
+    }
+
+    /// The extracted parse / merge / render steps keep the documented section
+    /// and key rules: header-less keys go to `[General]`, duplicate sections
+    /// merge case-insensitively into the first spelling, comments and blank
+    /// lines drop, forced keys are created with their canonical spelling,
+    /// `sdk_version` is created empty, and keys sort per section.
+    #[test]
+    fn parse_merge_and_render_pin_the_section_rules() {
+        let mut sections = parse_ini(
+            "; leading comment\n\
+             fps=60\n\
+             [Launcher]\n\
+             log_level=3\n\
+             [launcher]\n\
+             game_install_path=C:/g\n\
+             [General]\n\
+             FPS=120\n\
+             channel=5\n",
+        );
+        merge_ini(
+            &mut sections,
+            "5.1.0",
+            "hk4e_global",
+            ("1", "0", "hyp_hoyoverse"),
+        );
+        let text = render_ini(&mut sections);
+        assert_eq!(
+            text,
+            "[General]\n\
+             channel=1\n\
+             cps=hyp_hoyoverse\n\
+             fps=120\n\
+             game_biz=hk4e_global\n\
+             game_version=5.1.0\n\
+             sdk_version=\n\
+             sub_channel=0\n\
+             \n\
+             [Launcher]\n\
+             game_install_path=C:/g\n\
+             log_level=3\n\
+             \n"
+        );
+        assert!(
+            !text.contains("[launcher]"),
+            "the duplicate section merges into the first-seen spelling: {text}"
+        );
     }
 }

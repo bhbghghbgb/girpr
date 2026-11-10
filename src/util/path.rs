@@ -1,4 +1,12 @@
-﻿use anyhow::{Context, Result};
+//! Rel-path spelling for on-disk walks and server input.
+//!
+//! One rule: an on-disk rel is the walk path stripped of its base, converted
+//! lossily to a string and spelled with `/` ([`rel_from_base`]); a server rel is
+//! validated and normalised by [`clean_rel`]; and a rel directory joined to a
+//! name uses [`join_rel`]. The two spellings meet at the scope, which matches
+//! the `/` form both produce.
+
+use anyhow::{Context, Result};
 use std::path::{Component, Path, PathBuf};
 
 /// What a file-length probe found.
@@ -75,7 +83,7 @@ pub fn contained_rel(rel: &str) -> Result<PathBuf> {
 /// The caller builds the cleaned form rather than returning the input: `a/./b`
 /// must not survive as `a/./b`, because the plan stores this string and every
 /// later comparison (the purge's expected set, the reuse map, the scope) works
-/// on the plain form. A leading `.` in particular would make `expected_paths()`
+/// on the plain form. A leading `.` in particular would make the plan's rels
 /// disagree with the purge walk — which reports `game/foo.dat` — and the
 /// cleanup would delete the file this run just repaired.
 fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
@@ -102,7 +110,7 @@ fn walk_rel_components(rel: &str, mut emit: impl FnMut(&str)) -> Result<()> {
                     .to_str()
                     .with_context(|| format!("path is not UTF-8: {rel}"))?;
                 anyhow::ensure!(
-                    !part.ends_with('.') && !part.ends_with(' '),
+                    !has_windows_trailing_dot_or_space(part),
                     "path has a Windows-trailing dot or space: {rel}"
                 );
                 anyhow::ensure!(
@@ -147,6 +155,70 @@ pub fn clean_rel(rel: &str) -> Result<String> {
     Ok(clean)
 }
 
+/// The `/`-separated rel spelling of an on-disk path under `base`.
+///
+/// This is the on-disk counterpart of [`clean_rel`]: `base` is the walk root
+/// the path came from, and the result is what remains after stripping it, with
+/// `\` reported as `/`. The purge and the post-phase walk the same tree, so
+/// they must spell it the same way.
+///
+/// The string conversion is **lossy on purpose**. An install can hold a name
+/// that is not UTF-8, while the data plane and the log need a string; the path
+/// on disk stays the authority for the operation, and this is only how the rel
+/// is spelled in a plan, a log line or a scope match. `to_str().unwrap()` would
+/// refuse the whole walk instead of reporting it.
+///
+/// Returns `None` when `path` is not under `base`, so a caller can skip a path
+/// it cannot spell. A path equal to `base` yields `Some(String::new())`: it is
+/// under the base, but the empty rel names no file, and the walks skip the
+/// base itself.
+pub(crate) fn rel_from_base(path: &Path, base: &Path) -> Option<String> {
+    Some(rel_pair_from_base(path, base)?.0)
+}
+
+/// Strip `base` once and return both spellings a caller needs: the lossy `/`
+/// rel for the scope key, and the byte-exact relative path for the filesystem
+/// operation.
+///
+/// [`rel_from_base`] is the key-only half. A caller that keys a path and then
+/// moves it must not strip the base twice: the second strip could only
+/// disagree, and rebuilding the destination from the lossy string would
+/// rewrite a name that is not UTF-8. The path half keeps the source's own
+/// bytes, so the move lands on the same name.
+///
+/// The contract matches [`rel_from_base`]: `None` outside `base`, and
+/// `Some(("", ""))` for `base` itself.
+pub(crate) fn rel_pair_from_base<'a>(path: &'a Path, base: &Path) -> Option<(String, &'a Path)> {
+    let rel = path.strip_prefix(base).ok()?;
+    Some((lossy_slash(rel), rel))
+}
+
+/// Spell a path as a lossy string with `/` separators.
+///
+/// The conversion is shared by [`rel_from_base`] and [`join_rel`], so both
+/// halves of a rel use the same separator rule on every host.
+fn lossy_slash(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Join a rel directory and a name into the `/`-separated form the scope
+/// matches on.
+///
+/// `dir_rel` is already in the clean `/` form ([`clean_rel`]) and must not end
+/// with a separator: that is the form [`clean_rel`] returns, and this helper
+/// adds the one separator itself. `name` is a path fragment from a walk and is
+/// converted lossily, with `\` reported as `/`. An empty `dir_rel` yields
+/// `name` alone, so the result never starts with `/`; a non-empty one adds
+/// exactly one separator, never `//`.
+pub(crate) fn join_rel(dir_rel: &str, name: &Path) -> String {
+    let name = lossy_slash(name);
+    if dir_rel.is_empty() {
+        name
+    } else {
+        format!("{dir_rel}/{name}")
+    }
+}
+
 /// The key a path comparison uses when two spellings may name one file.
 ///
 /// Windows paths are case-insensitive, so the plan's dedup and the purge's
@@ -154,15 +226,73 @@ pub fn clean_rel(rel: &str) -> Result<String> {
 /// the key is the path itself. The two must agree, so the rule lives here
 /// instead of once per module.
 ///
+/// The Windows fold is **ASCII-only**. Server manifest paths are ASCII in
+/// practice, and `str::to_lowercase` is a Unicode case mapping rather than the
+/// filesystem's relation: it maps spellings Windows keeps apart onto one key
+/// (the Kelvin sign `\u{212A}` and `k`, for example), which over-merges in the
+/// plan and over-keeps in the purge. So the rule is "fold ASCII case, compare
+/// every other byte exactly".
+///
+/// Non-ASCII case variants are therefore deliberately **distinct** keys, even
+/// where the filesystem may consider them one file. That is the trade: this is
+/// a map key, not a containment check, and a non-ASCII install gets exact-byte
+/// equality rather than a guess. [`contained_join`] owns the filesystem
+/// decision.
+///
 /// The choice is compile-time (`cfg!`), so both branches are type-checked on
-/// every host while the behavior stays exactly "fold where Windows paths are
-/// case-insensitive".
+/// every host. Keep them in sync: a change to the Windows fold must be
+/// reflected in the Unix branch, or the platforms stop answering the same
+/// question.
+///
+/// This is **not** the folding `--include` / `--exclude` matching uses. That
+/// match is case-insensitive through the `glob` crate's per-character
+/// `eq_ignore_ascii_case` (see [`crate::repair::scope::filter`]), which is
+/// ASCII-only like this one but applies on every host. The two rules differ
+/// deliberately. A glob is a containment predicate over a user-written pattern,
+/// where matching broadly is the point. This function is a map key for path
+/// *identity*, where over-merging silently drops or keeps the wrong file, so it
+/// folds only where the filesystem does (Windows) and stays ASCII-only there.
 pub(crate) fn path_key(rel: &str) -> String {
     if cfg!(windows) {
-        rel.to_lowercase()
+        rel.to_ascii_lowercase()
     } else {
         rel.to_string()
     }
+}
+
+/// Does this name end in a dot or a space, which Windows strips when it
+/// resolves the name?
+///
+/// Windows aliases `config.` and `config ` to `config`, so a spelling with
+/// either trailing character names the same file as the stripped form. The
+/// check is lexical and runs on every host: the install is a Windows tree even
+/// when girpr itself runs elsewhere. [`contained_rel`] applies it to every
+/// component, and [`any_component_has_windows_trailing_dot_or_space`] applies
+/// it to every component of a writer's target.
+pub(crate) fn has_windows_trailing_dot_or_space(part: &str) -> bool {
+    part.ends_with('.') || part.ends_with(' ')
+}
+
+/// Does any component of `path` that names a file end in a Windows-trailing
+/// dot or space?
+///
+/// This is [`has_windows_trailing_dot_or_space`] over a whole path, for the
+/// writers whose target did not come through [`contained_rel`]: a caller-built
+/// path can carry the alias spelling in any directory component, not only in
+/// the final one. Windows strips the character when it resolves each
+/// component, so a directory spelled `dir.` aliases `dir` just as a file name
+/// does.
+///
+/// A prefix (a drive or a UNC share) and the root name a filesystem, not a
+/// file, so they are not checked. A `..` parent is not a name either: it walks
+/// out of a directory rather than naming one, and it would otherwise match this
+/// rule because it ends in a dot, refusing every path that climbs. `components()`
+/// drops `.` and repeated separators for the same reason.
+pub(crate) fn any_component_has_windows_trailing_dot_or_space(path: &Path) -> bool {
+    path.components().any(|c| match c {
+        Component::Normal(part) => has_windows_trailing_dot_or_space(&part.to_string_lossy()),
+        _ => false,
+    })
 }
 
 /// Is this component a name Windows reserves for a device in every directory?
@@ -266,6 +396,45 @@ pub fn contained_join(base: &Path, rel: &str) -> Result<PathBuf> {
     PathRoot::new(base)?.join_rel(rel)
 }
 
+/// The sibling an atomic writer publishes through: `path` with
+/// [`TEMP_SUFFIX`] appended to the whole file name.
+///
+/// `with_extension` replaces the real extension (`scan.txt` ->
+/// `scan.girpr_tmp`) and has its own surprises on multi-dot names; appending to
+/// the `OsString` keeps the whole name, so `config.ini` becomes
+/// `config.ini.girpr_tmp` and `plan.v1.json` becomes
+/// `plan.v1.json.girpr_tmp`. It also stays lossless for a non-UTF-8 name.
+///
+/// The result is beside `path`, which is what makes the rename that publishes
+/// it atomic.
+///
+/// A path with **no file name** still gets a name, but it is not a sibling of a
+/// file. The fallback prefix is empty, and `with_file_name` only removes a real
+/// file name before pushing the suffix; the path's directories stay as the
+/// prefix. So `Audio/res/..` becomes `Audio/res/../.girpr_tmp`, which still
+/// contains the `..` before resolution and resolves to `Audio/.girpr_tmp` —
+/// beside `res`, not inside it — and the empty path becomes `.girpr_tmp` in the
+/// current directory. A caller that must publish under the name it was given
+/// therefore refuses a target that names no file before calling this helper:
+/// `copy_publish_with` in the post-phase and `atomic::publish` both do.
+/// Both also refuse a target with a component that ends in a Windows-trailing
+/// dot or space ([`any_component_has_windows_trailing_dot_or_space`]), and
+/// `atomic::publish` additionally refuses a target that spells a directory
+/// (`dir/.`, `dir/`), because none of those is a name a file can be published
+/// under. This helper keeps the simple shape instead of inventing a directory
+/// for the temp.
+pub(crate) fn temp_sibling(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(TEMP_SUFFIX);
+    path.with_file_name(name)
+}
+
+/// The suffix [`temp_sibling`] appends.
+const TEMP_SUFFIX: &str = ".girpr_tmp";
+
 /// Canonicalize `path` as far as it exists, then append the missing tail.
 ///
 /// `canonicalize` fails on a path that is not there yet, and the plan runs
@@ -313,6 +482,18 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Both fixture families report a host refusal the shared way, so the
+    // import is used on every host.
+    use crate::test_support::FixtureRefusal;
+    #[cfg(windows)]
+    use crate::util::junction_support::{
+        JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
+        junction_result, require_junction, skip_junction, try_junction_dir,
+    };
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
     /// be refused; `a/b.dat` is the only legitimate shape.
@@ -441,6 +622,270 @@ mod tests {
         }
     }
 
+    /// The on-disk rel spelling is one rule for both walks: strip the walk
+    /// base, then report `/`. A path outside the base has no spelling and
+    /// reports `None`; the base itself reports the empty rel.
+    #[test]
+    fn rel_from_base_strips_the_walk_base_and_uses_slashes() {
+        let base = Path::new("Game");
+        assert_eq!(
+            rel_from_base(&base.join("a.pck"), base).as_deref(),
+            Some("a.pck")
+        );
+        assert_eq!(
+            rel_from_base(&base.join("Audio/cache/sub/a.pck"), base).as_deref(),
+            Some("Audio/cache/sub/a.pck")
+        );
+        // The base names no file: it is under itself, and the empty rel says so.
+        assert_eq!(rel_from_base(base, base).as_deref(), Some(""));
+        // A sibling, or an ancestor, cannot be spelled relative to the base.
+        assert_eq!(rel_from_base(Path::new("Other/a.pck"), base), None);
+        assert_eq!(rel_from_base(base, &base.join("sub")), None);
+        // Stripping is by path component, not by shared prefix text: `GameX`
+        // shares the letters with `Game` but is a sibling, not a descendant.
+        assert_eq!(rel_from_base(Path::new("GameX/a.pck"), base), None);
+        // A true component prefix still strips, including a nested base.
+        let nested_base = base.join("Audio");
+        assert_eq!(
+            rel_from_base(&nested_base.join("cache/a.pck"), &nested_base).as_deref(),
+            Some("cache/a.pck")
+        );
+    }
+
+    /// The pair helper strips the base once and returns both halves a moving
+    /// caller needs: the `/` key and the byte-exact path. A name that is not
+    /// UTF-8 is lossy in the key and untouched in the path.
+    #[test]
+    fn rel_pair_from_base_returns_the_key_and_the_byte_exact_path() {
+        let base = Path::new("Game");
+        let nested = base.join("Audio/cache/sub/a.pck");
+        let (key, rel) = rel_pair_from_base(&nested, base).unwrap();
+        assert_eq!(key, "Audio/cache/sub/a.pck");
+        assert_eq!(rel, Path::new("Audio/cache/sub/a.pck"));
+
+        // The base itself yields the empty rel in both spellings.
+        let (key, rel) = rel_pair_from_base(base, base).unwrap();
+        assert_eq!(key, "");
+        assert_eq!(rel, Path::new(""));
+
+        // Outside the base there is no pair to return.
+        assert_eq!(rel_pair_from_base(Path::new("Other/a.pck"), base), None);
+        // Shared prefix text is not a shared component: `GameX` is a sibling.
+        assert_eq!(rel_pair_from_base(Path::new("GameX/a.pck"), base), None);
+        // A true component prefix still yields the pair, also for a nested base.
+        let nested_base = base.join("Audio");
+        let nested_path = nested_base.join("cache/a.pck");
+        let (key, rel) = rel_pair_from_base(&nested_path, &nested_base).unwrap();
+        assert_eq!(key, "cache/a.pck");
+        assert_eq!(rel, Path::new("cache/a.pck"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"bad\xff.pck");
+            let path = base.join(name);
+            let (key, rel) = rel_pair_from_base(&path, base).unwrap();
+            assert_eq!(key, "bad\u{fffd}.pck");
+            assert_eq!(rel.as_os_str().as_bytes(), b"bad\xff.pck");
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            let name =
+                std::ffi::OsString::from_wide(&[0x62, 0x61, 0x64, 0xD800, 0x2E, 0x70, 0x63, 0x6B]);
+            let path = base.join(&name);
+            let (key, rel) = rel_pair_from_base(&path, base).unwrap();
+            assert_eq!(key, "bad\u{fffd}.pck");
+            assert_eq!(
+                rel.as_os_str().encode_wide().collect::<Vec<u16>>(),
+                name.encode_wide().collect::<Vec<u16>>()
+            );
+        }
+    }
+
+    /// A name that is not UTF-8 is still reported: the rel is lossy by design,
+    /// so the scope and the log get a string instead of the walk refusing the
+    /// file. Both platforms can build the fixture from an unpaired surrogate or
+    /// an invalid byte.
+    #[test]
+    fn rel_from_base_reports_a_non_utf8_name_lossily() {
+        let base = Path::new("Game");
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"bad\xff.pck");
+            assert_eq!(
+                rel_from_base(&base.join(name), base).unwrap(),
+                "bad\u{fffd}.pck"
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            // An unpaired surrogate has no UTF-8 encoding.
+            let name =
+                std::ffi::OsString::from_wide(&[0x62, 0x61, 0x64, 0xD800, 0x2E, 0x70, 0x63, 0x6B]);
+            assert_eq!(
+                rel_from_base(&base.join(&name), base).unwrap(),
+                "bad\u{fffd}.pck"
+            );
+        }
+    }
+
+    /// The join helper is the post-phase's spelling: a rel dir and a walk name,
+    /// one separator, `/` on every platform, and an empty dir adds none.
+    #[test]
+    fn join_rel_adds_one_separator_and_normalises_the_name() {
+        assert_eq!(join_rel("", Path::new("a.pck")), "a.pck");
+        assert_eq!(
+            join_rel("Audio/cache", Path::new("sub/a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+        // A name Windows spelled with `\` is reported in the `/` form.
+        assert_eq!(
+            join_rel("Audio/cache", Path::new("sub\\a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+        // The clean form clean_rel returns has no trailing separator, so the
+        // one join adds is the only one in the result.
+        let dir = clean_rel("Audio//cache").unwrap();
+        assert!(!dir.ends_with('/'));
+        assert_eq!(
+            join_rel(&dir, Path::new("sub/a.pck")),
+            "Audio/cache/sub/a.pck"
+        );
+    }
+
+    /// Every atomic writer names its temp the same way: the suffix is appended
+    /// to the whole file name, so no extension is replaced and a multi-dot name
+    /// keeps its shape.
+    #[test]
+    fn temp_sibling_appends_to_the_whole_name() {
+        for (input, want) in [
+            ("config.ini", "config.ini.girpr_tmp"),
+            ("scan.txt", "scan.txt.girpr_tmp"),
+            ("a.b.txt", "a.b.txt.girpr_tmp"),
+            ("plan.v1.json", "plan.v1.json.girpr_tmp"),
+            ("scan", "scan.girpr_tmp"),
+        ] {
+            assert_eq!(
+                temp_sibling(Path::new(input)),
+                PathBuf::from(want),
+                "{input:?}"
+            );
+        }
+        // The sibling stays beside the target, in the same directory.
+        assert_eq!(
+            temp_sibling(Path::new("Audio/scan.txt")),
+            PathBuf::from("Audio/scan.txt.girpr_tmp")
+        );
+    }
+
+    /// A path with no file name still names its sibling, but the shape depends
+    /// on what the path already says: `with_file_name` only pops a real file
+    /// name, so a path that ends in `..` keeps that component and gains the
+    /// suffix after it.
+    ///
+    /// `""` gains the suffix directly (`.girpr_tmp`). `Audio/res/..` becomes
+    /// `Audio/res/../.girpr_tmp`, which resolves to `Audio/.girpr_tmp` — beside
+    /// `res`, not inside it — so the result is not "beside a name" for such a
+    /// path. The post-phase's copy writer refuses a no-file-name target before
+    /// asking for a temp for exactly that reason.
+    #[test]
+    fn temp_sibling_names_the_no_file_name_fallback() {
+        let mut want = std::ffi::OsString::new();
+        want.push(TEMP_SUFFIX);
+        let empty = Path::new("");
+        assert!(empty.file_name().is_none());
+        assert_eq!(temp_sibling(empty).file_name(), Some(want.as_os_str()));
+        assert_eq!(temp_sibling(empty), PathBuf::from(want.as_os_str()));
+
+        // The `..` survives into the returned spelling before resolution.
+        let dotdot = Path::new("Audio/res/..");
+        assert!(dotdot.file_name().is_none());
+        assert_eq!(
+            temp_sibling(dotdot),
+            PathBuf::from("Audio/res/../.girpr_tmp")
+        );
+
+        // Resolved, that spelling lands beside `res`, not inside it: the
+        // fallback name is in the directory the `..` walks up to. The fixture
+        // makes both sides resolvable, so the landing location is pinned
+        // instead of only its unresolved spelling.
+        let dir = girpr_tempdir::TempDir::new("girpr_test_temp_sibling", "dotdot");
+        std::fs::create_dir_all(dir.join("Audio/res")).unwrap();
+        let in_fixture = dir.join("Audio/res/..");
+        assert!(in_fixture.file_name().is_none());
+        let landed = resolve_existing_prefix(&temp_sibling(&in_fixture)).unwrap();
+        let want = resolve_existing_prefix(&dir.join("Audio/.girpr_tmp")).unwrap();
+        assert_eq!(
+            landed, want,
+            "the fallback temp lands beside `res`, not inside it"
+        );
+        assert!(
+            landed.ends_with(Path::new("Audio").join(".girpr_tmp")),
+            "the resolved location is Audio/.girpr_tmp: {}",
+            landed.display()
+        );
+    }
+
+    /// The suffix is pushed onto the `OsString`, so a name that is not UTF-8
+    /// keeps every byte instead of being round-tripped through a lossy string.
+    #[test]
+    fn temp_sibling_keeps_a_non_utf8_name() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let name = std::ffi::OsStr::from_bytes(b"scan\xff.txt");
+            let got = temp_sibling(Path::new(name));
+            assert_eq!(
+                got.file_name().unwrap().as_bytes(),
+                b"scan\xff.txt.girpr_tmp"
+            );
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            // An unpaired surrogate has no UTF-8 encoding.
+            let name = std::ffi::OsString::from_wide(&[0x73, 0x63, 0xD800, 0x2e, 0x74, 0x78, 0x74]);
+            let got = temp_sibling(Path::new(&name));
+            let mut want: Vec<u16> = name.encode_wide().collect();
+            want.extend(".girpr_tmp".encode_utf16());
+            assert_eq!(
+                got.file_name().unwrap().encode_wide().collect::<Vec<u16>>(),
+                want
+            );
+        }
+    }
+
+    /// The key is the plan's and the purge's only path-equality rule, so the
+    /// fold it applies is pinned here: ASCII case where the platform folds it,
+    /// and no Unicode case mapping on either platform.
+    #[test]
+    fn path_key_folds_ascii_case_only_on_windows() {
+        // ASCII case variants name one file on Windows and two on Unix.
+        let ascii_same = path_key("Game/A.DAT") == path_key("game/a.dat");
+        assert_eq!(
+            ascii_same,
+            cfg!(windows),
+            "ASCII case folding must follow the host"
+        );
+
+        // `str::to_lowercase` maps the Kelvin sign to `k`, but Windows keeps
+        // the two names apart, so the key must not collapse them.
+        assert_ne!(path_key("\u{212A}"), path_key("k"));
+
+        // A non-ASCII name is compared byte for byte; only its ASCII letters
+        // are folded.
+        let mixed = path_key("Game/Ä.DAT");
+        if cfg!(windows) {
+            assert_eq!(mixed, "game/Ä.dat");
+        } else {
+            assert_eq!(mixed, "Game/Ä.DAT");
+        }
+        assert_ne!(path_key("Ä"), path_key("ä"));
+    }
+
     #[test]
     fn contained_join_keeps_a_legitimate_path_under_the_base() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "join");
@@ -483,19 +928,30 @@ mod tests {
     }
 
     /// A symlink inside the install that points out of it is an escape even
-    /// though the path is lexically relative. Windows needs a privilege to
-    /// create one, so the case only runs where it can be made.
+    /// though the path is lexically relative. The case needs a symlink, and
+    /// a host that provably refuses one cannot confirm the escape, so the
+    /// case is skipped with the reason rather than failed — unless
+    /// `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every other failure is
+    /// a broken test environment and fails loudly.
     #[cfg(unix)]
     #[test]
     fn contained_join_resolves_a_symlink_and_refuses_the_escape() {
         let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "outside");
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "link");
-        std::os::unix::fs::symlink(&outside, dir.join("game")).unwrap();
+        if let Err(e) = try_symlink_dir(&outside, &dir.join("game")) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
         let got = contained_join(&dir, "game/evil.dat");
         assert!(got.is_err(), "a symlink out of the base must be refused");
         // A symlink that stays inside is still fine.
         std::fs::create_dir_all(dir.join("real")).unwrap();
-        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        let alias = dir.join("alias");
+        // The first link proved this host can make one, so a refusal here is
+        // a broken fixture, not a host skip.
+        try_symlink_dir(&dir.join("real"), &alias).expect("this host already created one symlink");
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
     }
 
@@ -539,9 +995,12 @@ mod tests {
     /// escape, exactly like a Unix symlink, so the resolution path needs a
     /// test on the platform whose reparse points it will meet.
     ///
-    /// Junctions need no privilege (unlike symlinks), but a host that refuses
-    /// to create one cannot confirm the escape here, so the case is skipped
-    /// rather than failed. Link support is host-dependent — see
+    /// Junctions need no privilege (unlike symlinks), but a host that provably
+    /// refuses to create one cannot confirm the escape here, so that case is
+    /// skipped rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION` is
+    /// present. A failure whose cause cannot be proved a host refusal fails
+    /// loudly instead of skipping.
+    /// Link support is host-dependent — see
     /// docs/03-repair-rust-implementation-plan.md ("hard-link dedup": NTFS
     /// only, exFAT has no hard links).
     #[cfg(windows)]
@@ -550,14 +1009,10 @@ mod tests {
         let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_out");
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
         let link = dir.join("game");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&link)
-            .arg(&*outside)
-            .status();
-        let made = matches!(status, Ok(s) if s.success()) && link.exists();
-        if !made {
-            eprintln!("skipping: this host cannot create a directory junction");
+        if let Err(e) = try_junction_dir(&outside, &link) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            junction_fixture_decision(e, require_junction(), FixtureRefusal::Host);
             return;
         }
         let got = contained_join(&dir, "game/evil.dat");
@@ -565,17 +1020,71 @@ mod tests {
             got.is_err(),
             "a junction out of the base must be refused: {got:?}"
         );
-        // A junction that stays inside is still fine.
+        // A junction that stays inside is still fine. The first creation proved
+        // this host can make one, so a refusal here is a broken fixture, not a
+        // host skip.
         std::fs::create_dir_all(dir.join("real")).unwrap();
         let alias = dir.join("alias");
-        let status = std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
-            .arg(&alias)
-            .arg(dir.join("real"))
-            .status();
-        if matches!(status, Ok(s) if s.success()) {
-            assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+        try_junction_dir(&dir.join("real"), &alias)
+            .expect("this host already created one junction");
+        assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// A junction `mklink` claims but never creates is a broken fixture, not
+    /// a host refusal: the containment case must fail loudly instead of
+    /// skipping, so a run meant to prove the escape cannot pass having
+    /// checked nothing.
+    ///
+    /// The shared helper's exit-`0` branch is driven directly and the shared
+    /// decision is driven with its result, so the case runs on every host —
+    /// no `mklink` is run, and no host skip is needed. The decision is the
+    /// caller's own, so a decision that turned the broken arm into a skip
+    /// would fail this case instead of leaving it green.
+    #[cfg(windows)]
+    #[test]
+    fn a_claimed_junction_that_never_appeared_fails_instead_of_skipping() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "missing_junction");
+        let link = dir.join("game");
+
+        let err = junction_result(&JunctionOutcome::Success, &link)
+            .expect_err("a claimed link that never appeared must fail");
+        // The failure is honest about the link being missing.
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        let msg = format!("{err}");
+        assert!(msg.contains("is missing"), "{msg}");
+        assert!(msg.contains(&link.display().to_string()), "{msg}");
+
+        match drive_junction_decision(err, false, FixtureRefusal::Host) {
+            JunctionDecision::Skipped => {
+                panic!("a link that never appeared is not a host refusal")
+            }
+            JunctionDecision::Failed(message) => {
+                // The case fails loudly here, exactly as it does for a link
+                // that could not be inspected.
+                assert!(
+                    message.contains("could not create the test directory junction"),
+                    "the failure names the fixture: {message}"
+                );
+                assert!(message.contains("is missing"), "{message}");
+                assert!(message.contains(&link.display().to_string()), "{message}");
+            }
         }
+    }
+
+    /// Both junction branches are reachable without a host that refuses one.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_failure_skips_without_the_switch() {
+        skip_junction("injected refusal", false, FixtureRefusal::Injected);
+    }
+
+    /// The same refusal is a failure when the switch is present, whatever its
+    /// value.
+    #[cfg(windows)]
+    #[test]
+    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
+    fn a_junction_failure_fails_with_the_switch() {
+        skip_junction("injected refusal", true, FixtureRefusal::Injected);
     }
 
     /// T-2: `file_len` used `.ok()`, so every `metadata` error looked absent.

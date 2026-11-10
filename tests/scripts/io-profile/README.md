@@ -65,6 +65,12 @@ Run it once per disk and compare the `per_op` figures, not the totals: the
 number of operations is fixed so the totals are comparable, but a single noisy
 run is still only worth about 10%.
 
+The bench is a standalone workspace, so ordinary builds do not compile it. CI
+runs `cargo check --locked --manifest-path
+tests/scripts/io-profile/iot-bench/Cargo.toml` with the workspace MSRV (the
+root package's `rust-version`), to keep its pinned `redb` line buildable
+there.
+
 ## Reading the output
 
 - `WaitMs` in `tests-ranked.csv` is `wall - CPU`. It includes every deliberate

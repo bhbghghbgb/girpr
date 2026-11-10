@@ -50,19 +50,20 @@ pub mod scope;
 pub(crate) mod test_support;
 
 pub use phases::metadata::Meta;
-pub use phases::plan::{PlannedFile, RepairPlan};
-pub use purge::{PurgeCandidate, PurgePlan, PurgeVerdict};
-pub use scope::PathScope;
+pub use phases::plan::RepairPlan;
+pub use purge::PurgePlan;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use anyhow::Context;
 
-use crate::config::{RunCtx, RunFailure};
+use crate::config::{RunCtx, RunExit, RunFailure};
 use crate::hyp::HypClient;
+use crate::phase::PhaseTimer;
 use crate::report::{self, Summary};
+use crate::sophon::SophonChunkFile;
 use crate::util;
 
 use phases::{manifest, metadata}; // temporary single import; grows in later steps
@@ -71,23 +72,34 @@ use scan::ScanReport;
 
 /// Bring one install to the latest live version.
 ///
-/// Returns the run counters and the process exit code:
-/// `0` ok (or `--check-only` clean) · `1` usage/config · `2` metadata/network ·
-/// `3` write/verify · `4` `--check-only` found damage. Fatal classes come back
-/// as [`RunFailure`], which carries the same codes.
+/// Returns the run counters and the process exit code as a [`RunExit`].
 ///
 /// The work is split in two halves: `plan_phase` decides everything and
 /// touches nothing, then `execute_phase` carries it out. This function is
 /// only the phase order.
-pub async fn run(ctx: RunCtx) -> Result<(Summary, i32), RunFailure> {
+pub async fn run(ctx: RunCtx) -> Result<(Summary, RunExit), RunFailure> {
+    // The whole run's duration is not a substitute for the phase durations: it
+    // is the context that makes them add up.
+    let run_timer = PhaseTimer::start("run");
     // The counters accumulate across both halves and an early plan return still
     // has to hand them back, so `run` owns the `Summary` and lends it out.
     let mut summary = Summary::default();
     let phase = match plan_phase(&ctx, &mut summary).await? {
-        PlanOutcome::Finished(code) => return Ok((summary, code)),
+        PlanOutcome::Finished(code) => {
+            run_timer.finish();
+            return Ok((summary, code));
+        }
         PlanOutcome::Ready(phase) => *phase,
     };
-    execute_phase(&ctx, phase, summary).await
+    match execute_phase(&ctx, phase, summary).await {
+        Ok(result) => {
+            run_timer.finish();
+            Ok(result)
+        }
+        // The error path leaves the timer to its drop, which reports the run as
+        // incomplete rather than a completed run.
+        Err(e) => Err(e),
+    }
 }
 
 /// Everything the plan half decided, handed to the execute half unchanged.
@@ -109,15 +121,23 @@ struct PlanPhase {
     /// The work list, shared with the repair loop. The post-phase purge reads it.
     plan: Arc<RepairPlan>,
     /// The up-front purge candidates, when a purge or `--print-plan` asked for
-    /// them.
-    purge_plan: Option<PurgePlan>,
-    /// The install scan, when `--scan` asked for it.
-    scan: Option<ScanReport>,
+    /// them. Shared rather than cloned: the before pass hands the blocking
+    /// delete task the same plan the post-phase later reads.
+    purge_plan: Option<Arc<PurgePlan>>,
+    /// The plan-derived keep inputs, folded once here and reused by the
+    /// post-repair pass. `None` when no purge flag or `--print-plan` asked for
+    /// a purge plan at all.
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    /// The install scan, when `--scan` asked for it. Shared with the
+    /// `--check-only` verifier so neither path deep-clones it.
+    scan: Option<Arc<ScanReport>>,
     /// The server's deprecated-file list (empty in read-only modes, or when the
-    /// best-effort fetch failed).
-    deprecated: Vec<String>,
-    /// The local chunk map, moved into the repair loop.
-    local_map: manifest::LocalChunkMap,
+    /// best-effort fetch failed). Shared by `Arc` so the post-phase's blocking
+    /// delete task borrows the same elements instead of cloning them for
+    /// `'static`.
+    deprecated: Arc<[String]>,
+    /// The local chunk map, shared with the repair loop and the scan.
+    local_map: Arc<manifest::LocalChunkMap>,
 }
 
 /// How [`plan_phase`] ends.
@@ -130,16 +150,16 @@ enum PlanOutcome {
     ///
     /// Boxed so the enum stays one word; `PlanPhase` is the whole run state.
     Ready(Box<PlanPhase>),
-    /// The run ends in the plan half: `5` for a scope ceiling, `0` for
-    /// `--print-plan`.
-    Finished(i32),
+    /// The run ends in the plan half: [`RunExit::Limit`] for a scope ceiling,
+    /// [`RunExit::Success`] for `--print-plan`.
+    Finished(RunExit),
 }
 
 /// The plan half: decide everything, touch nothing.
 ///
 /// Metadata → `REPORT` → manifests → `build_plan` → the purge plan → the
 /// deprecated list → the scan → the ceilings → `--print-plan` / `--plan-out`.
-/// The two early exits here (`--print-plan` `0`, a scope ceiling `5`) are
+/// The two early exits here (`--print-plan` success, a scope ceiling) are
 /// [`PlanOutcome::Finished`]; the run never reaches `create_dir_all`.
 ///
 /// `summary` arrives empty and leaves with the plan-phase flags and totals set;
@@ -149,7 +169,6 @@ enum PlanOutcome {
 async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, RunFailure> {
     // Read-only modes must not write anything: `--dry-run` logs actions only,
     // `--check-only` verifies only.
-    let readonly = ctx.readonly();
     // NOTE: `game_dir` is NOT created here. `create_dir_all` lives in the
     // execution phase so a run that refuses before doing any work leaves no
     // directory behind. Reads tolerate a missing dir, so the plan phase can
@@ -169,38 +188,139 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // `--purge-before` and `--purge-after` delete the same things; only the
     // timing differs.
 
-    // 1 + 2. local state and server metadata.
-    let meta = metadata::fetch(ctx, &game_dir).await?;
-
-    // 2.5 begin report to stdout (mirrored to log): versions + API-sourced
-    // metadata, so a stdout parser sees what is on disk and what it will
-    // become before any repair starts.
-    report::emit(
-        &report::report_record(
-            &meta.local_version,
-            &meta.latest,
-            ctx.biz.as_str(),
-            &meta.config,
-            &meta.branch,
-            &meta.latest_build,
-            &meta.audio,
-        ),
-        ctx.output,
-    );
+    // 1 + 2 + 2.5. local state, server metadata, and the begin report.
+    let meta = fetch_and_report(ctx, &game_dir).await?;
 
     // 3. manifests (latest, per-manifest prefix kept) + local chunk map.
     let http = meta.hyp.http();
+    let (per_manifest, local_map) = load_manifests_and_reuse(ctx, &meta, &http, summary).await?;
+
+    // 4. work list, purge candidates, deprecated list, scan, estimates, and the
+    // ceilings — everything decided before a byte is written.
+    let Some(work) = build_and_assert_plan(PlanInputs {
+        ctx,
+        summary,
+        game_dir: &game_dir,
+        root: root.as_ref(),
+        meta: &meta,
+        per_manifest,
+        local_map: &local_map,
+    })
+    .await?
+    else {
+        // A limit, returned rather than raised: it is "the run failed", not
+        // "the run was misconfigured", and routing it through the normal return
+        // gives every exit path one uniform SUMMARY tail.
+        // Nothing has been written at this point — no directory created, no
+        // `_tmp` opened, no file deleted, no `config.ini` touched.
+        return Ok(PlanOutcome::Finished(RunExit::Limit));
+    };
+
+    // 4.7 `--print-plan` / `--plan-out`: report the whole plan and stop.
+    // Read-only by construction — this returns before `create_dir_all`, so no
+    // `game_dir`, no `_tmp`, no delete, no `config.ini` write. It does **not**
+    // imply `--check-only`: it answers "what would you do", not "what is wrong".
+    //
+    // The ceilings above still apply, and still trip here: narrowing what is
+    // verified is not a licence to skip the assertion.
+    //
+    // The document is published after the purge candidates were walked, so an
+    // in-install `--plan-out` is not among them: `--purge-before` executes that
+    // exact pre-flight set and leaves the document in place, while the
+    // post-repair re-plan sees it as any other extra file.
+    publish_plan(ctx, &game_dir, root.as_ref(), &work).await?;
+    if ctx.print_plan {
+        return Ok(PlanOutcome::Finished(RunExit::Success));
+    }
+
+    Ok(PlanOutcome::Ready(Box::new(PlanPhase {
+        game_dir,
+        meta,
+        http,
+        plan: work.plan,
+        purge_plan: work.purge_plan.map(Arc::new),
+        purge_keys: work.purge_keys,
+        scan: work.scan,
+        deprecated: work.deprecated,
+        local_map,
+    })))
+}
+
+/// The plan half's decision, before `--print-plan` / `--plan-out` publish it.
+///
+/// This is an output bag for [`build_and_assert_plan`], not a new phase: the
+/// caller hands it straight to [`publish_plan`] and then to [`PlanPhase`].
+struct PlanWork {
+    plan: Arc<RepairPlan>,
+    purge_plan: Option<PurgePlan>,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    deprecated: Arc<[String]>,
+    scan: Option<Arc<ScanReport>>,
+    /// The per-file download estimate. One derivation feeds both the `PLAN`
+    /// total and the `--plan-out` document.
+    est_download_by_file: Vec<u64>,
+    est_download_bytes: u64,
+}
+
+/// Steps 1 + 2 of the plan half: local state and server metadata, then the
+/// begin report to stdout (mirrored to log), so a stdout parser sees what is on
+/// disk and what it will become before any repair starts.
+async fn fetch_and_report(ctx: &RunCtx, game_dir: &Path) -> Result<Meta, RunFailure> {
+    let timer = PhaseTimer::start("metadata");
+    let meta = metadata::fetch(ctx, game_dir).await?;
+    timer.finish();
+    report::emit(
+        &report::report_record(&report::ReportProvenance {
+            local_version: &meta.local_version,
+            latest_version: &meta.latest,
+            biz: ctx.biz.as_str(),
+            cfg: &meta.config,
+            pkg: &meta.branch,
+            build: &meta.latest_build,
+            audio_langs: &meta.audio,
+        }),
+        ctx.output,
+    );
+    Ok(meta)
+}
+
+/// Step 3: the latest manifests (with each manifest's chunk URL prefix kept)
+/// and the local chunk-reuse map.
+async fn load_manifests_and_reuse(
+    ctx: &RunCtx,
+    meta: &Meta,
+    http: &reqwest::Client,
+    summary: &mut Summary,
+) -> Result<
+    (
+        Vec<(String, Vec<SophonChunkFile>)>,
+        Arc<manifest::LocalChunkMap>,
+    ),
+    RunFailure,
+> {
+    let timer = PhaseTimer::start("manifest");
     let sleep = ctx.sleep.as_ref();
-    let per_manifest =
-        manifest::fetch_latest(&http, sleep, &meta.latest_build, &meta.audio, &meta.ignore).await?;
-    let local_map = manifest::local_reuse_map(
-        &http,
+    let per_manifest = manifest::fetch_latest(
+        http,
         sleep,
-        meta.local_build.as_ref(),
+        &meta.latest_build,
         &meta.audio,
         &meta.ignore,
+        ctx.jobs,
     )
-    .await;
+    .await?;
+    let local_map = Arc::new(
+        manifest::local_reuse_map(
+            http,
+            sleep,
+            meta.local_build.as_ref(),
+            &meta.audio,
+            &meta.ignore,
+            ctx.jobs,
+        )
+        .await,
+    );
+    timer.finish();
     // The local manifest loading is the one degradation that changes the
     // reported numbers while leaving the exit code at `0`: with no local build
     // the reuse map is empty, so every chunk downloads and both
@@ -217,17 +337,111 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
             "unavailable"
         });
     }
+    Ok((per_manifest, local_map))
+}
 
-    // 4. work list. The plan outlives the repair loop (the post-phase purge
-    // needs it), so it is shared rather than moved into the tasks.
+/// The inputs to [`build_and_assert_plan`]: the values `plan_phase` already
+/// resolved, grouped so the signature names one run rather than eight roles.
+struct PlanInputs<'a> {
+    ctx: &'a RunCtx,
+    summary: &'a mut Summary,
+    game_dir: &'a Path,
+    root: Option<&'a util::PathRoot>,
+    meta: &'a Meta,
+    per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
+    local_map: &'a Arc<manifest::LocalChunkMap>,
+}
+
+/// Step 4: the work list, the purge candidates, the deprecated list, the scan,
+/// the download estimate, and the scope-of-work ceilings.
+///
+/// Returns `Ok(None)` when a ceiling refused the run; the caller owns the
+/// [`PlanOutcome::Finished`] return so a helper never hands back an exit code.
+///
+/// The body is the five conceptual steps in order (plan + purge, the include
+/// guard, the deprecated list, the scan, the estimate + ceilings); each one
+/// keeps its own side effects and log lines.
+async fn build_and_assert_plan(inputs: PlanInputs<'_>) -> Result<Option<PlanWork>, RunFailure> {
+    let PlanInputs {
+        ctx,
+        summary,
+        game_dir,
+        root,
+        meta,
+        per_manifest,
+        local_map,
+    } = inputs;
+
+    let (plan, purge_keys, purge_plan) =
+        plan_work_and_purge(ctx, summary, game_dir, meta, per_manifest).await?;
+
+    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
+    ensure_scope_selected_something(
+        &ctx.path_scope,
+        &plan,
+        purge_candidates,
+        purge_plan.as_ref(),
+    )?;
+
+    let deprecated = load_deprecated(ctx, meta).await;
+    let scan = scan_if_requested(ctx, game_dir, root, &plan, local_map).await;
+
+    // The estimate is a pure computation; the summary values it derives are
+    // written once, here, in the same order and under the same conditions as
+    // before.
+    let (estimate, plan_summary) =
+        estimate_download(ctx, scan.as_deref(), &plan, game_dir, root, local_map);
+    if let Some(bytes) = plan_summary.reported_bytes {
+        tracing::info!("estimated download: {bytes} bytes");
+        summary.flags.plan_download_bytes = Some(bytes);
+    }
+    if let Some(damaged_chunks) = plan_summary.damaged_chunks {
+        summary.flags.damaged_chunks = Some(damaged_chunks);
+    }
+    summary.files_total = plan_summary.files_total;
+    summary.flags.limited = plan_summary.limited;
+    if !within_limits(ctx, &plan, purge_plan.as_ref(), estimate.bytes) {
+        return Ok(None);
+    }
+
+    Ok(Some(PlanWork {
+        plan,
+        purge_plan,
+        purge_keys,
+        deprecated,
+        scan,
+        est_download_by_file: estimate.by_file,
+        est_download_bytes: estimate.bytes,
+    }))
+}
+
+/// Step 4.0: the work list and, when a purge will happen, its candidates.
+///
+/// The `plan` timer covers both, and stops before the include guard and the
+/// network work that follow.
+async fn plan_work_and_purge(
+    ctx: &RunCtx,
+    summary: &mut Summary,
+    game_dir: &Path,
+    meta: &Meta,
+    per_manifest: Vec<(String, Vec<SophonChunkFile>)>,
+) -> Result<
+    (
+        Arc<RepairPlan>,
+        Option<Arc<purge::PurgeKeys>>,
+        Option<PurgePlan>,
+    ),
+    RunFailure,
+> {
     let scope = &ctx.path_scope;
+    let timer = PhaseTimer::start("plan");
     let plan = Arc::new(
         phases::plan::build_plan(per_manifest, &meta.blacklist, &meta.latest, scope)
             .map_err(RunFailure::metadata)?,
     );
     tracing::info!(
         "work list: {} files{}",
-        plan.files.len(),
+        plan.len(),
         if scope.is_active() {
             " (filtered by --include/--exclude)"
         } else {
@@ -250,164 +464,293 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // re-plan, whose candidates could in principle differ — so the bound does
     // not rest on the pipeline's current promise that a successful repair
     // promotes every `*_tmp` it creates.
-    let purge_plan = (ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan)
-        .then(|| purge::plan_purge(&game_dir, &plan, &purge::keep_set(), &meta.blacklist, scope));
-
-    // 4.2 An `--include` that selected **nothing at all** is a typo, and a typo
-    // that costs 130 GB to discover is the failure mode this whole feature
-    // exists to remove. Exit `1` — a property of the request — rather than `5`,
-    // which means the request was well-formed and the answer was too big.
+    let purge_wanted = ctx.purge_before || ctx.purge_after || ctx.purge_only || ctx.print_plan;
+    // The keep inputs are derived only from the immutable plan and the run's
+    // configuration, so fold them once and let both purge passes (and the
+    // `--print-plan` numbers) share them. The walked candidates stay
+    // per-pass: the filesystem can change between the before and after walks.
     //
-    // "Nothing at all" spans both plans, which is why this sits after 4.1. An
-    // empty *repair* plan on its own is not a typo: a path that is on disk but
-    // absent from the new manifest — the ordinary "removed upstream" case, and
-    // `gircap`'s `removed` capture — is in no repair plan by construction, and
-    // `--purge-only --include <that path>` is precisely the request that deletes
-    // it. (This also means a new `--include` on a `--print-plan` run reports
-    // `files=0 purge_files=1` instead of erroring, which is what "print the
-    // plan" should do.)
-    let purge_candidates = purge_plan.as_ref().map_or(0, |p| p.files.len());
-    if scope.has_includes() && plan.files.is_empty() && purge_candidates == 0 {
-        // Say which of the two plans came back empty: the diagnosis differs, and
-        // so does the fix the user needs.
-        let message = if purge_plan.is_some() {
-            format!(
-                "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
-                 candidates either; check the glob spelling (`*` also crosses `/`) or the \
-                 installed version",
-                scope.describe_includes(),
-            )
-        } else {
-            format!(
-                "--include '{}' matched no file in the live manifest (plan_files=0); \
-                 check the glob spelling (`*` also crosses `/`) or the installed version",
-                scope.describe_includes(),
-            )
-        };
-        return Err(RunFailure::usage(anyhow::anyhow!("{message}")));
+    // The fold keys every expected rel with `path_key`, which is proportional
+    // to the manifest size (hundreds of milliseconds on a large install). It
+    // runs in the same blocking task as the walk, so neither the fold nor the
+    // walk occupies an async worker.
+    let (purge_keys, purge_plan) = if purge_wanted {
+        let purge_game_dir = game_dir.to_path_buf();
+        let keys_plan = Arc::clone(&plan);
+        let blacklist = meta.blacklist.clone();
+        let purge_scope = ctx.path_scope.clone();
+        // Raw `spawn_blocking`: the walk emits only best-effort diagnostics
+        // (a path it could not read, a candidate it could not stat), which
+        // nothing asserts through a scoped subscriber. A test that needed them
+        // would use `spawn_blocking_traced`.
+        let (keys, plan) = tokio::task::spawn_blocking(move || {
+            let keys = purge::PurgeKeys::new(&keys_plan, purge::keep_set(), &blacklist);
+            let plan = purge::plan_purge(&purge_game_dir, &keys, &purge_scope);
+            (keys, plan)
+        })
+        .await
+        .map_err(|e| {
+            RunFailure::write(anyhow::anyhow!(
+                "purge planning task failed before any delete: {e}"
+            ))
+        })?;
+        (Some(Arc::new(keys)), Some(plan))
+    } else {
+        (None, None)
+    };
+
+    timer.finish();
+    Ok((plan, purge_keys, purge_plan))
+}
+
+/// Step 4.2: an `--include` that selected **nothing at all** is a typo, and a
+/// typo that costs 130 GB to discover is the failure mode this whole feature
+/// exists to remove. Exit `1` — a property of the request — rather than `5`,
+/// which means the request was well-formed and the answer was too big.
+///
+/// "Nothing at all" spans both plans, which is why this runs after 4.1. An
+/// empty *repair* plan on its own is not a typo: a path that is on disk but
+/// absent from the new manifest — the ordinary "removed upstream" case, and
+/// `gircap`'s `removed` capture — is in no repair plan by construction, and
+/// `--purge-only --include <that path>` is precisely the request that deletes
+/// it. (This also means a new `--include` on a `--print-plan` run reports
+/// `files=0 purge_files=1` instead of erroring, which is what "print the
+/// plan" should do.)
+fn ensure_scope_selected_something(
+    scope: &scope::PathScope,
+    plan: &RepairPlan,
+    purge_candidates: usize,
+    purge_plan: Option<&PurgePlan>,
+) -> Result<(), RunFailure> {
+    if !scope.has_includes() || !plan.is_empty() || purge_candidates != 0 {
+        return Ok(());
     }
+    // Say which of the two plans came back empty: the diagnosis differs, and
+    // so does the fix the user needs.
+    let message = if purge_plan.is_some() {
+        format!(
+            "--include '{}' selected nothing: plan_files=0 and the files-cleanup has no \
+             candidates either; check the glob spelling (`*` also crosses `/`) or the \
+             installed version",
+            scope.describe_includes(),
+        )
+    } else {
+        format!(
+            "--include '{}' matched no file in the live manifest (plan_files=0); \
+             check the glob spelling (`*` also crosses `/`) or the installed version",
+            scope.describe_includes(),
+        )
+    };
+    Err(RunFailure::usage(anyhow::anyhow!("{message}")))
+}
 
-    // 4.3 the server's deprecated-file list, fetched here rather than in the
-    // post-phase: it is part of what the run will act on, so it belongs with the
-    // rest of the plan. Still best-effort (the list is advisory).
-    //
-    // Read-only modes skip it. The post-phase is its only consumer, and a
-    // read-only run never reaches the post-phase, so issuing the request would
-    // add a network round-trip to every `--dry-run`, `--check-only` and
-    // `--print-plan` run and then throw the answer away. (`--print-plan` is not
-    // covered by `readonly()` — it leaves by an early return — hence the
-    // explicit disjunct.)
-    //
-    // It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
-    // extra network call.
-    let wants_deprecated = !readonly && !ctx.print_plan;
-    let deprecated = if wants_deprecated {
+/// Step 4.3: the server's deprecated-file list.
+///
+/// Fetched here rather than in the post-phase: it is part of what the run will
+/// act on, so it belongs with the rest of the plan. Still best-effort (the list
+/// is advisory).
+///
+/// `--dry-run` needs it because the post-phase now runs in a dry run and lists
+/// the deprecated deletes it would make. `--check-only` and `--print-plan` still
+/// skip it: neither reaches the post-phase, so the request would only add a
+/// network round-trip and throw the answer away.
+///
+/// Those two modes are the whole exclusion. `readonly()` is
+/// `dry_run || check_only`, so once `check_only` is excluded the remaining
+/// `dry_run || !readonly` reduces to `dry_run || !dry_run` — always true — and
+/// the gate is just `!print_plan && !check_only`.
+///
+/// It stays *after* the 4.2 guard so that a typo'd `--include` still costs no
+/// extra network call. The call is needed exactly when the post-phase will list
+/// its deletes: any run that reaches the execution half.
+async fn load_deprecated(ctx: &RunCtx, meta: &Meta) -> Arc<[String]> {
+    let wants_deprecated = !ctx.print_plan && !ctx.check_only;
+    if wants_deprecated {
+        // The fetch hands back the shared list itself, so the post-phase can
+        // share it with its blocking task for a reference bump.
         fetch_deprecated(&meta.hyp).await
     } else {
         tracing::debug!("read-only mode: not fetching the deprecated-file list");
-        Vec::new()
-    };
+        Vec::new().into()
+    }
+}
 
-    // The scan, when it was asked for. It reads every planned file once and
-    // turns the plan's estimates from upper bounds into figures.
-    let scan = if ctx.scan {
+/// The scan, when it was asked for. It reads every planned file once and turns
+/// the plan's estimates from upper bounds into figures.
+async fn scan_if_requested(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    local_map: &Arc<manifest::LocalChunkMap>,
+) -> Option<Arc<ScanReport>> {
+    if !ctx.scan {
+        return None;
+    }
+    Some(Arc::new(
+        scan::scan_plan(
+            game_dir,
+            root,
+            Arc::clone(plan),
+            Arc::clone(local_map),
+            ctx.jobs,
+        )
+        .await,
+    ))
+}
+
+/// The download estimate: `Σ compressed_size` over the chunks the local reuse
+/// map cannot supply, split per file.
+///
+/// It is exactly `gircap`'s `patch_fetch` formula, and because capture
+/// invariant A6 says `len(blob) == compressed_size` it is the same quantity the
+/// runner counts — but it is a **lower bound, not a promise**: `try_reuse_slice`
+/// falls back to a download whenever a local slice fails its MD5, so a file
+/// estimated at 0 bytes can still download its whole body. That is why the
+/// runtime hard stop exists alongside this.
+///
+/// Under `--scan` the estimate is the **exact** figure for the write path each
+/// file takes: the chunks that are wrong where they belong and have no intact
+/// source the chosen direction keeps. It resolves the mode itself, including a
+/// requested `temp`, so this is one rule for every mode.
+///
+/// The split is computed once, per file, and both consumers fold it: the `PLAN`
+/// total and the `--plan-out` document. A second derivation would be a second
+/// answer.
+struct DownloadEstimate {
+    by_file: Vec<u64>,
+    bytes: u64,
+}
+
+/// The plan-phase values [`estimate_download`] derives for `SUMMARY`.
+///
+/// Kept apart from [`DownloadEstimate`] so that type stays about bytes: these
+/// are the report-shaped facts, not figures the write path uses.
+struct PlanSummaryValues {
+    /// `Some(bytes)` when the `ctx.limits.download_bytes` ceiling asked for the
+    /// figure, so the caller can log and report it without re-deriving the
+    /// condition.
+    reported_bytes: Option<u64>,
+    /// The scan's damaged-chunk count, when a scan ran.
+    damaged_chunks: Option<u64>,
+    /// The plan size, for `SUMMARY plan_files`.
+    files_total: u64,
+    /// Whether any ceiling was requested, for `SUMMARY limited=1`.
+    limited: bool,
+}
+
+fn estimate_download(
+    ctx: &RunCtx,
+    scan: Option<&ScanReport>,
+    plan: &Arc<RepairPlan>,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    local_map: &Arc<manifest::LocalChunkMap>,
+) -> (DownloadEstimate, PlanSummaryValues) {
+    let by_file = match scan {
+        Some(s) => s.est_download_bytes_by_file(plan, game_dir, root, ctx.repair_mode, local_map),
+        None => plan.est_download_bytes_by_file(local_map),
+    };
+    let bytes = by_file
+        .iter()
+        .fold(0u64, |total, n| total.saturating_add(*n));
+    (
+        DownloadEstimate { by_file, bytes },
+        PlanSummaryValues {
+            reported_bytes: ctx.limits.download_bytes.map(|_| bytes),
+            damaged_chunks: scan.map(|s| s.damaged_chunks),
+            files_total: plan.len() as u64,
+            limited: ctx.limits.is_active(),
+        },
+    )
+}
+
+/// === assert: the ceilings, before anything is mutated ===
+///
+/// Filter → assert → work, in that order. Checking the ceilings *after* the
+/// scope filter is what makes them usable at all: before filtering,
+/// `--max-files 8` would refuse on every real install.
+///
+/// Returns `false` when a ceiling refused the run, after logging every hit.
+fn within_limits(
+    ctx: &RunCtx,
+    plan: &Arc<RepairPlan>,
+    purge_plan: Option<&PurgePlan>,
+    est_download_bytes: u64,
+) -> bool {
+    let hits = ctx.limits.check_preflight(scope::Preflight {
+        plan,
+        est_download_bytes,
+        purge: purge_plan.filter(|_| !ctx.check_only),
+    });
+    if hits.is_empty() {
+        return true;
+    }
+    for hit in &hits {
+        tracing::error!("limit exceeded: {hit}");
+    }
+    false
+}
+
+/// Step 4.7: publish the plan when `--print-plan` or `--plan-out` asked for it.
+///
+/// Both consumers of the disk figures need the same table: the `PLAN` line and
+/// the `--plan-out` document. Compute it when either was asked for, so the
+/// document is written for a run that does the work as well as for
+/// `--print-plan`.
+#[allow(clippy::expect_used)] // each `disk` use is inside the branch that computed it
+async fn publish_plan(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    work: &PlanWork,
+) -> Result<(), RunFailure> {
+    let plan = &work.plan;
+    let purge_plan = work.purge_plan.as_ref();
+    let scan = work.scan.as_deref();
+    let est_download_by_file = &work.est_download_by_file;
+    let est_download_bytes = work.est_download_bytes;
+    // Publishing only costs anything when it produces a plan; an ordinary run's
+    // call is a no-op and must not add a zero-duration line.
+    let timer = (ctx.print_plan || ctx.plan_out.is_some()).then(|| PhaseTimer::start("publish"));
+    let disk = if ctx.print_plan || ctx.plan_out.is_some() {
+        let disk_game_dir = game_dir.to_path_buf();
+        let disk_root = root.cloned();
+        let disk_plan = Arc::clone(plan);
+        let repair_mode = ctx.repair_mode;
+        let jobs = ctx.jobs;
+        // Raw `spawn_blocking`: `DiskPlan::new` emits only best-effort
+        // warnings (a rel that escapes the install, a file that cannot be
+        // stat'd). No test drives them through this spawn site; a test that
+        // needed to would use `spawn_blocking_traced`.
         Some(
-            scan::scan_plan(
-                &game_dir,
-                root.as_ref(),
-                Arc::clone(&plan),
-                Arc::new(local_map.clone()),
-                ctx.jobs,
-            )
-            .await,
+            tokio::task::spawn_blocking(move || {
+                scope::report::DiskPlan::new(
+                    &disk_game_dir,
+                    disk_root.as_ref(),
+                    &disk_plan,
+                    repair_mode,
+                    jobs,
+                )
+            })
+            .await
+            .map_err(|e| {
+                RunFailure::write(anyhow::anyhow!(
+                    "disk planning task failed before any write: {e}"
+                ))
+            })?,
         )
     } else {
         None
     };
-
-    // === assert: the ceilings, before anything is mutated ===
-    //
-    // Filter → assert → work, in that order. Checking the ceilings
-    // *after* the scope filter is what makes them usable at all: before
-    // filtering, `--max-files 8` would refuse on every real install.
-    //
-    // The download estimate is `Σ compressed_size` over the chunks the local
-    // reuse map cannot supply. It is exactly `gircap`'s `patch_fetch` formula,
-    // and because capture invariant A6 says `len(blob) == compressed_size` it is
-    // the same quantity the runner counts — but it is a **lower bound, not a
-    // promise**: `try_reuse_slice` falls back to a download whenever a local
-    // slice fails its MD5, so a file estimated at 0 bytes can still download its
-    // whole body. That is why the runtime hard stop exists alongside this.
-    //
-    // Under `--scan` the estimate is the **exact** figure for the write path
-    // each file takes: the chunks that are wrong where they belong and have no
-    // intact source the chosen direction keeps. It resolves the mode itself,
-    // including a requested `temp`, so this is one rule for every mode.
-    //
-    // The split is computed once, per file, and both consumers fold it: the
-    // `PLAN` total below and the `--plan-out` document further down. A second
-    // derivation would be a second answer.
-    let est_download_by_file: Vec<u64> = match &scan {
-        Some(s) => s.est_download_bytes_by_file(
-            &plan,
-            &game_dir,
-            root.as_ref(),
-            ctx.repair_mode,
-            &local_map,
-        ),
-        None => plan.est_download_bytes_by_file(&local_map),
-    };
-    let est_download_bytes = est_download_by_file
-        .iter()
-        .fold(0u64, |total, n| total.saturating_add(*n));
-    if ctx.limits.download_bytes.is_some() {
-        tracing::info!("estimated download: {est_download_bytes} bytes");
-        summary.flags.plan_download_bytes = Some(est_download_bytes);
-    }
-    if let Some(s) = &scan {
-        summary.flags.damaged_chunks = Some(s.damaged_chunks);
-    }
-    summary.files_total = plan.files.len() as u64;
-    summary.flags.limited = ctx.limits.is_active();
-    let hits = ctx.limits.check_preflight(scope::Preflight {
-        plan: &plan,
-        est_download_bytes,
-        purge: purge_plan.as_ref().filter(|_| !ctx.check_only),
-    });
-    if !hits.is_empty() {
-        for hit in &hits {
-            tracing::error!("limit exceeded: {hit}");
-        }
-        // Exit `5`, returned rather than raised: it is "the run failed", not
-        // "the run was misconfigured", and routing it through the normal return
-        // gives every exit path one uniform SUMMARY tail.
-        // Nothing has been written at this point — no directory created, no
-        // `_tmp` opened, no file deleted, no `config.ini` touched.
-        return Ok(PlanOutcome::Finished(5));
-    }
-
-    // 4.7 `--print-plan`: report the whole plan and stop. Read-only by
-    // construction — this returns before `create_dir_all`, so no `game_dir`,
-    // no `_tmp`, no delete, no `config.ini` write. It does **not** imply
-    // `--check-only`: it answers "what would you do", not "what is wrong".
-    //
-    // The ceilings above still apply, and still trip here: narrowing what is
-    // verified is not a licence to skip the assertion.
-    // Both consumers of the disk figures need the same table: the `PLAN` line
-    // and the `--plan-out` document. Compute it when either was asked for, so
-    // the document is written for a run that does the work as well as for
-    // `--print-plan`.
-    let disk = (ctx.print_plan || ctx.plan_out.is_some()).then(|| {
-        scope::report::DiskPlan::new(&game_dir, root.as_ref(), &plan, ctx.repair_mode, ctx.jobs)
-    });
     if ctx.print_plan {
         let totals = scope::report::PlanTotals::new(
-            &plan,
-            purge_plan.as_ref(),
+            plan,
+            purge_plan,
             est_download_bytes,
-            scope.is_active(),
+            ctx.path_scope.is_active(),
             disk.as_ref().expect("the print-plan branch asks for it"),
-            scan.as_ref().map(|s| s.bytes),
+            scan.map(|s| s.bytes),
         );
         // One `PLAN` record, rendered once, so the JSON plane carries one
         // object per event rather than a second line repeating the numbers.
@@ -420,58 +763,132 @@ async fn plan_phase(ctx: &RunCtx, summary: &mut Summary) -> Result<PlanOutcome, 
     // write.
     if let Some(out) = ctx.plan_out.as_deref() {
         let doc = scope::report::PlanDocument::new(
-            &plan,
-            purge_plan.as_ref(),
-            &est_download_by_file,
+            plan,
+            purge_plan,
+            est_download_by_file,
             disk.as_ref().expect("the plan-out branch asks for it"),
         );
-        doc.write_to(std::path::Path::new(out))
+        doc.write_to(Path::new(out))
             .map_err(|e| RunFailure::write(e.context("write --plan-out")))?;
     }
-    if ctx.print_plan {
-        return Ok(PlanOutcome::Finished(0));
+    if let Some(timer) = timer {
+        timer.finish();
     }
-
-    Ok(PlanOutcome::Ready(Box::new(PlanPhase {
-        game_dir,
-        meta,
-        http,
-        plan,
-        purge_plan,
-        scan,
-        deprecated,
-        local_map,
-    })))
+    Ok(())
 }
 
 /// The execute half: everything here may touch the disk.
 ///
 /// Entered only with a completed [`PlanPhase`], so every refusal has already
 /// happened and `create_dir_all` below is the first mutation. The early returns
-/// keep their order and codes: `--check-only` (`0`/`4`), `--purge-only` (`0`/`5`),
-/// a runtime ceiling (`5`), a failed file (`3`), then the post-phase (`0`/`5`).
+/// keep their order and meaning: `--check-only` (success/found damage),
+/// `--purge-only` (success/limit), a runtime ceiling (limit), a failed file
+/// (write), then the post-phase (success/limit).
 async fn execute_phase(
     ctx: &RunCtx,
     phase: PlanPhase,
     mut summary: Summary,
-) -> Result<(Summary, i32), RunFailure> {
+) -> Result<(Summary, RunExit), RunFailure> {
     let PlanPhase {
         game_dir,
         meta,
         http,
         plan,
         purge_plan,
+        purge_keys,
         scan,
         deprecated,
         local_map,
     } = phase;
     let readonly = ctx.readonly();
-    let scope = &ctx.path_scope;
 
     // === execution phase: everything below may touch the disk ===
 
-    // 5. prepare `game_dir` (create when missing, unless read-only). Deferred
-    // from the top of the run so a refusal above creates nothing.
+    // 5. prepare `game_dir`, then take the single-writer lock.
+    let (game_dir, root) = prepare_install(ctx, game_dir, readonly)?;
+    let _lock = acquire_lock(ctx, &game_dir, readonly)?;
+
+    // 5.1 the explicit `--audio` selection.
+    write_explicit_audio(ctx, &game_dir, &meta, readonly)?;
+
+    // 5.2 files-cleanup before.
+    run_purge_before(ctx, purge_plan.clone(), &mut summary).await?;
+
+    // 5.5 check-only: verify only, then return. Nothing is written.
+    if ctx.check_only {
+        return run_check_only(ctx, &game_dir, root.as_ref(), &plan, scan, summary).await;
+    }
+
+    // 5.6 purge-only: every phase but the repair loop.
+    if ctx.purge_only {
+        return run_purge_only(
+            ctx,
+            &game_dir,
+            purge_keys,
+            purge_plan.as_deref(),
+            &meta,
+            &deprecated,
+            summary,
+        )
+        .await;
+    }
+
+    // 6. repair files (bounded file parallelism, sequential chunks per file).
+    summary = run_repair(
+        ctx,
+        file::RepairInputs {
+            http,
+            game_dir: game_dir.to_path_buf(),
+            root,
+            plan: Arc::clone(&plan),
+            local_map,
+            scan,
+            summary,
+            jobs: ctx.jobs,
+            dry_run: ctx.dry_run,
+            output: ctx.output,
+            repair_mode: ctx.repair_mode,
+            sleep: ctx.sleep.clone(),
+        },
+    )
+    .await;
+    if let Some(code) = apply_run_flags(ctx, &mut summary) {
+        return Ok((summary, code));
+    }
+    if summary.files_failed.load(Ordering::Relaxed) > 0 {
+        return Ok((summary, RunExit::Write));
+    }
+
+    // 7. post phase, when the run actually mutates the install or lists what a
+    // dry run would mutate.
+    let mutates = !readonly;
+    let lists_dry_run = ctx.dry_run && !ctx.check_only && !ctx.print_plan;
+    if mutates || lists_dry_run {
+        return run_post(
+            ctx,
+            &game_dir,
+            purge_keys,
+            purge_plan.as_deref(),
+            &meta,
+            &deprecated,
+            summary,
+        )
+        .await;
+    }
+
+    Ok((summary, RunExit::Success))
+}
+
+/// Step 5 of the execute half: create `game_dir` when the run may write, then
+/// canonicalize it again and resolve the execute-phase install root.
+///
+/// `create_dir_all` is deferred from the top of the run so a refusal in the
+/// plan half creates nothing.
+fn prepare_install(
+    ctx: &RunCtx,
+    game_dir: PathBuf,
+    readonly: bool,
+) -> Result<(PathBuf, Option<util::PathRoot>), RunFailure> {
     if !readonly {
         std::fs::create_dir_all(&ctx.game_dir)
             .context("create game dir")
@@ -483,136 +900,231 @@ async fn execute_phase(
     // The plan-phase root cached the pre-create form (or a missing tail). The
     // base exists now, so resolve it again for the execute-phase callers.
     let root = util::PathRoot::new(&game_dir).ok();
+    Ok((game_dir, root))
+}
 
-    // The single-writer lock. Two runs against one install can write
-    // conflicting bytes into the same file, so a run that mutates the
-    // install takes the lock — and only such a run, and only when the
-    // path scope admits the lock file (the same rule `config.ini` lives
-    // under: a path outside the scope does not exist to the run).
-    let _lock =
-        if !readonly && !ctx.check_only && !ctx.print_plan && scope.is_visible(lock::LOCK_FILE) {
-            let lock = lock::Lock::acquire(&game_dir)
-                .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
-            tracing::info!(path = %lock.path().display(), "single-writer lock taken");
-            Some(lock)
-        } else {
-            None
-        };
+/// Take the single-writer lock when this run mutates the install.
+///
+/// Two runs against one install can write conflicting bytes into the same
+/// file, so every run that mutates the install takes the lock. The lock lives
+/// outside the install, keyed by the canonical game dir, so a path scope cannot
+/// hide it from one run while another run mutates the same files.
+fn acquire_lock(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    readonly: bool,
+) -> Result<Option<lock::Lock>, RunFailure> {
+    if !lock::takes_lock(readonly, ctx.check_only, ctx.print_plan) {
+        return Ok(None);
+    }
+    let lock = lock::Lock::acquire(game_dir)
+        .map_err(|e| RunFailure::usage(e.context("single-writer lock")))?;
+    tracing::info!(path = %lock.path().display(), "single-writer lock taken");
+    Ok(Some(lock))
+}
 
-    // 5.1 the explicit `--audio` selection, written now rather than in
-    // `metadata`: the plan half is documented to leave the install untouched,
-    // and this write creates the scan file and its parent. Every refusal is
-    // already behind us, and the repair reads the in-memory `meta.audio`, so
-    // the timing changes nothing else. The path itself was validated
-    // (containment and scope) in `metadata`.
+/// Step 5.1: write the explicit `--audio` selection now rather than in
+/// `metadata`.
+///
+/// The plan half is documented to leave the install untouched, and this write
+/// creates the scan file and its parent. Every refusal is already behind us, and
+/// the repair reads the in-memory `meta.audio`, so the timing changes nothing
+/// else. The path itself was validated (containment and scope) in `metadata`.
+fn write_explicit_audio(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    meta: &Meta,
+    readonly: bool,
+) -> Result<(), RunFailure> {
     if ctx.audio_explicit && !readonly && !meta.config.audio_pkg_scan_dir.is_empty() {
-        audio::write_scan_file(&game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
+        audio::write_scan_file(game_dir, &meta.config.audio_pkg_scan_dir, &meta.audio)
             .context("write audio scan file")
             .map_err(RunFailure::write)?;
     }
+    Ok(())
+}
 
-    // 5.2 files-cleanup before: the plan built in 4.6, executed here to free
-    // space for the repair itself. Skipped entirely in `--check-only`
-    // (verification reports damage; it must not delete). In `--dry-run` it runs
-    // in log-only mode.
-    let mut purge_logged = false;
+/// Run a blocking closure on the blocking pool with the caller's tracing
+/// dispatcher installed.
+///
+/// `spawn_blocking` starts on a pool thread with no thread-local subscriber.
+/// Production installs a global one, so its lines are unaffected; this keeps a
+/// caller that scoped a subscriber (a test, or any explicit `with_default`)
+/// seeing the step's log lines, which are part of the operator contract.
+///
+/// The dispatcher is read from the calling thread at call time, so the call
+/// must be made on the thread carrying the subscriber — not from inside a
+/// spawned task, which a runtime may run on a worker without it. Called from
+/// such a task, this captures whatever dispatcher that worker carries instead
+/// of the caller's (for a scoped subscriber, none), so the closure's lines
+/// silently go there rather than to the scoped subscriber: the work still runs,
+/// the log record does not reach the caller.
+///
+/// The task is spawned before the handle is returned, so a caller can start a
+/// read alongside other work and await it later. Dropping the handle detaches
+/// the task rather than cancelling it: it still runs to completion on the
+/// blocking pool.
+fn spawn_blocking_traced<F, R>(f: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
+    tokio::task::spawn_blocking(move || tracing::dispatcher::with_default(&dispatcher, f))
+}
+
+/// Step 5.2: the up-front files-cleanup.
+///
+/// The plan built in step 4.1 is executed here to free space for the repair
+/// itself. Skipped entirely in `--check-only` (verification reports damage; it
+/// must not delete). In `--dry-run` it runs in log-only mode.
+///
+/// The delete is a sequence of blocking syscalls over the whole candidate
+/// list, so it runs on the blocking pool; the async worker only waits for the
+/// byte total. The plan is shared by `Arc`, not cloned, so this costs one
+/// reference bump.
+async fn run_purge_before(
+    ctx: &RunCtx,
+    purge_plan: Option<Arc<PurgePlan>>,
+    summary: &mut Summary,
+) -> Result<(), RunFailure> {
     if ctx.purge_before
         && !ctx.check_only
-        && let Some(pp) = purge_plan.as_ref()
+        && let Some(pp) = purge_plan
     {
-        let bytes = purge::apply_purge(pp, ctx.dry_run).map_err(RunFailure::write)?;
-        summary
-            .deleted_extra_bytes
-            .fetch_add(bytes, Ordering::Relaxed);
-        purge_logged = true;
+        let timer = PhaseTimer::start("purge-before");
+        let dry = ctx.dry_run;
+        let bytes = spawn_blocking_traced(move || purge::apply_purge(&pp, dry))
+            .await
+            .map_err(|e| {
+                RunFailure::write(anyhow::anyhow!(
+                    "purge delete task failed before the repair: {e}"
+                ))
+            })?
+            .map_err(RunFailure::write)?;
+        summary.add_deleted_bytes(bytes);
+        timer.finish();
     }
+    Ok(())
+}
 
-    // 5.5 check-only: verify only, then return. Nothing is written.
-    if ctx.check_only {
-        // The execute-phase root was built after `create_dir_all` and the
-        // second canonicalize above, so it is the current form for these
-        // files; no per-file re-resolution is needed.
-        let bad = phases::check::verify_plan(
-            &game_dir,
-            root.as_ref(),
-            &plan,
-            &summary,
-            ctx.output,
-            scan.as_ref(),
-        );
-        summary.files_failed.store(bad, Ordering::Relaxed);
-        return Ok((summary, if bad == 0 { 0 } else { 4 }));
-    }
+/// Step 5.5: verify only, then return. Nothing is written.
+async fn run_check_only(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: &Arc<RepairPlan>,
+    scan: Option<Arc<ScanReport>>,
+    summary: Summary,
+) -> Result<(Summary, RunExit), RunFailure> {
+    // The execute-phase root was built after `create_dir_all` and the second
+    // canonicalize, so it is the current form for these files; no per-file
+    // re-resolution is needed.
+    let summary = Arc::new(summary);
+    let bad = phases::check::verify_plan(
+        game_dir,
+        root,
+        Arc::clone(plan),
+        Arc::clone(&summary),
+        ctx.output,
+        scan,
+        ctx.jobs,
+    )
+    .await?;
+    // Success path only. The ticker guard is dropped when `verify_plan`
+    // returns, but its aborted task may still hold the `Arc` clone until the
+    // runtime polls the drop; `try_unwrap` then fails and `snapshot` reads the
+    // same counters. The panic path above returned with `?` before this line,
+    // so it takes no snapshot at all.
+    let summary = Arc::try_unwrap(summary).unwrap_or_else(|a| a.snapshot());
+    let code = if bad == 0 {
+        RunExit::Success
+    } else {
+        RunExit::CheckFailed
+    };
+    Ok((summary, code))
+}
 
-    // 5.6 purge-only: `check_only` inverted — every phase but the repair loop.
-    // One early return, beside the `--check-only` one. It **implies** the
-    // cleanup (a flag that cleaned up nothing would be a lie), and
-    // `config.ini` is **not** bumped: a cleanup does not put the bytes in
-    // place, so claiming the newer version would desync the launcher the same way
-    // a scoped run does, and on an already-current install it is a no-op anyway.
-    if ctx.purge_only {
-        summary.flags.config_bumped_zero = true;
-        tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
-        let outcome =
-            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
-        let code = finish(outcome, &mut summary);
-        return Ok((summary, code));
-    }
+/// Step 5.6: `check_only` inverted — every phase but the repair loop.
+///
+/// It **implies** the cleanup (a flag that cleaned up nothing would be a lie),
+/// and `config.ini` is **not** bumped: a cleanup does not put the bytes in
+/// place, so claiming the newer version would desync the launcher the same way
+/// a scoped run does, and on an already-current install it is a no-op anyway.
+async fn run_purge_only(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
+    meta: &Meta,
+    deprecated: &Arc<[String]>,
+    mut summary: Summary,
+) -> Result<(Summary, RunExit), RunFailure> {
+    summary.flags.config_bumped_zero = true;
+    tracing::warn!("--purge-only: cleaning up without repairing; config.ini is not bumped");
+    let outcome = phases::post::run(
+        ctx,
+        game_dir,
+        purge_keys,
+        before_purge,
+        meta,
+        &summary,
+        deprecated,
+    )
+    .await?;
+    let code = finish(outcome, &mut summary);
+    Ok((summary, code))
+}
 
-    // 6. repair files (bounded file parallelism, sequential chunks per file).
-    summary.set_download_limit(ctx.limits.download_bytes);
-    summary.set_verified_download_limit(ctx.limits.verified_download_bytes);
-    summary.set_write_limit(ctx.limits.write_bytes);
-    summary.set_verified_write_limit(ctx.limits.verified_write_bytes);
-    summary.set_ram_limit(ctx.limits.ram_bytes);
-    summary.set_fail_fast(ctx.fail_fast);
+/// Step 6: the repair loop.
+async fn run_repair(ctx: &RunCtx, mut inputs: file::RepairInputs) -> Summary {
+    inputs.summary.set_download_limit(ctx.limits.download_bytes);
+    inputs
+        .summary
+        .set_verified_download_limit(ctx.limits.verified_download_bytes);
+    inputs.summary.set_write_limit(ctx.limits.write_bytes);
+    inputs
+        .summary
+        .set_verified_write_limit(ctx.limits.verified_write_bytes);
+    inputs.summary.set_ram_limit(ctx.limits.ram_bytes);
+    inputs.summary.set_fail_fast(ctx.fail_fast);
     tracing::info!(
         mode = ctx.repair_mode.as_str(),
         ram_budget = ?ctx.ram_budget(),
         "repair mode"
     );
-    summary = file::repair_all(
-        http,
-        game_dir.clone(),
-        root,
-        plan.clone(),
-        local_map,
-        summary,
-        ctx.jobs,
-        ctx.dry_run,
-        ctx.output,
-        ctx.repair_mode,
-        ctx.sleep.clone(),
+    let timer = PhaseTimer::start("repair");
+    let summary = file::repair_all(inputs).await;
+    timer.finish();
+    summary
+}
+
+/// Step 7: the post phase.
+///
+/// It runs when the run actually mutates the install, and for `--dry-run` so
+/// the listing covers what the post-phase would do. `--check-only` already
+/// returned above and `--print-plan` never reaches the execution phase.
+async fn run_post(
+    ctx: &RunCtx,
+    game_dir: &Path,
+    purge_keys: Option<Arc<purge::PurgeKeys>>,
+    before_purge: Option<&PurgePlan>,
+    meta: &Meta,
+    deprecated: &Arc<[String]>,
+    mut summary: Summary,
+) -> Result<(Summary, RunExit), RunFailure> {
+    let outcome = phases::post::run(
+        ctx,
+        game_dir,
+        purge_keys,
+        before_purge,
+        meta,
+        &summary,
+        deprecated,
     )
-    .await;
-    if let Some(code) = apply_run_flags(ctx, &mut summary) {
-        return Ok((summary, code));
-    }
-    if summary.files_failed.load(Ordering::Relaxed) > 0 {
-        return Ok((summary, 3));
-    }
-
-    // 7. post phase. `readonly` covers both `--dry-run` and `--check-only`
-    // (check-only already returned, but gating on `readonly` keeps the
-    // invariant obvious).
-    if !readonly {
-        let outcome =
-            phases::post::run(ctx, &game_dir, &plan, &meta, &summary, &deprecated).await?;
-        let code = finish(outcome, &mut summary);
-        return Ok((summary, code));
-    } else if ctx.dry_run
-        && ctx.purge_after
-        && !purge_logged
-        && let Some(pp) = purge_plan.as_ref()
-    {
-        // Dry-run logging only: list what the files-cleanup would delete (writes
-        // nothing; the byte count stays 0 by design). Skipped when the
-        // purge-before pass above already listed the same candidates, so
-        // `--purge-before --purge-after --dry-run` does not log each file twice.
-        purge::apply_purge(pp, true).map_err(RunFailure::write)?;
-    }
-
-    Ok((summary, 0))
+    .await?;
+    let code = finish(outcome, &mut summary);
+    Ok((summary, code))
 }
 
 /// Fill in the conditional `SUMMARY` keys, then name any runtime hard stop.
@@ -620,10 +1132,10 @@ async fn execute_phase(
 /// Every key here is emitted **only when its flag was passed**: the
 /// `is_some` / `explicit` checks are the whole rule, kept in one function so
 /// it can be read against the rendering order in
-/// [`crate::report::summary::conditional_extras`]. Returns `Some(5)` when a
-/// runtime ceiling bound, after recording it in `stopped=`; the caller must
-/// return that code without running the post-phase.
-fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<i32> {
+/// [`crate::report::summary::conditional_extras`]. Returns
+/// [`RunExit::Limit`] when a runtime ceiling bound, after recording it in
+/// `stopped=`; the caller must return that code without running the post-phase.
+fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<RunExit> {
     // The byte figures, when their ceilings were asked for. The **settled**
     // one is what the repair achieved; the **spent** one is what it cost.
     // They are the same number in a clean run and differ exactly when the
@@ -674,7 +1186,7 @@ fn apply_run_flags(ctx: &RunCtx, summary: &mut Summary) -> Option<i32> {
         stopped.figure()
     );
     note_stopped(summary, flag);
-    Some(5)
+    Some(RunExit::Limit)
 }
 
 /// Record which ceiling bound the run, keeping the first one that did.
@@ -691,19 +1203,21 @@ fn note_stopped(summary: &mut Summary, flag: &'static str) {
 /// Turn a post-phase outcome into the run's exit code, and say which ceiling
 /// bound.
 ///
-/// A runtime hard stop in the cleanup is exit `5` like every other limit, and
-/// `stopped=--max-delete-bytes` says which one — deletion is the one
+/// A runtime hard stop in the cleanup is [`RunExit::Limit`] like every other
+/// limit, and `stopped=--max-delete-bytes` says which one — deletion is the one
 /// irreversible act in the tool, so a bounded delete that got refused has to be
 /// visible.
-fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
+fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> RunExit {
     match outcome {
-        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => 0,
+        phases::post::PostOutcome::Ok | phases::post::PostOutcome::DeletedNothing => {
+            RunExit::Success
+        }
         phases::post::PostOutcome::DeleteCeiling => {
             tracing::error!(
                 "--max-delete-bytes blocked the post-repair cleanup pass; nothing in it was deleted"
             );
             note_stopped(summary, "--max-delete-bytes");
-            5
+            RunExit::Limit
         }
     }
 }
@@ -716,32 +1230,95 @@ fn finish(outcome: phases::post::PostOutcome, summary: &mut Summary) -> i32 {
 /// scope gate and the delete sink must compare the same string. A name that is
 /// not a plain relative path is dropped with a warning: it is a delete sink, so
 /// it is never followed.
-async fn fetch_deprecated(hyp: &HypClient) -> Vec<String> {
+async fn fetch_deprecated(hyp: &HypClient) -> Arc<[String]> {
     match hyp.deprecated_files().await {
-        Ok(list) => list
-            .into_iter()
-            .filter_map(|name| match util::clean_rel(&name) {
-                Ok(rel) => Some(rel),
-                Err(e) => {
-                    tracing::warn!(
-                        path = %name,
-                        error = %format!("{e:#}"),
-                        "deprecated path is not a plain relative path; ignored"
-                    );
-                    None
-                }
-            })
-            .collect(),
+        Ok(mut list) => {
+            // Filter in place: the fetch already allocated the `Vec`, and the
+            // retain reuses its buffer instead of collecting the survivors
+            // into another one. The `Arc<[String]>` copies the survivors into
+            // its own buffer; its header means it cannot reuse the `Vec`'s.
+            normalize_deprecated(&mut list);
+            list.into_iter().collect()
+        }
         Err(e) => {
             tracing::warn!("deprecated list unavailable: {e:#}");
-            Vec::new()
+            Vec::new().into()
         }
     }
 }
 
+/// Normalise each deprecated name to the `/` form the post-phase compares
+/// against, dropping (with a warning) anything that is not a plain relative
+/// path. The list is a delete sink, so a name that would escape the install is
+/// never followed.
+fn normalize_deprecated(list: &mut Vec<String>) {
+    list.retain_mut(|name| match util::clean_rel(name) {
+        Ok(rel) => {
+            *name = rel;
+            true
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %name,
+                error = %format!("{e:#}"),
+                "deprecated path is not a plain relative path; ignored"
+            );
+            false
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Summary, note_stopped};
+    use super::{
+        RunExit, Summary, fetch_deprecated, finish, normalize_deprecated, note_stopped, phases,
+        spawn_blocking_traced,
+    };
+    use crate::Biz;
+    use crate::hyp::HypClient;
+    use crate::sleep::NoSleep;
+    use std::sync::Arc;
+
+    /// A blocking task still reaches the caller's scoped subscriber: the pool
+    /// thread has no thread-local dispatcher, and the cleanup passes log the
+    /// deletes they perform.
+    #[test]
+    fn a_blocking_task_keeps_the_callers_subscriber() {
+        let logs = crate::repair::test_support::logs_of(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                spawn_blocking_traced(|| tracing::info!("blocking line"))
+                    .await
+                    .unwrap();
+            });
+        });
+        assert!(logs.contains("blocking line"), "{logs}");
+    }
+
+    /// `spawn_blocking_traced` spawns eagerly: the closure runs before its
+    /// handle is awaited, which is what lets a caller start a read alongside
+    /// other work and collect it later.
+    ///
+    /// The receive is the proof: a handle that only spawned on `await` would
+    /// leave it to time out. The deadline is a guard against hanging the suite,
+    /// not a timing bound, because the closure signals as soon as it runs.
+    #[tokio::test]
+    async fn a_blocking_task_starts_before_its_handle_is_awaited() {
+        const RECEIVE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = spawn_blocking_traced(move || {
+            tx.send(()).expect("the test receiver is alive");
+        });
+
+        // Nothing has awaited `handle` yet.
+        rx.recv_timeout(RECEIVE_WAIT)
+            .expect("the blocking closure ran before its handle was awaited");
+
+        handle.await.expect("the blocking task finishes");
+    }
 
     /// `SUMMARY`'s `stopped=` names the **first** ceiling to bind: a later
     /// phase that also hits one must not rewrite the answer.
@@ -751,5 +1328,88 @@ mod tests {
         note_stopped(&mut summary, "--max-write-bytes");
         note_stopped(&mut summary, "--max-delete-bytes");
         assert_eq!(summary.flags.stopped, Some("--max-write-bytes"));
+    }
+
+    /// A clean post-phase is success; only a delete ceiling is a limit.
+    #[test]
+    fn the_post_outcomes_keep_their_documented_codes() {
+        let cases = [
+            (phases::post::PostOutcome::Ok, RunExit::Success),
+            (phases::post::PostOutcome::DeletedNothing, RunExit::Success),
+            (phases::post::PostOutcome::DeleteCeiling, RunExit::Limit),
+        ];
+        for (outcome, expected) in cases {
+            let mut summary = Summary::new();
+            assert_eq!(finish(outcome, &mut summary), expected);
+        }
+    }
+
+    /// The deprecated list is normalised in place and keeps its order, while a
+    /// name that is not a plain relative path is dropped and warned about: the
+    /// list is a delete sink, so an absolute or escaping name must never reach
+    /// it.
+    #[test]
+    fn deprecated_names_are_normalised_and_unsafe_ones_dropped() {
+        let mut list = vec![
+            "old\\legacy.dll".to_string(),
+            "../victim.dll".to_string(),
+            "./kept//file.dat".to_string(),
+            "/abs/evil.dll".to_string(),
+            "other\\stale.bin".to_string(),
+            "C:/abs/evil.dll".to_string(),
+            "a//b\\c.dat".to_string(),
+        ];
+
+        let logs = crate::repair::test_support::logs_of(|| normalize_deprecated(&mut list));
+
+        assert_eq!(
+            list,
+            vec![
+                "old/legacy.dll",
+                "kept/file.dat",
+                "other/stale.bin",
+                "a/b/c.dat",
+            ],
+            "survivors keep their input order and take the / form"
+        );
+        assert_eq!(
+            logs.matches("deprecated path is not a plain relative path; ignored")
+                .count(),
+            3,
+            "each dropped name warns exactly once: {logs}"
+        );
+        for dropped in ["../victim.dll", "/abs/evil.dll", "C:/abs/evil.dll"] {
+            assert!(
+                logs.contains(dropped),
+                "the warning names the dropped path {dropped:?}: {logs}"
+            );
+        }
+    }
+
+    /// The fetch path normalises the server's names before they reach the
+    /// post-phase: unsafe entries never enter the delete list, and the
+    /// survivors are in `/` form. Calling the helper directly would not catch
+    /// a fetch that skipped it.
+    #[tokio::test]
+    async fn fetch_deprecated_normalises_the_server_list() {
+        let (base, _) = crate::test_http::serve_bodies(vec![
+            r#"{"retcode":0,"message":"OK","data":{"deprecated_file_configs":[{"deprecated_files":[{"name":"old\\legacy.dll"},{"name":"../victim.dll"},{"name":"./kept//file.dat"},{"name":"/abs/evil.dll"},{"name":"a//b\\c.dat"}]}]}}"#,
+        ])
+        .await;
+        let hyp = HypClient::new_with_bases(
+            Biz::Hk4eGlobal,
+            base,
+            "http://sophon.test/api".into(),
+            Arc::new(NoSleep),
+        )
+        .expect("build the stub client");
+
+        let list = fetch_deprecated(&hyp).await;
+
+        assert_eq!(
+            &list[..],
+            ["old/legacy.dll", "kept/file.dat", "a/b/c.dat"],
+            "the fetch drops unsafe names and hands on / forms in input order"
+        );
     }
 }

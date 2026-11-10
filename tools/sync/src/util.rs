@@ -158,7 +158,27 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     }
 }
 
-/// Group `keys` by lowercase spelling and abort when a group has more than one
+/// The key a case-insensitive path comparison uses when two spellings may name
+/// one file.
+///
+/// Insensitive mode pairs paths by folding case, so `Readme.TXT` on one side and
+/// `readme.txt` on the other are one path. The fold is **ASCII-only**. Manifests
+/// are ASCII in practice, and `str::to_lowercase` is a Unicode case mapping
+/// rather than the filesystem's relation: it maps spellings the filesystem keeps
+/// apart onto one key (the Kelvin sign `\u{212A}` and `k`, for example), which
+/// would pair paths that are not the same file. The rule is "fold ASCII case,
+/// compare every other byte exactly", so a non-ASCII case variant is
+/// deliberately a distinct key.
+///
+/// This is a map key, not a containment check: [`component_eq`] and
+/// [`same_path`] own the filesystem-identity decision and keep their Unicode
+/// fallback for names outside ASCII. Callers use this where the run pairs paths
+/// case-insensitively.
+pub(crate) fn path_key(rel: &str) -> String {
+    rel.to_ascii_lowercase()
+}
+
+/// Group `keys` by case-folded spelling and abort when a group has more than one
 /// spelling.
 ///
 /// An exact duplicate is not a collision, so each group is sorted and
@@ -175,7 +195,7 @@ pub(crate) fn check_mixed_case_keys<'a>(
 ) -> Result<()> {
     let mut groups: HashMap<String, Vec<&'a str>> = HashMap::new();
     for key in keys {
-        groups.entry(key.to_lowercase()).or_default().push(key);
+        groups.entry(path_key(key)).or_default().push(key);
     }
     for (_, mut group) in groups {
         group.sort_unstable();
@@ -311,6 +331,32 @@ mod tests {
             Path::new("c:/root/sub/ärger")
         ));
         assert!(!same_path(Path::new("C:/Ärger"), Path::new("c:/Arger")));
+    }
+
+    /// The path key folds ASCII case only. A Unicode fold would map the Kelvin
+    /// sign onto `k` and pair two paths the filesystem keeps apart.
+    #[test]
+    fn path_key_folds_ascii_case_only() {
+        assert_eq!(path_key("Game/Readme.TXT"), "game/readme.txt");
+        assert_eq!(path_key("Ärger"), "Ärger");
+        assert_ne!(path_key("\u{212A}"), path_key("k"));
+    }
+
+    /// The mixed-case guard groups by the same key, so its verdict for a
+    /// non-ASCII pair is "two distinct paths" rather than a collision. The ASCII
+    /// spelling difference still collides, and an exact repeat still does not.
+    #[test]
+    fn mixed_case_check_groups_by_the_ascii_only_key() {
+        let err = check_mixed_case_keys(["Readme.TXT", "readme.txt"], "", "src").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "mixed-case collision in src: Readme.TXT vs readme.txt"
+        );
+        check_mixed_case_keys(["same.txt", "same.txt"], "", "src")
+            .expect("an exact repeat is one spelling, not a collision");
+        check_mixed_case_keys(["Ärger.txt", "ärger.txt"], "", "src")
+            .expect("a non-ASCII case variant is a distinct path");
+        check_mixed_case_keys(["\u{212A}", "k"], "", "src").expect("the Kelvin sign is not `k`");
     }
 
     /// A name that is not valid UTF-8 has no `to_str` answer, so the comparison

@@ -43,20 +43,20 @@ machine rather than the code.
 | `src/logging.rs` | console layer + file layer, over the shared log policy | `init_tracing`, `default_log_path`, `PROJECT` |
 | `crates/log/` | the shared log policy: log file path, log levels, env vars | `LogPlan`, `LogOptions`, `EnvOptions`, `Level`, `filter`, `default_log_path`, `default_file_is_written`, `env_options` |
 | `crates/tempdir/` | the shared scratch-directory policy: a name nothing collides with, a tree removed with the test | `TempDir`, `TempDir::new`, `TempDir::absent`, `TempDir::at`, `TempDir::subdir`, `root`, `ROOT` |
-| `src/report.rs` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `emit_progress`, `summary_record`, `spawn_progress_reporter` |
+| `src/report/` | run counters + every stdout line of the contract | `Summary`, `SummaryFlags`, `Summary::snapshot`, `emit`, `report_record`, `progress_record`, `summary_record`, `ProgressGuard` |
 | `src/biz.rs` | biz/channel/launcher/game-id mapping | `Biz::endpoints`, `Biz::channel_tuple` |
 | `src/hyp.rs` | HoYoPlay + Sophon JSON APIs | `HypClient::new`, `HypClient::new_with_bases`, `game_config`, `game_branch`, `chunk_build`, `deprecated_files`, `production_bases` |
-| `src/sophon.rs` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
+| `src/sophon/` | chunk-manifest protobuf, fetch+verify+parse, manifest filter, local chunk map | `select_manifests`, `fetch_manifest`, `stream_chunk_to`, `HashingWriter`, `ChunkSink`, `build_local_chunk_map`, `join_url` |
 | `src/repair/mod.rs` | phase coordinator: plan, then assert, then execute; exit-code contract | `run` |
 | `src/repair/phases/metadata.rs` | local state + server metadata (docs/02 1–2) | `fetch`, `Meta` |
 | `src/repair/phases/manifest.rs` | manifest fetch + local chunk-reuse map (3) | `fetch_latest`, `local_reuse_map`, `LocalChunkMap` |
-| `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_paths`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
+| `src/repair/phases/plan.rs` | work list (4) + the plan module | `build_plan`, `RepairPlan`, `RepairPlan::expected_rels`, `RepairPlan::est_download_bytes`, `est_file_download_bytes`, `PlannedFile`, `PlannedFile::layout`, `Layout` |
 | `src/repair/purge.rs` | Collapse files-cleanup: plan (5, 7) + apply | `plan_purge`, `apply_purge`, `PurgePlan`, `PurgeCandidate`, `keep_set`, `classify_purge_path`, `PurgeVerdict` |
 | `src/repair/phases/check.rs` | `--check-only` verification (6.5) | `verify_plan` |
 | `src/repair/file/mod.rs` | per-file repair: in-place patch, the temp mode, reuse vs download (6) | `repair_all`, `ChunkStats`, `Mode`, `Repaired` |
 | `src/repair/reuse.rs` | the salvage order: which source survives, in which direction | `salvage_order`, `sources_for`, `Order` |
 | `src/repair/scan.rs` | the `--scan` pass: the plan's exact numbers | `scan_plan`, `ScanReport`, `Verdict` |
-| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire`, `LOCK_FILE` |
+| `src/repair/lock.rs` | the single-writer lock | `Lock::acquire` |
 | `src/repair/phases/post.rs` | deprecated/audio/`config.ini` + cleanup-after (7) | `run` |
 | `src/repair/scope/mod.rs` | scope-of-work facade: path scope + ceilings | `PathScope`, `Limits`, `LimitHit` |
 | `src/repair/scope/filter.rs` | `--include`/`--exclude` glob semantics (pure) | `PathScope::new`, `is_visible`, `is_active`, `is_open`, `has_includes`, `compile_patterns` |
@@ -64,7 +64,7 @@ machine rather than the code.
 | `src/repair/scope/report.rs` | the `PLAN` line + the `--plan-out` JSON document | `PlanTotals`, `plan_record`, `PlanDocument` |
 | `src/repair/scope/ledger.rs` | the runtime ledger: the metered counters the hard stops read | `Meter`, `StoppedBy`, `Summary::reserve_download_bytes`, `reserve_write_bytes`, `note_write_bytes`, `settle_download_bytes`, `adjust_download_bytes`, `stop`, `abort` |
 | `src/repair/audio.rs` | audio scan-file format (used by 1 and 7) | `resolve_effective_audio`, `read_scan_file`, `write_scan_file` |
-| `src/util.rs` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5_file`, `md5_file_slice`, `scan_file`, `scan_reader`, `read_range`, `Scan`, `ScanRange`, `file_len`, `read_game_version`, `write_config_ini`, `read_ignore_categories`, `read_blacklist`, `contained_rel`, `contained_join` |
+| `src/util/` | MD5, the one-read scan, `config.ini`, ignore/blacklist files, server-path containment | `md5::md5_file`, `md5::md5_file_slice`, `md5::scan_file`, `md5::scan_reader`, `path::contained_rel`, `path::contained_join`, `path::file_len`, `ini::read_game_version`, `ini::write_config_ini`, `ini::read_ignore_categories`, `ini::read_blacklist`, `atomic::write_atomic` |
 | `tests/repair_offline.rs` | offline integration/e2e (mock API) | one `#[tokio::test]` per behavior |
 | `tests/cli_contract.rs` | binary-level arg handling + exit codes | one case per usage error class |
 | `tests/common/mod.rs` | mock server + the fixture *description* | `MockServer`, `FixtureSpec`, `build_fixture_spec`, `MockOpts` |
@@ -78,7 +78,7 @@ machine rather than the code.
 
 ```mermaid
 flowchart TD
-    A["parse Args<br/>cli.rs: validate io_threads, audio, globs, ceilings → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
+    A["parse Args<br/>cli.rs: validate jobs, audio, globs, ceilings → RunCtx"] --> B["metadata::fetch<br/>config.ini game_version (last-match-wins)<br/>ignore + blacklist files<br/>getGameConfigs → getGameBranches<br/>→ getBuild(latest) → getBuild(local, best-effort)"]
     B -->|FILE mode| X1["exit 1 (usage)"]
     B -->|retcode/http fail| X2["exit 2 (metadata)"]
     B --> C["print REPORT to stdout+log<br/>local vs latest + API fields"]
@@ -121,10 +121,14 @@ flowchart TD
 
 **Machine contracts (do not break without updating tests + this table).**
 
-- stdout: `REPORT …` once after metadata; `PROGRESS …` every 10 s;
-  `PLAN …` with `--print-plan`; `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`.
-  `--output json` emits every one of those lines as an NDJSON object instead —
-  same records, same order, each carrying an `event` name.
+- stdout is a **record stream: one record per event**, and the order is fixed —
+  `REPORT …` once after metadata, then `PLAN …` when `--print-plan` asked for it,
+  then zero or more `PROGRESS …` ticks (a single ticker, every 10 s), then
+  `SUMMARY total=… skipped=… repaired=… failed=… download_bytes=… deleted_extra_bytes=… exit=…`
+  last. No phase emits `SUMMARY`; only the caller does, once, and a run that
+  fails fatally prints `FATAL` instead and has no `SUMMARY` (see the flow above).
+  `--output json` emits the same records in the same order as NDJSON objects,
+  each carrying an `event` name.
   A **scoped or limited** run appends conditional keys to that line
   (`scoped=1`, `config_bumped=0`, `plan_files=…`, `limited=1`, …). Every one is
   emitted **only** when its flag is active, so an unflagged run's `SUMMARY` is
@@ -210,7 +214,7 @@ flowchart TD
   `SUMMARY` is still emitted, with `limited=1`.  `5` is deliberately not `1`: the API has to be fetched first, so whether a
   limit trips depends on the server's answer — `--max-files 0` is not an error
   against an empty plan and is on a 3000-file one. Every argument-level failure
-  (unknown flag, bad enum value, `--io-threads 0`, bad `--audio`, bad
+  (unknown flag, bad enum value, `--jobs 0`, bad `--audio`, bad
   `--include` glob, non-numeric `--max-files`) is `1` — clap's default `2` is
   remapped so it cannot collide with "metadata/network". `--help` is `0`.
 - `getGameConfigs.default_download_mode` must be `DOWNLOAD_MODE_CHUNK`; anything
@@ -220,7 +224,23 @@ flowchart TD
   and it uses the per-launcher pair (cn `1/1`, global `1/0`, bili `14/0`) — the
   deprecated list is filtered by them, so cn/bilibili would get the wrong set.
 - read-only modes: `--dry-run` and `--check-only` write nothing (no purge, no scan-file,
-  no `config.ini`, byte counters stay 0; purge lists are only logged).
+  no `config.ini`, byte counters stay 0). `--dry-run` also exercises the post-phase's
+  read-only paths: it lists the deprecated deletes, the audio cache move and the
+  cleanup, and stops before the `config.ini` bump. With both purge flags it lists
+  each candidate once — the after pass names only candidates the before pass did
+  not. The `purge dry-run: N bytes would be freed` line is per pass: it is
+  emitted once for each pass that reaches the delete step, including a pass with
+  no candidates (a `0`-byte line), but when the before pass already named every
+  candidate the after pass returns before it and adds no second byte line. The
+  zero line is meaningful: it says the pass reached the delete step and found
+  nothing, which a missing line does not (the pass may have been skipped or
+  deduplicated instead). A tripped
+  ceiling still stops a dry run, including the post-repair delete
+  re-check (exit `5`, `SUMMARY stopped=--max-delete-bytes`), and a post-repair
+  purge that cannot be planned is the same write-class failure (exit `3`) as in a
+  real run. `--check-only` and `--print-plan` do not run the post-phase, so they
+  also skip its deprecated-list request; `--print-plan --dry-run` is just
+  `--print-plan`.
   A malformed manifest chunk range is a **plan** error (exit `2`) in every
   mode, including these read-only ones, so `--check-only` cannot report such a
   file intact and `--print-plan` cannot print a plan that cannot run.
@@ -236,23 +256,37 @@ flowchart TD
   `--print-plan`. A ceiling still trips a `--print-plan` run.
 - purge: `--purge-before` and `--purge-after` run the **same** cleanup, in two
   calls — `purge::plan_purge` decides, `purge::apply_purge` acts —
-  (expected set = live-manifest paths + `config.ini` + the single-writer lock
-  + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version` patterns;
+  (expected set = live-manifest paths + `config.ini` + the legacy in-install
+  `girpr.lock` + the cleaned blacklist + `audio_lang_*`/`Audio_*_pkg_version`
+  patterns;
   **everything not kept by rules 0-4 purges**, incl. temps, exe, logs,
   `ScreenShot/`). The whole plan is built before the first delete.
-- single-writer lock: a run that mutates the install takes `{game_dir}/girpr.lock`
-  (`create_new`, so the creation *is* the exclusion). A live lock refuses the
-  second run with **exit `1`**, naming the file and the pid; a lock older than
-  24 h is taken over. A read-only run (`--check-only`, `--dry-run`,
-  `--print-plan`) never takes it, and a **scoped** run does not either — the
-  lock's path is outside the scope, so it does not exist to the run.
+  The `--plan-out` document is an ordinary unexpected file if it is written
+  inside the install: the `--purge-after`/`--purge-only` re-plan runs after the
+  document is written and deletes it. (`--purge-before` acts on the plan built
+  before the document exists, so it leaves it in place.) Point `--plan-out`
+  outside `--game-path` to keep it.
+- single-writer lock: every run that mutates the install takes an OS advisory
+  lock on `{temp}/girpr-{key:016x}.lock`, keyed by a stable FNV-1a hash of the
+  canonical game dir (ASCII case folded on Windows, because the filesystem is).
+  The open handle is the exclusion, so a **scoped** run takes the same lock as
+  an unscoped one and the OS releases a killed run's lock immediately — there
+  is no wall-clock staleness rule. A live holder refuses the second run with
+  **exit `1`**, naming the lock file and the holder from the body when it can
+  be read (an exclusive lock can hide the body on Windows, and the refusal says
+  so). The file is left in place on exit, so a run that opens it while the lock
+  is being released cannot end up holding a file that is no longer at the path;
+  an unlocked leftover does not block the next run. A read-only run
+  (`--check-only`, `--dry-run`, `--print-plan`) never takes it. Older runs wrote
+  `{game_dir}/girpr.lock`; it is never created now, and a leftover is left
+  alone by the run and the cleanup.
 - audio: omitted flag = keep scan file (default `en-us` only when the file is **absent**; an unreadable scan file fails the run rather than silently replacing the selection). An empty scan file is the game-only choice, not absence. A non-empty scan file that names no known language is a config error (exit `1`, naming the file and the offending line) rather than an empty selection `--purge-after` would act on. Explicit list/`none` overwrites the scan file atomically, in the execution phase after every plan-half refusal. `none` never mixes with langs.
 - per-file spans: `file{seq,total,task,path}` — `grep 'path=<file>'` groups a file's lifecycle.
 
 **Deliberate simplifications (do NOT "fix" without reading the linked code).**
-S1 no manifest cache in `game_dir` (`sophon.rs`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
+S1 no manifest cache in `game_dir` (`sophon/`, `repair/phases/manifest.rs`) · S2 same-file-only chunk reuse
 (`repair/file/mod.rs`, `sophon::build_local_chunk_map`). Purge keep-set is `config.ini` + the
-single-writer lock (`purge::keep_set`); the cleaned blacklist is a separate keep input
+legacy in-install `girpr.lock` (`purge::keep_set`); the cleaned blacklist is a separate keep input
 (`purge::plan_purge`). Version parse is last-match-wins
 (`util::read_game_version`, Starward parity).
 
@@ -264,11 +298,50 @@ the completed `*_tmp` prefix and continuing it.
 
 ## Requirements / build / usage
 
-- Rust 1.85+ (the crate is `edition = "2024"`); network to HoYoPlay + Sophon
-  CDNs (production runs only).
-- Game dir (read/write); free bytes ≈ `io_threads × largest file` **growth**
+- Rust at the highest `rust-version` any workspace member declares, or newer
+  for the whole workspace (each member keeps its own minimum; the root is at
+  today's high-water mark, 1.89, alongside `girsync`; the crates are
+  `edition = "2024"`, and the single-writer lock uses
+  `File::try_lock`/`File::unlock`, both stable since 1.89); network to
+  HoYoPlay + Sophon CDNs (production runs only). The
+  dev-only `girsync` cache pins `redb` to exactly 4.1.0, the last 4.x release
+  that supports `girsync`'s minimum (4.2 and later need 1.90), so checking the
+  whole workspace needs a toolchain at least as new as every member's minimum,
+  not only the product's.
+- Game dir (read/write); free bytes ≈ `jobs × largest file` **growth**
   beyond the game (0 for a same-size repair — the in-place path writes only
   the wrong bytes). `--repair-mode temp` needs the whole file instead.
+
+`cargo build` and `cargo test` at the workspace root build the product
+(`girpr`). The two dev tools (`gircap`, `girsync`) are workspace members but
+not default members, so a root command does not compile them; check them
+explicitly when working on them. `--workspace` is the everything command.
+
+Every member declares its own `rust-version`. To check that each one still
+builds with exactly that toolchain, rather than only with the newest compiler
+on the host:
+
+```powershell
+pwsh -File tests/scripts/check-msrv.ps1
+```
+
+The script reads the members and their minimums from `cargo metadata`, installs
+any missing toolchain through rustup, and runs
+`cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
+so tests and benches are held to the same floor. It needs
+rustup and network access on the first run; after that the declared
+toolchains and the shared target directory make a run a few minutes of
+incremental builds. The `msrv` workflow runs the same script.
+
+**Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
+bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working
+copy. Both are development-only and are not part of the shipped product. They
+share the workspace lockfile but are built on request:
+
+```powershell
+cargo check -p girsync -p gircap
+cargo build --workspace
+```
 
 ```powershell
 cargo build --release
@@ -277,7 +350,7 @@ cargo build --release
 # Verify only; exit 4 if damaged
 .\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --check-only
 # Repair + purge extras
-.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --io-threads 4
+.\target\release\girpr --game-path "D:\Genshin Impact game" --biz hk4e_global --purge-after --jobs 4
 ```
 
 | Flag | Default | Meaning |
@@ -285,7 +358,7 @@ cargo build --release
 | `--game-path <DIR>` | (required) | Install dir (`config.ini`, `*_Data`, …) |
 | `--biz <BIZ>` | (required) | `hk4e_cn` \| `hk4e_global` \| `hk4e_bilibili` |
 | `--audio <LANG>`… | keep current, else `en-us` | Repeatable: `zh-cn`, `en-us`, `ja-jp`, `ko-kr` (case-insensitive, `_` accepted for `-`; display names `chinese`/`english`/`english(us)`/`japanese`/`korean` also work); `none` = game-only (overwrites scan file) |
-| `--io-threads <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2 |
+| `--jobs <N>` | `4` | Concurrent **files** (chunks per file sequential → HDD-friendly). SSD 4–8, HDD 1–2. Bounds in-flight file tasks, not tokio worker threads; a value above the host's parallelism warns and still runs. Values above `1024` are a usage error (exit `1`). `--io-threads` is a deprecated alias |
 | `--purge-after` / `--purge-before` | off | Same files-cleanup, different timing (before frees repair space) |
 | `--include <GLOB>` | (every path) | Repeatable. Only act on paths matching this glob (`/`-separated, relative to `--game-path`, case-insensitive). `*` also crosses `/`. Non-matching paths do not exist to the run: not repaired, **not deleted**, and `config.ini` is not bumped |
 | `--exclude <GLOB>` | (nothing) | Repeatable. Treat matching paths as nonexistent; beats `--include`. A content glob such as `mods/*` hides the files under `mods` but not `mods` itself, so an empty `mods` directory is still visible and may be swept; a directory is hidden only when the glob matches the directory path itself |
@@ -301,9 +374,9 @@ cargo build --release
 | `--check-only` | off | Verify size+MD5; writes nothing. A malformed manifest chunk range is refused at plan time (exit `2`) before the check, so it cannot be reported intact |
 | `--purge-only` | off | Make the install match the manifest: files-cleanup + post-phase, **no repair loop** (it *implies* the cleanup, so no purge flag is needed). The inverse of `--check-only`. Does not bump `config.ini` |
 | `--fail-fast` | off | Stop the run once one file exhausts its retries; no further files are started. Only worth setting for `5xx`-shaped failures: a 4xx costs nothing on its own, because only `408`/`429`/`5xx` are retried (a 404 on a chunk is asked once, not five times) |
-| `--dry-run` | off | Log actions; writes nothing |
+| `--dry-run` | off | Log actions, including the post-phase's deprecated deletes, audio-cache move and cleanup; writes nothing |
 | `--print-plan` | off | Print the whole plan (`PLAN files=… est_download_bytes=… est_write_bytes=… est_extra_bytes=… purge_files=… purge_bytes=… max_chunk_bytes=… scoped=…`) and exit 0 without repairing, purging or bumping anything. Under `--scan` the line also carries `scan_bytes=`. **Not** an offline mode — the plan *is* the manifest, so it still fetches |
-| `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed) |
+| `--plan-out <FILE>` | (none) | Write the per-file plan as JSON `{repair:[…],purge:[…]}`. Works with or without `--print-plan`; on its own it writes the plan of the run that then does the work (before the first mutation, so a write failure is exit `3` with nothing changed). The document is not a keep category: if it is written inside `--game-path`, the `--purge-after`/`--purge-only` re-plan in the same run deletes it as an unexpected file (`--purge-before` acts on the plan built before the document exists). Write it outside the install when combining it with a purge |
 | `--output <text\|json>` | `text` | One human `key=value` line per record, or the same records as NDJSON (`report` / `progress` / `plan` / `summary` events). Stdout only; diagnostics stay on stderr |
 | `--log-level <LVL>` | `info` | The **console's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `RUST_LOG` *adds* to it — it can turn up other crates, but it cannot change this program's own level |
 | `--log-file-level <LVL>` | `debug` | The **log file's** verbosity: `error`/`warn`/`info`/`debug`/`trace`. `GIRPR_LOG_FILE_LEVEL` says otherwise when the flag is absent. Separate from `--log-level` because the console is read while the run happens and the file is read afterwards |
@@ -315,6 +388,13 @@ cargo build --release
 `--hyp-base` / `--sophon-base` redirect the **metadata calls only**. Manifest
 and chunk URLs come from the `url_prefix` inside the response *bodies*, not from
 the configured base, so a local mock must return bodies pointing at itself.
+
+### Text values in `--output`
+
+With `--output text`, a value is written bare — never quoted or escaped — so a
+value that itself contains one of its record's own `key=` tokens is ambiguous
+to a parser. Use `--output json` when a value may contain one, because the JSON
+plane always carries each string value as a quoted string.
 
 ## Logging
 
@@ -348,6 +428,12 @@ ships.
   the tool typed.
 - **A log file that cannot be opened is a warning, never a failure.** A run
   must not end differently because of where it was asked to log.
+- **The file is buffered, not streamed in real time.** Its writer holds up to
+  64 KiB before a write, and `flush_log` empties it on every exit path the
+  binary controls (the normal exit and the handled fatal/usage paths). An
+  external `tail -f` can therefore lag by up to that buffer; the file is the
+  durable record of the run, not a live feed, and an exit that skips the flush
+  (such as `kill -9`) can lose the tail.
 - The **format** is not shared: this binary writes a human-readable text log,
   meant to be read with `grep 'path=<file>'`; the two dev tools write JSON
   lines, meant to be parsed.
@@ -360,15 +446,65 @@ the prebuilt release for the platform. Every crate in the workspace (`girpr`,
 [`.config/nextest.toml`](.config/nextest.toml) holds the shared defaults.
 
 ```powershell
-cargo nextest run             # 362 tests in this package, all offline (7 #[ignore]d)
+cargo nextest run             # this package's offline suite (ignored tests excluded)
 cargo nextest run --workspace # the whole workspace: girpr, girpr-log, girpr-tempdir, gircap, girsync
+cargo check -p girsync -p gircap # the dev tools, which a root command does not build
 cargo nextest run --test repair_offline
 cargo nextest run --test repair_machinery
-cargo clippy --all-targets
+cargo clippy -p girpr --all-targets -- -D warnings
+cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 
-# the artifact bridge: #[ignore]d, needs a bundle (docs/06)
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+# the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
+# builds gircap first so the `gircap verify` precondition executes
+# the same commands, explained in "Real bytes, real flags — and expensive" below
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+cargo build -p gircap
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
+
+# the hash and scan throughput measurements: #[ignore]d, print MiB/s
+cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
+cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
 ```
+
+- **Hash and scan throughput is measured by hand, not asserted.** The ignored
+  `util::md5::tests::md5_throughput` hashes a generated file through the same
+  whole-file path the repair gate uses (`md5_file` → `md5_reader_digest`). The
+  ignored `util::md5::tests::scan_throughput` reads one destination range per
+  MiB and one source range in every chunk through `scan_file` and
+  `scan_reader`, the path a repair scan takes. Both print MiB/s; run them with
+  `--release`, because the debug profile measures the compiler, not the
+  hasher. `GIRPR_MD5_BENCH_MIB`/`GIRPR_SCAN_BENCH_MIB` (default 64) size the
+  files and `GIRPR_MD5_BENCH_RUNS`/`GIRPR_SCAN_BENCH_RUNS` (default 5) the
+  repetitions.
+
+- **One lint policy for the product and its shared policy crates.** The root
+  `Cargo.toml` holds `[workspace.lints]`; `girpr`, `girpr-log` and
+  `girpr-tempdir` opt in with `[lints] workspace = true`. `clippy::all` and the
+  `unwrap_used`/`expect_used` pair warn; `unsafe_code` is denied, with the
+  counting allocator in `tests/peak_heap.rs` the one explicit test-only
+  exception. Test code may `unwrap`/`expect` — those are assertions, and the
+  lint is about the paths a user runs. Nothing denies warnings at the crate
+  level: CI, or the command above, is free to add `-D warnings`.
+
+  Test allowances stay in the code. On this toolchain (clippy 0.1.99 / rustc
+  1.99.1) `clippy.toml`'s `allow-unwrap-in-tests` and `allow-expect-in-tests`
+  exempt only code inside a `#[cfg(test)]` module or a `#[test]` function. The
+  shared helpers in `tests/common/mod.rs` are ordinary functions compiled into
+  every integration target, so the options miss them, while a crate-level
+  `allow` at the target root covers that whole module tree; the library's
+  `#[cfg_attr(test, allow(...))]` covers its unit tests without a second lint
+  policy file. Re-test the options before moving these allowances to a config
+  file.
+
+- **The two dev tools opt into a smaller lint subset.** `girsync` and `gircap`
+  set `[lints.rust] unsafe_code = "deny"` and `[lints.clippy] all = "warn"`
+  themselves instead of inheriting the workspace table, and the command above
+  checks them with `-D warnings`. The `unwrap_used`/`expect_used` pair is
+  deliberately absent: for a repair run a panic is a failed run, while for a
+  dev tool it is a failed developer run, and those paths may assert. The one
+  deliberate `unsafe` is the Windows handle call in `tools/sync/src/hardlink.rs`,
+  annotated at its item; the test that sets an environment variable in
+  `tools/sync/tests/cli_dispatch.rs` carries the same narrow annotation.
 
 - **`cargo nextest run` is not `cargo test`.** It runs each test in its own
   process, which is what makes the suite's isolation real rather than
@@ -385,6 +521,36 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
     workspace's doctests — the examples in `crates/log/src/lib.rs` and
     `crates/tempdir/src/lib.rs` — are mirrored by unit tests beside them, and
     `cargo nextest run` alone covers everything the suite covers.
+
+- **The non-UTF-8 audio-cache cases, the Windows junction case and the
+  directory-symlink cases can skip.** A host whose filesystem cannot create a
+  name with an unpaired surrogate (or a non-UTF-8 byte), a Windows host that
+  refuses `mklink /J`, and a host whose directory-symlink call reports a
+  refusal the fixture names skip those cases rather than failing. The named
+  refusals are a privilege denial (`EPERM`/`EACCES` on Unix,
+  `ERROR_PRIVILEGE_NOT_HELD` on Windows) and the platform's own "no symlinks
+  here" codes (`ENOSYS` and `EOPNOTSUPP`/`ENOTSUP` on the Unix targets the
+  fixture covers, `ERROR_CALL_NOT_IMPLEMENTED` on Windows); a
+  directory-symlink failure outside that set is a broken test environment and
+  fails the case. Set `GIRPR_TEST_REQUIRE_NON_UTF8`,
+  `GIRPR_TEST_REQUIRE_JUNCTION` or `GIRPR_TEST_REQUIRE_SYMLINK` to turn the
+  corresponding skip into a failure, so a run meant to prove the byte-exact
+  move, the junction escape or the symlink refusals cannot pass having
+  checked nothing. The switches are **presence-based**: any value, including
+  `0`, requires the case; unset is the only way to allow a skip.
+  Nextest's default profile shows these tests' output even when they pass
+  (`.config/nextest.toml`), so a skip is visible under the plain gate.
+
+- **A clock that cannot reach before the Unix epoch skips the crossing
+  cases.** The age rule's fixtures place an instant on either side of the
+  epoch; a host whose `SystemTime` cannot represent a moment before it cannot
+  build those fixtures, so the cases that need one report that and pass
+  instead of panicking. Set `GIRPR_TEST_REQUIRE_PRE_EPOCH` to turn that skip
+  into a failure, so a run meant to prove the backward crossing cannot pass
+  having checked nothing. The switch is presence-based, like the fixture
+  switches above: any value, including `0`, requires the cases. Nextest's
+  default profile shows these tests' output even when they pass
+  (`.config/nextest.toml`), so a skip is visible under the plain gate.
 
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
@@ -405,17 +571,18 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
 - Binary-level e2e without code changes: set `GIRPR_HYP_BASE` / `GIRPR_SOPHON_BASE`
   env vars, or pass `--hyp-base` / `--sophon-base` (explicit > env > production;
   resolved in `RunCtx::api_bases`).
-- **What the tests actually drive.** `tests/repair_offline.rs` is 74 cases, and
-  most of them call `repair::run(ctx)` **in-process** with a hand-built `RunCtx`
-  — that exercises the library, not the flag surface. Six of them (the
-  endpoint-override cases, the `--output` format case, the scan estimate and the
-  scoped cleanup) spawn the real binary through `CARGO_BIN_EXE_girpr`, which is
-  how the `--hyp-base` / `--sophon-base` precedence is pinned; they still run
-  against the mock, not against real bytes.
-  `tests/cli_contract.rs` is the other file that spawns the binary, and it never
-  reaches the API at all — it is argument handling and exit codes only.
+- **What the tests actually drive.** `tests/repair_offline.rs` holds the offline
+  integration cases, and most of them call `repair::run(ctx)` **in-process**
+  with a hand-built `RunCtx` — that exercises the library, not the flag surface.
+  A few of them — the plan-print and manifest-selection cases — spawn the real
+  binary through `CARGO_BIN_EXE_girpr`; the endpoint-override, `--output`
+  format, scan-estimate and scoped-cleanup cases do the same from their own
+  integration files. Those spawns are how the `--hyp-base` / `--sophon-base`
+  precedence is pinned; they still run against the mock, not against real bytes.
+  `tests/cli_contract.rs` also spawns the binary, and it never reaches the API
+  at all — it is argument handling and exit codes only.
 - **The repair's own decisions are on crafted fixtures.**
-  `tests/repair_machinery.rs` is 25 cases, one per decision the repair makes
+  `tests/repair_machinery.rs` has one case per decision the repair makes
   per file — the tier, the write direction, the trim, the growth, the mode, the
   resume, and what a malformed manifest does — plus the four facts the run
   reports on its data plane (the live and the settled byte figures agree,
@@ -439,17 +606,34 @@ cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-captur
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
   `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs real binary runs over ~20 MB of bundle bytes per run**, and it is
-  meant to be started **by hand, only when a repair-spec change is
-  suspected**:
+  it costs real binary runs over ~19 MiB of bundle bytes per run**, and it is a
+  **pre-release gate: run it by hand before any release that changes the repair
+  spec, and whenever a regression in that spec is suspected**:
   ```powershell
-  cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+  # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+  cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+  cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
   ```
+  The six cases run in parallel — each capture gets its own scratch tree and its
+  own listeners — so neither `--no-capture` nor `--test-threads=1` is needed:
+  the per-case `success-output` override in `.config/nextest.toml` prints each
+  case's precondition and summary lines even though it passes. To reproduce one
+  failure, put the case in the filter of the same command:
+
+  ```powershell
+  cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+  ```
+
+  The `-E` expression narrows the set nextest has already selected; it does not
+  add `#[ignore]`d cases to it. A command without `--run-ignored only` (or
+  `all`) runs none of them, and `cargo nextest list` needs `--run-ignored only`
+  (or `all`) to list them at all.
   It still *compiles* under `cargo nextest run`, so a broken bridge fails to
   build rather than failing silently. And because it only ever runs
-  deliberately, a **missing prerequisite is an error**: no bundle under
-  `artifacts/` and no `GIRPR_ARTIFACT_BUNDLE` fails the run with the command
-  that would produce one, rather than passing quietly having checked nothing.
+  deliberately, a **missing prerequisite is an error**: no bundle under the
+  search root (`artifacts/`, or `GIRPR_ARTIFACT_ROOT` when set; an explicit
+  `GIRPR_ARTIFACT_BUNDLE` outranks both) fails the run with the command that
+  would produce one, rather than passing quietly having checked nothing.
   - The spec is [`docs/06-artifact-bridge-spec.md`](docs/06-artifact-bridge-spec.md).
   - The server rewrites only the **scheme and authority** of the `url_prefix`
     inside each `getBuild` body, because manifest and chunk URLs are built from

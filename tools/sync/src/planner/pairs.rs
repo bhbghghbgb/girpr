@@ -12,6 +12,7 @@ use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
+use crate::util::path_key;
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -71,6 +72,14 @@ pub struct PairPlan {
 /// | [`Exact`](Self::Exact) | `a.txt` and `A.txt` are two different paths | a diff over paths that already line up |
 /// | [`Lowercase`](Self::Lowercase) | `a.txt` and `A.txt` are one path, spelled two ways | pairing what is on disk, before any rename |
 ///
+/// [`Lowercase`](Self::Lowercase) folds **ASCII case only**, the same key
+/// `path_key` builds: `Ärger.txt` and `ärger.txt`, or the Kelvin sign `\u{212A}`
+/// and `k`, stay two paths. A non-ASCII name therefore pairs only with its
+/// byte-identical spelling. The fold deliberately does not reproduce a platform's
+/// Unicode case table; restricting it to ASCII means no two distinct non-ASCII
+/// spellings are ever merged, and the disk walk and capture both preserve names as
+/// written.
+///
 /// `sync` plans with [`Lowercase`](Self::Lowercase) in insensitive mode and then
 /// diffs with [`Exact`](Self::Exact), because the rename pass has re-keyed dst
 /// onto src's spelling by then. Read as two bare booleans that is a pair of calls
@@ -120,9 +129,9 @@ fn shared_pairs<'a>(
         CasePairing::Lowercase => {
             let mut slow: HashMap<String, &String> = HashMap::new();
             for k in src.keys() {
-                slow.insert(k.to_lowercase(), k);
+                slow.insert(path_key(k), k);
             }
-            for (lkey, drel) in dst.keys().map(|k| (k.to_lowercase(), k)) {
+            for (lkey, drel) in dst.keys().map(|k| (path_key(k), k)) {
                 if let Some(srel) = slow.get(&lkey) {
                     out.push((srel, drel));
                 }
@@ -591,5 +600,39 @@ mod tests {
         let p = plan(&s, &d, false, false);
         assert_eq!(p.src.pending(), vec!["a.txt", "same.txt"]);
         assert_eq!(p.dst.pending(), vec!["A.txt", "same.txt"]);
+    }
+
+    /// Lowercase pairing folds ASCII case only, matching `path_key` and
+    /// `diff_maps`. A non-ASCII case variant is two paths, so neither spelling is
+    /// paired and nothing is hashed for it; the byte-identical non-ASCII name
+    /// beside it still pairs and needs a digest, which is what tells "outside the
+    /// fold" apart from "pairing stopped working".
+    #[test]
+    fn insensitive_mode_does_not_fold_non_ascii_case() {
+        let s = map(vec![
+            ("Ärger.txt", file(10, 100)),
+            ("Привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let d = map(vec![
+            ("ärger.txt", file(10, 100)),
+            ("привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let p = plan(&s, &d, false, false);
+        assert_eq!(p.src.pending(), vec!["café.txt"]);
+        assert_eq!(p.dst.pending(), vec!["café.txt"]);
+    }
+
+    /// A Unicode fold would map the Kelvin sign onto `k` and pair two paths the
+    /// filesystem keeps apart. The ASCII-only key does not, so an insensitive run
+    /// has no pair here and plans no digest.
+    #[test]
+    fn insensitive_mode_keeps_a_non_ascii_lookalike_distinct() {
+        let s = map(vec![("\u{212A}.txt", file(10, 100))]);
+        let d = map(vec![("k.txt", file(10, 100))]);
+        let p = plan(&s, &d, false, false);
+        assert!(p.src.pending().is_empty());
+        assert!(p.dst.pending().is_empty());
     }
 }

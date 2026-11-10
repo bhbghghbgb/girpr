@@ -15,34 +15,45 @@
 //! install before it refuses, because the estimate the ceiling is checked
 //! against is only exact after the scan.
 //!
-//! The scan does not change what the repair does. The repair re-reads each
-//! file before it writes it, because a file can have changed since the plan
-//! phase, and the repair needs its verdicts at the moment it writes. The
-//! scan is for the *plan*, not for the writer.
+//! Under `--scan`, the plan's verdict is also available to the in-place
+//! writer, guarded by a length and modification-time check that falls back to
+//! a fresh read when the file changed since it was scanned. The plan scan
+//! feeds the in-place writer only: the temp path's gate is a single digest
+//! over the finished temp file, not a verdict about the target, so it keeps
+//! its own read.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
-use futures::StreamExt;
+use futures_util::StreamExt;
 
 use super::file::Mode;
 use crate::config::RepairMode;
 use crate::repair::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan};
+use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::reuse;
 use crate::sophon::SophonChunk;
 use crate::util;
+use crate::util::Md5;
 
 /// What one file's scan found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Verdict {
-    /// The whole-file MD5 of what was on disk.
-    pub file_md5: String,
+    /// The whole-file MD5 of what was on disk, as a digest. Hex is produced
+    /// only where a report or a log needs text.
+    pub file_md5: Md5,
     /// Per chunk, in the plan's order: is it correct where it belongs?
     pub dest_ok: Vec<bool>,
     /// Per chunk, in the plan's order: is its reuse source intact?
     pub source_ok: Vec<bool>,
+    /// The file length the scan read. The in-place writer compares this
+    /// against its open handle before reusing the verdict.
+    pub file_len: u64,
+    /// The file's modification time when the scan was taken, from one
+    /// `metadata` call. `None` when that stat failed, which leaves the
+    /// verdict unusable for reuse.
+    pub modified: Option<SystemTime>,
 }
 
 impl Verdict {
@@ -55,15 +66,82 @@ impl Verdict {
 /// The scan of the whole plan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanReport {
-    /// Per planned file, by rel path.
-    pub files: HashMap<String, Verdict>,
+    /// Per planned file, in `plan.files` order. `None` is a file the scan did
+    /// not reach: a task that panicked or was cancelled, or a plan this report
+    /// was not built from.
+    files: Vec<Option<Verdict>>,
     /// The bytes the scan read.
     pub bytes: u64,
     /// The chunks that are wrong where they belong, over the whole plan.
     pub damaged_chunks: u64,
+    /// When the scan started. The in-place writer reports how old the plan
+    /// scan is when it reuses a verdict; `None` for a report built by hand.
+    pub scanned_at: Option<SystemTime>,
+    /// The [`RepairPlan::fingerprint`] of the plan this scan read.
+    ///
+    /// A scan's `files` are indexed by plan position, so this is the identity
+    /// that makes those positions meaningful. `None` is a report built by
+    /// hand; it answers for no plan rather than accidentally matching one.
+    ///
+    /// This is an in-memory identity only: it comes from
+    /// [`RepairPlan::fingerprint`], which uses the standard library's
+    /// `DefaultHasher` and is not stable across processes or Rust releases.
+    /// A `ScanReport` is never serialized, persisted, or sent to another
+    /// process. If it ever has to cross such a boundary, the fingerprint must
+    /// become a stable fold first; comparing this value elsewhere is unsafe.
+    plan_fingerprint: Option<u64>,
 }
 
 impl ScanReport {
+    /// Whether this report was taken from `plan`.
+    ///
+    /// The comparison is exactly `self.plan_fingerprint == Some(plan.fingerprint())`:
+    /// the same ordered file list, file metadata and chunk layout. A report
+    /// from another plan is not an answer, even at an in-range index.
+    pub(crate) fn matches_plan(&self, plan: &RepairPlan) -> bool {
+        self.plan_fingerprint == Some(plan.fingerprint())
+    }
+
+    /// A report for `files`, bound to `plan` — the test-only constructor for
+    /// the private index fields.
+    #[cfg(test)]
+    pub(crate) fn for_test(plan: &RepairPlan, files: Vec<Option<Verdict>>) -> Self {
+        let damaged_chunks = files.iter().flatten().map(Verdict::damaged_chunks).sum();
+        Self {
+            files,
+            damaged_chunks,
+            plan_fingerprint: Some(plan.fingerprint()),
+            ..Default::default()
+        }
+    }
+
+    /// [`Self::for_test`] with a plan-scan start time, so a test can exercise
+    /// the reuse guard's age rule instead of always reading the file again.
+    #[cfg(test)]
+    pub(crate) fn for_test_at(
+        plan: &RepairPlan,
+        files: Vec<Option<Verdict>>,
+        scanned_at: SystemTime,
+    ) -> Self {
+        Self {
+            scanned_at: Some(scanned_at),
+            ..Self::for_test(plan, files)
+        }
+    }
+
+    /// The verdict for one planned file, when this report is from `plan` and
+    /// the scan produced one.
+    ///
+    /// A report from a different plan returns `None` for every id: the caller
+    /// then re-reads the file or estimates it in full, which is safe. The scan
+    /// is never silently applied to a plan it does not describe.
+    pub fn get(&self, plan: &RepairPlan, id: FileId) -> Option<&Verdict> {
+        if !self.matches_plan(plan) {
+            return None;
+        }
+        self.files.get(id.index()).and_then(Option::as_ref)
+    }
+
     /// The bytes the repair will really download, per file, in `plan.files`
     /// order.
     ///
@@ -104,9 +182,8 @@ impl ScanReport {
         requested: RepairMode,
         local_map: &LocalChunkMap,
     ) -> Vec<u64> {
-        plan.files
-            .iter()
-            .map(|f| {
+        plan.iter()
+            .map(|(id, f)| {
                 let sources = reuse::sources_for(&f.chunks, local_map.get(&f.rel));
                 // The run's cached root when it has one; otherwise resolve the
                 // base here, exactly as `contained_join` always did.
@@ -122,7 +199,7 @@ impl ScanReport {
                 };
                 est_file_download_bytes(
                     &f.chunks,
-                    self.files.get(&f.rel),
+                    self.get(plan, id),
                     &sources,
                     requested,
                     resolved,
@@ -205,7 +282,6 @@ fn est_file_download_bytes(
 
 /// One file's scan, before it is folded into the report.
 struct Scanned {
-    rel: String,
     verdict: Verdict,
     bytes: u64,
 }
@@ -222,6 +298,8 @@ pub async fn scan_plan(
     local_map: Arc<LocalChunkMap>,
     jobs: usize,
 ) -> ScanReport {
+    let timer = crate::phase::PhaseTimer::start("scan");
+    let scanned_at = Some(SystemTime::now());
     // NOTE: the plan is shared by `Arc` and each task is handed an index, not a
     // file. A `PlannedFile` owns its rel, MD5 and every chunk, so cloning one
     // per task would deep-clone the whole plan — the same reason
@@ -230,23 +308,37 @@ pub async fn scan_plan(
     // The install root is resolved once here, not once per file, and shared by
     // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
     let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
-    let mut stream = futures::stream::iter(0..plan.files.len())
+    let total_files = plan.len();
+    let plan_fingerprint = plan.fingerprint();
+    let mut stream = futures_util::stream::iter(0..total_files)
         .map(move |idx| {
             let plan = Arc::clone(&plan);
             let game_dir = game_dir.to_path_buf();
             let local_map = Arc::clone(&local_map);
             let root = root.clone();
             async move {
-                tokio::task::spawn_blocking(move || {
-                    scan_one(&game_dir, root.as_deref(), &plan.files[idx], &local_map)
+                // Raw `spawn_blocking` on purpose: `scan_one`'s per-file lines
+                // are best-effort diagnostics, and no test asserts them through
+                // a scoped subscriber. A production run has the global
+                // dispatcher anyway. A per-file log assertion would have to use
+                // `spawn_blocking_traced` to carry the caller's dispatcher onto
+                // this pool thread.
+                let result = tokio::task::spawn_blocking(move || {
+                    scan_one(&game_dir, root.as_deref(), &plan.files()[idx], &local_map)
                 })
-                .await
+                .await;
+                (idx, result)
             }
         })
         .buffer_unordered(jobs.max(1));
 
-    let mut out = ScanReport::default();
-    while let Some(res) = stream.next().await {
+    let mut out = ScanReport {
+        scanned_at,
+        plan_fingerprint: Some(plan_fingerprint),
+        ..Default::default()
+    };
+    out.files.resize(total_files, None);
+    while let Some((idx, res)) = stream.next().await {
         let scanned = match res {
             Ok(scanned) => scanned,
             Err(e) => {
@@ -264,14 +356,17 @@ pub async fn scan_plan(
         };
         out.bytes += scanned.bytes;
         out.damaged_chunks += scanned.verdict.damaged_chunks();
-        out.files.insert(scanned.rel, scanned.verdict);
+        out.files[idx] = Some(scanned.verdict);
     }
     tracing::info!(
-        files = out.files.len(),
+        phase = % "scan",
+        duration_ms = timer.elapsed_ms(),
+        files = out.files.iter().filter(|verdict| verdict.is_some()).count(),
         bytes = out.bytes,
         damaged_chunks = out.damaged_chunks,
         "scan"
     );
+    timer.disarm();
     out
 }
 
@@ -319,6 +414,43 @@ pub(crate) fn scan_ranges<'a>(
     (dest_ranges, source_ranges, source_owner)
 }
 
+/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
+///
+/// `scan_source_ok` is indexed by the range list [`scan_ranges`] built, which
+/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
+/// that range `k` belongs to. A chunk with no source has no intact source, by
+/// definition, so it stays `false`. A source verdict that is missing keeps
+/// that same conservative answer rather than panicking.
+///
+/// The discard path replaces a real scan with [`util::Scan::absent`], whose
+/// tuple is `(dest ranges, source ranges)`; this remap is what keeps that
+/// per-range shape from being read as per-chunk. Both the scan's estimate and
+/// the in-place writer use this one definition.
+pub(crate) fn source_ok_by_chunk(
+    chunks_len: usize,
+    source_owner: &[usize],
+    scan_source_ok: &[bool],
+) -> Vec<bool> {
+    let mut source_ok = vec![false; chunks_len];
+    for (k, &i) in source_owner.iter().enumerate() {
+        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
+    }
+    source_ok
+}
+
+/// The inverse of [`source_ok_by_chunk`]: one verdict per source range, in the
+/// order [`scan_ranges`] built them, from one verdict per chunk.
+///
+/// The in-place writer uses this when it replaces a fresh scan with the plan's
+/// per-chunk verdict. Both directions share the same ownership rule, and they
+/// are pinned against each other in one test so the two cannot drift.
+pub(crate) fn source_ok_by_range(chunk_source_ok: &[bool], source_owner: &[usize]) -> Vec<bool> {
+    source_owner
+        .iter()
+        .map(|&i| chunk_source_ok.get(i).copied().unwrap_or(false))
+        .collect()
+}
+
 /// Scan one file: one read, every answer.
 fn scan_one(
     game_dir: &Path,
@@ -342,16 +474,23 @@ fn scan_one(
             );
             let n = file.chunks.len();
             return Scanned {
-                rel: file.rel.clone(),
                 bytes: 0,
                 verdict: Verdict {
-                    file_md5: util::EMPTY_MD5.to_string(),
+                    file_md5: Md5::EMPTY,
                     dest_ok: vec![false; n],
                     source_ok: vec![false; n],
+                    file_len: 0,
+                    modified: None,
                 },
             };
         }
     };
+    // The guard the writer can use later: the modification time from one stat
+    // taken before the read, plus the length the read itself observes. A
+    // failed stat leaves the time absent, so the verdict is never reusable.
+    let modified = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok());
     let sources = reuse::sources_for(&file.chunks, local_map.get(&file.rel));
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
     let scan = util::scan_file(&path, &dest_ranges, &source_ranges).unwrap_or_else(|e| {
@@ -361,18 +500,22 @@ fn scan_one(
         util::Scan::absent(dest_ranges.len(), source_ranges.len())
     });
     // Back to one verdict per chunk, in the plan's order: a chunk with no
-    // source has no intact source, by definition.
-    let mut source_ok = vec![false; file.chunks.len()];
-    for (k, &i) in source_owner.iter().enumerate() {
-        source_ok[i] = scan.source_ok.get(k).copied().unwrap_or(false);
-    }
+    // source has no intact source, by definition. The scan answers one verdict
+    // per source range, so the two lists are the same length here.
+    debug_assert_eq!(
+        source_owner.len(),
+        scan.source_ok.len(),
+        "the scan answers one source verdict per source range"
+    );
+    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
     Scanned {
-        rel: file.rel.clone(),
         bytes: scan.file_len,
         verdict: Verdict {
             file_md5: scan.file_md5,
             dest_ok: scan.dest_ok,
             source_ok,
+            file_len: scan.file_len,
+            modified,
         },
     }
 }
@@ -406,9 +549,11 @@ mod tests {
         // c0 is wrong but has an intact source the ascending order keeps; c1
         // is wrong and has none.
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false, false],
             source_ok: vec![true, false],
+            file_len: 0,
+            modified: None,
         };
         let sources = vec![Some(20u64), None];
         assert_eq!(
@@ -437,9 +582,11 @@ mod tests {
     fn the_ordered_tier_can_download_a_chunk_whose_source_the_scan_found_intact() {
         let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false, false],
             source_ok: vec![true, true],
+            file_len: 0,
+            modified: None,
         };
         // Each chunk's bytes live where the other lands.
         let sources = vec![Some(20u64), Some(0)];
@@ -475,9 +622,11 @@ mod tests {
     fn the_temp_estimate_counts_the_correct_chunks_the_in_place_path_keeps() {
         let chunks = vec![chunk_at("c0", "m0", 0, 10), chunk_at("c1", "m1", 10, 20)];
         let verdict = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![true, false],
             source_ok: vec![false, false],
+            file_len: 0,
+            modified: None,
         };
         let sources = vec![None, None];
         assert_eq!(
@@ -532,9 +681,11 @@ mod tests {
         );
 
         let all_wrong = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![false; 3],
             source_ok: vec![false; 3],
+            file_len: 0,
+            modified: None,
         };
         assert_eq!(
             est_file_download_bytes(
@@ -556,7 +707,7 @@ mod tests {
         // non-existent source intact and hide the download from the estimate.
         let x = vec![0x58u8; 10];
         let y = vec![0x59u8; 10];
-        let md5_x = format!("{:x}", md5::compute(&x));
+        let md5_x = util::md5::md5_digest(&x).to_hex();
         let mut bytes = x.clone();
         bytes.extend_from_slice(&y);
         let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "no_source");
@@ -564,7 +715,8 @@ mod tests {
         let file = PlannedFile {
             rel: "a.dat".into(),
             size: 20,
-            md5: format!("{:x}", md5::compute(&bytes)),
+            md5: util::md5::md5_digest(&bytes).to_hex(),
+            url_prefix: Arc::from(""),
             chunks: vec![chunk_at("c0", &md5_x, 10, 10)],
         };
 
@@ -597,13 +749,218 @@ mod tests {
         );
     }
 
+    /// One remap pins the ownership rule: only chunks with a source have an
+    /// entry in `scan_source_ok`, and a chunk without one stays `false`. A
+    /// verdict list that is shorter than the owner list is a missing answer,
+    /// not a panic.
+    #[test]
+    fn the_source_verdicts_land_on_the_chunk_that_owns_the_range() {
+        assert_eq!(
+            source_ok_by_chunk(3, &[0, 2], &[true, true]),
+            vec![true, false, true],
+            "chunk 1 has no source range, so it has no intact source"
+        );
+        assert_eq!(
+            source_ok_by_chunk(3, &[0, 2], &[true]),
+            vec![true, false, false],
+            "a missing per-range verdict is false, not a panic"
+        );
+    }
+
+    /// The per-range view is the exact inverse of the shared remap: a
+    /// round-trip through both leaves every range verdict unchanged, and a
+    /// chunk the owner list does not claim is simply absent from the result.
+    #[test]
+    fn the_per_range_view_inverts_the_shared_remap() {
+        let owner = [0usize, 2];
+        for ranges in [[true, true], [true, false], [false, true], [false, false]] {
+            let by_chunk = source_ok_by_chunk(3, &owner, &ranges);
+            assert_eq!(
+                source_ok_by_range(&by_chunk, &owner),
+                ranges.to_vec(),
+                "every per-range verdict survives the round-trip"
+            );
+        }
+
+        // A per-chunk list maps onto the ranges that own those chunks only.
+        assert_eq!(
+            source_ok_by_range(&[true, false, true], &owner),
+            vec![true, true]
+        );
+        // A missing per-chunk verdict keeps the conservative answer.
+        assert_eq!(
+            source_ok_by_range(&[true], &owner),
+            vec![true, false],
+            "a chunk with no verdict is not an intact source"
+        );
+    }
+
+    /// A no-source chunk stays `false` even when the scan's source list carries
+    /// an entry the owner list does not claim.
+    #[test]
+    fn a_stray_source_verdict_never_marks_a_no_source_chunk() {
+        assert_eq!(
+            source_ok_by_chunk(3, &[2], &[true, true]),
+            vec![false, false, true],
+            "the extra answer belongs to no chunk, and chunk 1 has no source"
+        );
+    }
+
+    /// The scan's estimate and the in-place writer read the same remapped
+    /// per-chunk verdict: the chunk without a source is the one both name as a
+    /// download.
+    #[test]
+    fn the_scan_and_inplace_estimates_agree_after_the_remap() {
+        let chunks = vec![
+            chunk_at("c0", "m0", 0, 10),
+            chunk_at("c1", "m1", 10, 20),
+            chunk_at("c2", "m2", 30, 30),
+        ];
+        let sources = vec![Some(100u64), None, Some(300)];
+        let (_, _, owner) = scan_ranges(&chunks, &sources);
+        assert_eq!(owner, vec![0, 2]);
+        let source_ok = source_ok_by_chunk(chunks.len(), &owner, &[true, true]);
+        let verdict = Verdict {
+            file_md5: Md5::EMPTY,
+            dest_ok: vec![false; 3],
+            source_ok,
+            file_len: 0,
+            modified: None,
+        };
+        assert_eq!(
+            est_file_download_bytes(
+                &chunks,
+                Some(&verdict),
+                &sources,
+                RepairMode::Auto,
+                Mode::Inplace
+            ),
+            20,
+            "only the source-less chunk must be fetched"
+        );
+
+        // The writer builds its patch list from the same verdict; the chunks
+        // it downloads are the same ones the estimate counted.
+        let bad: Vec<usize> = (0..chunks.len()).filter(|&i| !verdict.dest_ok[i]).collect();
+        let srcs: Vec<Option<u64>> = bad
+            .iter()
+            .map(|&i| {
+                if verdict.source_ok[i] {
+                    sources[i]
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let kept: Vec<&SophonChunk> = bad.iter().map(|&i| &chunks[i]).collect();
+        let order = reuse::salvage_order_refs(&kept, &srcs, u64::MAX);
+        let downloaded: u64 = kept
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| !order.live[*k])
+            .fold(0u64, |n, (_, c)| {
+                n.saturating_add(c.compressed_size.max(0) as u64)
+            });
+        assert_eq!(
+            downloaded, 20,
+            "the writer's patch list and the estimate must agree"
+        );
+    }
+
     #[test]
     fn the_damaged_chunk_count_is_the_wrong_chunks() {
         let v = Verdict {
-            file_md5: "x".into(),
+            file_md5: Md5::EMPTY,
             dest_ok: vec![true, false, false, true],
             source_ok: vec![true; 4],
+            file_len: 0,
+            modified: None,
         };
         assert_eq!(v.damaged_chunks(), 2);
+    }
+
+    #[test]
+    fn the_report_returns_verdicts_by_file_id() {
+        let plan = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
+                rel: "a.dat".into(),
+                size: 0,
+                md5: "m".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![],
+            }],
+        );
+        let present = Md5::parse_hex("00000000000000000000000000000001").unwrap();
+        let report = ScanReport {
+            files: vec![
+                None,
+                Some(Verdict {
+                    file_md5: present,
+                    dest_ok: vec![],
+                    source_ok: vec![],
+                    file_len: 0,
+                    modified: None,
+                }),
+            ],
+            bytes: 0,
+            damaged_chunks: 0,
+            scanned_at: None,
+            plan_fingerprint: Some(plan.fingerprint()),
+        };
+
+        assert!(report.get(&plan, FileId::new(0)).is_none());
+        assert_eq!(report.get(&plan, FileId::new(1)).unwrap().file_md5, present);
+        assert!(
+            report.get(&plan, FileId::new(2)).is_none(),
+            "an id outside the report is not a verdict"
+        );
+    }
+
+    /// The report's file positions belong to the plan it read. A report paired
+    /// with a different plan answers `None` for every id instead of handing
+    /// back a verdict at a position that means something else there.
+    #[test]
+    fn a_report_from_another_plan_is_rejected() {
+        let plan_a = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
+                rel: "a.dat".into(),
+                size: 1,
+                md5: "a".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![chunk_at("c0", "m0", 0, 1)],
+            }],
+        );
+        let plan_b = RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
+                rel: "b.dat".into(),
+                size: 2,
+                md5: "b".into(),
+                url_prefix: Arc::from(""),
+                chunks: vec![chunk_at("c0", "m1", 0, 2)],
+            }],
+        );
+        let report = ScanReport {
+            files: vec![Some(Verdict {
+                file_md5: Md5::EMPTY,
+                dest_ok: vec![true],
+                source_ok: vec![true],
+                file_len: 1,
+                modified: None,
+            })],
+            bytes: 1,
+            damaged_chunks: 0,
+            scanned_at: None,
+            plan_fingerprint: Some(plan_a.fingerprint()),
+        };
+
+        assert!(report.matches_plan(&plan_a));
+        assert!(!report.matches_plan(&plan_b));
+        assert!(
+            report.get(&plan_b, FileId::new(0)).is_none(),
+            "a verdict from another plan must not be applied"
+        );
     }
 }

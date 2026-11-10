@@ -11,7 +11,7 @@ use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::{DigestSet, HashAlg};
 use crate::scan::{check_mixed_case, walk_live};
-use crate::util::elapsed_s;
+use crate::util::{elapsed_s, path_key};
 
 use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_matches};
 
@@ -131,7 +131,7 @@ pub fn scan_stat_only(
     };
     let mut alt_index: HashMap<String, Vec<String>> = HashMap::new();
     for key in alt_keys {
-        alt_index.entry(key.to_lowercase()).or_default().push(key);
+        alt_index.entry(path_key(&key)).or_default().push(key);
     }
     // An adopted key is renamed to the disk casing and removed, so it must not
     // also be counted as stale when the prune set is read below.
@@ -169,7 +169,7 @@ pub fn scan_stat_only(
             // Exact-case miss in insensitive mode: adopt the single stale
             // alternate-cased entry as the cache candidate (disk name wins).
             None if !case_sensitive => {
-                match alt_index.get(&e.rel.to_lowercase()) {
+                match alt_index.get(&path_key(&e.rel)) {
                     Some(alts) => {
                         let others: Vec<&String> = alts.iter().filter(|k| *k != &e.rel).collect();
                         if others.len() == 1 {

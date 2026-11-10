@@ -8,7 +8,7 @@
 //! independent by design (`tools/sync` is a sibling tool, not a dependency).
 //!
 //! Matched against the `/`-separated, game-dir-rooted rel path — the same
-//! string `plan::build_plan` stores and `util::contained_rel` validates at
+//! string `plan::build_plan` stores and `util::path::contained_rel` validates at
 //! the filesystem boundary.
 //!
 //! Three semantics are inherited deliberately and must not be "fixed" here:
@@ -20,7 +20,15 @@
 //!   so. (`**/` also works and additionally matches at the root.)
 //! - **Case-insensitive, with no flag.** Game paths are Windows and the live
 //!   manifests are lowercase anyway; `girsync` defaults `--case-sensitive` to
-//!   `false` and this port hardcodes that.
+//!   `false` and this port hardcodes that. This folding is **not**
+//!   [`crate::util::path::path_key`]: both fold ASCII case only and leave
+//!   non-ASCII bytes exact, but the glob crate applies its per-character fold
+//!   on every host as a containment predicate over a user-written pattern,
+//!   while `path_key` is the map key for path identity and folds only on
+//!   Windows. The rules differ deliberately. A glob is a containment predicate
+//!   over a user-written pattern, so matching broadly is the point; `path_key`
+//!   over-merges at its peril, because two keys that collapse there silently
+//!   drop or keep the wrong file.
 //! - **`--exclude` beats `--include`.** Last-writer-wins would be the
 //!   alternative; exclusion wins so a narrow `--include` can always be widened
 //!   down without reordering anything.
@@ -29,19 +37,20 @@ use anyhow::{Context, Result};
 use glob::{MatchOptions, Pattern};
 
 /// girsync's matching options, hardcoded (see the module docs).
-fn match_options() -> MatchOptions {
-    MatchOptions {
-        case_sensitive: false,
-        require_literal_separator: false,
-        require_literal_leading_dot: false,
-    }
-}
+///
+/// A fixed value: keeping it `const` avoids rebuilding it for every walked
+/// path in the hottest predicate.
+const MATCH_OPTIONS: MatchOptions = MatchOptions {
+    case_sensitive: false,
+    require_literal_separator: false,
+    require_literal_leading_dot: false,
+};
 
 /// The set of globs narrowing one run, compiled once at startup.
 ///
 /// An empty `includes` admits **everything** — that is what makes
 /// `--exclude`-only and unflagged runs identical.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct PathScope {
     includes: Vec<Pattern>,
     excludes: Vec<Pattern>,
@@ -77,11 +86,18 @@ impl PathScope {
 
     /// `true` when `rel` is inside the scope. `--exclude` beats `--include`.
     pub fn is_visible(&self, rel: &str) -> bool {
-        let opts = match_options();
-        if !self.includes.is_empty() && !self.includes.iter().any(|p| p.matches_with(rel, opts)) {
+        if !self.includes.is_empty()
+            && !self
+                .includes
+                .iter()
+                .any(|p| p.matches_with(rel, MATCH_OPTIONS))
+        {
             return false;
         }
-        !self.excludes.iter().any(|p| p.matches_with(rel, opts))
+        !self
+            .excludes
+            .iter()
+            .any(|p| p.matches_with(rel, MATCH_OPTIONS))
     }
 
     /// The `--include` globs as written, for the "matched nothing" usage

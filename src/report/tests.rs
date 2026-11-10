@@ -1,8 +1,12 @@
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Duration;
 
 use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
-use crate::report::emit::{progress_record, report_record, summary_record};
+use crate::report::emit::{
+    ProgressGuard, ReportProvenance, progress_record, report_record, summary_record, write_line,
+};
 use crate::report::record::{OutputFormat, Record};
 use crate::report::summary::{Extra, Summary, SummaryFlags, conditional_extras};
 
@@ -20,7 +24,6 @@ fn text_and_json_are_two_renderings_of_one_record() {
         r#"{"event":"summary","total":4,"word":"a b\"c"}"#,
         "the event name is the label lowercased, and the order is report order"
     );
-    assert_eq!(rec.event(), "summary");
     assert_eq!(rec.label(), "SUMMARY");
     assert_eq!(
         rec.fields().iter().map(|(k, _)| *k).collect::<Vec<_>>(),
@@ -75,6 +78,80 @@ fn progress_record_counts_done_as_the_three_outcomes() {
     assert_eq!(v["total"], 10);
 }
 
+/// The phase's guard is the only owner of the ticker: it skips the immediate
+/// first tick, emits once per interval after that, and never emits `SUMMARY`.
+///
+/// Paused time makes the cadence deterministic instead of sleeping.
+#[test]
+fn the_progress_guard_ticks_once_per_interval_and_never_emits_a_summary() {
+    let logs = crate::repair::test_support::logs_of(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::pause();
+            let summary = Arc::new(Summary::default());
+            let guard = ProgressGuard::start_with_interval(
+                Arc::clone(&summary),
+                OutputFormat::Text,
+                Duration::from_millis(10),
+            );
+            // Let the ticker consume its immediate first tick, then let the
+            // paused clock pass two full intervals. Auto-advance drives the
+            // ticker's timer; the test task's own sleep is what yields to it.
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            drop(guard);
+        });
+    });
+    assert_eq!(
+        logs.lines()
+            .filter(|line| line.contains("PROGRESS done="))
+            .count(),
+        2,
+        "one tick per interval, with the immediate first tick skipped:\n{logs}"
+    );
+    assert!(
+        !logs.lines().any(|line| line.contains("SUMMARY ")),
+        "the ticker never owns the run's final record:\n{logs}"
+    );
+}
+
+/// Dropping the guard stops the ticker, including when a phase returns early.
+/// Nothing may keep ticking into the next phase.
+#[test]
+fn dropping_the_progress_guard_stops_the_ticker() {
+    let logs = crate::repair::test_support::logs_of(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::pause();
+            let summary = Arc::new(Summary::default());
+            let guard = ProgressGuard::start_with_interval(
+                Arc::clone(&summary),
+                OutputFormat::Text,
+                Duration::from_millis(10),
+            );
+            tokio::task::yield_now().await;
+            drop(guard);
+            // A whole minute of clock after the drop: an unstopped ticker would
+            // have emitted thousands of records here.
+            tokio::time::advance(Duration::from_secs(60)).await;
+            tokio::task::yield_now().await;
+        });
+    });
+    assert_eq!(
+        logs.lines()
+            .filter(|line| line.contains("PROGRESS done="))
+            .count(),
+        0,
+        "the dropped guard must leave no ticker behind:\n{logs}"
+    );
+}
+
 #[test]
 fn summary_line_keyvalue_and_json_agree() {
     let s = Summary {
@@ -105,6 +182,24 @@ fn summary_line_keyvalue_and_json_agree() {
     // An unflagged run gains no members at all — that is the whole
     // contract of the conditional keys.
     assert_eq!(v.as_object().unwrap().len(), 8, "{json}");
+}
+
+#[test]
+fn deleted_byte_accounting_saturates_instead_of_wrapping() {
+    let s = Summary::new();
+    s.add_deleted_bytes(5);
+    s.add_deleted_bytes(7);
+    assert_eq!(s.deleted_extra_bytes.load(Ordering::Relaxed), 12);
+
+    s.deleted_extra_bytes.store(u64::MAX - 2, Ordering::Relaxed);
+    s.add_deleted_bytes(10);
+    assert_eq!(s.deleted_extra_bytes.load(Ordering::Relaxed), u64::MAX);
+    s.add_deleted_bytes(1);
+    assert_eq!(
+        s.deleted_extra_bytes.load(Ordering::Relaxed),
+        u64::MAX,
+        "a saturated total stays at the ceiling"
+    );
 }
 
 #[test]
@@ -243,17 +338,42 @@ fn snapshot_copies_every_counter() {
     let s = Summary {
         files_total: 7,
         files_skipped: AtomicU64::new(1),
+        check_damaged_chunks: AtomicU64::new(3),
+        check_damaged_chunks_measured: AtomicBool::new(true),
         ..Summary::default()
     };
     s.download.settle(9);
     let snap = s.snapshot();
     assert_eq!(snap.files_total, 7);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(snap.check_damaged_chunks(), Some(3));
     assert_eq!(snap.download.settled(), 9);
     assert_eq!(snap.flags, SummaryFlags::default());
     // Mutating the source afterwards must not touch the snapshot.
     s.files_skipped.store(5, Ordering::Relaxed);
+    s.check_damaged_chunks.store(4, Ordering::Relaxed);
     assert_eq!(snap.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(snap.check_damaged_chunks(), Some(3));
+}
+
+/// A default `Summary` has not measured the check's tally, so it must not
+/// report zero as if a clean check had produced it.
+#[test]
+fn an_unmeasured_check_tally_is_not_zero() {
+    assert_eq!(Summary::default().check_damaged_chunks(), None);
+
+    let measured_zero = Summary {
+        check_damaged_chunks_measured: AtomicBool::new(true),
+        ..Summary::default()
+    };
+    assert_eq!(measured_zero.check_damaged_chunks(), Some(0));
+
+    let snapped = measured_zero.snapshot();
+    assert_eq!(
+        snapped.check_damaged_chunks(),
+        Some(0),
+        "a snapshot keeps the measured-zero distinction"
+    );
 }
 
 fn cfg_full() -> GameConfig {
@@ -285,15 +405,15 @@ fn report_record_reports_versions_and_api_fields() {
         manifests: Vec::new(),
     };
     let audio: HashSet<String> = ["ja-jp".into(), "en-us".into()].into_iter().collect();
-    let rec = report_record(
-        &Some("4.0.0".to_string()),
-        "5.1.0",
-        "hk4e_global",
-        &cfg_full(),
-        &pkg,
-        &build,
-        &audio,
-    );
+    let rec = report_record(&ReportProvenance {
+        local_version: &Some("4.0.0".to_string()),
+        latest_version: "5.1.0",
+        biz: "hk4e_global",
+        cfg: &cfg_full(),
+        pkg: &pkg,
+        build: &build,
+        audio_langs: &audio,
+    });
     let line = rec.text();
     assert!(
         line.starts_with("REPORT local_version=4.0.0 latest_version=5.1.0 biz=hk4e_global"),
@@ -321,7 +441,15 @@ fn report_record_says_none_for_an_absent_local_version() {
         manifests: Vec::new(),
     };
     let audio: HashSet<String> = HashSet::new();
-    let rec = report_record(&None, "3.0.0", "hk4e_cn", &cfg, &pkg, &build, &audio);
+    let rec = report_record(&ReportProvenance {
+        local_version: &None,
+        latest_version: "3.0.0",
+        biz: "hk4e_cn",
+        cfg: &cfg,
+        pkg: &pkg,
+        build: &build,
+        audio_langs: &audio,
+    });
     let v: serde_json::Value = serde_json::from_str(&rec.json()).unwrap();
     assert_eq!(v["event"], "report");
     assert_eq!(v["local_version"], "none");
@@ -329,4 +457,75 @@ fn report_record_says_none_for_an_absent_local_version() {
     assert_eq!(v["biz"], "hk4e_cn");
     assert_eq!(v["exe"], "GenshinImpact.exe");
     assert_eq!(v["audio_langs"], "");
+}
+
+/// A writer whose reader has gone away: it fails on the first write, exactly
+/// as process stdout does after `| head`.
+struct BrokenPipeWriter;
+
+impl std::io::Write for BrokenPipeWriter {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A writer that accepts one byte and then makes no more progress.
+struct ShortWriter(usize);
+
+impl std::io::Write for ShortWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(1).min(self.0);
+        if n == 1 {
+            self.0 = 0;
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct VecWriter(Vec<u8>);
+
+impl std::io::Write for VecWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_closed_stdout_returns_the_error_instead_of_panicking() {
+    // `emit` handles this error and carries on; here the seam itself must only
+    // report it, so the caller has something to handle rather than a panic.
+    let err = write_line(&mut BrokenPipeWriter, "SUMMARY total=1").unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
+#[test]
+fn a_short_write_is_reported_and_not_retried_forever() {
+    let mut out = ShortWriter(1);
+    let err = write_line(&mut out, "SUMMARY total=1").unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+}
+
+#[test]
+fn a_successful_write_is_the_line_and_exactly_one_newline() {
+    let mut out = VecWriter(Vec::new());
+    write_line(&mut out, "SUMMARY total=1").unwrap();
+    assert_eq!(out.0, b"SUMMARY total=1\n");
 }

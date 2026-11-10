@@ -21,7 +21,8 @@
 //!
 //! - [`record`] — `Record`, `Val`, `OutputFormat`, and the two renderings.
 //! - [`summary`] — `Summary`, `SummaryFlags`, and the conditional tail.
-//! - [`mod@emit`] — `emit`, `progress_record`, `report_record`, `summary_record`.
+//! - [`mod@emit`] — `emit`, `ProgressGuard`, `progress_record`, `report_record`,
+//!   `summary_record`.
 
 #[cfg(test)]
 mod tests;
@@ -30,8 +31,6 @@ pub mod emit;
 pub mod record;
 pub mod summary;
 
-pub use self::emit::{
-    emit, emit_progress, progress_record, report_record, spawn_progress_reporter, summary_record,
-};
-pub use self::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record, Val};
-pub use self::summary::{Extra, Summary, SummaryFlags};
+pub use self::emit::{ProgressGuard, ReportProvenance, emit, report_record, summary_record};
+pub use self::record::{OutputFormat, Record};
+pub use self::summary::{Ceiling, Summary, SummaryFlags};

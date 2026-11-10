@@ -138,7 +138,7 @@ Collapse (`Hi3Helper.Sophon/*`, `InstallManagerBase.Sophon*.cs`, `GenshinInstall
     marks `*deletefiles*` entries + `*.diff/*_tmp/*.hdiff` (`Check.cs:232-319`) as `Unused`, deleted in
     `Repair.cs:150-165` during `RepairAssetTypeGeneric`.
 - **v1 files-cleanup scope for this tool (Collapse-handling, no SDK/WPF/dispatcher)**: expected set =
-  `{latest chunk-manifest paths} ∪ {config.ini} ∪ {the single-writer lock} ∪ {cleaned blacklist paths}`
+  `{latest chunk-manifest paths} ∪ {config.ini} ∪ {the legacy in-install girpr.lock} ∪ {cleaned blacklist paths}`
   plus filename-pattern keeps for `audio_lang_*` + `Audio_*_pkg_version` (Collapse
   `GenshinInstall.cs:232-241` parity). Everything not kept by rules 0-4 purges into the
   single `deleted_extra_bytes` counter — including temps (`*_tmp`, `*.hdiff`, `chunk/`,
@@ -180,9 +180,9 @@ Extra behavior changes recommended (beyond 1:1 port):
 - **Files-cleanup both before and after** (`--purge-before` / `--purge-after` run the
   same Collapse `GetUnusedFileInfoList`-parity cleanup; only timing differs);
   dry-run lists bytes. Expected set per §3 v1 scope; keep minimal
-  (`config.ini` + manifest membership + `audio_lang_*` / `Audio_*_pkg_version`
-  pattern).
-- Bound file parallelism (`--io-threads`; chunks sequential within a file) for HDD vs SSD.
+  (`config.ini` + a legacy in-install `girpr.lock` + manifest membership +
+  blacklisted paths + `audio_lang_*` / `Audio_*_pkg_version` pattern).
+- Bound file parallelism (`--jobs`; chunks sequential within a file) for HDD vs SSD.
 - Skip SDK/WPF downloads and dispatcher persistent writes in v1 (game launches without them; add
   `--with-sdk --with-wpf` later if a channel proves otherwise). Always move audio cache→res if the
   game config names distinct dirs (Starward parity, prevents stranded duplicates).

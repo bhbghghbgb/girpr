@@ -9,7 +9,7 @@
 //! The whole justification for the streaming path is a number: the chunk
 //! path's peak live heap goes from **6.14 MB to 0.03 MB** per active chunk
 //! (measured below on the 2 162 302 B chunk: 6 435 587 B against 33 684 B),
-//! which at `--io-threads 8` is ~64-97 MB of resident chunk buffers down to
+//! which at `--jobs 8` is ~64-97 MB of resident chunk buffers down to
 //! ~0.3 MB. Without an instrument that number is a sentence in a document,
 //! and the next change that reintroduces a buffer silently invalidates it.
 //!
@@ -40,7 +40,7 @@
 //!
 //! | shape | what it does |
 //! |---|---|
-//! | **streamed** | `sophon::stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
+//! | **streamed** | `stream_chunk_to` — the body is decoded as it arrives and the decoded bytes are written into the file |
 //! | **buffered** | `resp.bytes()` → `zstd::decode_all` → the decoded buffer — the buffered path |
 //!
 //! The payload is the shape of the reference bundle's largest chunk: ~2.16 MB
@@ -49,13 +49,23 @@
 //! wrong thing — the compressed body would be small and the buffered path's
 //! peak would be the decoded buffer alone.
 
+// A counting global allocator is necessarily `unsafe`: it is the instrument
+// this file exists to be, and it implements the standard trait exactly as the
+// trait requires. The production code has no `unsafe`.
+#![allow(unsafe_code)]
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+#[path = "common/digest.rs"]
+mod digest;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::future::Future;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use girpr::sleep::RealSleep;
-use girpr::sophon::{self, ChunkSink};
+use digest::md5hex;
+use girpr::test_support::{ChunkFetch, ChunkSink, RealSleep, stream_chunk_to};
 use girpr_tempdir::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -272,16 +282,16 @@ async fn the_chunk_paths_peak_live_heap() {
     {
         let mut sink = FileSink::new(&path);
         let mut consumed = 0u64;
-        sophon::stream_chunk_to(
-            &client,
-            &RealSleep,
-            &base,
-            "chunk",
-            payload.len() as u64,
-            frame.len() as u64,
-            &mut consumed,
-            &mut sink,
-        )
+        stream_chunk_to(ChunkFetch {
+            client: &client,
+            sleep: &RealSleep,
+            url_prefix: &base,
+            id: "chunk",
+            expected: payload.len() as u64,
+            max_compressed: frame.len() as u64,
+            consumed: &mut consumed,
+            sink: &mut sink,
+        })
         .await
         .expect("the warm-up fetch");
     }
@@ -290,22 +300,22 @@ async fn the_chunk_paths_peak_live_heap() {
     // bytes are written into the file.
     let mut sink = FileSink::new(&path);
     let mut consumed = 0u64;
-    let (streamed, digest) = measure(sophon::stream_chunk_to(
-        &client,
-        &RealSleep,
-        &base,
-        "chunk",
-        payload.len() as u64,
-        frame.len() as u64,
-        &mut consumed,
-        &mut sink,
-    ))
+    let (streamed, digest) = measure(stream_chunk_to(ChunkFetch {
+        client: &client,
+        sleep: &RealSleep,
+        url_prefix: &base,
+        id: "chunk",
+        expected: payload.len() as u64,
+        max_compressed: frame.len() as u64,
+        consumed: &mut consumed,
+        sink: &mut sink,
+    }))
     .await;
     let digest = digest.expect("the streamed fetch");
     assert_eq!(digest.bytes, payload.len() as u64, "the whole chunk landed");
     assert_eq!(
         digest.md5.to_hex(),
-        format!("{:x}", md5::compute(&payload)),
+        md5hex(&payload),
         "and it is the right chunk"
     );
 

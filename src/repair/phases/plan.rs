@@ -13,7 +13,8 @@
 //! makes any-version → latest work: the local manifest is only ever an
 //! optimization (chunk reuse), never an input to correctness.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -32,6 +33,9 @@ pub struct PlannedFile {
     pub rel: String,
     pub size: i64,
     pub md5: String,
+    /// The chunk URL prefix this file's chunks live under. Shared per manifest
+    /// so a manifest's files do not each own a copy of the same string.
+    pub url_prefix: Arc<str>,
     /// The file's chunks, **sorted by offset** (see `build_plan`) and with
     /// the empty ones dropped.
     pub chunks: Vec<SophonChunk>,
@@ -147,28 +151,164 @@ pub struct Layout {
     pub overlaps: Vec<(u64, u64)>,
 }
 
+/// A planned file's position in [`RepairPlan::files`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FileId(usize);
+
+impl std::fmt::Debug for FileId {
+    /// Print the index itself: a `FileId` is a position, and the wrapper's
+    /// name adds nothing a reader of a log or a test failure needs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl FileId {
+    pub(crate) fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// The position in [`RepairPlan::files`] this id names.
+    pub fn index(self) -> usize {
+        self.0
+    }
+}
+
+/// The fingerprint of an ordered file list and each file's chunk layout.
+///
+/// Only what the scan's per-file and per-chunk positions depend on is hashed:
+/// the file's identity and manifest facts in plan order, then its chunks'
+/// identity, offsets and sizes in plan order. Kept separate from
+/// [`RepairPlan::fingerprint`] so the expensive walk can be done once.
+fn fingerprint_files(files: &[PlannedFile]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    files.len().hash(&mut hasher);
+    for file in files {
+        file.rel.hash(&mut hasher);
+        file.size.hash(&mut hasher);
+        file.md5.hash(&mut hasher);
+        file.url_prefix.as_ref().hash(&mut hasher);
+        file.chunks.len().hash(&mut hasher);
+        for chunk in &file.chunks {
+            chunk.id.hash(&mut hasher);
+            chunk.uncompressed_md5.hash(&mut hasher);
+            chunk.offset.hash(&mut hasher);
+            chunk.compressed_size.hash(&mut hasher);
+            chunk.uncompressed_size.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 /// The sorted, deduped work list for one run.
 pub struct RepairPlan {
-    pub latest: String,
-    pub files: Vec<PlannedFile>,
-    /// The chunk URL prefix each file's chunks live under, shared per manifest
-    /// so a manifest's files do not each own a copy of the same string.
-    pub url_prefix_by_file: HashMap<String, Arc<str>>,
+    /// The latest manifest tag the plan was built from.
+    ///
+    /// Private and read-only: a plan is immutable after construction, so the
+    /// tag that [`fingerprint`](Self::fingerprint) mixes in cannot be changed
+    /// from under a scan that recorded the plan's identity.
+    latest: String,
+    files: Vec<PlannedFile>,
+    /// The fingerprint of `files`, computed once when the plan is built.
+    ///
+    /// `files` and `latest` are private and never mutated after construction,
+    /// so caching it cannot go stale. [`fingerprint`](Self::fingerprint)
+    /// mixes in `latest`, so the tag is still part of the answer.
+    files_fingerprint: u64,
 }
 
 impl RepairPlan {
+    /// Assemble the plan, computing the immutable file list's fingerprint once.
+    fn new(latest: String, files: Vec<PlannedFile>) -> Self {
+        let files_fingerprint = fingerprint_files(&files);
+        Self {
+            latest,
+            files,
+            files_fingerprint,
+        }
+    }
+
+    /// The latest manifest tag the plan was built from.
+    pub fn latest(&self) -> &str {
+        &self.latest
+    }
+
+    /// The planned files, in plan order.
+    ///
+    /// The one crate-private view used where an operation is intrinsically
+    /// index-based (a parallel task is handed a position). Everything that
+    /// starts from a plan position or addresses a file should prefer
+    /// [`file`](Self::file) or [`iter`](Self::iter), so the id and the file
+    /// stay together.
+    pub(crate) fn files(&self) -> &[PlannedFile] {
+        &self.files
+    }
+
+    /// The file `id` names, or `None` when the id is not from this plan.
+    pub fn file(&self, id: FileId) -> Option<&PlannedFile> {
+        self.files.get(id.index())
+    }
+
+    /// The number of planned files.
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Whether the plan has no files.
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// A fingerprint of this plan's identity: the ordered file list, each
+    /// file's manifest facts, and its ordered chunk layout.
+    ///
+    /// Two plans with the same fingerprint have the same files at the same
+    /// positions and the same chunks in the same order, so a per-file scan
+    /// index means the same thing in both. A scan records the fingerprint of
+    /// the plan it was taken from and refuses to answer for any other plan.
+    ///
+    /// This is an in-process check only. It is never persisted or emitted, so
+    /// it does not extend the output contract; the hash function is whatever
+    /// `DefaultHasher` provides in this build. `DefaultHasher` is not a
+    /// stable, cross-process hash — its output may differ between processes
+    /// or Rust releases — so a value from here must be compared only inside
+    /// the process that built the plan. The one consumer, [`ScanReport`],
+    /// holds it in memory and is never serialized. If a scan report ever has
+    /// to cross a process boundary, replace this with a stable fold first.
+    ///
+    /// The file-list half is cached at construction, because callers ask this
+    /// per file and rehashing the whole plan for each one would be quadratic in
+    /// the plan size.
+    ///
+    /// [`ScanReport`]: crate::repair::scan::ScanReport
+    pub(crate) fn fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.latest.hash(&mut hasher);
+        self.files_fingerprint.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// Every planned file with the id that addresses it, in plan order.
+    pub fn iter(&self) -> impl Iterator<Item = (FileId, &PlannedFile)> {
+        self.files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| (FileId::new(index), file))
+    }
+
+    /// A plan from its parts — the test-only constructor for the private file
+    /// list. Production builds the plan through [`build_plan`].
+    #[cfg(test)]
+    pub(crate) fn from_files(latest: impl Into<String>, files: Vec<PlannedFile>) -> Self {
+        Self::new(latest.into(), files)
+    }
+
     /// Paths the files-cleanup must treat as expected (docs/02 step 7).
     ///
     /// Borrowed so a caller that needs its own key (the purge keys the keep
     /// set with `path_key`) does not pay for two sets and two clones per file.
     pub fn expected_rels(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|f| f.rel.as_str())
-    }
-
-    /// The same paths as owned `String`s, for callers that want the raw
-    /// spelling. [`Self::expected_rels`] is the allocation-free view.
-    pub fn expected_paths(&self) -> HashSet<String> {
-        self.expected_rels().map(str::to_string).collect()
     }
 
     /// `Σ compressed_size` over every planned file, against a local reuse map.
@@ -275,7 +415,7 @@ pub(crate) fn validate_chunk_ranges(file: &PlannedFile) -> Result<()> {
 /// deleted by `--purge-*` (docs/01: blacklisted entries are never deleted).
 ///
 /// A path outside `scope` is dropped **here**, before the plan exists, so
-/// `files_total`, the repair loop and `expected_paths()` all see the same
+/// `files_total`, the repair loop and `expected_rels()` all see the same
 /// narrowed world. Dropping it later instead would leave the purge with a
 /// *narrower* keep-set than an unfiltered run.
 pub fn build_plan(
@@ -285,7 +425,6 @@ pub fn build_plan(
     scope: &PathScope,
 ) -> Result<RepairPlan> {
     let mut files: Vec<PlannedFile> = Vec::new();
-    let mut prefix: HashMap<String, Arc<str>> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (url_prefix, list) in per_manifest {
         // One allocation per manifest: every file in the list shares it.
@@ -308,7 +447,6 @@ pub fn build_plan(
             if blacklist.contains(&rel) || !scope.is_visible(&rel) || !seen.insert(path_key(&rel)) {
                 continue;
             }
-            prefix.insert(rel.clone(), Arc::clone(&url_prefix));
             // The chunk list is made **ascending by offset** here, once,
             // because everything downstream depends on it and nothing
             // upstream guarantees it: the manifest is whatever the server
@@ -325,6 +463,7 @@ pub fn build_plan(
                 rel,
                 size: f.size,
                 md5: f.md5.clone(),
+                url_prefix: Arc::clone(&url_prefix),
                 chunks,
             };
             // Validate **before** the empty-chunk drop: a zero-size chunk is an
@@ -366,11 +505,7 @@ pub fn build_plan(
     }
     // Stable order so log lines and the parallel spawn order are reproducible.
     files.sort_by(|a, b| a.rel.cmp(&b.rel));
-    Ok(RepairPlan {
-        latest: latest_tag.to_string(),
-        files,
-        url_prefix_by_file: prefix,
-    })
+    Ok(RepairPlan::new(latest_tag.to_string(), files))
 }
 
 #[cfg(test)]
@@ -397,6 +532,7 @@ mod tests {
             rel: "f.dat".into(),
             size,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks,
         }
     }
@@ -475,6 +611,72 @@ mod tests {
         let forward = file_with(128, vec![a.clone(), b.clone()]).layout();
         let backward = file_with(128, vec![b, a]).layout();
         assert_eq!(forward, backward);
+    }
+
+    /// [`Layout::overlaps`] names **both** sides of every overlap: the offsets
+    /// it records contain the offset of each chunk in every pair whose ranges
+    /// share a byte.
+    ///
+    /// The in-place writer relies on this when it narrows the post-redo scan:
+    /// a chunk the layout does not name is one no other chunk claims, so its
+    /// verdict cannot change when the redo writes. A layout that named only
+    /// one side would silently make a rewrite of the unnamed side invisible.
+    #[test]
+    fn every_overlapping_pair_is_named_from_both_sides() {
+        let cases: [(&str, Vec<SophonChunk>); 5] = [
+            ("two chunks", vec![chunk("a", 0, 4), chunk("b", 2, 4)]),
+            ("nested", vec![chunk("a", 0, 8), chunk("b", 2, 2)]),
+            ("identical copies", vec![chunk("a", 0, 4), chunk("b", 0, 4)]),
+            (
+                "chain",
+                vec![chunk("a", 0, 4), chunk("b", 2, 4), chunk("c", 4, 4)],
+            ),
+            (
+                // The layout records the chunk that last extended the
+                // coverage, which is not always one of the two chunks that
+                // overlap.
+                "a later pair behind a long first chunk",
+                vec![chunk("a", 0, 100), chunk("b", 10, 50), chunk("c", 20, 5)],
+            ),
+        ];
+        for (name, chunks) in cases {
+            let file = file_with(128, chunks);
+            let layout = file.layout();
+            assert!(!layout.overlaps.is_empty(), "{name}: the case must overlap");
+            let named: Vec<u64> = layout.overlaps.iter().flat_map(|&(a, b)| [a, b]).collect();
+            for (i, a) in file.chunks.iter().enumerate() {
+                for b in file.chunks.iter().skip(i + 1) {
+                    if !chunks_overlap(a, b) {
+                        continue;
+                    }
+                    assert!(
+                        named.contains(&(a.offset as u64)),
+                        "{name}: {} overlaps {} but the layout does not name it",
+                        a.id,
+                        b.id
+                    );
+                    assert!(
+                        named.contains(&(b.offset as u64)),
+                        "{name}: {} overlaps {} but the layout does not name it",
+                        b.id,
+                        a.id
+                    );
+                }
+            }
+        }
+
+        // The simplest case, stated exactly: one pair, both offsets named. A
+        // layout that remembered only the earlier side would fail here.
+        let layout = file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]).layout();
+        assert_eq!(layout.overlaps, vec![(0, 32)]);
+    }
+
+    /// Do two chunk ranges share a byte? An empty range shares none.
+    fn chunks_overlap(a: &SophonChunk, b: &SophonChunk) -> bool {
+        if a.uncompressed_size <= 0 || b.uncompressed_size <= 0 {
+            return false;
+        }
+        a.offset < b.offset + b.uncompressed_size && b.offset < a.offset + a.uncompressed_size
     }
 
     #[test]
@@ -612,11 +814,61 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a.dat", "b.dat"]
         );
-        assert_eq!(plan.latest, "5.0");
-        assert_eq!(
-            plan.url_prefix_by_file.get("a.dat").unwrap().as_ref(),
-            "http://x"
+        assert_eq!(plan.latest(), "5.0");
+        assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
+    }
+
+    /// A `FileId` is its index: debug output names the position, not an
+    /// opaque wrapper around it.
+    #[test]
+    fn a_file_id_debugs_as_its_index() {
+        assert_eq!(format!("{:?}", FileId::new(0)), "0");
+        assert_eq!(format!("{:?}", FileId::new(7)), "7");
+    }
+
+    /// The fingerprint is stable for one plan, and the cached file-list half
+    /// does not hide the tag: two plans with the same files but different tags
+    /// have different fingerprints.
+    #[test]
+    fn a_plan_fingerprint_is_stable_and_covers_the_tag() {
+        let plan_for = |tag: &str| {
+            let per = vec![(
+                "http://x".to_string(),
+                vec![manifest_file("a.dat", 1, vec![])],
+            )];
+            build_plan(per, &HashSet::new(), tag, &PathScope::default()).unwrap()
+        };
+        let plan = plan_for("5.0");
+        let first = plan.fingerprint();
+        assert_eq!(plan.fingerprint(), first, "one plan, one fingerprint");
+        let other = plan_for("6.0");
+        assert_ne!(
+            other.fingerprint(),
+            first,
+            "the tag is part of the plan's identity"
         );
+    }
+
+    #[test]
+    fn file_ids_follow_the_sorted_plan_order() {
+        let per = vec![(
+            "http://x".to_string(),
+            vec![
+                manifest_file("b.dat", 2, vec![]),
+                manifest_file("a.dat", 1, vec![]),
+            ],
+        )];
+        let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
+
+        assert_eq!(plan.len(), 2);
+        assert!(!plan.is_empty());
+        let order: Vec<(usize, &str)> = plan
+            .iter()
+            .map(|(id, f)| (id.index(), f.rel.as_str()))
+            .collect();
+        assert_eq!(order, vec![(0, "a.dat"), (1, "b.dat")]);
+        assert_eq!(plan.file(FileId::new(1)).unwrap().rel, "b.dat");
+        assert!(plan.file(FileId::new(2)).is_none());
     }
 
     #[test]
@@ -644,11 +896,8 @@ mod tests {
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "a/b.dat");
         // First manifest wins the prefix.
-        assert_eq!(
-            plan.url_prefix_by_file.get("a/b.dat").unwrap().as_ref(),
-            "http://x"
-        );
-        assert_eq!(plan.expected_paths().len(), 1);
+        assert_eq!(plan.files[0].url_prefix.as_ref(), "http://x");
+        assert_eq!(plan.expected_rels().count(), 1);
     }
 
     /// A manifest path is server data. Anything that can leave `game_dir` is
@@ -709,6 +958,7 @@ mod tests {
             rel: "f.bin".into(),
             size: 64,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks: vec![huge.clone(), huge.clone(), huge],
         };
         assert_eq!(est_file_download_bytes(&file, None), u64::MAX);
@@ -716,8 +966,8 @@ mod tests {
 
     /// A leading `.` component is accepted but must not survive into the
     /// plan: the purge walk reports the plain form, so a stored `./game/foo.dat`
-    /// would not match `expected_paths()` and `--purge-after` would delete the
-    /// file the run just repaired.
+    /// would not match the purge's expected set and `--purge-after` would delete
+    /// the file the run just repaired.
     #[test]
     fn a_leading_dot_component_is_stripped_from_the_plan() {
         let f = SophonChunkFile {
@@ -731,10 +981,13 @@ mod tests {
         let plan = build_plan(per, &HashSet::new(), "5.0", &PathScope::default()).unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
-        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
+        assert_eq!(
+            plan.expected_rels().collect::<Vec<_>>(),
+            vec!["game/foo.dat"]
+        );
     }
 
-    /// The scope is applied *before* the plan exists, so `expected_paths()` —
+    /// The scope is applied *before* the plan exists, so `expected_rels()` —
     /// the only manifest-derived input to the files-cleanup's keep set — is
     /// narrowed too. Applying it anywhere downstream instead would leave the
     /// cleanup with a narrower keep set than an unfiltered run.
@@ -767,10 +1020,9 @@ mod tests {
         .unwrap();
         assert_eq!(plan.files.len(), 1);
         assert_eq!(plan.files[0].rel, "game/foo.dat");
-        assert_eq!(plan.expected_paths(), ["game/foo.dat".to_string()].into());
-        assert!(
-            !plan.url_prefix_by_file.contains_key("game/bar.dat"),
-            "a dropped path must not keep a prefix entry either"
+        assert_eq!(
+            plan.expected_rels().collect::<Vec<_>>(),
+            vec!["game/foo.dat"]
         );
     }
 

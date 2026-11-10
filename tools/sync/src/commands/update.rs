@@ -93,9 +93,10 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // through the limiter, so `update`'s hashing is bounded by the run's budget
     // like every other phase.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         "rw limits"
     );
     let db = open_folder_cache(&dir, &common, mode, true)?;

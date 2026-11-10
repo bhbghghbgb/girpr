@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::Biz;
+use crate::retry::{Retry, retry};
 use crate::sleep::{RealSleep, Sleep};
 
 /// Minimal HoYoPlay client (Starward parity): getGameConfigs / getGameBranches /
@@ -73,6 +74,8 @@ pub struct GameConfig {
 pub struct GameBranch {
     #[serde(default)]
     pub main: GameBranchPackage,
+    // Deserialized for completeness; no phase reads the pre-download branch.
+    #[allow(dead_code)]
     #[serde(default)]
     pub pre_download: Option<GameBranchPackage>,
 }
@@ -101,10 +104,52 @@ pub struct ChunkBuild {
     pub manifests: Vec<ChunkManifestMeta>,
 }
 
+/// The identity a response declares for itself, if any.
+///
+/// An absent or empty field carries no identity, so there is nothing it can
+/// disagree with. Callers treat that as "unchecked", not as a match.
+fn declared_identity(value: Option<&str>) -> Option<&str> {
+    value.filter(|v| !v.is_empty())
+}
+
+/// Return the declared identity when it is present and names something other
+/// than the one the request asked for.
+///
+/// `requested` is the identity the run resolved for the request. An empty
+/// `requested` is not an identity either (for example a branch tag the API
+/// omitted), so it is not checked.
+fn identity_mismatch<'a>(declared: Option<&'a str>, requested: &str) -> Option<&'a str> {
+    if requested.is_empty() {
+        return None;
+    }
+    declared_identity(declared).filter(|d| *d != requested)
+}
+
+impl GameConfig {
+    /// The `game.biz` this response declares, when it disagrees with `biz`.
+    ///
+    /// The field is optional and may be empty; either way there is no identity
+    /// to refuse.
+    pub(crate) fn biz_mismatch(&self, biz: &str) -> Option<&str> {
+        identity_mismatch(self.game.as_ref().map(|g| g.biz.as_str()), biz)
+    }
+}
+
+impl ChunkBuild {
+    /// The `tag` this response declares, when it disagrees with `tag`.
+    ///
+    /// An empty response tag carries no identity.
+    pub(crate) fn tag_mismatch(&self, tag: &str) -> Option<&str> {
+        identity_mismatch(Some(self.tag.as_str()), tag)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChunkManifestMeta {
     #[serde(default)]
     pub category_id: String,
+    // Deserialized for completeness; the manifest is selected by category id.
+    #[allow(dead_code)]
     #[serde(default)]
     pub category_name: String,
     #[serde(default)]
@@ -117,11 +162,24 @@ pub struct ChunkManifestMeta {
     pub manifest_download: ManifestUrl,
 }
 
+/// Deserialize an API size from either a JSON number or a JSON string.
+///
+/// Any `i64` is accepted, including a negative one. These sizes are hints, not
+/// promises; the consumers clamp a negative value to zero instead of treating
+/// the whole build as unparseable.
 fn num_from_string<'de, D>(deserializer: D) -> std::result::Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     use serde::de::{self, Visitor};
+
+    /// Parse the string shape, keeping the parser's reason so the serde error
+    /// names both the offending value and why it was rejected.
+    fn parse_size(v: &str) -> std::result::Result<i64, String> {
+        v.parse::<i64>()
+            .map_err(|e| format!("size {v:?} is not an integer that fits an i64: {e}"))
+    }
+
     struct V;
     impl Visitor<'_> for V {
         type Value = i64;
@@ -132,24 +190,33 @@ where
             Ok(v)
         }
         fn visit_u64<E: de::Error>(self, v: u64) -> std::result::Result<i64, E> {
-            Ok(v as i64)
+            i64::try_from(v)
+                .map_err(|_| E::custom(format!("size {v} is larger than i64::MAX ({})", i64::MAX)))
         }
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<i64, E> {
-            v.parse::<i64>().map_err(E::custom)
+            parse_size(v).map_err(E::custom)
         }
         fn visit_string<E: de::Error>(self, v: String) -> std::result::Result<i64, E> {
-            v.parse::<i64>().map_err(E::custom)
+            parse_size(&v).map_err(E::custom)
         }
     }
     deserializer.deserialize_any(V)
 }
 
+/// A manifest's sizes as the API reports them.
+///
+/// Both sizes are hints, not promises. `uncompressed_size` is read (it sizes
+/// the decode buffer) and a negative value is clamped to zero where it is used,
+/// so a bogus field costs a skipped estimate or reallocation, not a failed
+/// build. `compressed_size` is only deserialized; no phase reads it.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ManifestFile {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub checksum: String,
+    // Deserialized for completeness; the manifest fetch uses `uncompressed_size`.
+    #[allow(dead_code)]
     #[serde(default, deserialize_with = "num_from_string")]
     pub compressed_size: i64,
     #[serde(default, deserialize_with = "num_from_string")]
@@ -160,6 +227,8 @@ pub struct ManifestFile {
 pub struct ManifestUrl {
     #[serde(default)]
     pub url_prefix: String,
+    // Deserialized for completeness; only the prefix is joined with the id.
+    #[allow(dead_code)]
     #[serde(default)]
     pub url_suffix: String,
 }
@@ -183,7 +252,7 @@ pub struct DeprecatedFile {
 ///
 /// | retcode | request | what it means |
 /// |---|---|---|
-/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as [`SophonNotFound`], which the local-build fallback is built around |
+/// | `-202` | `getBuild?tag=<unknown>` | `not found` — surfaced as `SophonNotFound`, which the local-build fallback is built around |
 /// | `-201` | `getBuild` with a bad `package_id` | `invalid params` |
 /// | `-1001` | `getGameConfigs` / `getGameBranches` with a bad `game_ids[]` | `invalid params` |
 ///
@@ -199,14 +268,17 @@ pub struct DeprecatedFile {
 ///
 /// The two route families disagree about what failure looks like: the blob
 /// routes answer `404`, these JSON routes answer `200` and put it in
-/// `retcode`. So the retry policy is written per family — see
-/// [`crate::sophon::retryable`] for the blob half, which uses the same rule as
-/// `gircap`'s `RetryPolicy::should_retry_status`.
+/// `retcode`. So the retry policy is written per family — the blob half's
+/// `retryable` status rule uses the same rule as `gircap`'s
+/// `RetryPolicy::should_retry_status`.
 pub fn terminal_retcode(retcode: i64) -> bool {
     matches!(retcode, -201 | -202 | -1001)
 }
 
 impl HypClient {
+    /// The default constructor, kept for callers that do not override the
+    /// bases.
+    #[allow(dead_code)]
     pub fn new(biz: Biz) -> Result<Self> {
         let (host, _, _) = biz.endpoints();
         let (hyp_base, sophon_base) = production_bases(host);
@@ -277,27 +349,37 @@ impl HypClient {
 
     async fn get_node<T: DeserializeOwned>(&self, url: &str, node: &str) -> Result<T> {
         tracing::debug!(api = "hyp", url = %url, "GET");
-        let mut last_err = anyhow::anyhow!("no attempts");
-        for attempt in 1..=5 {
-            let r = self.client.get(url).send().await;
-            match r {
+        retry(5, self.sleep.as_ref(), |attempt| async move {
+            match self.client.get(url).send().await {
                 Ok(resp) => {
                     let status = resp.status();
-                    let body = resp.bytes().await.context("read body")?;
+                    let body = match resp.bytes().await {
+                        Ok(body) => body,
+                        Err(e) => {
+                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                        }
+                    };
                     tracing::trace!(api = "hyp", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
-                    let w: NodeWrapper =
-                        serde_json::from_slice(&body).context("parse hyp wrapper")?;
+                    let w: NodeWrapper = match serde_json::from_slice(&body) {
+                        Ok(w) => w,
+                        Err(e) => {
+                            return Retry::Fatal(
+                                anyhow::Error::from(e).context("parse hyp wrapper"),
+                            );
+                        }
+                    };
                     if w.retcode != 0 {
                         tracing::debug!(api = "hyp", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
-                        last_err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                             "hyp api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
                             url
                         );
                         if terminal_retcode(w.retcode) {
-                            return Err(last_err);
+                            return Retry::Fatal(err);
                         }
+                        Retry::Retry(err)
                     } else {
                         let node_val = w
                             .data
@@ -306,48 +388,48 @@ impl HypClient {
                             .cloned()
                             .unwrap_or(serde_json::Value::Null);
                         tracing::debug!(api = "hyp", url = %url, node, attempt, "ok");
-                        let v: T = serde_json::from_value(node_val).context("parse hyp node")?;
-                        return Ok(v);
+                        match serde_json::from_value(node_val) {
+                            Ok(v) => Retry::Done(v),
+                            Err(e) => Retry::Fatal(
+                                anyhow::Error::from(e).context("parse hyp node"),
+                            ),
+                        }
                     }
                 }
                 Err(e) => {
                     tracing::debug!(api = "hyp", url = %url, attempt, "http error: {}", e);
-                    last_err = anyhow::anyhow!("http {}", e);
+                    Retry::Retry(anyhow::anyhow!("http {}", e))
                 }
             }
-            self.sleep
-                .sleep(std::time::Duration::from_secs(attempt))
-                .await;
-        }
-        Err(last_err)
+        })
+        .await
     }
 
     async fn get_direct<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
         // Sophon getBuild: data IS the object (Starward CommonGetAsync without node).
         // Returns retcode -202 when tag unknown -> caller maps to None.
         tracing::debug!(api = "sophon", url = %url, "GET");
-        let mut last_err = anyhow::anyhow!("no attempts");
-        for attempt in 1..=5 {
-            let resp = self.client.get(url).send().await;
-            match resp {
+        retry(5, self.sleep.as_ref(), |attempt| async move {
+            match self.client.get(url).send().await {
                 Ok(r) => {
                     let status = r.status();
-                    let body = r.bytes().await.context("read body")?;
+                    let body = match r.bytes().await {
+                        Ok(body) => body,
+                        Err(e) => {
+                            return Retry::Fatal(anyhow::Error::from(e).context("read body"));
+                        }
+                    };
                     tracing::trace!(api = "sophon", url = %url, status = %status, bytes = body.len(), body = %String::from_utf8_lossy(&body), "response");
                     let w: Wrapper<T> = match serde_json::from_slice(&body) {
                         Ok(w) => w,
                         Err(e) => {
                             tracing::debug!(api = "sophon", url = %url, attempt, "parse error: {}", e);
-                            last_err = anyhow::anyhow!("parse sophon wrapper: {}", e);
-                            self.sleep
-                                .sleep(std::time::Duration::from_secs(attempt))
-                                .await;
-                            continue;
+                            return Retry::Retry(anyhow::anyhow!("parse sophon wrapper: {}", e));
                         }
                     };
                     if w.retcode != 0 {
                         tracing::debug!(api = "sophon", url = %url, retcode = w.retcode, msg = ?w.message, attempt, "retcode != 0");
-                        last_err = anyhow::anyhow!(
+                        let err = anyhow::anyhow!(
                             "sophon api retcode={} msg={:?} url={}",
                             w.retcode,
                             w.message,
@@ -357,28 +439,26 @@ impl HypClient {
                             // Distinct from the other terminal codes: the caller
                             // maps this one to "no local manifest" and falls back,
                             // where an invalid-params code is a hard stop.
-                            return Err(SophonNotFound.into());
+                            return Retry::Fatal(SophonNotFound.into());
                         }
                         if terminal_retcode(w.retcode) {
-                            return Err(last_err);
+                            return Retry::Fatal(err);
                         }
+                        Retry::Retry(err)
                     } else if let Some(d) = w.data {
                         tracing::debug!(api = "sophon", url = %url, attempt, "ok");
-                        return Ok(d);
+                        Retry::Done(d)
                     } else {
-                        last_err = anyhow::anyhow!("sophon api empty data url={}", url);
+                        Retry::Retry(anyhow::anyhow!("sophon api empty data url={}", url))
                     }
                 }
                 Err(e) => {
                     tracing::debug!(api = "sophon", url = %url, attempt, "http error: {}", e);
-                    last_err = anyhow::anyhow!("http {}", e);
+                    Retry::Retry(anyhow::anyhow!("http {}", e))
                 }
             }
-            self.sleep
-                .sleep(std::time::Duration::from_secs(attempt))
-                .await;
-        }
-        Err(last_err)
+        })
+        .await
     }
 
     pub async fn game_config(&self) -> Result<GameConfig> {
@@ -480,6 +560,8 @@ fn urlencode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_http::serve_bodies;
+    use std::sync::atomic::Ordering;
 
     /// The measured `retcode`s are terminal; everything else is not. `0` is the
     /// important negative: it is a *success*, and `getGameBranches` returns it
@@ -504,16 +586,60 @@ mod tests {
         assert_eq!(v[0].main.tag, "5.0.0");
     }
 
+    #[derive(Debug, Deserialize)]
+    struct Size {
+        #[serde(deserialize_with = "num_from_string")]
+        n: i64,
+    }
+
+    fn parse(json: &str) -> std::result::Result<Size, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
     #[test]
     fn num_from_string_both_shapes() {
-        #[derive(Deserialize)]
-        struct S {
-            #[serde(deserialize_with = "num_from_string")]
-            n: i64,
-        }
-        let a: S = serde_json::from_str(r#"{"n":12}"#).unwrap();
-        let b: S = serde_json::from_str(r#"{"n":"34"}"#).unwrap();
+        let a = parse(r#"{"n":12}"#).unwrap();
+        let b = parse(r#"{"n":"34"}"#).unwrap();
         assert_eq!((a.n, b.n), (12, 34));
+
+        // The largest representable size is accepted in both shapes.
+        let max_num = parse(r#"{"n":9223372036854775807}"#).unwrap();
+        let max_str = parse(r#"{"n":"9223372036854775807"}"#).unwrap();
+        assert_eq!((max_num.n, max_str.n), (i64::MAX, i64::MAX));
+
+        // One past the top of the range must not wrap into a negative size.
+        let above = parse(r#"{"n":9223372036854775808}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(above.contains("9223372036854775808"), "{above}");
+
+        assert!(parse(r#"{"n":18446744073709551615}"#).is_err());
+        assert!(parse(r#"{"n":"9223372036854775808"}"#).is_err());
+
+        // A string that does not parse keeps the parser's reason: the message
+        // must say *why* the value was rejected, not just that it was.
+        let not_a_number = parse(r#"{"n":"abc"}"#).unwrap_err().to_string();
+        assert!(
+            not_a_number.contains("invalid digit found in string"),
+            "{not_a_number}"
+        );
+        let too_large = parse(r#"{"n":"9223372036854775808"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(too_large.contains("9223372036854775808"), "{too_large}");
+        assert!(
+            too_large.contains("number too large to fit in target type"),
+            "{too_large}"
+        );
+    }
+
+    /// A negative size is accepted rather than rejected: it is a hint, and the
+    /// consumers clamp it to zero where they use it.
+    #[test]
+    fn negative_sizes_are_kept_for_the_consumer_to_clamp() {
+        let num = parse(r#"{"n":-1}"#).unwrap();
+        let string = parse(r#"{"n":"-1"}"#).unwrap();
+        assert_eq!((num.n, string.n), (-1, -1));
     }
 
     fn client_for(biz: Biz) -> HypClient {
@@ -524,6 +650,88 @@ mod tests {
             Arc::new(crate::sleep::NoSleep),
         )
         .unwrap()
+    }
+
+    /// A retryable retcode on the first call and a real node on the second: the
+    /// caller must see the second answer, and the server both requests.
+    #[tokio::test]
+    async fn get_node_retries_a_retryable_retcode_and_takes_the_next_answer() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1,"message":"busy","data":null}"#,
+            r#"{"retcode":0,"message":"OK","data":{"launch_configs":[{"exe_file_name":"GenshinImpact.exe"}]}}"#,
+        ])
+        .await;
+        let list: Vec<GameConfig> = client_for(Biz::Hk4eGlobal)
+            .get_node(&base, "launch_configs")
+            .await
+            .expect("the second attempt answers");
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(list[0].exe_file_name, "GenshinImpact.exe");
+    }
+
+    /// An invalid-params retcode is answered identically every time, so the
+    /// first answer must end the call.
+    #[tokio::test]
+    async fn get_node_stops_on_a_terminal_retcode() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1001,"message":"invalid params","data":null}"#,
+        ])
+        .await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_node::<Vec<GameConfig>>(&base, "launch_configs")
+            .await
+            .expect_err("invalid params is final");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a terminal retcode must not be retried"
+        );
+        let chain = format!("{err:#}");
+        assert!(chain.contains("-1001"), "{chain}");
+        assert!(
+            !chain.contains("after 5 attempts"),
+            "a fatal answer must not be dressed up as exhaustion: {chain}"
+        );
+    }
+
+    /// `get_direct` uses the same retry rule: a transient failure is retried,
+    /// and the successful body is returned as the node itself.
+    #[tokio::test]
+    async fn get_direct_retries_a_retryable_retcode_and_takes_the_next_answer() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-1,"message":"busy","data":null}"#,
+            r#"{"retcode":0,"message":"OK","data":{"build_id":"build_test"}}"#,
+        ])
+        .await;
+        let build: ChunkBuild = client_for(Biz::Hk4eGlobal)
+            .get_direct(&base)
+            .await
+            .expect("the second attempt answers");
+        assert_eq!(hits.load(Ordering::Relaxed), 2);
+        assert_eq!(build.build_id, "build_test");
+    }
+
+    /// `-202` is terminal *and* has its own meaning: the caller must get
+    /// [`SophonNotFound`] after one request, not a retried generic error.
+    #[tokio::test]
+    async fn get_direct_stops_on_a_fatal_retcode() {
+        let (base, hits) = serve_bodies(vec![
+            r#"{"retcode":-202,"message":"not found","data":null}"#,
+        ])
+        .await;
+        let err = client_for(Biz::Hk4eGlobal)
+            .get_direct::<ChunkBuild>(&base)
+            .await
+            .expect_err("an unknown tag is final");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "a fatal retcode must not be retried"
+        );
+        assert!(
+            err.downcast_ref::<SophonNotFound>().is_some(),
+            "the caller needs the not-found marker: {err:#}"
+        );
     }
 
     /// The channel query is per-launcher (`LauncherConfig.Channel/SubChannel`),
@@ -569,5 +777,72 @@ mod tests {
             sophon_build_url(base, &pkg, Some("5.0.0")),
             "http://sophon.test/api/getBuild?branch=main&package_id=pkg%20id&password=p%40ss%2Fword&tag=5.0.0"
         );
+    }
+
+    /// Only a present, non-empty identity that names something else is a
+    /// mismatch; absence and an empty value carry nothing to check, and an
+    /// empty request has no identity to compare against.
+    #[test]
+    fn identity_mismatch_checks_only_a_present_different_value() {
+        assert_eq!(identity_mismatch(None, "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some(""), "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some("5.1.0"), "5.1.0"), None);
+        assert_eq!(identity_mismatch(Some("5.0.0"), "5.1.0"), Some("5.0.0"));
+        assert_eq!(identity_mismatch(Some("5.0.0"), ""), None);
+    }
+
+    fn config_with_game(game: Option<GameIdRef>) -> GameConfig {
+        GameConfig {
+            exe_file_name: String::new(),
+            audio_pkg_scan_dir: String::new(),
+            audio_pkg_res_dir: String::new(),
+            audio_pkg_cache_dir: String::new(),
+            default_download_mode: String::new(),
+            res_category_dir: String::new(),
+            blacklist_dir: String::new(),
+            enable_resource_blacklist: false,
+            game,
+        }
+    }
+
+    #[test]
+    fn game_config_biz_mismatch_is_reported_only_when_declared() {
+        let absent = config_with_game(None);
+        assert_eq!(absent.biz_mismatch("hk4e_global"), None);
+
+        let empty = config_with_game(Some(GameIdRef {
+            id: "gopR6Cufr3".into(),
+            biz: String::new(),
+        }));
+        assert_eq!(empty.biz_mismatch("hk4e_global"), None);
+
+        let matching = config_with_game(Some(GameIdRef {
+            id: "gopR6Cufr3".into(),
+            biz: "hk4e_global".into(),
+        }));
+        assert_eq!(matching.biz_mismatch("hk4e_global"), None);
+
+        let different = config_with_game(Some(GameIdRef {
+            id: "1Z8W5NHUQb".into(),
+            biz: "hk4e_cn".into(),
+        }));
+        assert_eq!(
+            different.biz_mismatch("hk4e_global"),
+            Some("hk4e_cn"),
+            "a present biz for another launcher is a mismatch"
+        );
+    }
+
+    #[test]
+    fn chunk_build_tag_mismatch_is_reported_only_when_declared() {
+        let build = |tag: &str| ChunkBuild {
+            build_id: "b".into(),
+            tag: tag.into(),
+            manifests: vec![],
+        };
+        assert_eq!(build("").tag_mismatch("5.1.0"), None);
+        assert_eq!(build("5.1.0").tag_mismatch("5.1.0"), None);
+        assert_eq!(build("5.0.0").tag_mismatch("5.1.0"), Some("5.0.0"));
+        assert_eq!(build("5.0.0").tag_mismatch(""), None);
     }
 }

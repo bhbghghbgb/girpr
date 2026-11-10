@@ -4,7 +4,8 @@
 //! three separate reasons:
 //!
 //! 1. **Cost.** `repair_one_file` runs `util::file_len` *then*
-//!    `util::md5_file` and only *then* hits `if ctx.dry_run { return DryRun }`.
+//!    `util::md5::md5_file` and only *then* hits
+//!    `if ctx.dry_run { return DryRun }`.
 //!    So `--dry-run` on a real install full-file-MD5s every planned file —
 //!    precisely the cost the limitation exists to avoid. `--print-plan` stops
 //!    before the repair loop and pays none of it.
@@ -19,7 +20,6 @@
 //! manifest — there is no plan without it — so `--print-plan` fetches, logs at
 //! the usual level, and the flag help says so.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Context;
@@ -27,7 +27,7 @@ use serde::Serialize;
 
 use crate::config::RepairMode;
 use crate::repair::file::{Mode, resolve_mode};
-use crate::repair::phases::plan::RepairPlan;
+use crate::repair::phases::plan::{FileId, RepairPlan};
 use crate::repair::purge::PurgePlan;
 use crate::report::Record;
 use crate::util;
@@ -64,7 +64,8 @@ pub struct DiskPlan {
     pub est_write_bytes: u64,
     /// The free space the run needs beyond the install.
     pub est_extra_bytes: u64,
-    per_file: HashMap<String, FileDisk>,
+    /// Per planned file, in `plan.files` order.
+    per_file: Vec<FileDisk>,
 }
 
 impl DiskPlan {
@@ -85,7 +86,7 @@ impl DiskPlan {
     ) -> Self {
         let mut out = DiskPlan::default();
         let mut peak = 0u64;
-        for f in &plan.files {
+        for (_, f) in plan.iter() {
             let joined = root.map_or_else(
                 || util::contained_join(game_dir, &f.rel),
                 |root| root.join(&f.rel),
@@ -101,6 +102,10 @@ impl DiskPlan {
                         error = %format!("{e:#}"),
                         "disk plan: path escapes the game dir; file omitted from the estimate"
                     );
+                    out.per_file.push(FileDisk {
+                        mode: "inplace",
+                        extra_bytes: 0,
+                    });
                     continue;
                 }
             };
@@ -124,29 +129,24 @@ impl DiskPlan {
             // the `PLAN` line lie) is not an answer to a corrupt manifest.
             out.est_write_bytes = out.est_write_bytes.saturating_add(size);
             peak = peak.max(extra);
-            out.per_file.insert(
-                f.rel.clone(),
-                FileDisk {
-                    mode: match mode {
-                        Mode::Inplace => "inplace",
-                        Mode::Temp => "temp",
-                    },
-                    extra_bytes: extra,
+            out.per_file.push(FileDisk {
+                mode: match mode {
+                    Mode::Inplace => "inplace",
+                    Mode::Temp => "temp",
                 },
-            );
+                extra_bytes: extra,
+            });
         }
         // The peak is per file, and `jobs` files are in flight at once.
         out.est_extra_bytes = peak.saturating_mul(jobs.max(1) as u64);
         out
     }
 
-    /// The figures for one file. A file the plan does not know about has no
-    /// figures — the plan is the only input.
-    pub fn for_file(&self, rel: &str) -> FileDisk {
-        self.per_file.get(rel).copied().unwrap_or(FileDisk {
-            mode: "inplace",
-            extra_bytes: 0,
-        })
+    /// The figures for one planned file, or `None` when `id` is not from this
+    /// disk plan. There is no plausible default: the plan is the only input,
+    /// and an id it does not cover has no figures.
+    pub fn for_id(&self, id: FileId) -> Option<FileDisk> {
+        self.per_file.get(id.index()).copied()
     }
 }
 
@@ -209,19 +209,18 @@ impl PlanTotals {
         scan_bytes: Option<u64>,
     ) -> Self {
         Self {
-            files: plan.files.len() as u64,
+            files: plan.len() as u64,
             est_download_bytes,
             purge_files: purge.map_or(0, |p| p.files.len() as u64),
             purge_bytes: purge.map_or(0, |p| p.total_bytes),
             // The largest single chunk is what bounds peak RAM (a whole chunk is
             // buffered compressed + uncompressed) and, multiplied by
-            // `io_threads`, transient disk. Worth reporting even though nothing
+            // `jobs`, transient disk. Worth reporting even though nothing
             // enforces it: it is the number a `--max-chunk-bytes` ceiling would
             // take, and it is one line to print.
             max_chunk_bytes: plan
-                .files
                 .iter()
-                .flat_map(|f| f.chunks.iter())
+                .flat_map(|(_, f)| f.chunks.iter())
                 .map(|c| c.compressed_size.max(0) as u64)
                 .max()
                 .unwrap_or(0),
@@ -303,26 +302,43 @@ impl<'a> PlanDocument<'a> {
     ///
     /// A caller whose slice is short (a bug, not server data) falls back to the
     /// over-approximation for the missing file, never to zero.
+    ///
+    /// `disk` must cover every file in `plan`: both are built from the same
+    /// plan by the publisher, and a missing entry is a caller bug that would
+    /// otherwise print another file's figures at this position.
+    #[allow(clippy::expect_used)] // a disk plan from `DiskPlan::new` covers the whole plan
     pub fn new(
         plan: &'a RepairPlan,
         purge: Option<&'a PurgePlan>,
         est_by_file: &[u64],
         disk: &DiskPlan,
     ) -> Self {
+        // `disk` and `plan` share one source: the publisher builds the disk
+        // plan with `DiskPlan::new`, which pushes exactly one entry per file
+        // from `plan.iter()`, in plan order. Coverage is therefore an
+        // invariant of that construction rather than a caller obligation.
+        // The release `expect` below still refuses a hand-built `DiskPlan`
+        // that breaks it, instead of silently shifting another file's figures
+        // onto this position.
+        debug_assert_eq!(
+            disk.per_file.len(),
+            plan.len(),
+            "the disk plan covers every file in the plan"
+        );
         Self {
             repair: plan
-                .files
                 .iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    let est = est_by_file.get(i).copied().unwrap_or_else(|| {
+                .map(|(id, f)| {
+                    let est = est_by_file.get(id.index()).copied().unwrap_or_else(|| {
                         // Server-controlled sizes: saturate, so a corrupt
                         // manifest cannot overflow the fallback.
                         f.chunks.iter().fold(0u64, |n, c| {
                             n.saturating_add(c.compressed_size.max(0) as u64)
                         })
                     });
-                    let d = disk.for_file(&f.rel);
+                    let d = disk
+                        .for_id(id)
+                        .expect("the disk plan covers every file in the plan");
                     RepairEntry {
                         rel: &f.rel,
                         size: f.size,
@@ -348,25 +364,42 @@ impl<'a> PlanDocument<'a> {
     }
 
     /// Render to the file named by `--plan-out`.
+    ///
+    /// The document is serialized into a temp file beside the target and then
+    /// renamed, so a full disk or a crash cannot leave a truncated plan where
+    /// the caller asked for a parseable one. The plan is an advisory artifact,
+    /// so it is published without a durable sync.
+    ///
+    /// The rename replaces whatever is at `path` wholesale. Two consequences
+    /// are deliberate for an output artifact: a symlink at `path` is replaced
+    /// by a regular file instead of writing through to its target, and the
+    /// published file gets the new file's default mode rather than the old
+    /// target's. Preserving either would mean following a link whose target the
+    /// caller did not name, and inheriting a mode from a file this write is
+    /// about to replace. A caller that needs the link or the mode preserved
+    /// owns that decision; the plan writer's contract is "the bytes you asked
+    /// for are at this exact path, all or nothing".
     pub fn write_to(&self, path: &Path) -> anyhow::Result<()> {
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create dir {}", parent.display()))?;
-        }
-        let json = serde_json::to_string_pretty(self).context("serialize plan")?;
-        std::fs::write(path, format!("{json}\n"))
-            .with_context(|| format!("write {}", path.display()))?;
-        Ok(())
+        util::atomic::write_atomic_with(path, false, |writer| {
+            serde_json::to_writer_pretty(&mut *writer, self).context("serialize plan")?;
+            writer.write_all(b"\n").context("serialize plan")
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::repair::phases::plan::PlannedFile;
+    use crate::repair::phases::plan::{FileId, PlannedFile};
     use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
-    use std::collections::HashMap;
+    #[cfg(unix)]
+    use crate::test_support::FixtureRefusal;
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
+    use std::sync::Arc;
 
     fn chunk(id: &str, size: i64) -> crate::sophon::SophonChunk {
         crate::sophon::SophonChunk {
@@ -381,29 +414,48 @@ mod tests {
     }
 
     fn plan() -> RepairPlan {
-        RepairPlan {
-            latest: "9.9".into(),
-            files: vec![
+        RepairPlan::from_files(
+            "9.9",
+            vec![
                 PlannedFile {
                     rel: "game/foo.dat".into(),
                     size: 128,
                     md5: "a".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![chunk("c0", 10), chunk("c1", 20)],
                 },
                 PlannedFile {
                     rel: "game/bar.dat".into(),
                     size: 64,
                     md5: "b".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![chunk("c2", 30)],
                 },
                 PlannedFile {
                     rel: "game/empty.dat".into(),
                     size: 0,
                     md5: "c".into(),
+                    url_prefix: Arc::from("http://x"),
                     chunks: vec![],
                 },
             ],
-            url_prefix_by_file: HashMap::new(),
+        )
+    }
+
+    /// A disk plan that covers every file with no on-disk I/O: the tests that
+    /// only exercise the document's shape use this instead of stat-ing a
+    /// fixture.
+    fn plain_disk(plan: &RepairPlan) -> DiskPlan {
+        DiskPlan {
+            est_write_bytes: 0,
+            est_extra_bytes: 0,
+            per_file: vec![
+                FileDisk {
+                    mode: "inplace",
+                    extra_bytes: 0,
+                };
+                plan.len()
+            ],
         }
     }
 
@@ -487,14 +539,11 @@ mod tests {
     #[test]
     fn max_chunk_bytes_is_the_largest_compressed_chunk() {
         // Peak RAM per active chunk is roughly compressed + uncompressed, and
-        // peak transient disk is io_threads x that.
+        // peak transient disk is jobs x that.
         let t = PlanTotals::new(&plan(), None, 60, false, &DiskPlan::default(), None);
         assert_eq!(t.max_chunk_bytes, 30);
         let t = PlanTotals::new(
-            &RepairPlan {
-                files: vec![],
-                ..plan()
-            },
+            &RepairPlan::from_files("9.9", vec![]),
             None,
             0,
             false,
@@ -515,14 +564,14 @@ mod tests {
 
         let plan = plan();
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 4);
-        assert_eq!(disk.for_file("game/foo.dat").mode, "inplace");
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "inplace");
         assert_eq!(
-            disk.for_file("game/foo.dat").extra_bytes,
+            disk.for_id(FileId::new(0)).unwrap().extra_bytes,
             0,
             "a file that is already the right size needs nothing"
         );
         assert_eq!(
-            disk.for_file("game/bar.dat").extra_bytes,
+            disk.for_id(FileId::new(1)).unwrap().extra_bytes,
             64,
             "a file that is not there has to be created"
         );
@@ -534,9 +583,44 @@ mod tests {
 
         // The temp path duplicates every file.
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 4);
-        assert_eq!(disk.for_file("game/foo.dat").mode, "temp");
-        assert_eq!(disk.for_file("game/foo.dat").extra_bytes, 128);
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "temp");
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().extra_bytes, 128);
         assert_eq!(disk.est_extra_bytes, 128 * 4);
+    }
+
+    /// An id outside the per-file table has no figures: there is no default
+    /// that could be mistaken for a real measurement.
+    #[test]
+    fn a_disk_plan_has_no_figures_for_an_id_outside_it() {
+        let plan = plan();
+        let disk = plain_disk(&plan);
+        assert!(disk.for_id(FileId::new(0)).is_some());
+        assert!(
+            disk.for_id(FileId::new(plan.len())).is_none(),
+            "an id the disk plan does not cover is not a file with zero extra disk"
+        );
+    }
+
+    /// A path that cannot be resolved keeps its place in the per-file table:
+    /// dropping it would shift every later file onto the wrong id.
+    #[test]
+    fn the_disk_plan_keeps_its_place_when_a_path_cannot_be_resolved() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "aligned");
+        let mut files: Vec<PlannedFile> = plan().iter().map(|(_, f)| f.clone()).collect();
+        files.truncate(2);
+        files[1].rel = "../escape.dat".into();
+        let plan = RepairPlan::from_files("9.9", files);
+
+        let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Temp, 1);
+        assert_eq!(disk.for_id(FileId::new(0)).unwrap().mode, "temp");
+        assert_eq!(
+            disk.for_id(FileId::new(1)).unwrap(),
+            FileDisk {
+                mode: "inplace",
+                extra_bytes: 0,
+            },
+            "the unresolved file still occupies its own slot"
+        );
     }
 
     /// E-2: `discard` deletes the target before writing, so it never needs a
@@ -554,12 +638,12 @@ mod tests {
 
         let disk = DiskPlan::new(&dir, None, &plan(), RepairMode::Discard, 4);
         assert_eq!(
-            disk.for_file("game/foo.dat").extra_bytes,
+            disk.for_id(FileId::new(0)).unwrap().extra_bytes,
             0,
             "a full-size target is deleted and rewritten in place: no second copy"
         );
         assert_eq!(
-            disk.for_file("game/bar.dat").extra_bytes,
+            disk.for_id(FileId::new(1)).unwrap().extra_bytes,
             64 - 16,
             "a truncated target still grows to its manifest size"
         );
@@ -627,7 +711,7 @@ mod tests {
     #[test]
     fn the_document_lists_every_file_and_the_estimates_sum_to_the_plan() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
         assert_eq!(doc.repair.len(), 3);
         assert_eq!(doc.repair[0].rel, "game/foo.dat");
         assert_eq!(doc.repair[0].chunks_total, 2);
@@ -649,7 +733,7 @@ mod tests {
         // old reconciliation only handled `summed < est`, which is the
         // direction that never occurs under `--scan`.
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[10, 0, 0], &plain_disk(&plan));
         assert_eq!(doc.repair[0].est_download_bytes, 10);
         assert_eq!(doc.repair[1].est_download_bytes, 0);
         let sum = doc
@@ -665,19 +749,19 @@ mod tests {
         // fit in a `u64`: the debug build must not panic and a release build
         // must not wrap a smaller "estimate" onto the PLAN line.
         let dir = girpr_tempdir::TempDir::new("girpr_test_disk", "overflow");
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: ["a.dat", "b.dat", "c.dat"]
+        let plan = RepairPlan::from_files(
+            "9.9",
+            ["a.dat", "b.dat", "c.dat"]
                 .into_iter()
                 .map(|rel| PlannedFile {
                     rel: rel.into(),
                     size: i64::MAX,
                     md5: "m".into(),
+                    url_prefix: Arc::from(""),
                     chunks: vec![],
                 })
                 .collect(),
-            url_prefix_by_file: HashMap::new(),
-        };
+        );
         let disk = DiskPlan::new(&dir, None, &plan, RepairMode::Auto, 3);
         assert_eq!(disk.est_write_bytes, u64::MAX);
         // The peak is the largest single file (`i64::MAX`); three files in
@@ -690,21 +774,21 @@ mod tests {
         // The caller supplies the same split the total was folded from. A
         // short slice is a caller bug; the fallback over-approximates and
         // saturates, rather than inventing a zero or overflowing.
-        let plan = RepairPlan {
-            latest: "9.9".into(),
-            files: vec![PlannedFile {
+        let plan = RepairPlan::from_files(
+            "9.9",
+            vec![PlannedFile {
                 rel: "game/huge.dat".into(),
                 size: 192,
                 md5: "m".into(),
+                url_prefix: Arc::from(""),
                 chunks: vec![
                     chunk("c0", i64::MAX),
                     chunk("c1", i64::MAX),
                     chunk("c2", i64::MAX),
                 ],
             }],
-            url_prefix_by_file: HashMap::new(),
-        };
-        let doc = PlanDocument::new(&plan, None, &[], &DiskPlan::default());
+        );
+        let doc = PlanDocument::new(&plan, None, &[], &plain_disk(&plan));
         assert_eq!(doc.repair[0].est_download_bytes, u64::MAX);
         let sum = doc
             .repair
@@ -716,7 +800,7 @@ mod tests {
     #[test]
     fn the_document_is_valid_json_with_the_documented_shape() {
         let (plan, purge) = (plan(), purge_plan());
-        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
         let v: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap())
             .expect("the document must be valid JSON");
         assert_eq!(v["repair"].as_array().unwrap().len(), 3);
@@ -730,13 +814,146 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "creates_parent");
         let path = dir.join("nested").join("plan.json");
         let plan = plan();
-        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &DiskPlan::default());
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
         doc.write_to(&path).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("game/foo.dat"), "{written}");
         assert!(
             written.ends_with('\n'),
             "a text document ends with a newline"
+        );
+    }
+
+    #[test]
+    fn the_written_document_is_valid_json_ending_in_one_newline() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "written_shape");
+        let path = dir.join("plan.json");
+        let (plan, purge) = (plan(), purge_plan());
+        let doc = PlanDocument::new(&plan, Some(&purge), &[30, 30, 0], &plain_disk(&plan));
+        doc.write_to(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            bytes.iter().rev().take_while(|b| **b == b'\n').count(),
+            1,
+            "exactly one trailing newline"
+        );
+        let v: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("the written plan must be valid JSON");
+        assert_eq!(v["repair"].as_array().unwrap().len(), 3);
+        assert_eq!(v["repair"][0]["rel"], "game/foo.dat");
+        assert!(v["repair"][0].get("est_download_bytes").is_some());
+        assert_eq!(v["purge"][0]["rel"], "stray/orphan.dat");
+        assert!(
+            !dir.join("plan.json.girpr_tmp").exists(),
+            "the temp is renamed away, not left beside the plan"
+        );
+    }
+
+    #[test]
+    fn a_failed_publish_leaves_no_temp_sibling() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "failed_publish");
+        let path = dir.join("plan.json");
+        // A directory in place of the target makes the publish rename fail.
+        std::fs::create_dir(&path).unwrap();
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
+        let err = doc.write_to(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("publish"), "{err:#}");
+        assert!(
+            !dir.join("plan.json.girpr_tmp").exists(),
+            "a failed write must not leave the temp behind"
+        );
+    }
+
+    #[test]
+    fn a_failed_write_leaves_an_existing_plan_intact() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "keeps_target");
+        let path = dir.join("plan.json");
+        let previous = b"{\"previous\":true}\n";
+        std::fs::write(&path, previous).unwrap();
+        // A directory where the temp would go makes the write fail before the
+        // target is touched.
+        let tmp = crate::util::path::temp_sibling(&path);
+        std::fs::create_dir(&tmp).unwrap();
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
+        let mut failed = None;
+        let logs = crate::repair::test_support::logs_of(|| {
+            failed = Some(doc.write_to(&path).unwrap_err());
+        });
+        failed.expect("the write must fail");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            previous.as_slice(),
+            "the target keeps its old contents when the write fails"
+        );
+        assert!(
+            logs.contains("could not remove the temp file after a failed publish"),
+            "a directory at the temp path cannot be removed; the cleanup is warned: {logs}"
+        );
+    }
+
+    /// A target with no file name is refused before the publish names its temp:
+    /// there is no name to publish under, and the fallback temp would land in a
+    /// different directory. Nothing is published and no temp is left there.
+    #[test]
+    fn a_target_without_a_file_name_publishes_nothing_and_leaves_no_temp() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "no_file_name");
+        let path = dir.join("..");
+        assert!(path.file_name().is_none(), "the fixture names no file");
+        let tmp = crate::util::path::temp_sibling(&path);
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
+        let err = doc.write_to(&path).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("publish target has no file name"),
+            "{err:#}"
+        );
+        assert!(path.is_dir(), "the directory target is untouched");
+        assert!(!tmp.exists(), "the fallback temp is never written");
+    }
+
+    /// The documented publish trade, pinned: a symlink at the plan path is
+    /// replaced by a regular file and the file it pointed at keeps its bytes.
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the trade, so the case is skipped with the reason rather than
+    /// failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every
+    /// other failure is a broken test environment and fails loudly.
+    #[cfg(unix)]
+    #[test]
+    fn publishing_over_a_symlink_replaces_the_link_not_its_target() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_plan_out", "symlink");
+        let real = dir.join("real.json");
+        std::fs::write(&real, b"old\n").unwrap();
+        let path = dir.join("plan.json");
+        if let Err(e) = try_symlink_dir(&real, &path) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
+
+        let plan = plan();
+        let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
+        doc.write_to(&path).unwrap();
+
+        assert!(
+            !std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the publish replaces the link with a regular file"
+        );
+        assert_eq!(
+            std::fs::read(&real).unwrap(),
+            b"old\n",
+            "the link target is not written through"
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("game/foo.dat"),
+            "the requested path holds the plan"
         );
     }
 

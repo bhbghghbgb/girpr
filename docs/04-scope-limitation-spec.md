@@ -83,14 +83,14 @@ from records, left untouched in the destination. For `girpr` "both sides" is
 easy to forget.
 
 That is stronger than "skip it in the repair loop", and the difference is where
-the bugs are. `plan.expected_paths()` is the *only* manifest-derived input to the
+the bugs are. `plan.expected_rels()` is the *only* manifest-derived input to the
 keep set, so narrowing the plan alone leaves the purge with a **narrower**
 keep-set than an unfiltered run — the worst possible outcome. Every site that
 touches a path by name has to participate:
 
 | site | under a path scope |
 |---|---|
-| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_paths()` both see the narrowed world |
+| `repair::phases::plan::build_plan` | drop non-matching `rel` **before** the plan exists, so `files_total` and `expected_rels()` both see the narrowed world |
 | `repair::file::repair_all` | already narrowed; nothing to do |
 | `repair::phases::check::verify_plan` | already narrowed |
 | `repair::purge::plan_purge` / `apply_purge` | hidden paths must be invisible **here too**, or `--purge-*` deletes the fixture |
@@ -193,7 +193,7 @@ test rigour rather than a demo; **P2** is worth having if cheap.
 ### A1 · `--include <GLOB>` / `--exclude <GLOB>` (repeatable) — **P0** — path scope
 
 `glob` patterns matched against the `/`-separated, game-dir-rooted rel path —
-the same string `phases::plan::build_plan` stores; `util::contained_rel` validates it
+the same string `phases::plan::build_plan` stores; `util::path::contained_rel` validates it
 at the filesystem boundary. Empty `--include` admits everything; `--exclude` beats
 `--include`. The semantics are `girsync`'s, including
 `MatchOptions { require_literal_separator: false, require_literal_leading_dot:
@@ -297,7 +297,7 @@ file fetches its correct chunks too, and only the runtime hard stop bounds it.
   run exits `5`.
 
 The reservation is a compare-and-swap taken **before** each fetch, not a
-check-then-add: under `--io-threads N` a check overshoots by up to N−1 chunks,
+check-then-add: under `--jobs N` a check overshoots by up to N−1 chunks,
 and a ceiling is not a guideline. Once the fetch ends, the reservation is
 reconciled with the bytes the attempt really delivered — a failed attempt's
 partial body is charged, not refunded — and a settle that carries the live
@@ -323,7 +323,7 @@ Bytes written are also not knowable from the plan — reuse success is decided p
 chunk at runtime, against bytes that may not be there. So this is a mid-flight
 stop and nothing else.
 
-The number that matters for capacity is *peak* disk (`io_threads × largest
+The number that matters for capacity is *peak* disk (`jobs × largest
 file`). This bounds the cumulative counterpart, which is what a runaway actually
 blows.
 
@@ -398,7 +398,7 @@ nothing to refuse.
 **`--dry-run` does not cover this,** for three concrete reasons:
 
 1. **Cost.** `--dry-run` is not cheap. `repair_one_file` runs `util::file_len`
-   and then `util::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
+   and then `util::md5::md5_file` *before* it reaches `if ctx.dry_run { … }`, so a
    `--dry-run` on a real install **full-file MD5s every planned file** — on the
    130 GB case, exactly the cost the limitation is meant to avoid.
    `--print-plan` stops before the repair loop entirely, so it pays none of it.
@@ -425,7 +425,12 @@ PLAN files=8 est_download_bytes=2373385 est_write_bytes=… est_extra_bytes=… 
 size}]}` — for the `--per-class`-sized cases where diffing eight lines beats
 eight `--include` flags. It works with or without `--print-plan`: on its own it
 writes the plan of the run that then does the work, before the first mutation,
-so a write failure is exit `3` with nothing changed. JSON because
+so a write failure is exit `3` with nothing changed. If the file is inside the
+install, the `--purge-after`/`--purge-only` re-plan in the same run treats it
+as an unexpected file and deletes it (`--purge-before` acts on the plan built
+before the document exists, which keeps the cleanup's candidates exactly the
+set the pre-flight ceilings were asserted against); point it outside
+`--game-path` when combining the two. JSON because
 `girsync --output json` and the whole artifact side of this repo (`gircap`'s
 bundle, `patchmaps/<id>.json`) are JSON, and a parser that has to read
 `SUMMARY` *and* the plan wants one reader, not two vocabularies. The
@@ -590,6 +595,13 @@ and a ceiling there costs nothing and refuses for free.
 verified*, and `4` must not be masked by narrowing — but a ceiling that trips
 during `--check-only` is still `5`, because that is a different fact from
 "damage found".
+
+The post-repair delete re-check follows the same rule: a dry run stops with `5`
+when it trips, rather than logging the ceiling and finishing clean. A dry run
+that cannot re-plan the purge is a write-class failure (`3`), exactly as in a
+real run, even though the dry run itself wrote nothing. With both purge flags a
+dry run lists each candidate once; the after pass names only candidates the
+before pass did not.
 
 ---
 

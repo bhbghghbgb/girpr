@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use md5::Digest;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
@@ -92,9 +93,11 @@ impl fmt::Debug for Md5 {
     }
 }
 
-impl From<md5::Digest> for Md5 {
-    fn from(digest: md5::Digest) -> Self {
-        Self(digest.0)
+impl From<md5::digest::Output<md5::Md5>> for Md5 {
+    fn from(digest: md5::digest::Output<md5::Md5>) -> Self {
+        let mut bytes = [0u8; 16];
+        bytes.copy_from_slice(&digest);
+        Self(bytes)
     }
 }
 
@@ -116,8 +119,9 @@ pub type ScanRange<'a> = (u64, u64, &'a str);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scan {
     /// Whole-file MD5 of what was on disk. The MD5 of the empty file when the
-    /// file was absent.
-    pub file_md5: String,
+    /// file was absent. Kept as a digest: callers compare bytes, and only a
+    /// report or log turns it back into hex.
+    pub file_md5: Md5,
     /// Bytes on disk (`0` when the file was absent).
     pub file_len: u64,
     /// Per destination range, **in the order given**: is the range already
@@ -137,7 +141,7 @@ impl Scan {
     /// scan.
     pub fn absent(dest_len: usize, source_len: usize) -> Self {
         Self {
-            file_md5: EMPTY_MD5.to_string(),
+            file_md5: Md5::EMPTY,
             file_len: 0,
             dest_ok: vec![false; dest_len],
             source_ok: vec![false; source_len],
@@ -153,7 +157,7 @@ struct RangeState {
     /// canonical. `None` when the expectation is empty (or otherwise not a
     /// hex digest): "unknown", not "matches".
     expect: Option<Md5>,
-    ctx: md5::Context,
+    ctx: md5::Md5,
     /// Bytes of this range actually read. A range that runs past the end of
     /// the file is short, and a short range is never correct.
     seen: u64,
@@ -169,7 +173,7 @@ impl RangeState {
         let Some(expect) = self.expect else {
             return false;
         };
-        self.seen == self.len && Md5::from(self.ctx.clone().compute()) == expect
+        self.seen == self.len && Md5::from(self.ctx.clone().finalize()) == expect
     }
 }
 
@@ -225,7 +229,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     let mut order: Vec<usize> = (0..ranges.len()).collect();
     order.sort_by_key(|&i| (ranges[i].offset, ranges[i].len));
 
-    let mut whole = md5::Context::new();
+    let mut whole = md5::Md5::new();
     let mut buf = vec![0u8; MD5_BUF];
     let mut pos: u64 = 0;
     let mut total: u64 = 0;
@@ -235,7 +239,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
         if n == 0 {
             break;
         }
-        whole.consume(&buf[..n]);
+        whole.update(&buf[..n]);
         let block_end = pos + n as u64;
         // Ranges that ended before this block are done with; the rest are
         // visited in order and take the part of themselves inside the block.
@@ -259,7 +263,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
             if end > start {
                 let a = (start - pos) as usize;
                 let b = (end - pos) as usize;
-                ranges[ri].ctx.consume(&buf[a..b]);
+                ranges[ri].ctx.update(&buf[a..b]);
                 ranges[ri].seen += end - start;
             }
             j += 1;
@@ -269,7 +273,7 @@ pub fn scan_reader(f: &mut File, dest: &[ScanRange<'_>], source: &[ScanRange<'_>
     }
 
     Ok(Scan {
-        file_md5: Md5::from(whole.compute()).to_hex(),
+        file_md5: Md5::from(whole.finalize()),
         file_len: total,
         dest_ok: dest_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
         source_ok: source_idx.iter().map(|&i| ranges[i].is_ok()).collect(),
@@ -299,7 +303,7 @@ fn intern(
         offset,
         len,
         expect,
-        ctx: md5::Context::new(),
+        ctx: md5::Md5::new(),
         seen: 0,
     });
     index.insert(key, i);
@@ -336,7 +340,17 @@ pub fn read_range(f: &mut File, offset: u64, len: u64) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The MD5 of a byte slice, as a digest.
+pub fn md5_digest(data: &[u8]) -> Md5 {
+    Md5::from(md5::Md5::digest(data))
+}
+
 /// Lowercase hex MD5 of a file.
+///
+/// The text form callers that report a digest use; the internal gates compare
+/// [`Md5`] bytes through [`md5_file_digest`]. Kept as the public hex wrapper
+/// even though the crate's own gates no longer need to go through it.
+#[allow(dead_code)]
 pub fn md5_file(path: &Path) -> Result<String> {
     Ok(md5_file_digest(path)?.to_hex())
 }
@@ -344,23 +358,35 @@ pub fn md5_file(path: &Path) -> Result<String> {
 /// [`md5_file`] as a digest, for a gate that compares bytes.
 pub(crate) fn md5_file_digest(path: &Path) -> Result<Md5> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
+    md5_reader_digest(&mut f)
+}
+
+/// The whole-file MD5 of a handle the caller already holds.
+///
+/// The handle's position is whatever the caller's last read or write left it
+/// at, so the digest always starts at the beginning of the file — the same
+/// rule [`scan_reader`] follows. This is the verify gate that only needs the
+/// whole-file answer: it does not build a digest per range.
+pub(crate) fn md5_reader_digest(f: &mut File) -> Result<Md5> {
+    f.seek(SeekFrom::Start(0))?;
     let mut buf = vec![0u8; MD5_BUF];
-    let mut ctx = md5::Context::new();
+    let mut ctx = md5::Md5::new();
     loop {
         let n = f.read(&mut buf)?;
         if n == 0 {
             break;
         }
-        ctx.consume(&buf[..n]);
+        ctx.update(&buf[..n]);
     }
-    Ok(Md5::from(ctx.compute()))
+    Ok(Md5::from(ctx.finalize()))
 }
 
 /// MD5 of a byte slice range of a file [offset, offset+len).
 ///
 /// Opens the file and hashes the range through the shared reader helper; the
 /// read buffer is internal. A caller that already holds the file and wants to
-/// reuse its buffer uses [`md5_reader_slice`] instead.
+/// reuse its buffer uses `md5_reader_slice` instead.
+#[cfg(test)]
 pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
     let mut f = File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut buf = Vec::new();
@@ -373,11 +399,12 @@ pub fn md5_file_slice(path: &Path, offset: u64, len: u64) -> Result<String> {
 /// Seeks `f` to `offset` first and leaves it at the end of the range (or at
 /// end of file, for a short read), so a caller that wants to copy the same
 /// bytes afterwards seeks back once instead of opening the file again.
+#[cfg(test)]
 pub fn md5_reader_slice(f: &mut File, offset: u64, len: u64, buf: &mut Vec<u8>) -> Result<String> {
     Ok(md5_reader_slice_digest(f, offset, len, buf)?.to_hex())
 }
 
-/// [`md5_reader_slice`] as a digest, for a gate that compares bytes.
+/// `md5_reader_slice` as a digest, for a gate that compares bytes.
 pub(crate) fn md5_reader_slice_digest(
     f: &mut File,
     offset: u64,
@@ -388,7 +415,7 @@ pub(crate) fn md5_reader_slice_digest(
     if buf.len() < MD5_BUF {
         buf.resize(MD5_BUF, 0);
     }
-    let mut ctx = md5::Context::new();
+    let mut ctx = md5::Md5::new();
     let mut remaining = len;
     while remaining > 0 {
         let want = (remaining as usize).min(buf.len());
@@ -396,10 +423,10 @@ pub(crate) fn md5_reader_slice_digest(
         if n == 0 {
             break;
         }
-        ctx.consume(&buf[..n]);
+        ctx.update(&buf[..n]);
         remaining -= n as u64;
     }
-    Ok(Md5::from(ctx.compute()))
+    Ok(Md5::from(ctx.finalize()))
 }
 
 #[cfg(test)]
@@ -407,7 +434,7 @@ mod tests {
     use super::*;
 
     fn hex(data: &[u8]) -> String {
-        format!("{:x}", md5::compute(data))
+        md5_digest(data).to_hex()
     }
 
     /// Ranges with **owned** MD5s, so a test can build a list without
@@ -450,6 +477,36 @@ mod tests {
     }
 
     #[test]
+    fn the_rfc_1321_vectors_hold() {
+        let million_a = "a".repeat(1_000_000);
+        let cases = [
+            ("", "d41d8cd98f00b204e9800998ecf8427e"),
+            ("a", "0cc175b9c0f1b6a831c399e269772661"),
+            ("abc", "900150983cd24fb0d6963f7d28e17f72"),
+            ("message digest", "f96b697d7cb7938d525a2f31aaf161d0"),
+            (
+                "abcdefghijklmnopqrstuvwxyz",
+                "c3fcd3d76192e4007dfb496cca67e13b",
+            ),
+            (
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+                "d174ab98d277d9f5a5611c2c9f419d9f",
+            ),
+            (
+                "12345678901234567890123456789012345678901234567890123456789012345678901234567890",
+                "57edf4a22be3c955ac49da2e2107b67a",
+            ),
+        ];
+        for (input, want) in cases {
+            assert_eq!(hex(input.as_bytes()), want, "{input:?}");
+        }
+        assert_eq!(
+            hex(million_a.as_bytes()),
+            "7707d6ae4e027c70eea2a935c2296f21"
+        );
+    }
+
+    #[test]
     fn a_digest_parses_in_either_case_and_prints_lowercase() {
         let upper = Md5::parse_hex("D41D8CD98F00B204E9800998ECF8427E").unwrap();
         let lower = Md5::parse_hex("d41d8cd98f00b204e9800998ecf8427e").unwrap();
@@ -481,7 +538,7 @@ mod tests {
         let dest = Ranges::of(&[(0, 64, hex(&data[0..64])), (64, 65, hex(&data[64..129]))]);
         let scan = scan_file(&dir.join("f.dat"), &dest.view(), &[]).unwrap();
         assert_eq!(scan.file_len, data.len() as u64);
-        assert_eq!(scan.file_md5, hex(&data));
+        assert_eq!(scan.file_md5, md5_digest(&data));
         assert_eq!(scan.dest_ok, vec![true, true]);
         assert!(scan.source_ok.is_empty());
     }
@@ -501,7 +558,11 @@ mod tests {
             vec![true, false],
             "only the block that was actually damaged is wrong"
         );
-        assert_ne!(scan.file_md5, hex(&good), "the whole file is wrong too");
+        assert_ne!(
+            scan.file_md5,
+            md5_digest(&good),
+            "the whole file is wrong too"
+        );
     }
 
     #[test]
@@ -522,7 +583,7 @@ mod tests {
         let dest = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let source = Ranges::of(&[(0, 64, EMPTY_MD5.to_string())]);
         let scan = scan_file(&dir.join("nope.dat"), &dest.view(), &source.view()).unwrap();
-        assert_eq!(scan.file_md5, EMPTY_MD5);
+        assert_eq!(scan.file_md5, Md5::EMPTY);
         assert_eq!(scan.file_len, 0);
         assert_eq!(scan.dest_ok, vec![false]);
         assert_eq!(scan.source_ok, vec![false]);
@@ -615,6 +676,32 @@ mod tests {
     }
 
     #[test]
+    fn a_handle_digest_agrees_with_the_file_digest_at_any_position() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "reader_digest");
+        let large: Vec<u8> = (0..(MD5_BUF + 17)).map(|i| (i % 251) as u8).collect();
+        for (name, data) in [
+            ("empty", Vec::new()),
+            ("small", b"small file".to_vec()),
+            ("large", large),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, &data).unwrap();
+            let want = md5_digest(&data);
+            let mut f = File::open(&path).unwrap();
+            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name}");
+            // The handle is left at EOF by the read; the next digest still
+            // starts at the beginning of the file.
+            f.seek(SeekFrom::End(0)).unwrap();
+            assert_eq!(md5_reader_digest(&mut f).unwrap(), want, "{name} at EOF");
+            assert_eq!(
+                md5_reader_digest(&mut f).unwrap(),
+                md5_file_digest(&path).unwrap(),
+                "{name}: the handle digest and the path digest are one answer"
+            );
+        }
+    }
+
+    #[test]
     fn read_range_returns_the_bytes_at_the_offset() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_scan", "read_range");
         let data = four_blocks();
@@ -632,5 +719,153 @@ mod tests {
         std::fs::write(dir.join("f.dat"), b"abc").unwrap();
         let mut f = File::open(dir.join("f.dat")).unwrap();
         assert!(read_range(&mut f, 0, u64::MAX).is_err());
+    }
+
+    /// Whole-file MD5 throughput, on the path the repair gate uses:
+    /// [`md5_file`] → [`md5_reader_digest`], with the 512 KiB read buffer.
+    ///
+    /// This is a measurement, not a property, so it is `#[ignore]`d and is
+    /// never part of the normal suite or CI. It writes a file of
+    /// `GIRPR_MD5_BENCH_MIB` MiB (default 64), hashes it `GIRPR_MD5_BENCH_RUNS`
+    /// times (default 5), and prints the throughput. Run it by hand:
+    ///
+    /// ```text
+    /// cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
+    /// ```
+    #[test]
+    #[ignore = "throughput measurement, run by hand"]
+    fn md5_throughput() {
+        let mib: usize = std::env::var("GIRPR_MD5_BENCH_MIB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(64);
+        let runs: usize = std::env::var("GIRPR_MD5_BENCH_RUNS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
+        assert!(
+            mib > 0 && runs > 0,
+            "the benchmark needs a non-zero size and run count"
+        );
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "throughput");
+        let path = dir.join("throughput.bin");
+        let block: Vec<u8> = (0..1024 * 1024).map(|i| (i % 251) as u8).collect();
+        let mut file = File::create(&path).expect("create the benchmark file");
+        for _ in 0..mib {
+            std::io::Write::write_all(&mut file, &block).expect("write the benchmark file");
+        }
+        file.sync_all().expect("flush the benchmark file");
+        drop(file);
+
+        // Warm the page cache and the hasher before taking the clock, so the
+        // number is throughput and not first-touch I/O.
+        let _ = md5_file(&path).expect("warm-up hash");
+        let start = std::time::Instant::now();
+        let mut digest = String::new();
+        for _ in 0..runs {
+            digest = md5_file(&path).expect("hash the benchmark file");
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let bytes = (mib * 1024 * 1024) as f64 * runs as f64;
+        println!(
+            "md5_file: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (digest {digest})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
+        assert_eq!(digest.len(), 32, "the benchmark hashed a real file");
+    }
+
+    /// Scan throughput, on the repair path that dwarfs the whole-file digest:
+    /// [`scan_file`] and [`scan_reader`], with one destination range per MiB
+    /// and a half-chunk source range in every chunk.
+    ///
+    /// This is a measurement, not a property, so it is `#[ignore]`d and is
+    /// never part of the normal suite or CI. It writes a file of
+    /// `GIRPR_SCAN_BENCH_MIB` MiB (default 64), scans it
+    /// `GIRPR_SCAN_BENCH_RUNS` times (default 5), and prints the throughput.
+    /// Run it by hand:
+    ///
+    /// ```text
+    /// cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_throughput)' --no-capture
+    /// ```
+    #[test]
+    #[ignore = "throughput measurement, run by hand"]
+    fn scan_throughput() {
+        let mib: usize = std::env::var("GIRPR_SCAN_BENCH_MIB")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(64);
+        let runs: usize = std::env::var("GIRPR_SCAN_BENCH_RUNS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5);
+        assert!(
+            mib > 0 && runs > 0,
+            "the benchmark needs a non-zero size and run count"
+        );
+        const MIB: usize = 1024 * 1024;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_md5", "scan_throughput");
+        let path = dir.join("scan.bin");
+        let block: Vec<u8> = (0..MIB).map(|i| (i % 251) as u8).collect();
+        let mut file = File::create(&path).expect("create the benchmark file");
+        for _ in 0..mib {
+            std::io::Write::write_all(&mut file, &block).expect("write the benchmark file");
+        }
+        file.sync_all().expect("flush the benchmark file");
+        drop(file);
+
+        let chunk_md5 = md5_digest(&block).to_hex();
+        let dest_owned: Vec<(u64, u64, String)> = (0..mib)
+            .map(|i| ((i * MIB) as u64, MIB as u64, chunk_md5.clone()))
+            .collect();
+        let half = MIB / 2;
+        let half_md5 = md5_digest(&block[half..]).to_hex();
+        let source_owned: Vec<(u64, u64, String)> = (0..mib)
+            .map(|i| ((i * MIB + half) as u64, half as u64, half_md5.clone()))
+            .collect();
+        let dest = Ranges::of(&dest_owned);
+        let source = Ranges::of(&source_owned);
+        let dest = dest.view();
+        let source = source.view();
+
+        // Warm the page cache before taking the clock, so the number is
+        // throughput and not first-touch I/O.
+        let _ = scan_file(&path, &dest, &source).expect("warm-up scan");
+        let start = std::time::Instant::now();
+        let mut dest_ok = 0;
+        for _ in 0..runs {
+            let scan = scan_file(&path, &dest, &source).expect("scan the benchmark file");
+            dest_ok = scan.dest_ok.iter().filter(|&&ok| ok).count();
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        let bytes = (mib * MIB) as f64 * runs as f64;
+        // A scan that stops finding intact ranges would otherwise still print
+        // a plausible throughput figure. The file is generated by this test,
+        // so every range must be correct on every run.
+        assert_eq!(
+            dest_ok, mib,
+            "the scan must find every destination range intact"
+        );
+        println!(
+            "scan_file: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (dest_ok {dest_ok}/{mib})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
+
+        let mut handle = File::open(&path).expect("open the benchmark file");
+        let start = std::time::Instant::now();
+        let mut source_ok = 0;
+        for _ in 0..runs {
+            let scan = scan_reader(&mut handle, &dest, &source).expect("scan the benchmark handle");
+            source_ok = scan.source_ok.iter().filter(|&&ok| ok).count();
+        }
+        let elapsed = start.elapsed().as_secs_f64();
+        assert_eq!(
+            source_ok, mib,
+            "the scan must find every source range intact"
+        );
+        println!(
+            "scan_reader: {mib} MiB x {runs} runs in {elapsed:.3} s = {:.1} MiB/s (source_ok {source_ok}/{mib})",
+            bytes / (1024.0 * 1024.0) / elapsed,
+        );
     }
 }

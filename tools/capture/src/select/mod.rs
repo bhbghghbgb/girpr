@@ -421,29 +421,29 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     out
 }
 
-/// The pool indices that satisfy each class, indexed by [`Class::ALL`].
+/// The pool indices that satisfy each class, **keyed by the class itself**.
 ///
 /// One walk of the pool instead of one per class. The per-class lists are in
 /// pool order — cheapest first — so a class's picks are read straight off its
 /// list, and `considered` is the list's length.
-fn candidates_by_class(pool: &[SizedCandidate]) -> [Vec<usize>; Class::ALL.len()] {
-    let mut out: [Vec<usize>; Class::ALL.len()] = std::array::from_fn(|_| Vec::new());
+///
+/// Keyed rather than positionally indexed so a lookup cannot depend on the
+/// class order used to build the table matching the order a caller walks. The
+/// two orders are the same list today; keying keeps them from being load
+/// bearing if one is ever reordered.
+fn candidates_by_class(pool: &[SizedCandidate]) -> BTreeMap<Class, Vec<usize>> {
+    let mut out: BTreeMap<Class, Vec<usize>> = Class::ALL
+        .into_iter()
+        .map(|class| (class, Vec::new()))
+        .collect();
     for (i, c) in pool.iter().enumerate() {
-        for (list, class) in out.iter_mut().zip(Class::ALL) {
-            if c.candidate.satisfies(class) {
+        for (class, list) in &mut out {
+            if c.candidate.satisfies(*class) {
                 list.push(i);
             }
         }
     }
     out
-}
-
-/// Where a class sits in [`Class::ALL`], for indexing [`candidates_by_class`].
-fn class_idx(class: Class) -> usize {
-    Class::ALL
-        .iter()
-        .position(|c| *c == class)
-        .expect("every class is in ALL")
 }
 
 /// Cheapest first, then the field with `game` ranked first, then by path.
@@ -622,7 +622,13 @@ pub fn select(
     let mut taken: std::collections::HashSet<&str> =
         admitted.iter().map(|a| a.path.as_str()).collect();
     for class in Class::REQUIRED_ORDER {
-        let candidates = &by_class[class_idx(class)];
+        // Every class is seeded by `candidates_by_class`, so a miss means the
+        // two class lists disagree; fail loudly rather than admit an empty
+        // list and report the class as unavailable.
+        let candidates: &[usize] = by_class
+            .get(&class)
+            .map(Vec::as_slice)
+            .expect("candidates_by_class seeds every class from Class::ALL");
         let considered = candidates.len() as u64;
 
         // Already answered by something captured for another reason?

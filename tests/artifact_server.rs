@@ -19,8 +19,14 @@
 //! when the bundle carries none — and then the server *says so* rather than
 //! letting a not-found assertion pass on an invented status.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "artifact_bridge/server.rs"]
 mod server;
+
+#[path = "common/digest.rs"]
+mod digest;
 
 use std::path::{Path, PathBuf};
 

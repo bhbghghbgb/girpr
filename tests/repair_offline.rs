@@ -3,100 +3,53 @@
 //! Everything runs against a local mock HoYoPlay + Sophon server
 //! (`mod common`, `127.0.0.1:<ephemeral>`). No external network is touched:
 //! every `RunCtx` sets `hyp_base_override` / `sophon_base_override` to the
-//! mock, so a sandbox without internet still passes. Three cases run the
+//! mock, so a sandbox without internet still passes. Three cases drive the
 //! real binary instead, over those same overrides.
 //!
-//! The first ten cases are the repair pipeline (each a full `repair::run`):
-//! 1. repair of missing + corrupt files (exit 0, bytes verified, tmp swept)
-//! 2. `--check-only` clean (exit 0) and dirty (exit 4, writes nothing)
-//! 3. `--dry-run` writes nothing
-//! 4. `--purge-after` / `--purge-before` delete orphans into one counter
-//! 5. deprecated files deleted in the post phase
-//! 6. verified local-slice reuse downloads only the bad chunk (S2)
-//! 7. partial `_tmp` prefix resumed by length, gated by final MD5
-//! 8. explicit audio selection overwrites the scan file
-//! 9. a non-chunk `default_download_mode` is refused with exit 1
-//! 10. the deprecated-files call carries the per-launcher channel
+//! This file covers the offline repair run and the run-level contract:
+//! - the end-to-end repair of missing and corrupt files, and that a failed
+//!   audio move is best-effort while the version still advances;
+//! - `--dry-run` writes nothing;
+//! - a manifest path that escapes the game dir, and a chunk range that
+//!   overflows, are refused before any write;
+//! - the per-file write counters and the `--repair-mode` group;
+//! - the single-writer lock: a second run is refused, a scoped run takes the
+//!   same lock, read-only modes skip it, and a legacy in-install lock is left
+//!   alone;
+//! - the non-chunk download mode is a usage refusal, including when the branch
+//!   call also fails;
+//! - manifest selection: no local build, build-order selection, an ignored
+//!   category, and an unserved extra manifest.
 //!
-//! The rest are grouped by the tier they cover (see
-//! [`docs/04-scope-limitation-spec.md`](../docs/04-scope-limitation-spec.md)):
-//! - **path scope** — include-only repairs exactly one file, a purge under a
-//!   scope leaves the fixture alone, deprecated files out of scope survive, an
-//!   `--include` matching nothing and `--audio` under a scope are exit `1`
-//! - **resource ceilings** — `--max-files`, `--max-delete-bytes` and
-//!   `--max-download-bytes` refuse (exit `5`) or pass on the boundary, a broken
-//!   reuse path trips the runtime stop, a refused run leaves no `game_dir`
-//! - **`--print-plan`** — reports the plan, writes nothing, `--plan-out` JSON
-//!   agrees with the plan total, a ceiling still trips it
-//! - **`--max-write-bytes`, `--fail-fast`, `--purge-only`** — the write stop, a
-//!   500 origin, and `--purge-only` alone and with `--dry-run`
-//! - **read-only discipline** — no deprecated-list call, `download_bytes`
-//!   counts only promoted files even after a retry
-//! - **endpoint override** — the real binary over `--hyp-base` / `--sophon-base`,
-//!   and the explicit-beats-env precedence
+//! The scope, ceiling, plan-output, write-stop, read-only, and endpoint-override
+//! cases live in their own integration files (`tests/repair_scope.rs`,
+//! `tests/repair_limits.rs`, `tests/repair_plan.rs`, and so on).
 
-#[path = "common/mod.rs"]
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use common::{
-    ChunkSpec, FileSpec, FixtureSpec, LATEST_TAG, Lies, MockOpts, MockServer, build_fixture,
-    build_fixture_spec, build_fixture_with_lies, build_moved_fixture, read_game_file, temp_dir,
-    write_game_file,
+    BranchFailure, ChunkSpec, ExtraManifestSpec, FileSpec, FixtureLatestManifest, FixtureSpec,
+    GameFixture, LATEST_TAG, Lies, MockOpts, MockServer, build_fixture, build_fixture_spec,
+    ctx_for, field, load_counters, read_game_file, remove_run_lock, run, run_binary, scope,
+    temp_dir, write_game_file,
 };
-use girpr::repair::scope::{Limits, PathScope};
-use girpr::sleep::NoSleep;
-use girpr::{Biz, OutputFormat, RunCtx, config::RepairMode, repair};
-use std::collections::HashSet;
-use std::sync::Arc;
+use girpr::RunExit;
+use girpr::test_support::{Lock, RepairMode, join_url, summary_record};
 use std::sync::atomic::Ordering;
 
-/// Compile a path scope for a test, the way `Args::into_ctx` does.
-fn scope(include: &[&str], exclude: &[&str]) -> PathScope {
-    let inc: Vec<String> = include.iter().map(|s| s.to_string()).collect();
-    let exc: Vec<String> = exclude.iter().map(|s| s.to_string()).collect();
-    PathScope::new(&inc, &exc).expect("test globs must compile")
-}
-
-fn ctx_for(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize) -> RunCtx {
-    ctx_for_biz(game_dir, mock, jobs, Biz::Hk4eGlobal)
-}
-
-fn ctx_for_biz(game_dir: std::path::PathBuf, mock: &MockServer, jobs: usize, biz: Biz) -> RunCtx {
-    RunCtx {
-        game_dir,
-        biz,
-        audio: HashSet::new(),
-        audio_explicit: false,
-        path_scope: PathScope::default(),
-        limits: Limits::default(),
-        repair_mode: girpr::config::RepairMode::Auto,
-        repair_mode_explicit: false,
-        jobs,
-        check_only: false,
-        scan: false,
-        purge_only: false,
-        fail_fast: false,
-        dry_run: false,
-        print_plan: false,
-        plan_out: None,
-        purge_after: false,
-        purge_before: false,
-        output: OutputFormat::Text,
-        hyp_base_override: Some(mock.hyp_base.clone()),
-        sophon_base_override: Some(mock.sophon_base.clone()),
-        // Tests skip retry backoff: a failed fetch is retried immediately.
-        sleep: Arc::new(NoSleep),
-    }
-}
-
-fn load_counters(s: &girpr::Summary) -> (u64, u64, u64, u64, u64) {
-    (
-        s.files_skipped.load(Ordering::Relaxed),
-        s.files_repaired.load(Ordering::Relaxed),
-        s.files_failed.load(Ordering::Relaxed),
-        s.download.settled(),
-        s.deleted_extra_bytes.load(Ordering::Relaxed),
-    )
+/// The extra latest-build manifest the fixture advertises under `field`.
+///
+/// Selection is by the field `getBuild` advertises, never by position: a
+/// fixture that reorders its extra manifests must not swap the identities a
+/// test asserts on.
+fn extra_manifest<'a>(fx: &'a GameFixture, field: &str) -> &'a FixtureLatestManifest {
+    fx.extra_latest_manifests
+        .iter()
+        .find(|m| m.matching_field == field)
+        .unwrap_or_else(|| panic!("the fixture describes the {field} manifest"))
 }
 
 #[tokio::test]
@@ -118,10 +71,10 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
     }
     write_game_file(&dir, &foo.rel, &bad_foo);
 
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
         .await
         .expect("run must succeed");
-    assert_eq!(code, 0, "repair exit");
+    assert_eq!(code, RunExit::Success, "repair exit");
     assert_eq!(summary.files_total, 2);
     let (skipped, repaired, failed, dl, _del) = load_counters(&summary);
     assert_eq!((skipped, repaired, failed), (1, 1, 0));
@@ -136,92 +89,54 @@ async fn repairs_missing_and_corrupt_files_end_to_end() {
     );
     // Version bumped to the mock latest tag.
     let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
-    assert!(cfg.contains("game_version=9.9.9-test"), "{cfg}");
+    assert!(cfg.contains(&format!("game_version={LATEST_TAG}")), "{cfg}");
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn check_only_clean_reports_zero() {
+async fn a_failed_audio_move_is_best_effort_and_still_bumps_the_version() {
+    // The audio move is housekeeping: a destination that refuses both the
+    // rename and the copy must not fail the run, must keep the source, and
+    // must not publish a partial file. The post-phase still reaches its
+    // `config.ini` bump, because the repair itself completed.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("check_clean");
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            cache_dir: "Audio/cache".to_string(),
+            res_dir: "Audio/res".to_string(),
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("audio_move_failed");
     let fx2 = build_fixture();
     for f in &fx2.files {
         write_game_file(&dir, &f.rel, &f.data);
     }
+    write_game_file(&dir, "Audio/cache/a.pck", b"cache bytes");
+    // A directory at the destination makes both the rename and the copy fail.
+    std::fs::create_dir_all(dir.join("Audio/res/a.pck")).unwrap();
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.check_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("check-only runs");
-    assert_eq!(code, 0);
-    let (skipped, _rep, failed, _, _) = load_counters(&summary);
-    assert_eq!(failed, 0);
-    assert_eq!(skipped, 2);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn check_only_dirty_reports_damage_and_writes_nothing() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("check_dirty");
-    let fx2 = build_fixture();
-    let foo = &fx2.files[0];
-    let bar = &fx2.files[1];
-    write_game_file(&dir, &bar.rel, &bar.data);
-    write_game_file(&dir, &foo.rel, b"definitely not the game data");
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.check_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("check-only runs");
-    assert_eq!(code, 4, "check-only damage exit");
-    let (_sk, _rep, failed, _, _) = load_counters(&summary);
-    assert_eq!(failed, 1);
-
-    // Read-only contract: corrupt bytes untouched, no config bump, no tmps.
+    let (_summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 2))
+        .await
+        .expect("a refused audio move is not a run failure");
+    assert_eq!(code, RunExit::Success);
     assert_eq!(
-        read_game_file(&dir, &foo.rel).unwrap(),
-        b"definitely not the game data"
+        read_game_file(&dir, "Audio/cache/a.pck").unwrap(),
+        b"cache bytes",
+        "the refused move keeps its source"
     );
-    assert!(!dir.join("config.ini").exists());
-    assert!(!dir.join("game").join("foo.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
-    // The scan's verdict for an absent file carries the empty digest, and a
-    // legitimate empty file's manifest entry has exactly that digest. The
-    // md5 alone therefore cannot tell them apart.
-    let spec = FixtureSpec::new(vec![FileSpec::new("game/empty.dat", vec![])]);
-    let mock = MockServer::start(build_fixture_spec(&spec), MockOpts::default()).await;
-    let dir = temp_dir("check_empty_absent");
-
-    for scan in [false, true] {
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-        ctx.check_only = true;
-        ctx.scan = scan;
-        let (summary, code) = repair::run(ctx).await.expect("check-only runs");
-        assert_eq!(code, 4, "scan={scan}: an absent file is damage");
-        assert_eq!(
-            summary.files_failed.load(Ordering::Relaxed),
-            1,
-            "scan={scan}"
-        );
-    }
-
-    // The same manifest entry, with the file present and empty: clean.
-    write_game_file(&dir, "game/empty.dat", &[]);
-    for scan in [false, true] {
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-        ctx.check_only = true;
-        ctx.scan = scan;
-        let (_summary, code) = repair::run(ctx).await.expect("check-only runs");
-        assert_eq!(code, 0, "scan={scan}: an empty file that exists is clean");
-    }
+    assert!(
+        dir.join("Audio/res/a.pck").is_dir(),
+        "the destination that refused the publish is untouched"
+    );
+    let cfg = std::fs::read_to_string(dir.join("config.ini")).expect("config.ini");
+    assert!(
+        cfg.contains(&format!("game_version={LATEST_TAG}")),
+        "the completed repair still advances the version: {cfg}"
+    );
 
     mock.stop();
 }
@@ -237,319 +152,13 @@ async fn dry_run_writes_nothing() {
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.dry_run = true;
-    let (_summary, code) = repair::run(ctx).await.expect("dry-run runs");
-    assert_eq!(code, 0);
+    let (_summary, code) = run(ctx).await.expect("dry-run runs");
+    assert_eq!(code, RunExit::Success);
     assert!(
         read_game_file(&dir, &fx2.files[0].rel).is_none(),
         "dry-run must not create the missing file"
     );
     assert!(!dir.join("config.ini").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn purge_after_deletes_orphans_keeps_manifest_and_config() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_after");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-after runs");
-    assert_eq!(code, 0);
-    let (_, _, _, _, deleted) = load_counters(&summary);
-    assert!(deleted >= 100, "orphan bytes counted, got {deleted}");
-    assert!(
-        read_game_file(&dir, "stray/orphan.dat").is_none(),
-        "orphan deleted"
-    );
-    for f in &fx2.files {
-        assert_eq!(read_game_file(&dir, &f.rel).unwrap(), f.data);
-    }
-    assert!(dir.join("config.ini").exists(), "config.ini kept");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn purge_after_keeps_the_case_variant_it_just_verified() {
-    // N-5: the purge walks the **on-disk** spelling, which on Windows can
-    // differ in case from the manifest. Before the purge key mirrored the
-    // plan's dedup key, `--purge-after` saw `game/foo.dat`, missed the
-    // expected `Game/Foo.dat` and deleted the file the run had just verified.
-    let spec = FixtureSpec::new(vec![FileSpec::new(
-        "Game/Foo.dat",
-        vec![ChunkSpec::new("case_c0", vec![0x41u8; 64], 0)],
-    )]);
-    let expected = build_fixture_spec(&spec);
-    let data = expected.files[0].data.clone();
-    let mock = MockServer::start(build_fixture_spec(&spec), MockOpts::default()).await;
-    let dir = temp_dir("purge_case");
-    write_game_file(&dir, "game/foo.dat", &data);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.purge_after = true;
-    let (_summary, code) = repair::run(ctx).await.expect("case-differing purge run");
-    assert_eq!(code, 0);
-
-    #[cfg(windows)]
-    assert_eq!(
-        read_game_file(&dir, "game/foo.dat").as_deref(),
-        Some(data.as_slice()),
-        "Windows: the case variant is the file the manifest expected, and survives"
-    );
-    #[cfg(unix)]
-    {
-        assert_eq!(
-            read_game_file(&dir, "Game/Foo.dat").as_deref(),
-            Some(data.as_slice()),
-            "Unix: the manifest spelling is a distinct file and is kept"
-        );
-        assert!(
-            read_game_file(&dir, "game/foo.dat").is_none(),
-            "Unix: the lower-case sibling is an orphan and still purges"
-        );
-    }
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn purge_before_deletes_orphans_then_repairs() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_before");
-    let fx2 = build_fixture();
-    // bar intact, foo missing, plus an orphan taking space.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_before = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-before runs");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, deleted) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert!(deleted >= 64);
-    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn blacklisted_files_survive_every_purge_spelling() {
-    // The blacklist excludes a file from the *work list*; it does not remove
-    // it from the expected install. docs/01 says blacklisted entries are
-    // "never deleted" and docs/02 defines the cleanup's expected set from the
-    // manifest, so the blacklist must also be a keep input.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            blacklist_dir: "blacklist.txt".to_string(),
-            enable_resource_blacklist: true,
-            ..Default::default()
-        },
-    )
-    .await;
-
-    for (name, apply) in [
-        (
-            "after",
-            (|c: &mut RunCtx| c.purge_after = true) as fn(&mut RunCtx),
-        ),
-        ("before", |c: &mut RunCtx| c.purge_before = true),
-        ("only", |c: &mut RunCtx| c.purge_only = true),
-    ] {
-        let dir = temp_dir(&format!("purge_blacklist_{name}"));
-        let fx2 = build_fixture();
-        for f in &fx2.files {
-            write_game_file(&dir, &f.rel, &f.data);
-        }
-        // The blacklisted file is a manifest path (so it is part of the
-        // expected install) and stays on disk unchanged.
-        write_game_file(&dir, "blacklist.txt", br#"{"fileName":"game/foo.dat"}"#);
-        // A genuinely stale file still has to be deleted.
-        write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 32]);
-
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-        apply(&mut ctx);
-        let (summary, code) = repair::run(ctx)
-            .await
-            .unwrap_or_else(|e| panic!("{name}: run failed: {e:#}"));
-        assert_eq!(code, 0, "{name}: exit");
-        assert!(
-            read_game_file(&dir, "game/foo.dat").is_some(),
-            "{name}: a blacklisted manifest file must never be deleted"
-        );
-        assert!(
-            read_game_file(&dir, "stray/orphan.dat").is_none(),
-            "{name}: the stale file is still purged"
-        );
-        assert!(
-            summary.deleted_extra_bytes.load(Ordering::Relaxed) >= 32,
-            "{name}: the stale file's bytes are counted"
-        );
-    }
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn deprecated_files_deleted_in_post_phase() {
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            deprecated_files: vec!["old/legacy.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("deprecated");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
-        .await
-        .expect("run with deprecated list");
-    assert_eq!(code, 0);
-    let (_, _, _, _, deleted) = load_counters(&summary);
-    assert_eq!(deleted, 50);
-    assert!(read_game_file(&dir, "old/legacy.dll").is_none());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn verified_local_slice_is_reused_without_redownload() {
-    // S2: same-file reuse. config.ini already at latest so the local build
-    // loads; foo keeps chunk0 intact and corrupts chunk1 -> only chunk_foo1
-    // may be fetched.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("reuse");
-    let fx2 = build_fixture();
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
-    )
-    .unwrap();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("reuse run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn partial_tmp_prefix_is_resumed() {
-    // Resume-by-length: the **temp** path's resume mechanism, so
-    // it is asked for explicitly: `--repair-mode temp` is the mode that
-    // writes `{path}_tmp` at all. foo missing but foo_tmp holds the first
-    // chunk; only the second chunk is downloaded, then tmp is promoted.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("resume");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, "game/foo.dat_tmp", &fx2.files[0].data[..64]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = RepairMode::Temp;
-    ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("resume run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    // The prefix was kept, not rewritten: the temp path resumes by length, so
-    // the first chunk's 64 bytes count as bytes the repair did not have to
-    // touch — the same definition `kept_bytes` uses for the in-place path.
-    assert_eq!(
-        summary.kept_bytes.load(Ordering::Relaxed),
-        64,
-        "the resumed `_tmp` prefix is kept, not rewritten"
-    );
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-    assert!(
-        !dir.join("game").join("foo.dat_tmp").exists(),
-        "tmp promoted"
-    );
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_full_length_corrupt_tmp_is_deleted_and_rebuilt() {
-    // Resume-by-length keeps a prefix it has not verified, so a `_tmp` that is
-    // already the right length can be entirely wrong. The whole-file MD5 gate
-    // is what refuses it: the promote deletes the `_tmp`, the file attempt is
-    // retried, and the second attempt downloads the file from scratch instead
-    // of promoting the corrupt bytes.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("corrupt_tmp_full");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let bad = vec![0xEEu8; fx2.files[0].data.len()];
-    write_game_file(&dir, "game/foo.dat_tmp", &bad);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = RepairMode::Temp;
-    ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("the retry repairs the file");
-    assert_eq!(code, 0);
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "the corrupt attempt was retried, not counted as a failure"
-    );
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the rebuilt file is the manifest's"
-    );
-    assert!(
-        !dir.join("game").join("foo.dat_tmp").exists(),
-        "the `_tmp` was deleted by the failed gate and rebuilt"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
-        "the full-length corrupt `_tmp` was not reused"
-    );
 
     mock.stop();
 }
@@ -569,109 +178,14 @@ async fn a_manifest_path_that_escapes_the_game_dir_is_refused_before_any_write()
         let dir = temp_dir("escape_manifest");
         let game = dir.join("install");
 
-        let err = repair::run(ctx_for(game.clone(), &mock, 1))
+        let err = run(ctx_for(game.clone(), &mock, 1))
             .await
             .expect_err("an escaping manifest path is metadata");
-        assert_eq!(err.exit_code, 2, "{bad}");
+        assert_eq!(err.exit_code, RunExit::Metadata, "{bad}");
         assert!(!game.exists(), "{bad}: the game dir must not be created");
         assert!(!dir.join("outside.dat").exists(), "{bad}: escaped write");
         assert!(!dir.join("evil.dat").exists(), "{bad}: escaped write");
 
-        mock.stop();
-    }
-}
-
-#[tokio::test]
-async fn a_deprecated_path_that_escapes_the_game_dir_is_kept() {
-    // The deprecated list is a **delete** sink. A `../` name must be skipped
-    // with a warning, not resolved outside the install.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            deprecated_files: vec!["../victim.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("escape_deprecated");
-    let game = dir.join("install");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&game, &f.rel, &f.data);
-    }
-    std::fs::write(dir.join("victim.dll"), b"do not delete").unwrap();
-
-    let (summary, code) = repair::run(ctx_for(game, &mock, 2))
-        .await
-        .expect("the run itself is fine");
-    assert_eq!(code, 0);
-    assert_eq!(
-        std::fs::read(dir.join("victim.dll")).unwrap(),
-        b"do not delete",
-        "the outside file must survive"
-    );
-    assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "nothing was deleted"
-    );
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_audio_dir_that_escapes_the_game_dir_is_refused_as_metadata() {
-    // The cache/res pair is a **mutation** sink fed by server strings. Both
-    // are validated with the other config dirs at metadata time, so a `..`
-    // value refuses the run (exit 2) before `config.ini` is bumped or a file
-    // moves — it must not report success after skipping the move.
-    for (cache, res) in [
-        ("../audio_cache".to_string(), "Audio/res".to_string()),
-        ("Audio/cache".to_string(), "../audio_res".to_string()),
-    ] {
-        let fx = build_fixture();
-        let mock = MockServer::start(
-            fx,
-            MockOpts {
-                cache_dir: cache,
-                res_dir: res,
-                ..Default::default()
-            },
-        )
-        .await;
-        let dir = temp_dir("escape_audio");
-        let game = dir.join("install");
-        let fx2 = build_fixture();
-        for f in &fx2.files {
-            write_game_file(&game, &f.rel, &f.data);
-        }
-        std::fs::create_dir_all(dir.join("audio_cache")).unwrap();
-        std::fs::write(dir.join("audio_cache").join("a.pck"), b"cache bytes").unwrap();
-        std::fs::create_dir_all(dir.join("audio_res")).unwrap();
-        std::fs::write(dir.join("audio_res").join("keep.pck"), b"res bytes").unwrap();
-
-        let err = repair::run(ctx_for(game.clone(), &mock, 2))
-            .await
-            .expect_err("an escaping audio dir is metadata");
-        assert_eq!(err.exit_code, 2, "an escaping audio dir is metadata");
-        assert!(
-            !game.join("config.ini").exists(),
-            "the version must not be bumped for refused server data"
-        );
-        assert_eq!(
-            std::fs::read(dir.join("audio_cache").join("a.pck")).unwrap(),
-            b"cache bytes",
-            "the outside cache must not move"
-        );
-        assert_eq!(
-            std::fs::read(dir.join("audio_res").join("keep.pck")).unwrap(),
-            b"res bytes",
-            "the outside res dir must not be touched"
-        );
-        assert!(
-            !game.join("Audio").join("res").exists(),
-            "nothing may be moved into the install from outside it"
-        );
         mock.stop();
     }
 }
@@ -702,7 +216,7 @@ async fn a_manifest_offset_overflow_refuses_the_plan_instead_of_panicking() {
             &game_arg,
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "1",
             "--print-plan",
             "--hyp-base",
@@ -731,328 +245,6 @@ async fn a_manifest_offset_overflow_refuses_the_plan_instead_of_panicking() {
 }
 
 #[tokio::test]
-async fn the_in_place_repair_writes_only_the_wrong_chunk_and_no_tmp() {
-    // The disk claim, on the fixture: a right-sized file whose second chunk
-    // is corrupt is repaired by writing that chunk and nothing else. The
-    // write counter is the evidence — the temp path would have written the
-    // whole 128 bytes.
-    //
-    // There is no `config.ini` here, so there is no local manifest and no
-    // reuse map: the in-place path finds the intact chunk on its own, from
-    // the scan. That is the network win that needs no manifest at all.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("inplace_patch");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("in-place run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the file is correct"
-    );
-    // The disk claim: one chunk written, not the whole file.
-    assert_eq!(
-        summary.write.settled(),
-        64,
-        "only the corrupt chunk was written"
-    );
-    // And no `_tmp` anywhere: the in-place path never creates one.
-    assert!(
-        !dir.join("game").join("foo.dat_tmp").exists(),
-        "the in-place path must not create a temp file"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
-        "the intact chunk is kept, not fetched"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_file_that_grows_writes_only_the_growth() {
-    // foo.dat is 128 bytes in the manifest; on disk it is 64. The first
-    // chunk is already right, the second is missing: the repair writes 64
-    // bytes — the growth — and not the 128 the temp path would have.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("inplace_grow");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, &fx2.files[0].rel, &fx2.files[0].data[..64]);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("in-place run");
-    assert_eq!(code, 0);
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the file grew to its manifest size"
-    );
-    assert_eq!(
-        summary.write.settled(),
-        64,
-        "only the missing chunk was written"
-    );
-    assert!(!dir.join("game").join("foo.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_discard_mode_deletes_the_target_and_writes_it_from_scratch() {
-    // `discard` trades the network for the disk: the target is deleted and
-    // written again, so nothing reusable survives — not even the chunk that
-    // was already correct where it belonged.
-    //
-    // The local manifest is loaded here (config.ini at the latest tag), so
-    // the reuse map exists and the *default* run would keep the intact
-    // chunk. That is the difference the mode makes visible.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("discard");
-    std::fs::write(
-        dir.join("config.ini"),
-        format!("[General]\ngame_version={}\n", LATEST_TAG),
-    )
-    .unwrap();
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = RepairMode::Discard;
-    let (summary, code) = repair::run(ctx).await.expect("discard run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
-        "after the delete there is nothing left to reuse, so both chunks are fetched"
-    );
-    assert!(!dir.join("game").join("foo.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_read_only_target_is_made_writable_and_repaired_in_place() {
-    // A game file can carry the read-only attribute, and then it cannot be
-    // opened for writing. The repair clears the attribute and carries on —
-    // the temp path would not have helped, because the promote renames over
-    // the target and that fails the same way.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("readonly");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let target = dir.join("game").join("foo.dat");
-    let mut perms = std::fs::metadata(&target).unwrap().permissions();
-    perms.set_readonly(true);
-    std::fs::set_permissions(&target, perms).unwrap();
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("read-only run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-    assert!(
-        !dir.join("game").join("foo.dat_tmp").exists(),
-        "the in-place path repaired it without a temp file"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_ram_tier_keeps_every_source_when_the_content_moved() {
-    // The fixture's old file is `P || Q || R` and the new one is `R || P ||
-    // T`: the content moved, so the repair has to move bytes *inside* the
-    // file. The sources are in both directions (R's is later, P's is
-    // earlier), which is the case the two tiers differ on.
-    //
-    // The RAM tier stages the moving bytes, so **every** source survives:
-    // only the brand-new chunk is downloaded.
-    let fx = build_moved_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("moved_staged");
-    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
-    )
-    .unwrap();
-    write_game_file(&dir, &old_rel, &old_bytes);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("moved run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_t".to_string()],
-        "both moved chunks are salvaged; only the new one is downloaded"
-    );
-    // The file is the new one.
-    let want = build_moved_fixture().files[0].data.clone();
-    assert_eq!(read_game_file(&dir, &old_rel).unwrap(), want);
-    // And nothing was staged for nothing: the payload was the two moved
-    // chunks, and the peak says so.
-    assert!(
-        summary.ram_peak_bytes() > 0,
-        "the staged payload is counted"
-    );
-    assert!(!dir.join("game").join("moved.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_ordered_tier_keeps_one_direction_and_produces_the_same_file() {
-    // The same file, repaired by the ordered tier: no staging, so the
-    // sources are read from the file at write time and only the ones that
-    // survive the write order can be used. One direction's worth is kept —
-    // here the tie goes to ascending, which keeps `R` and loses `P`.
-    //
-    // The file that comes out is **the same file**: the tier is a choice of
-    // how to get there, not of what to produce.
-    let fx = build_moved_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("moved_ordered");
-    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
-    )
-    .unwrap();
-    write_game_file(&dir, &old_rel, &old_bytes);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    // "stage nothing at all" is what selects the ordered tier.
-    ctx.limits.ram_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("moved run");
-    assert_eq!(code, 0);
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_p".to_string(), "chunk_t".to_string()],
-        "the source that the other direction needed was lost, so it downloaded"
-    );
-    // The same file the RAM tier produces.
-    let want = build_moved_fixture().files[0].data.clone();
-    assert_eq!(read_game_file(&dir, &old_rel).unwrap(), want);
-    assert!(!dir.join("game").join("moved.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
-    // N-17: the scan finds both moved sources intact, but the ordered tier's
-    // write order keeps only one direction's worth. The estimate must model
-    // the writer's order, not "the source verified", or the PLAN line is below
-    // the bytes the same run downloads.
-    let fx = build_moved_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scan_ordered");
-    let (old_rel, old_bytes) = build_moved_fixture().old_data.expect("the old file");
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.8-test\n",
-    )
-    .unwrap();
-    write_game_file(&dir, &old_rel, &old_bytes);
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-        "--max-ram-bytes",
-        "0",
-    ];
-
-    // 1. the plan, scanned: the ordered tier is selected by the RAM budget.
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--print-plan"]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let estimate = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("PLAN "))
-            .expect("the PLAN line"),
-        "est_download_bytes",
-    );
-
-    // 2. the repair: the same budget, so the same tier and order.
-    let mut args = base.clone();
-    args.push("--scan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let downloaded = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("SUMMARY "))
-            .expect("the SUMMARY line"),
-        "download_bytes",
-    );
-    assert_eq!(
-        estimate, downloaded,
-        "the scanned estimate is the ordered tier's real cost: {estimate} vs {downloaded}"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_p".to_string(), "chunk_t".to_string()],
-        "the source the losing direction needed is downloaded"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
 async fn the_run_counts_the_paths_it_used() {
     // The disk claim of the run, in two numbers: how many files were written
     // where they lie, and how many went through a `_tmp`.
@@ -1068,10 +260,10 @@ async fn the_run_counts_the_paths_it_used() {
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
     // The default: in place.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 1);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 0);
 
@@ -1081,8 +273,8 @@ async fn the_run_counts_the_paths_it_used() {
     write_game_file(&dir2, &fx2.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Temp;
-    let (summary, code) = repair::run(ctx).await.expect("temp run");
-    assert_eq!(code, 0);
+    let (summary, code) = run(ctx).await.expect("temp run");
+    assert_eq!(code, RunExit::Success);
     assert_eq!(summary.files_inplace.load(Ordering::Relaxed), 0);
     assert_eq!(summary.files_temp.load(Ordering::Relaxed), 1);
     // The temp path wrote the whole file; the in-place path wrote one chunk.
@@ -1109,11 +301,11 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     write_game_file(&dir, &fx2.files[0].rel, &half_bad);
 
     // Unflagged: nothing.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    assert_eq!(code, RunExit::Success);
+    let line = summary_record(&summary, code.code()).text();
     for k in ["repair_mode", "inplace", "temp", "kept_bytes", "ram_bytes"] {
         assert!(
             !line.contains(k),
@@ -1128,9 +320,9 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
     ctx.repair_mode = RepairMode::Auto;
     ctx.repair_mode_explicit = true;
-    let (summary, code) = repair::run(ctx).await.expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let (summary, code) = run(ctx).await.expect("run");
+    assert_eq!(code, RunExit::Success);
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("repair_mode=auto"), "{line}");
     assert!(line.contains("inplace=1"), "{line}");
     assert!(line.contains("temp=0"), "{line}");
@@ -1145,61 +337,10 @@ async fn the_repair_mode_group_is_emitted_only_when_the_flag_was_passed() {
     write_game_file(&dir3, &fx2.files[0].rel, &half_bad);
     let mut ctx = ctx_for(dir3.to_path_buf(), &mock, 1);
     ctx.limits.ram_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
+    let (summary, code) = run(ctx).await.expect("run");
+    assert_eq!(code, RunExit::Success);
+    let line = summary_record(&summary, code.code()).text();
     assert!(line.contains("ram_bytes=0"), "{line}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_plan_line_says_what_the_repair_would_cost_in_disk() {
-    // The `PLAN` line carries the two disk figures: the bytes a repair
-    // writes into the install, and the free space it needs beyond it.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("plan_disk");
-    let fx2 = build_fixture();
-    // bar.dat is 48 bytes in the manifest and 32 on disk: it has to grow by
-    // 16. foo.dat is not there: it has to be created, so it needs all 128.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data[..32]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
-    // The run reported the plan, not a repair.
-    assert!(summary.files_repaired.load(Ordering::Relaxed) == 0);
-
-    // The plan line itself is on stdout; the driver only keeps the summary
-    // here, so the figures are checked through the plan-out document.
-    let out = dir.join("plan.json");
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    ctx.plan_out = Some(out.clone());
-    repair::run(ctx).await.expect("print-plan runs");
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let foo = v["repair"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["rel"] == "game/foo.dat")
-        .expect("foo.dat is planned");
-    assert_eq!(foo["mode"], "inplace");
-    assert_eq!(
-        foo["extra_bytes"], 128,
-        "a file that is not there has to be created"
-    );
-    let bar = v["repair"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["rel"] == "game/bar.dat")
-        .expect("bar.dat is planned");
-    assert_eq!(bar["mode"], "inplace");
-    assert_eq!(bar["extra_bytes"], 16, "bar.dat has to grow by 16");
 
     mock.stop();
 }
@@ -1215,44 +356,93 @@ async fn a_second_run_against_the_same_install_is_refused() {
     let fx2 = build_fixture();
     write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
     // Hold the lock, as a first run would.
-    let _lock = girpr::repair::lock::Lock::acquire(&dir).expect("the lock is taken");
+    let _lock = Lock::acquire(&dir).expect("the lock is taken");
+    let lock_path = _lock.path().to_path_buf();
 
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("the second run is refused");
-    assert_eq!(err.exit_code, 1, "a live lock is a usage refusal");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "a live lock is a usage refusal"
+    );
     let msg = format!("{:#}", err.source);
     assert!(
-        msg.contains("girpr.lock"),
+        msg.contains(lock_path.to_string_lossy().as_ref()),
         "the refusal names the file: {msg}"
     );
-    assert!(msg.contains(&std::process::id().to_string()), "{msg}");
+    // An exclusive OS lock can hide the body from another process; either
+    // the pid or that fact is named.
+    assert!(
+        msg.contains(&std::process::id().to_string()) || msg.contains("body is unreadable"),
+        "{msg}"
+    );
 
-    // A **scoped** run does not take the lock — the lock's path is outside
-    // the scope, so it does not exist to the run — and is not refused.
+    // A **scoped** run takes the same lock even though the lock's path is
+    // outside its include list; otherwise it could write beside the first run.
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
     ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (_, code) = repair::run(ctx).await.expect("a scoped run is not refused");
-    assert_eq!(code, 0);
+    let err = run(ctx).await.expect_err("a scoped run is refused too");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "a live lock is a usage refusal"
+    );
 
-    // The lock is released when the run that holds it ends.
+    // The lock is released when the run that holds it ends; the file is left
+    // for the next run to reuse rather than unlinked under a racing opener.
     drop(_lock);
-    assert!(!dir.join("girpr.lock").exists());
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+    assert!(lock_path.exists(), "the unlocked file stays in place");
+    let (summary, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect("the next run is not refused");
-    assert_eq!(code, 0);
-    // The scoped run above already repaired foo.dat, and bar.dat was intact.
-    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
+    assert_eq!(code, RunExit::Success);
+    // foo.dat was missing and is repaired; bar.dat was intact.
+    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 1);
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn the_cleanup_never_eats_the_lock() {
-    // The lock lives at the game dir's root and is not in the manifest. The
-    // files-cleanup must not eat it: a run that holds it would lose its
-    // exclusion.
+async fn read_only_runs_do_not_take_the_lock() {
+    // A held lock only refuses a run that mutates the install. Verification,
+    // a dry run and a printed plan stay lock-free.
+    let fx = build_fixture();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("lock_readonly");
+    let fx2 = build_fixture();
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
+    let _lock = Lock::acquire(&dir).expect("the lock is taken");
+
+    let mut check = ctx_for(dir.to_path_buf(), &mock, 1);
+    check.check_only = true;
+    let (_, code) = run(check).await.expect("check-only ignores the lock");
+    assert_eq!(code, RunExit::Success);
+
+    let mut dry = ctx_for(dir.to_path_buf(), &mock, 1);
+    dry.dry_run = true;
+    let (_, code) = run(dry).await.expect("dry-run ignores the lock");
+    assert_eq!(code, RunExit::Success);
+
+    let mut plan = ctx_for(dir.to_path_buf(), &mock, 1);
+    plan.print_plan = true;
+    let (_, code) = run(plan).await.expect("print-plan ignores the lock");
+    assert_eq!(code, RunExit::Success);
+
+    drop(_lock);
+    remove_run_lock(&dir);
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_legacy_in_install_lock_is_left_alone() {
+    // Older runs put the lock at the game dir's root. This run locks outside
+    // the install and must not delete the old file behind the user's back;
+    // the files-cleanup keeps it for the same reason.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("lock_purge");
@@ -1261,354 +451,19 @@ async fn the_cleanup_never_eats_the_lock() {
         write_game_file(&dir, &f.rel, &f.data);
     }
     write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
-    // A lock left behind by a run that was killed: old enough to be taken
-    // over, so this run takes it — and the cleanup must not eat it.
-    let lock = dir.join("girpr.lock");
-    std::fs::write(&lock, b"pid=1\n").unwrap();
-    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
-    std::fs::File::options()
-        .write(true)
-        .open(&lock)
-        .unwrap()
-        .set_times(std::fs::FileTimes::new().set_modified(old))
-        .unwrap();
+    let legacy = dir.join("girpr.lock");
+    std::fs::write(&legacy, b"pid=1\n").unwrap();
 
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.purge_after = true;
-    let (_, code) = repair::run(ctx).await.expect("the purge runs");
-    assert_eq!(code, 0);
-    // The run took the stale lock over and released it again on the way
-    // out, so the file is gone — but the *cleanup* did not eat it: the run
-    // that holds the lock is the only thing that removes it, and it did so
-    // at the very end. The classification that keeps it is pinned by
-    // `purge::tests::the_lock_is_kept_by_the_cleanup`.
-    assert!(
-        !dir.join("girpr.lock").exists(),
-        "the run released its own lock"
-    );
+    let (_, code) = run(ctx).await.expect("the purge runs");
+    assert_eq!(code, RunExit::Success);
+    // The old lock is an ordinary unexpected file that the cleanup keeps;
+    // only the new temp-dir lock is the run's own.
+    assert!(legacy.exists(), "the legacy in-install lock is left alone");
     assert!(
         read_game_file(&dir, "stray/orphan.dat").is_none(),
         "the orphan is still purged"
-    );
-
-    mock.stop();
-}
-
-/// The value of one `key=value` field on a `key=value` line.
-fn field(line: &str, name: &str) -> u64 {
-    line.split_whitespace()
-        .find_map(|kv| kv.strip_prefix(&format!("{name}=")))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("no {name} in {line}"))
-}
-
-#[tokio::test]
-async fn the_scanned_estimate_is_the_bytes_the_repair_really_downloads() {
-    // The assertion that did not exist before `--scan`: the plan's estimate
-    // and the repair's actual cost are the same number.
-    //
-    // Without the scan the estimate counts every chunk the reuse map cannot
-    // supply — which is what the *temp* path downloads, but not what the
-    // in-place path does: it keeps the chunk that is already correct where
-    // it belongs. So the unscanned estimate is an upper bound, and the
-    // scanned one is the figure.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scan_exact");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    // 1. the plan, unscanned: the upper bound.
-    let mut args = base.clone();
-    args.extend_from_slice(&["--print-plan"]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let unscanned = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("PLAN "))
-            .expect("the PLAN line"),
-        "est_download_bytes",
-    );
-
-    // 2. the plan, scanned: the exact figure, and the per-file document must
-    //    carry the same split the total was folded from.
-    let out = dir.join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--print-plan", "--plan-out", &out_arg]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let plan_line = stdout
-        .lines()
-        .find(|l| l.starts_with("PLAN "))
-        .expect("the PLAN line");
-    let scanned = field(plan_line, "est_download_bytes");
-    assert!(
-        scanned < unscanned,
-        "the scan knows the intact chunk is kept: {scanned} vs {unscanned}"
-    );
-    assert!(
-        plan_line.contains(&format!("scan_bytes={}", 128 + 48)),
-        "the scan reports the bytes it read: {plan_line}"
-    );
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
-    assert_eq!(
-        doc_sum, scanned,
-        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
-    );
-
-    // 3. the repair: what it really downloaded.
-    let mut args = base.clone();
-    args.push("--scan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let summary = stdout
-        .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .expect("the SUMMARY line");
-    let downloaded = field(summary, "download_bytes");
-    assert_eq!(
-        scanned, downloaded,
-        "the scanned estimate is the real cost: {scanned} vs {downloaded}"
-    );
-    assert!(summary.contains("damaged_chunks=1"), "{summary}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
-    // Both of foo's chunks
-    // have a candidate entry (config.ini names the installed build), but
-    // chunk 1 is corrupt on disk: the temp path re-hashes the candidate
-    // slice, refuses it and fetches `chunk_foo1`. The scanned plan must price
-    // that chunk, and the price must be what the repair really spends.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scan_exact_temp");
-    let fx2 = build_fixture();
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
-    )
-    .unwrap();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    // 1. the plan: the scan's own figure for the mode that was asked for.
-    let out = dir.join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let mut args = base.clone();
-    args.extend_from_slice(&[
-        "--scan",
-        "--repair-mode",
-        "temp",
-        "--print-plan",
-        "--plan-out",
-        &out_arg,
-    ]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let plan_line = stdout
-        .lines()
-        .find(|l| l.starts_with("PLAN "))
-        .expect("the PLAN line");
-    let scanned = field(plan_line, "est_download_bytes");
-    assert!(
-        scanned > 0,
-        "the corrupt candidate cannot be reused, so the chunk is a download: {plan_line}"
-    );
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
-    assert_eq!(
-        doc_sum, scanned,
-        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
-    );
-
-    // 2. the repair in the same mode: the same figure.
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--repair-mode", "temp"]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let summary = stdout
-        .lines()
-        .find(|l| l.starts_with("SUMMARY "))
-        .expect("the SUMMARY line");
-    let downloaded = field(summary, "download_bytes");
-    assert_eq!(
-        scanned, downloaded,
-        "the scanned temp estimate is the real cost: {scanned} vs {downloaded}"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
-        "the corrupt candidate is fetched, the intact one is reused"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_interrupted_in_place_run_resumes_by_verification() {
-    // The state an interrupted in-place run leaves behind: some chunks
-    // correct where they belong, some not. There is no artefact to resume
-    // from — the next run finds the correct chunks in its scan and rewrites
-    // the rest, and a `_tmp` is nowhere in sight.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("inplace_resume");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    // Half of the second chunk is wrong: the file is neither the old one
-    // nor the new one, which is exactly what an interrupted write leaves.
-    let mut interrupted = fx2.files[0].data.clone();
-    for b in interrupted.iter_mut().skip(96) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &interrupted);
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("in-place run");
-    assert_eq!(code, 0);
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data
-    );
-    assert_eq!(
-        summary.write.settled(),
-        64,
-        "the chunk that was already right was not rewritten"
-    );
-    assert!(!dir.join("game").join("foo.dat_tmp").exists());
-    assert!(
-        !dir.join("game").join("foo.dat_tmp").exists(),
-        "no artefact: resume is by verification"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn explicit_audio_selection_overwrites_scan_file() {
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let fx2 = build_fixture();
-
-    // Explicit ja-jp -> scan file written with the display name.
-    let dir = temp_dir("audio_explicit");
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.audio = HashSet::from(["ja-jp".to_string()]);
-    ctx.audio_explicit = true;
-    let (_, code) = repair::run(ctx).await.expect("audio run");
-    assert_eq!(code, 0);
-    let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
-    assert!(scan.contains("Japanese"), "{scan}");
-
-    // Explicit game-only (empty set, `--audio none` equivalent) -> empty file.
-    let dir2 = temp_dir("audio_none");
-    for f in &fx2.files {
-        write_game_file(&dir2, &f.rel, &f.data);
-    }
-    let mut ctx2 = ctx_for(dir2.to_path_buf(), &mock, 2);
-    ctx2.audio = HashSet::new();
-    ctx2.audio_explicit = true;
-    let (_, code2) = repair::run(ctx2).await.expect("audio-none run");
-    assert_eq!(code2, 0);
-    let scan2 = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
-    assert!(scan2.is_empty(), "{scan2}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_unreadable_audio_scan_file_fails_before_any_repair() {
-    // R-2: a scan file that exists but cannot be read is local state, not the
-    // documented "absent → en-us" case. Treating it as absence silently
-    // replaces the selection; this run refuses (exit 1) instead.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("audio_unreadable");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    // A directory where the scan file belongs is readable-as-a-path but not
-    // readable-as-a-file on every supported host.
-    std::fs::create_dir_all(dir.join("Audio").join("scan.txt")).unwrap();
-
-    let ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    let err = repair::run(ctx)
-        .await
-        .expect_err("an unreadable scan file must not default to en-us");
-    assert_eq!(err.exit_code, 1, "local config read failure: {err:#}");
-    assert!(
-        format!("{err:#}").contains("scan.txt"),
-        "the report names the file: {err:#}"
-    );
-    assert!(
-        mock.chunk_hits().is_empty(),
-        "nothing may be planned or downloaded on a failed selection"
     );
 
     mock.stop();
@@ -1634,10 +489,14 @@ async fn non_chunk_download_mode_is_a_usage_error() {
         for f in &fx2.files {
             write_game_file(&dir, &f.rel, &f.data);
         }
-        let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
+        let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
             .await
             .expect_err("non-chunk mode must fail");
-        assert_eq!(err.exit_code, 1, "mode {mode:?} must be a usage error");
+        assert_eq!(
+            err.exit_code,
+            RunExit::Usage,
+            "mode {mode:?} must be a usage error"
+        );
         assert!(
             err.source.to_string().contains("not chunk mode"),
             "mode {mode:?}: {err}"
@@ -1653,193 +512,271 @@ async fn non_chunk_download_mode_is_a_usage_error() {
 }
 
 #[tokio::test]
-async fn a_run_that_stops_before_acting_creates_no_game_dir() {
-    // `create_dir_all` lives in the execution phase, not at the top of
-    // the run, so a run that never reaches it (here: the non-chunk
-    // download-mode refusal) leaves nothing on disk.
+async fn non_chunk_mode_wins_over_a_failed_branch_call() {
+    // The first wave issues both calls. A branch endpoint that fails must not
+    // turn the authoritative mode refusal into a metadata error: the mode
+    // check runs after the config answer but before the branch result is used,
+    // and a still-pending branch call is dropped, so exit 1 wins over exit 2.
+    //
+    // Holding the config answer until the branch answer is chosen pins the
+    // branch as issued and failed, rather than leaving that to which request
+    // the selector happens to poll first.
     let fx = build_fixture();
     let mock = MockServer::start(
         fx,
         MockOpts {
             download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+            branch_failure: BranchFailure::NonJson,
+            config_after_branches: true,
             ..Default::default()
         },
     )
     .await;
-    let parent = temp_dir("nodir");
-    let missing = parent.join("never-created");
-    let err = repair::run(ctx_for(missing.clone(), &mock, 1))
+    let dir = temp_dir("dlmode_branch");
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
         .await
         .expect_err("non-chunk mode must fail");
-    assert_eq!(err.exit_code, 1);
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "the mode refusal wins: {err:#}"
+    );
     assert!(
-        !missing.exists(),
-        "a run that refuses must not create game_dir"
+        err.source.to_string().contains("not chunk mode"),
+        "the refusal is the mode one: {err:#}"
+    );
+    assert!(
+        mock.first_target_with("getGameBranches").is_some(),
+        "the branch call was issued and then discarded"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a refused mode"
     );
 
     mock.stop();
 }
 
-// ---------------------------------------------------------------------------
-// path scope
-// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn non_chunk_mode_wins_over_a_terminal_branch_failure() {
+    // A branch answer with a terminal retcode is final on the first attempt,
+    // and the config's mode is still the authoritative answer: the run is a
+    // usage refusal, not a metadata failure. Holding the config until the
+    // branch has answered pins the branch as issued and already failed.
+    let fx = build_fixture();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            download_mode: Some("DOWNLOAD_MODE_FILE".to_string()),
+            branch_failure: BranchFailure::terminal(-1001),
+            config_after_branches: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("dlmode_branch_terminal");
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("non-chunk mode must fail");
+    assert_eq!(
+        err.exit_code,
+        RunExit::Usage,
+        "the mode refusal wins over a terminal branch failure: {err:#}"
+    );
+    assert!(
+        err.source.to_string().contains("not chunk mode"),
+        "the refusal is the mode one, not the branch one: {err:#}"
+    );
+    assert!(
+        !err.source.to_string().contains("getGameBranches"),
+        "the terminal branch error must not replace the mode refusal: {err:#}"
+    );
+    assert!(
+        mock.first_target_with("getGameBranches").is_some(),
+        "the branch call was issued and then discarded"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a refused mode"
+    );
+
+    mock.stop();
+}
 
 #[tokio::test]
-async fn include_repairs_exactly_the_selected_file() {
-    // The `gircap` use case: one run per fixture path, with the
-    // exact chunk download set as the assertion.
+async fn a_non_json_branch_body_is_metadata_under_chunk_mode() {
+    // Under the mode this tool implements, a branch answer whose body is not
+    // JSON fails to parse on the first attempt, and that fatal parse error is a
+    // metadata failure that names the branch call. The run must stop before any
+    // build or write.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_include");
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            branch_failure: BranchFailure::NonJson,
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_fatal_metadata");
     let fx2 = build_fixture();
-    let foo = &fx2.files[0];
-    let bar = &fx2.files[1];
-    // bar is corrupt and must NOT be repaired; foo is missing and must be.
-    write_game_file(&dir, &bar.rel, b"not the game data");
+    for f in &fx2.files {
+        write_game_file(&dir, &f.rel, &f.data);
+    }
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped run");
-    assert_eq!(code, 0);
-    assert_eq!(summary.files_total, 1, "only the selected file is planned");
-    assert!(summary.flags.scoped, "scoped run reports scoped=1");
-
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a fatal branch failure must stop the run");
     assert_eq!(
-        read_game_file(&dir, &foo.rel).unwrap(),
-        foo.data,
-        "selected file repaired"
+        err.exit_code,
+        RunExit::Metadata,
+        "a refused branch call is metadata: {err:#}"
     );
+    let text = format!("{:#}", err);
+    assert!(text.contains("getGameBranches"), "{text}");
+    assert!(
+        !text.contains("getGameConfigs"),
+        "the config call succeeded, so it must not be blamed: {text}"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a failed branch call"
+    );
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
     assert_eq!(
-        read_game_file(&dir, &bar.rel).unwrap(),
-        b"not the game data",
-        "an out-of-scope file is not even verified"
+        branch_requests, 1,
+        "a non-JSON failure is fatal, so the call is not retried"
     );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo0".to_string(), "chunk_foo1".to_string()],
-        "only the selected file's chunks are fetched"
-    );
-    // docs/04 §2.1: a scoped run must not advance config.ini.
     assert!(
         !dir.join("config.ini").exists(),
-        "a scoped run does not bump config.ini"
+        "the version must not be bumped for a failed metadata phase"
     );
-    // ...and says so in the machine contract, so a test can assert the fact
-    // instead of reading the file.
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("scoped=1"), "{line}");
-    assert!(line.contains("config_bumped=0"), "{line}");
-    assert!(line.contains("plan_files=1"), "{line}");
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn a_purge_under_a_scope_leaves_every_other_fixture_file_alone() {
-    // The case the whole thing exists for: narrowing the plan must NOT narrow
-    // the cleanup's keep set, or `--purge-*` eats the fixture.
+async fn a_retryable_branch_failure_is_retried_then_succeeds() {
+    // A JSON wrapper with a non-terminal retcode is transient: the client
+    // retries it and takes the next (successful) answer, so the run proceeds.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_purge");
-    let fx2 = build_fixture();
-    // Everything intact, plus neighbours that are not in the manifest and would
-    // normally be eaten by a full-install purge.
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "log/output.txt", &[0x5Au8; 100]);
-    write_game_file(&dir, "ScreenShot/shot.png", &[0x5Bu8; 100]);
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            branch_failure: BranchFailure::Retryable { calls: 2 },
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_retry_succeeds");
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("scoped purge run");
-    assert_eq!(code, 0);
+    let (_, code) = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect("the third branch answer succeeds");
+    assert_eq!(code, RunExit::Success);
 
-    // Everything survives: the fixture files, and the orphans that were out of
-    // scope even though they are not in the manifest.
-    for f in &fx2.files {
-        assert_eq!(
-            read_game_file(&dir, &f.rel).unwrap(),
-            f.data,
-            "{} must survive",
-            f.rel
-        );
-    }
-    for rel in ["log/output.txt", "ScreenShot/shot.png", "old/legacy.dll"] {
-        assert!(read_game_file(&dir, rel).is_some(), "{rel} must survive");
-    }
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
     assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "a purge under a scope has nothing to delete here"
+        branch_requests, 3,
+        "two retryable answers and then the successful one"
     );
-    assert!(dir.join("log").is_dir(), "emptied dirs must not be swept");
+    assert!(
+        mock.first_target_with("getBuild").is_some(),
+        "the run must proceed once the branch answers"
+    );
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn a_scoped_purge_keeps_an_empty_out_of_scope_directory() {
+async fn a_retryable_branch_failure_exhausts_the_retry_budget() {
+    // The same retryable body on every attempt: the client gives up after its
+    // five attempts and the run reports a metadata failure naming the branch
+    // call, before any build request or write.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_purge_empty_dir");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    std::fs::create_dir_all(dir.join("mods/nested")).unwrap();
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            branch_failure: BranchFailure::Retryable { calls: 5 },
+            ..Default::default()
+        },
+    )
+    .await;
+    let dir = temp_dir("branch_retry_exhausted");
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    ctx.purge_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("scoped purge-only run");
-    assert_eq!(code, 0);
+    let err = run(ctx_for(dir.to_path_buf(), &mock, 1))
+        .await
+        .expect_err("a persistently retryable branch answer must stop the run");
+    assert_eq!(err.exit_code, RunExit::Metadata);
+    let text = format!("{:#}", err);
+    assert!(text.contains("getGameBranches"), "{text}");
+    assert!(text.contains("after 5 attempts"), "{text}");
+    assert!(text.contains("-1"), "the last retcode is reported: {text}");
 
-    assert!(
-        dir.join("mods/nested").is_dir(),
-        "an out-of-scope empty dir must survive the sweep"
-    );
-    assert!(dir.join("mods").is_dir());
+    let branch_requests = mock
+        .request_targets()
+        .iter()
+        .filter(|target| target.contains("getGameBranches"))
+        .count();
     assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "nothing in scope was deleted"
+        branch_requests, 5,
+        "the client's whole retry budget is used"
+    );
+    assert!(
+        mock.first_target_with("getBuild").is_none(),
+        "no build call may follow a failed branch call"
+    );
+    assert!(
+        !dir.join("config.ini").exists(),
+        "the version must not be bumped for a failed metadata phase"
     );
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn an_unscoped_purge_still_deletes_orphans() {
-    // The control: with no scope, the cleanup is unchanged.
+async fn a_retried_config_call_after_the_branch_still_answers() {
+    // The branch answer is a fact that stays true, not a one-shot permit. A
+    // config call that is retried after the branch was already served must
+    // answer instead of waiting for another branch response that never comes.
     let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_unscoped_purge");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "log/output.txt", &[0x5Au8; 100]);
+    let mock = MockServer::start(
+        fx,
+        MockOpts {
+            config_after_branches: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let client = reqwest::Client::new();
+    let branch = client
+        .get(format!("{}/getGameBranches", mock.hyp_base))
+        .send()
+        .await
+        .expect("branch answers");
+    assert!(branch.status().is_success(), "{:?}", branch.status());
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("plain purge run");
-    assert_eq!(code, 0);
-    assert!(
-        read_game_file(&dir, "log/output.txt").is_none(),
-        "orphan deleted"
-    );
-    assert!(!summary.flags.scoped);
-    assert!(!summary.flags.limited);
-    // And the conditional keys are absent, so an unflagged `SUMMARY` carries
-    // only the always-on ones.
-    let line = girpr::report::summary_record(&summary, code).text();
-    for k in ["scoped", "config_bumped", "plan_files", "limited"] {
+    let config_url = format!("{}/getGameConfigs", mock.hyp_base);
+    for attempt in 0..2 {
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.get(&config_url).send(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("config attempt {attempt} hung"));
+        let response = response.expect("config answers");
         assert!(
-            !line.contains(k),
-            "{k} must be absent when unflagged: {line}"
+            response.status().is_success(),
+            "attempt {attempt}: {:?}",
+            response.status()
         );
     }
 
@@ -1847,2777 +784,280 @@ async fn an_unscoped_purge_still_deletes_orphans() {
 }
 
 #[tokio::test]
-async fn an_include_matching_nothing_is_a_usage_error() {
-    // Guard 1: a scope that selected nothing is a typo, and exit
-    // 1 — not exit 5, which means "well-formed but the answer was too big".
+async fn a_run_without_a_local_version_issues_only_the_latest_build() {
+    // A fresh install has no `config.ini`, so there is no local tag to ask
+    // for: the second build call is not merely allowed to fail, it must not
+    // be issued at all.
     let fx = build_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_empty");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
+    let dir = temp_dir("no_local_build");
     let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&["game/nope.dat"], &[]);
-    let err = repair::run(ctx)
-        .await
-        .expect_err("an empty scope must fail");
-    assert_eq!(err.exit_code, 1);
-    let msg = format!("{:#}", err.source);
-    assert!(msg.contains("game/nope.dat"), "must name the glob: {msg}");
-    assert!(msg.contains("plan_files=0"), "{msg}");
-
-    // `--exclude` matching nothing is unremarkable and must still succeed.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&[], &["no/such/thing"]);
-    let (_, code) = repair::run(ctx)
-        .await
-        .expect("a non-matching exclude is fine");
-    assert_eq!(code, 0);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn explicit_audio_under_a_scope_is_refused_unless_the_scan_file_is_in_scope() {
-    // Guard 2: two flags asking for opposite scopes is a
-    // contradiction, not a merge. The scan file's rel path comes from
-    // getGameConfigs and is never hardcoded.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let fx2 = build_fixture();
-
-    let dir = temp_dir("audio_scope_refuse");
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    ctx.audio = HashSet::from(["ja-jp".to_string()]);
-    ctx.audio_explicit = true;
-    let err = repair::run(ctx).await.expect_err("--audio under a scope");
-    assert_eq!(err.exit_code, 1);
-    let msg = format!("{:#}", err.source);
-    assert!(
-        msg.contains("Audio/scan.txt"),
-        "must name the scan file: {msg}"
-    );
-    assert!(
-        !dir.join("Audio").exists(),
-        "the refused run must not write the scan file"
-    );
-
-    // The escape hatch: include the scan file's own rel path.
-    let dir2 = temp_dir("audio_scope_allowed");
-    for f in &fx2.files {
-        write_game_file(&dir2, &f.rel, &f.data);
-    }
-    let mut ctx2 = ctx_for(dir2.to_path_buf(), &mock, 1);
-    ctx2.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
-    ctx2.audio = HashSet::from(["ja-jp".to_string()]);
-    ctx2.audio_explicit = true;
-    let (_, code) = repair::run(ctx2)
-        .await
-        .expect("scan file in scope is allowed");
-    assert_eq!(code, 0);
-    let scan = std::fs::read_to_string(dir2.join("Audio").join("scan.txt")).unwrap();
-    assert!(scan.contains("Japanese"), "{scan}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn deprecated_files_outside_the_scope_are_not_deleted() {
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            deprecated_files: vec!["old/legacy.dll".to_string(), "other/stale.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("scope_deprecated");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-    write_game_file(&dir, "other/stale.dll", &[0x7Fu8; 70]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&["old/*", "game/foo.dat", "game/bar.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
-    assert_eq!(code, 0);
-    assert!(
-        read_game_file(&dir, "old/legacy.dll").is_none(),
-        "in-scope deprecated file deleted"
-    );
-    assert_eq!(
-        read_game_file(&dir, "other/stale.dll").unwrap(),
-        &[0x7Fu8; 70],
-        "out-of-scope deprecated file kept"
-    );
-    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 50);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_dot_spelled_deprecated_path_hidden_by_the_scope_is_not_deleted() {
-    // The server may spell the same file `./old/legacy.dll`. The scope
-    // matches the *cleaned* rel (`old/legacy.dll`), so an exclude that hides
-    // the plain spelling must hide this one too: the gate cleans before it
-    // compares.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            deprecated_files: vec!["./old/legacy.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("dot_scope_deprecated");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&[], &["old/*"]);
-    let (summary, code) = repair::run(ctx).await.expect("scoped deprecated run");
-    assert_eq!(code, 0);
-    assert_eq!(
-        read_game_file(&dir, "old/legacy.dll").unwrap(),
-        &[0x7Eu8; 50],
-        "the excluded `./`-spelled path must survive"
-    );
-    assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "nothing was deleted"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_dot_spelled_explicit_audio_scan_file_in_scope_is_accepted() {
-    // The scan file's own rel path is the documented escape hatch for
-    // `--audio` under a scope. A `./` spelling is the same file, so the
-    // include that names the plain path must admit it; the gate cleans before
-    // it compares, so a `./` spelling cannot refuse an in-scope run.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "./Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("audio_scope_dot_allowed");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&["Audio/scan.txt", "game/foo.dat"], &[]);
-    ctx.audio = HashSet::from(["ja-jp".to_string()]);
-    ctx.audio_explicit = true;
-    let (_, code) = repair::run(ctx)
-        .await
-        .expect("the cleaned scan rel is in scope");
-    assert_eq!(code, 0);
-    let scan = std::fs::read_to_string(dir.join("Audio").join("scan.txt")).unwrap();
-    assert!(scan.contains("Japanese"), "{scan}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_dot_spelled_audio_cache_hidden_by_the_scope_is_not_moved() {
-    // `./Audio/cache` and `Audio/cache` are one directory: the move sink
-    // cleans before it gates. An exclude that hides the cache must leave it
-    // where it is.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            cache_dir: "./Audio/cache".to_string(),
-            res_dir: "./Audio/res".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("dot_scope_audio_move");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&[], &["Audio/*"]);
-    let (_, code) = repair::run(ctx).await.expect("scoped audio run");
-    assert_eq!(code, 0);
-    assert_eq!(
-        read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
-        &[0x3Bu8; 128],
-        "the excluded cache file must not move"
-    );
-    assert!(
-        read_game_file(&dir, "Audio/res/track_1.pcm").is_none(),
-        "nothing may appear in the res dir"
-    );
-
-    mock.stop();
-}
-
-// ---------------------------------------------------------------------------
-// resource ceilings
-// ---------------------------------------------------------------------------
-
-/// A game dir that does not exist yet, pointed at by `parent/missing`.
-fn absent_game_dir(parent: &std::path::Path) -> std::path::PathBuf {
-    parent.join("not-created-yet")
-}
-
-#[tokio::test]
-async fn max_files_refuses_before_touching_anything() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let parent = temp_dir("max_files");
-    let dir = parent.join("game");
-    let fx2 = build_fixture();
-    // bar corrupt (would be repaired), foo missing (would be downloaded).
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.files = Some(1); // the plan is 2 files
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5, "a tripped ceiling is exit 5");
-    assert!(summary.flags.limited);
-    assert_eq!(summary.files_total, 2, "plan_files is still reported");
-    assert_eq!(
-        summary.files_repaired.load(Ordering::Relaxed),
-        0,
-        "nothing was repaired"
-    );
-    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 0);
-    assert!(
-        mock.chunk_hits().is_empty(),
-        "not one chunk may be fetched on a refusal"
-    );
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
-        b"not the game data",
-        "the damaged file is untouched"
-    );
-    assert!(read_game_file(&dir, &fx2.files[0].rel).is_none());
-
-    // The same refusal against a game dir that does not exist yet: not even
-    // the directory may be created, because the ceiling asserts before
-    // `create_dir_all`.
-    let missing = absent_game_dir(&parent);
-    let mut ctx = ctx_for(missing.clone(), &mock, 1);
-    ctx.limits.files = Some(1);
-    let (_, code) = repair::run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5);
-    assert!(!missing.exists(), "a refusal must not even create game_dir");
-
-    mock.stop();
-}
-
-/// Run the binary with an explicit `--audio` and one extra refusing flag.
-///
-/// R-7's reproducer: the scan write lives in the plan half, so a run that then
-/// refuses may already have rewritten the user's audio selection.
-async fn run_audio_refusal(
-    mock: &MockServer,
-    game: &std::path::Path,
-    extra: &[&str],
-) -> (i32, String, String) {
-    let game_arg = game.to_string_lossy().into_owned();
-    let mut args: Vec<&str> = vec![
-        "--game-path",
-        &game_arg,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--audio",
-        "en-us",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-    args.extend_from_slice(extra);
-    run_binary(&args, &[]).await
-}
-
-/// A refusal must touch nothing: no scan file and no `game_dir`, however the
-/// run is refused.
-#[tokio::test]
-async fn explicit_audio_is_not_written_before_a_refusal() {
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let parent = temp_dir("audio_refusal");
-
-    // (a) a tripped ceiling: exit `5`.
-    let game = absent_game_dir(&parent);
-    let (code, _, stderr) = run_audio_refusal(&mock, &game, &["--max-files", "0"]).await;
-    assert_eq!(code, 5, "a ceiling is exit 5: {stderr}");
-    assert!(
-        !game.exists(),
-        "a refused run must not create game_dir (nor the scan file inside it): {stderr}"
-    );
-    assert!(
-        !game.join("Audio").exists(),
-        "a refused run must not create the scan dir: {stderr}"
-    );
-
-    // (b) an unwritable `--plan-out`: exit `3`, still before the first mutation.
-    let game = absent_game_dir(&parent);
-    let out_dir = parent.join("plan-out-is-a-directory");
-    std::fs::create_dir_all(&out_dir).unwrap();
-    let out_arg = out_dir.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_audio_refusal(&mock, &game, &["--plan-out", &out_arg]).await;
-    assert_eq!(code, 3, "an unwritable --plan-out is exit 3: {stderr}");
-    assert!(
-        !game.exists(),
-        "the plan-out failure must not create game_dir: {stderr}"
-    );
-
-    // (c) an `--include` that selected nothing: exit `1`.
-    let game = absent_game_dir(&parent);
-    let (code, _, stderr) =
-        run_audio_refusal(&mock, &game, &["--include", "does/not/exist/*"]).await;
-    assert_eq!(code, 1, "an empty --include is exit 1: {stderr}");
-    assert!(
-        !game.exists(),
-        "the include refusal must not create game_dir: {stderr}"
-    );
-
-    assert!(
-        mock.chunk_hits().is_empty(),
-        "no refusal may reach the download phase"
-    );
-    mock.stop();
-}
-
-/// A non-empty scan file whose lines are all unrecognized is not the
-/// game-only selection: with `--purge-after` that selection drops the real
-/// language's manifests from the keep set and deletes its packages. It must
-/// be a config error instead.
-#[tokio::test]
-async fn an_all_unrecognized_audio_scan_file_is_refused_not_read_as_game_only() {
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("audio_unknown");
-    std::fs::create_dir_all(dir.join("Audio")).unwrap();
-    let scan = dir.join("Audio").join("scan.txt");
-    // A renamed display name: non-blank, understood by nothing.
-    std::fs::write(&scan, "English (US)\n").unwrap();
-
-    let game_arg = dir.to_string_lossy().into_owned();
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "1",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(
-        code, 1,
-        "an all-unrecognized scan file is a config error, not game-only:\n{stdout}\n{stderr}"
-    );
-    assert!(
-        stderr.contains("scan.txt"),
-        "the error names the file: {stderr}"
-    );
-    assert!(
-        stderr.contains("English (US)"),
-        "the error quotes the offending line: {stderr}"
-    );
-    assert!(
-        mock.chunk_hits().is_empty(),
-        "nothing may be planned or downloaded from a malformed selection"
-    );
-    assert_eq!(
-        std::fs::read_to_string(&scan).unwrap(),
-        "English (US)\n",
-        "the scan file is reported, never rewritten"
-    );
-    mock.stop();
-}
-
-#[tokio::test]
-async fn max_files_at_the_boundary_does_not_refuse() {
-    // "> N", not ">= N": a run that exactly fits must be allowed through.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_files_edge");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.limits.files = Some(2); // == plan.files.len()
-    let (summary, code) = repair::run(ctx).await.expect("the boundary must pass");
-    assert_eq!(code, 0);
-    assert!(
-        summary.flags.limited,
-        "the flag was passed, so it is reported"
-    );
-    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn max_files_zero_is_a_ceiling_not_a_usage_error() {
-    // `0` is a perfectly meaningful ceiling: it is not an error on an empty
-    // plan and it is on a 3000-file one. Only an unparseable value is
-    // exit `1`, and that is clap's job.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_files_zero");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.limits.files = Some(0);
-    let (_, code) = repair::run(ctx).await.expect("0 is a ceiling");
-    assert_eq!(code, 5, "0 files allowed, 2 planned -> refuse");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn max_files_is_checked_after_the_scope_filter() {
-    // The pairing that gives the flag its purpose: `--include` selects,
-    // `--max-files` verifies the selection.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_files_scoped");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    ctx.limits.files = Some(1); // the *filtered* plan is 1 file
-    let (summary, code) = repair::run(ctx).await.expect("scoped boundary passes");
-    assert_eq!(code, 0);
-    assert_eq!(summary.files_total, 1);
-    assert!(summary.flags.scoped && summary.flags.limited);
-
-    // Same scope, ceiling of 0: now it refuses.
-    let dir2 = temp_dir("max_files_scoped_refuse");
-    let mut ctx2 = ctx_for(dir2.to_path_buf(), &mock, 1);
-    ctx2.path_scope = scope(&["game/foo.dat"], &[]);
-    ctx2.limits.files = Some(0);
-    let (_, code2) = repair::run(ctx2).await.expect("refusal is not an error");
-    assert_eq!(code2, 5);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn max_delete_bytes_refuses_and_deletes_nothing() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_delete");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    // Two orphans totalling 170 bytes, which no purge flag would touch yet.
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
-    write_game_file(&dir, "other/stale.dat", &[0x5Bu8; 70]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_after = true;
-    ctx.limits.delete_bytes = Some(100);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
-    assert_eq!(code, 5, "170 > 100");
-    assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "a refused purge deletes nothing"
-    );
-    assert!(read_game_file(&dir, "stray/orphan.dat").is_some(), "kept");
-    assert!(read_game_file(&dir, "other/stale.dat").is_some(), "kept");
-
-    // Exactly at the ceiling: the purge runs.
-    let mut ctx2 = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx2.purge_after = true;
-    ctx2.limits.delete_bytes = Some(170);
-    let (summary2, code2) = repair::run(ctx2).await.expect("the boundary passes");
-    assert_eq!(code2, 0);
-    assert_eq!(summary2.deleted_extra_bytes.load(Ordering::Relaxed), 170);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_out_of_scope_path_never_counts_toward_the_delete_ceiling() {
-    // The scope and the ceiling are complementary, not redundant: the glob
-    // narrows what is *counted*, the ceiling bounds what is *done*.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_delete_scoped");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    // A 1 GB orphan that is deliberately out of scope.
-    write_game_file(&dir, "huge/orphan.dat", &[0x5Au8; 4096]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.path_scope = scope(&["game/foo.dat", "game/bar.dat"], &[]);
-    ctx.purge_after = true;
-    ctx.limits.delete_bytes = Some(1); // would be blown by the orphan
-    let (_, code) = repair::run(ctx).await.expect("scoped run");
-    assert_eq!(code, 0, "the out-of-scope orphan is not a candidate at all");
-    assert!(read_game_file(&dir, "huge/orphan.dat").is_some(), "kept");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_tripped_ceiling_still_emits_a_summary_tail() {
-    // A refusal is *returned*, not raised, so every exit path ends with
-    // one uniform SUMMARY.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_files_summary");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.limits.files = Some(1);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert_eq!(
-        line,
-        "SUMMARY total=2 skipped=0 repaired=0 failed=0 download_bytes=0 deleted_extra_bytes=0 \
-         exit=5 limited=1 plan_files=2"
-    );
-    assert!(!line.contains("scoped"), "no scope was passed: {line}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn check_only_trips_a_ceiling_with_exit_five_not_four() {
-    // A ceiling narrows *what is verified*; `4` (damage found) must not be
-    // masked by narrowing — but a ceiling is a different fact entirely.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_files_check");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, b"damaged");
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.check_only = true;
-    ctx.limits.files = Some(1);
-    let (summary, code) = repair::run(ctx).await.expect("refusal is not an error");
-    assert_eq!(code, 5, "the ceiling is asked before the verification");
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "nothing verified"
-    );
-
-    // Without the ceiling, the same run reports damage.
-    let mut ctx2 = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx2.check_only = true;
-    let (_, code2) = repair::run(ctx2).await.expect("check runs");
-    assert_eq!(code2, 4);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn max_download_bytes_refuses_on_the_estimate_and_passes_at_the_boundary() {
-    // With no local build the reuse map is empty, so the estimate is every
-    // chunk's compressed size — the same quantity the runner would download.
-    let fx = build_fixture();
-    let est = fx.chunk_store.values().map(|b| b.len() as u64).sum::<u64>();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_dl_refuse");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    // One byte under the estimate → refuse before fetching anything.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.limits.download_bytes = Some(est - 1);
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5);
-    assert_eq!(
-        summary.flags.plan_download_bytes,
-        Some(est),
-        "SUMMARY reports the estimate it refused on"
-    );
-    assert!(mock.chunk_hits().is_empty(), "nothing may be fetched");
-    assert!(!dir.join("game").join("foo.dat_tmp").exists(), "no _tmp");
-
-    // Exactly the estimate → the boundary passes and the whole thing runs.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.limits.download_bytes = Some(est);
-    let (summary, code) = repair::run(ctx).await.expect("the boundary passes");
-    assert_eq!(code, 0);
-    assert_eq!(summary.download.settled(), est);
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(
-        line.contains(&format!("plan_download_bytes={est}")),
-        "{line}"
-    );
-
-    mock.stop();
-}
-
-/// A transport that delivers part of a chunk and then drops still spent those
-/// bytes, the retry's body is charged on top, and crossing the ceiling is a
-/// hard stop — even though the retry repaired the file.
-///
-/// A flaky transport could deliver half of every chunk for free and the live
-/// figure (`download_bytes_spent`) would under-report what the run actually
-/// caused. The partial body is charged, and the settled figure — the bytes of
-/// the file that was promoted — stays the manifest's size. The ceiling is
-/// exactly that size, so the partial body is the bytes that cross it: the run
-/// must exit `5` with the stop named, not `0`.
-#[tokio::test]
-async fn a_partial_body_then_a_drop_is_charged_to_the_download_meter() {
-    // Incompressible bytes: `compressed_size` is close to the payload's length,
-    // so truncating at half of it is a meaningful partial body.
-    let mut x = 0x1234_5678u32;
-    let payload: Vec<u8> = (0..16 * 1024)
-        .map(|_| {
-            x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-            (x >> 24) as u8
-        })
-        .collect();
-    let spec = FixtureSpec::new(vec![FileSpec::new(
-        "game/big.dat",
-        vec![ChunkSpec::new("c0", payload, 0)],
-    )]);
-    let fx = build_fixture_spec(&spec);
-    let compressed = fx.chunk_store["c0"].len() as u64;
-    let cut = (compressed / 2) as usize;
-    assert!(cut > 0, "the fixture's body is big enough to cut");
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            truncate_first_chunks: 1,
-            truncate_bytes: cut,
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("partial_body_meter");
-
-    // The estimate is every chunk's `compressed_size`, and the ceiling is
-    // exactly that: the plan passes, and the retry's traffic is what crosses it.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.download_bytes = Some(compressed);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-    assert_eq!(
-        code, 5,
-        "a settle that crosses the ceiling is the runtime hard stop"
-    );
-    assert_eq!(
-        summary.flags.stopped,
-        Some("--max-download-bytes"),
-        "the stop names the flag that bound"
-    );
-    assert_eq!(
-        summary.download.settled(),
-        compressed,
-        "the promoted file's bytes are the settled figure"
-    );
-    assert_eq!(
-        summary.download.live(),
-        compressed + cut as u64,
-        "the partial body crossed the wire, so the live figure has it too"
-    );
-    assert!(
-        summary.download.live() > compressed,
-        "the ceiling was passed by the bytes that really arrived"
-    );
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["c0".to_string(), "c0".to_string()],
-        "the dropped body was retried once"
-    );
-    assert_eq!(
-        read_game_file(&dir, "game/big.dat").expect("the file was repaired"),
-        spec.new[0].chunks[0].payload,
-        "and the retry's body is what landed"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_broken_reuse_path_still_trips_the_runtime_stop() {
-    // The case that justifies B2 having *two* mechanisms. `config.ini` already
-    // at the latest tag → the local build loads → the reuse map covers both of
-    // foo's chunks → the pre-flight estimate is 0 and the run is allowed
-    // through. Then foo's bytes are corrupted in *both* halves, so every local
-    // slice fails its MD5 and every chunk falls back to a download. The
-    // estimate was wrong; the runtime reservation is what stops the run.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_dl_runtime");
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=9.9.9-test\n",
-    )
-    .unwrap();
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data); // bar intact
-    let mut all_bad = fx2.files[0].data.clone();
-    for b in all_bad.iter_mut() {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &all_bad);
-
-    let limit = 1u64; // any positive value: the estimate is 0, so it passes
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.download_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-    assert_eq!(code, 5, "the runtime hard stop is also exit 5");
-    assert_eq!(
-        summary.flags.stopped,
-        Some("--max-download-bytes"),
-        "the stop must be distinguishable from a refusal"
-    );
-    assert_eq!(
-        summary.flags.plan_download_bytes,
-        Some(0),
-        "the estimate really was zero — that is the point"
-    );
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "not a failure"
-    );
-    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
-    assert_eq!(
-        summary.files_skipped.load(Ordering::Relaxed),
-        1,
-        "bar was intact"
-    );
-    assert!(
-        summary.download.settled() <= limit,
-        "the ceiling must not be overshot"
-    );
-    // The stopped file keeps its `_tmp`, and the next run resumes it.
-    assert_ne!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "a stopped file is not promoted"
-    );
-
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("stopped=--max-download-bytes"), "{line}");
-    assert!(line.contains("limited=1"), "{line}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_summary_growth_keys_appear_only_when_their_flag_is_active() {
-    // Every scope/ceiling key is emitted only when its flag is active, so
-    // an unflagged run stays byte-identical to one that passes no flags.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("summary_absent");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 2))
-        .await
-        .expect("plain run");
-    assert_eq!(code, 0);
-    for format in [OutputFormat::Text, OutputFormat::Json] {
-        let line = girpr::report::summary_record(&summary, code).render(format);
-        for k in [
-            "limited",
-            "scoped",
-            "config_bumped",
-            "plan_files",
-            "plan_download_bytes",
-            "download_bytes_spent",
-            "write_bytes",
-            "write_bytes_spent",
-            "stopped",
-            // A fresh install has no `config.ini`, so no local version is known
-            // and the lookup is never attempted — the key must not appear.
-            "local_manifest",
-        ] {
-            assert!(
-                !line.contains(k),
-                "{k} must be absent when unflagged: {line}"
-            );
-        }
-    }
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_reports_the_plan_and_writes_nothing() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("print_plan");
-    let fx2 = build_fixture();
-    // foo missing (would be repaired), bar corrupt, plus an orphan that a purge
-    // would delete and a `*_tmp` that would be swept.
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 4096]);
-    write_game_file(&dir, "game/bar.dat_tmp", &[0x6Bu8; 16]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
     ctx.print_plan = true;
-    ctx.purge_after = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
-
-    // The counters report a plan, not a repair.
-    let (skipped, repaired, failed, dl, deleted) = load_counters(&summary);
-    assert_eq!((skipped, repaired, failed, dl, deleted), (0, 0, 0, 0, 0));
-    assert!(mock.chunk_hits().is_empty(), "no chunk may be fetched");
-
-    // Read-only by construction: nothing on disk moved.
-    assert!(
-        read_game_file(&dir, "stray/orphan.dat").is_some(),
-        "orphan kept"
-    );
-    assert!(dir.join("game").join("bar.dat_tmp").exists(), "_tmp kept");
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
-        b"not the game data",
-        "the damaged file was not touched"
-    );
-    assert!(
-        read_game_file(&dir, &fx2.files[0].rel).is_none(),
-        "foo not created"
-    );
-    assert!(!dir.join("config.ini").exists(), "config.ini not bumped");
-
-    // The numbers a real run would act on are visible without doing it: the
-    // plan carried both files and the purge plan carried the orphan.
-    assert_eq!(summary.files_total, 2);
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_with_audio_writes_no_scan_file_and_names_the_language() {
-    // `--print-plan` is documented as read-only by construction: it never
-    // writes the scan file or creates `game_dir`.
-    //
-    // The report must still name the requested language: resolving the audio
-    // set is not the write.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(!game.exists(), "--print-plan must not create the game dir");
-    assert!(
-        !game.join("Audio").exists(),
-        "--print-plan must not create the scan dir"
-    );
-    assert!(
-        stdout.contains("audio_langs=en-us"),
-        "the report must name the requested language:\n{stdout}"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_audio_outside_the_scope_is_not_refused_and_writes_nothing() {
-    // An explicit `--audio` under an active scope whose scan file is *not*
-    // included is a
-    // usage error (exit `1`) — unless the run is `--print-plan`, which never
-    // writes the scan file at all. `--print-plan` therefore has to exempt the
-    // scope gate while still deferring the write: exit `0`, a `PLAN`, and no
-    // scan file on disk prove both halves.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio_scope_out");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-            "--include",
-            "game/foo.dat",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan must still be reported:\n{stdout}"
-    );
-    assert!(
-        !game.join("Audio").join("scan.txt").exists(),
-        "the scan file is out of scope and print-plan must not write it"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_audio_inside_the_scope_still_defers_the_write() {
-    // The companion case: include the scan file's own rel, so the scope gate
-    // would admit the write. `--print-plan` alone still defers it — exit `0`,
-    // the `PLAN` is printed, and the file the scope admitted is not created.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("print_plan_audio_scope_in");
-    let game = dir.join("install");
-    let game_arg = game.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game_arg,
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "1",
-            "--print-plan",
-            "--audio",
-            "en-us",
-            "--include",
-            "Audio/scan.txt",
-            "--include",
-            "game/foo.dat",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan must still be reported:\n{stdout}"
-    );
-    assert!(
-        !game.join("Audio").join("scan.txt").exists(),
-        "print-plan must defer the scan write even when the scope admits it"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_hostile_manifest_saturates_the_plan_figures_instead_of_panicking() {
-    // `size` and `compressed_size` are server manifest data. Three files at
-    // `i64::MAX` and one file with three chunks at `i64::MAX` each overflow the
-    // plan's aggregates: the plan phase must saturate, not panic a debug build
-    // (or wrap a smaller figure onto the PLAN line in a release build).
-    let big =
-        |rel: &str, id: &str| FileSpec::new(rel, vec![ChunkSpec::new(id, vec![0x41u8; 16], 0)]);
-    let fx = build_fixture_spec(
-        &FixtureSpec::new(vec![
-            big("game/big1.dat", "chunk_b1"),
-            big("game/big2.dat", "chunk_b2"),
-            big("game/big3.dat", "chunk_b3"),
-            FileSpec::new(
-                "game/chunky.dat",
-                vec![
-                    ChunkSpec::new("chunk_h0", vec![0x10u8; 16], 0),
-                    ChunkSpec::new("chunk_h1", vec![0x11u8; 16], 16),
-                    ChunkSpec::new("chunk_h2", vec![0x12u8; 16], 32),
-                ],
-            ),
-        ])
-        .with_lies(Lies {
-            huge_file_size: vec![
-                "game/big1.dat".into(),
-                "game/big2.dat".into(),
-                "game/big3.dat".into(),
-            ],
-            huge_compressed_size: vec!["chunk_h0".into(), "chunk_h1".into(), "chunk_h2".into()],
-            ..Default::default()
-        }),
-    );
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("plan_overflow");
-    let out = dir.join("plan.json");
-    let game = dir.to_string_lossy().into_owned();
-    let out_arg = out.to_string_lossy().into_owned();
-    let args = [
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-        "--print-plan",
-        "--plan-out",
-        &out_arg,
-    ];
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
-    let plan_line = stdout
-        .lines()
-        .find(|l| l.starts_with("PLAN "))
-        .expect("the PLAN line");
-    assert_eq!(field(plan_line, "est_write_bytes"), u64::MAX, "{plan_line}");
-    assert_eq!(
-        field(plan_line, "est_download_bytes"),
-        u64::MAX,
-        "{plan_line}"
-    );
-
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let entry = v["repair"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["rel"] == "game/chunky.dat")
-        .expect("chunky.dat is planned");
-    assert_eq!(entry["est_download_bytes"], u64::MAX);
-    let sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
-        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
-    });
-    assert_eq!(sum, u64::MAX, "the document agrees with the PLAN line");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_out_writes_the_per_file_json_document() {
-    let fx = build_fixture();
-    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("plan_out");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 2048]);
-
-    let out = dir.join("reports").join("plan.json");
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    ctx.purge_after = true;
-    ctx.plan_out = Some(out.clone());
-    let (_, code) = repair::run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
-
-    let written = std::fs::read_to_string(&out).expect("--plan-out file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    assert_eq!(v["repair"].as_array().unwrap().len(), 2);
-    let rels: Vec<&str> = v["repair"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["rel"].as_str().unwrap())
-        .collect();
-    assert_eq!(rels, vec!["game/bar.dat", "game/foo.dat"], "plan order");
-    // The per-file estimates must add up to the plan's own figure — the same
-    // number `SUMMARY plan_download_bytes` and the ceiling are checked against.
-    let sum: u64 = v["repair"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["est_download_bytes"].as_u64().unwrap())
-        .sum();
-    assert_eq!(sum, est, "document must agree with the plan total");
-    assert_eq!(v["purge"][0]["rel"], "stray/orphan.dat");
-    assert_eq!(v["purge"][0]["size"], 2048);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn plan_out_without_print_plan_writes_the_document_of_the_run() {
-    // The help says the flag works on its own: the document is written before
-    // execution, through the real binary.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("plan_out_alone");
-    let fx2 = build_fixture();
-    // bar is intact and foo is missing, so this is a run that does work.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-
-    let out = dir.join("reports").join("plan.json");
-    let out_arg = out.to_string_lossy().into_owned();
-    let game = dir.to_string_lossy().into_owned();
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--io-threads",
-            "1",
-            "--plan-out",
-            &out_arg,
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(stdout.contains("SUMMARY "), "the run executed: {stdout}");
-    let written = std::fs::read_to_string(&out)
-        .expect("--plan-out without --print-plan must create the documented file");
-    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    assert_eq!(
-        v["repair"].as_array().unwrap().len(),
-        2,
-        "the document describes the run: {written}"
-    );
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the run still did the work it planned"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_ceiling_trips_print_plan_like_any_other_mode() {
-    let fx = build_fixture();
-    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("print_plan_limit");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    ctx.limits.download_bytes = Some(est - 1);
-    let (summary, code) = repair::run(ctx).await.expect("a refusal is not an error");
-    assert_eq!(code, 5, "the assert comes before the plan report");
-    assert_eq!(summary.flags.plan_download_bytes, Some(est));
-}
-
-#[tokio::test]
-async fn print_plan_does_not_imply_check_only() {
-    // "what would you do", not "what is wrong": a damaged file is reported as
-    // planned work, never as damage, and exit is `0` either way.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("print_plan_not_check");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"corrupt");
-    write_game_file(&dir, &fx2.files[1].rel, b"corrupt");
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan runs");
-    assert_eq!(code, 0);
-    assert_eq!(summary.files_failed.load(Ordering::Relaxed), 0);
-    assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 0);
-
-    // The same tree under --check-only does report damage.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.check_only = true;
-    let (_, code) = repair::run(ctx).await.expect("check runs");
-    assert_eq!(code, 4);
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn print_plan_with_dry_run_is_coherent() {
-    // The plan prints first; then `--dry-run` does what it was asked for —
-    // walk the selected files and hash them, writing nothing.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("print_plan_dry");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.print_plan = true;
-    ctx.dry_run = true;
-    let (summary, code) = repair::run(ctx).await.expect("print-plan + dry-run runs");
-    assert_eq!(code, 0);
-    assert_eq!(summary.files_total, 2);
-    assert!(!dir.join("config.ini").exists(), "dry-run writes nothing");
-
-    mock.stop();
-}
-
-// ---------------------------------------------------------------------------
-// --max-write-bytes, --fail-fast, --purge-only
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn max_write_bytes_stops_mid_flight_and_leaves_the_work_for_the_next_run() {
-    // The only ceiling that cannot be a pre-flight refusal: reuse success is
-    // decided per chunk at runtime, against bytes that may not be there. This
-    // run downloads both files, so almost every byte written into the install
-    // is a write the plan's estimate never counted.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("max_write");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    let limit = 1u64;
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.write_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-    assert_eq!(code, 5);
-    assert_eq!(
-        summary.flags.stopped,
-        Some("--max-write-bytes"),
-        "which ceiling bound"
-    );
-    assert!(summary.flags.limited, "the ceiling was requested");
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "not a failure"
-    );
-    assert!(
-        summary.write.live() <= limit,
-        "the ceiling must not be overshot: the live counter is the one the \
-         ceiling bounds"
-    );
-    assert!(
-        summary.write.settled() <= limit,
-        "and the reported figure is no larger than it"
-    );
-
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("stopped=--max-write-bytes"), "{line}");
-    assert!(line.contains("write_bytes="), "{line}");
-
-    // The file is left half-written: the next run re-verifies it and finishes
-    // it, so an aborted run is a smaller run, not a corrupt one.
-    assert!(!dir.join("config.ini").exists(), "post-phase is skipped");
-    assert_ne!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the file was not finished"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn write_bytes_is_counted_only_when_the_flag_is_active() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("write_bytes_absent");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    // Same run, no flag: the repair completes and the key is absent.
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("run");
-    assert_eq!(code, 0);
-    assert!(summary.write.settled() > 0, "it was counted");
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(!line.contains("write_bytes"), "{line}");
-    // `download_bytes` is the network; `write_bytes` is the disk. They are not the
-    // same quantity and never were — that is the whole reason `--max-write-bytes`
-    // exists. Here every byte written came from a download, so write_bytes is
-    // simply the *uncompressed* size, which is strictly larger.
-    assert!(
-        summary.write.settled() > summary.download.settled(),
-        "write_bytes counts uncompressed payload, download_bytes the compressed blob"
-    );
-
-    // A generous ceiling is reported but not tripped.
-    let dir2 = temp_dir("write_bytes_generous");
-    let fx3 = build_fixture();
-    write_game_file(&dir2, &fx3.files[0].rel, b"not the game data");
-    write_game_file(&dir2, &fx3.files[1].rel, b"not the game data");
-    let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
-    ctx.limits.write_bytes = Some(1 << 20);
-    let (summary, code) = repair::run(ctx).await.expect("run");
-    assert_eq!(code, 0);
-    assert!(summary.flags.stopped.is_none());
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("write_bytes="), "{line}");
-    assert!(!line.contains("stopped="), "{line}");
-
-    mock.stop();
-}
-
-/// The two byte families each have two numbers: the **settled** one (what the
-/// repair achieved — a function of the install) and the **spent** one (what it
-/// cost — a function of the transport). The spent figure is emitted only when
-/// the ceiling that bounds it is active, so an unflagged run's line stays
-/// byte-identical to one that passes no flags at all.
-#[tokio::test]
-async fn the_spent_figures_appear_only_when_their_ceiling_is_active() {
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-
-    // No ceiling: neither figure is on the line.
-    let dir = temp_dir("spent_absent");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, b"not the game data");
-    }
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(!line.contains("_spent"), "{line}");
-
-    // With the ceilings on, both figures are: what the repair achieved and
-    // what it spent. In a clean run they are the same number — nothing was
-    // wasted — and the spent one is the larger whenever the transport made
-    // the run work for it.
-    let dir2 = temp_dir("spent_present");
-    let fx3 = build_fixture();
-    for f in &fx3.files {
-        write_game_file(&dir2, &f.rel, b"not the game data");
-    }
-    let mut ctx = ctx_for(dir2.to_path_buf(), &mock, 1);
-    ctx.limits.download_bytes = Some(1 << 20);
-    ctx.limits.write_bytes = Some(1 << 20);
-    let (summary, code) = repair::run(ctx).await.expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("download_bytes_spent="), "{line}");
-    assert!(line.contains("write_bytes_spent="), "{line}");
-    // The settled download figure is the base key, and in a clean run it is
-    // the same number as the spent one: nothing was wasted.
-    let spent = field(&line, "download_bytes_spent");
-    let settled = field(&line, "download_bytes");
-    assert_eq!(spent, settled, "a clean run wastes nothing: {line}");
-    assert!(spent > 0, "the run really downloaded something: {line}");
-    // The disk is a different quantity from the network, and the two families
-    // are not the same number: the payload is uncompressed.
-    assert!(
-        field(&line, "write_bytes_spent") > field(&line, "download_bytes_spent"),
-        "the disk cost is the uncompressed payload: {line}"
-    );
-
-    mock.stop();
-}
-
-/// The two **verified** ceilings bound the *settled* figures — the bytes the
-/// repair was allowed to spend — and they are the limits the live/settled
-/// split makes possible: a run against a flaky origin can be bounded by what
-/// it *achieved* rather than by what it *cost*.
-#[tokio::test]
-async fn the_verified_write_ceiling_stops_the_run_on_the_settled_figure() {
-    // The fixture: `bar.dat` is one 48-byte chunk, `foo.dat` is two 64-byte
-    // ones, and the plan is sorted — so `bar.dat` is repaired first and
-    // settles 48 bytes, which is under the line. `foo.dat`'s first chunk
-    // settles 64 more and crosses it.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("verified_write");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, b"not the game data");
-    }
-
-    let limit = 64u64;
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.verified_write_bytes = Some(limit);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-    assert_eq!(
-        code, 5,
-        "the verified ceiling is a hard stop, like every other"
-    );
-    assert_eq!(
-        summary.flags.stopped,
-        Some("--max-verified-write-bytes"),
-        "the stop must name the flag that bound"
-    );
-    assert!(summary.flags.limited, "the ceiling was requested");
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "not a failure: the ceiling stopped the run, the file did not fail"
-    );
-    assert_eq!(
-        summary.files_repaired.load(Ordering::Relaxed),
-        1,
-        "the file that crossed the line was repaired; the next one was not started"
-    );
-    // The settled figure is counted even when it crosses the line: the write
-    // happened, and a figure that stopped counting would be a lie.
-    assert!(
-        summary.write.settled() > limit,
-        "the write that crossed the line is counted: {} > {limit}",
-        summary.write.settled()
-    );
-    // And the live figure — the one `--max-write-bytes` bounds — is the same
-    // number here: nothing was wasted, the run simply ran out of budget.
-    assert_eq!(summary.write.live(), summary.write.settled());
-
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(
-        line.contains("stopped=--max-verified-write-bytes"),
-        "{line}"
-    );
-    assert!(line.contains("write_bytes="), "{line}");
-    assert!(line.contains("limited=1"), "{line}");
-    // The **spent** figure is the live one, and the live ceiling was not
-    // asked for: the key is not on the line. The settled one is, because this
-    // ceiling is about it.
-    assert!(
-        !line.contains("write_bytes_spent="),
-        "the spent figure belongs to the live ceiling: {line}"
-    );
-
-    mock.stop();
-}
-
-/// The live and the verified ceilings **compose**, and the order matters: the
-/// live one is checked before the resource is consumed, the verified one when
-/// the resource is settled, and a run with both stops on whichever is reached
-/// first — with `stopped=` saying which.
-#[tokio::test]
-async fn the_live_and_the_verified_ceiling_stop_on_whichever_is_reached_first() {
-    // The fixture: `bar.dat` is one 48-byte chunk and `foo.dat` is two
-    // 64-byte ones, and the plan is sorted — so `bar.dat` is repaired first
-    // (48 bytes) and `foo.dat`'s first chunk settles 64 more.
-    async fn run(live: u64, verified: u64, tag: &str) -> &'static str {
-        let fx = build_fixture();
-        let mock = MockServer::start(fx, MockOpts::default()).await;
-        let dir = temp_dir(tag);
-        let fx2 = build_fixture();
-        for f in &fx2.files {
-            write_game_file(&dir, &f.rel, b"not the game data");
-        }
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-        ctx.limits.write_bytes = Some(live);
-        ctx.limits.verified_write_bytes = Some(verified);
-        let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-        assert_eq!(code, 5, "a ceiling bound");
-        mock.stop();
-        summary
-            .flags
-            .stopped
-            .expect("the ceiling that bound is named")
-    }
-
-    // The live ceiling is the tighter one: it is reached first, and it is the
-    // one that is named.
-    assert_eq!(
-        run(1, 1 << 20, "both_live_first").await,
-        "--max-write-bytes"
-    );
-    // The verified one is tighter: the settled figure crosses its line while
-    // the live figure is still under its own.
-    assert_eq!(
-        run(1 << 20, 64, "both_verified_first").await,
-        "--max-verified-write-bytes"
-    );
-}
-
-/// The download half of the same idea: a ceiling on the bytes of the files
-/// that were **actually repaired**, rather than on the traffic.
-#[tokio::test]
-async fn the_verified_download_ceiling_stops_the_run_on_the_settled_figure() {
-    let fx = build_fixture();
-    // The settled download figure is counted in **compressed** bytes, and it
-    // is settled per file — a file is the atom it is counted in.
-    let bar_bytes = fx.chunk_store.get("chunk_bar0").unwrap().len() as u64;
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("verified_download");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, b"not the game data");
-    }
-
-    // A ceiling of zero: the first file that is repaired crosses it, and the
-    // second one is never started.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.limits.verified_download_bytes = Some(0);
-    let (summary, code) = repair::run(ctx).await.expect("a stop is not an error");
-    assert_eq!(
-        code, 5,
-        "the verified ceiling is a hard stop, like every other"
-    );
-    assert_eq!(
-        summary.flags.stopped,
-        Some("--max-verified-download-bytes"),
-        "the stop must name the flag that bound"
-    );
-    assert!(summary.flags.limited, "the ceiling was requested");
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        0,
-        "not a failure: the ceiling stopped the run, the file did not fail"
-    );
-    assert_eq!(
-        summary.files_repaired.load(Ordering::Relaxed),
-        1,
-        "the first file was repaired; the next one was not started"
-    );
-    assert!(
-        summary.download.settled() >= bar_bytes,
-        "the file that crossed the line is counted: {} >= {bar_bytes}",
-        summary.download.settled()
-    );
-    // The live figure is the traffic: the same number here, because nothing
-    // was fetched twice.
-    assert_eq!(summary.download.live(), summary.download.settled());
-
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(
-        line.contains("stopped=--max-verified-download-bytes"),
-        "{line}"
-    );
-    assert!(line.contains("limited=1"), "{line}");
-
-    mock.stop();
-}
-
-/// `kept_bytes` is the complement of the file's **settled** writes — the bytes
-/// the repair did not have to touch — and the settled writes are the *file's*,
-/// accumulated across its attempts.
-///
-/// The bug this pins: `kept_bytes` was the file's size minus the **last
-/// attempt's** writes. An attempt that wrote a chunk and then failed on the
-/// next one left those bytes in the install, and the next attempt — which
-/// re-verifies the file, finds that chunk correct and does not write it again
-/// — was credited with them as "kept". The run then claimed it had touched
-/// fewer bytes than it had.
-#[tokio::test]
-async fn kept_bytes_is_the_complement_of_the_files_settled_writes() {
-    // The fixture: `foo.dat` is two 64-byte chunks, and the mock serves the
-    // second one corrupt on its first request. The first attempt writes the
-    // first chunk — which passes its gate — and then fails on the second; the
-    // second attempt finds the first chunk correct, writes the second, and
-    // the file verifies.
-    async fn run(opts: MockOpts, tag: &str) -> u64 {
-        let fx = build_fixture();
-        let mock = MockServer::start(fx, opts).await;
-        let dir = temp_dir(tag);
-        let fx2 = build_fixture();
-        write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-        ctx.repair_mode = RepairMode::Inplace;
-        // The key is emitted only when the flag was passed.
-        ctx.repair_mode_explicit = true;
-        ctx.path_scope = scope(&["game/foo.dat"], &[]);
-        let (summary, code) = repair::run(ctx).await.expect("run");
-        assert_eq!(code, 0, "the file was repaired on the second attempt");
-        assert_eq!(
-            read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-            fx2.files[0].data,
-            "the file is correct"
-        );
-        mock.stop();
-        summary.kept_bytes.load(Ordering::Relaxed)
-    }
-
-    let clean = run(MockOpts::default(), "kept_clean").await;
-    let retried = run(
-        MockOpts {
-            corrupt_chunks: vec!["chunk_foo1".to_string()],
-            ..Default::default()
-        },
-        "kept_retry",
-    )
-    .await;
-
-    assert_eq!(clean, 0, "nothing was kept: the whole file was written");
-    assert_eq!(
-        retried, clean,
-        "a retry must not look like a file that was left alone: the first \
-         attempt's chunk is in the install, so it was not kept"
-    );
-}
-
-#[tokio::test]
-async fn fail_fast_reaches_its_summary_in_seconds_against_a_500_origin() {
-    // Without `--fail-fast` each failing file costs `MAX_ATTEMPTS` × (the
-    // 5× retry with 1-5 s sleeps inside `stream_chunk_to` + 1-4 s of
-    // file-level backoff) ≈ **125 s of pure sleeping**, measured — and that is
-    // before `HypClient::new_with_bases` is even given a connect timeout. With
-    // it, a file gets one attempt and the abort spares every file behind it.
-    //
-    // There is deliberately no "without the flag" control here: proving that
-    // case means paying those 125 s, and it is already covered structurally —
-    // `repairs_missing_and_corrupt_files_end_to_end` shows every planned file is
-    // attempted when nothing is flagged.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            fail_chunks: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("fail_fast");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.fail_fast = true;
-    let started = std::time::Instant::now();
-    let (summary, code) = repair::run(ctx)
-        .await
-        .expect("a failed repair is not an Err");
-    let elapsed = started.elapsed();
-    assert_eq!(code, 3, "a file failed, so the post-phase is skipped");
-    assert_eq!(
-        summary.files_failed.load(Ordering::Relaxed),
-        1,
-        "honest count"
-    );
-    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
-    assert!(!dir.join("config.ini").exists());
-    // Every chunk request 500s, so nothing was ever delivered. A reservation
-    // that the failed fetch never gave back would still be sitting in the
-    // total — and with no ceiling set the sentinel is u64::MAX, so the leak is
-    // not gated on `--max-download-bytes`.
-    assert_eq!(
-        summary.download.settled(),
-        0,
-        "a fetch that delivered nothing must count nothing"
-    );
-    // The second file was never even asked for. The plan is sorted, so with
-    // `jobs=1` `bar.dat` runs first, exhausts its retries and trips the abort;
-    // `foo.dat` then drops out at its task entry without opening a connection.
-    let hits = mock.chunk_hits();
-    assert!(
-        hits.iter().all(|id| id == "chunk_bar0"),
-        "foo.dat must not be attempted after the abort: {hits:?}"
-    );
-    assert!(
-        elapsed < std::time::Duration::from_secs(30),
-        "fail-fast must reach its SUMMARY in seconds, took {elapsed:?}"
-    );
-    assert!(
-        summary.files_skipped.load(Ordering::Relaxed)
-            + summary.files_repaired.load(Ordering::Relaxed)
-            + summary.files_failed.load(Ordering::Relaxed)
-            < summary.files_total,
-        "the run was truncated before the plan was finished"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_404_is_asked_once_where_a_500_is_asked_five_times() {
-    // The two halves of the retry policy, from the origin's side of the wire.
-    //
-    // A 404 cannot be fixed by asking again: the chunk id came out of this
-    // build's own `getBuild` body, and the live blob routes answer a missing
-    // object with 404 + `application/xml`, never 200-with-a-code. So the
-    // request is made once and the run moves on. A 500 is a server that may
-    // come back, so it is retried on the linear backoff.
-    //
-    // `fail_fast` gives a file one attempt, so the two branches are directly
-    // comparable: the 500 spends the chunk fetch's 5 retries on that one attempt,
-    // and the 404 spends none of them.
-    for (name, opts, want_hits, max_elapsed) in [
-        (
-            "404",
-            MockOpts {
-                not_found_chunks: true,
-                ..Default::default()
-            },
-            1usize,
-            std::time::Duration::from_secs(5),
-        ),
-        (
-            "500",
-            MockOpts {
-                fail_chunks: true,
-                ..Default::default()
-            },
-            ATTEMPTS,
-            std::time::Duration::from_secs(30),
-        ),
-    ] {
-        let fx = build_fixture();
-        let mock = MockServer::start(fx, opts).await;
-        let dir = temp_dir(&format!("retry_{name}"));
-        let fx2 = build_fixture();
-        write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-        // `--include` so exactly one file is in scope, and `fail_fast` so a
-        // single file's retry budget is the whole number being measured rather
-        // than being multiplied by the rest of the plan.
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-        ctx.fail_fast = true;
-        ctx.path_scope = scope(&[&fx2.files[0].rel], &[]);
-        let started = std::time::Instant::now();
-        let (summary, code) = repair::run(ctx).await.expect("not an Err");
-        let elapsed = started.elapsed();
-
-        assert_eq!(
-            code, 3,
-            "{name}: a file failed, so the post-phase is skipped"
-        );
-        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1, "{name}");
-        let hits = mock.chunk_hits();
-        assert_eq!(
-            hits.len(),
-            want_hits,
-            "{name}: the origin was asked {want_hits} time(s): {hits:?}"
-        );
-        assert!(hits.iter().all(|id| id == "chunk_foo0"), "{name}: {hits:?}");
-        assert!(
-            elapsed < max_elapsed,
-            "{name} must not spend the budget in sleep, took {elapsed:?}"
-        );
-        mock.stop();
-    }
-}
-
-/// How many times `stream_chunk_to` asks a *retryable* origin — the linear
-/// 1+2+3+4 s backoff, five attempts. Kept next to the test that depends on it so
-/// the two cannot drift.
-const ATTEMPTS: usize = 5;
-
-#[tokio::test]
-async fn a_404_manifest_fails_the_run_without_waiting_for_it() {
-    // The manifest half. Without a terminal status this costs ~15 s of backoff
-    // to learn that the build's manifests are gone, and then exits `2` anyway —
-    // metadata, not a repaired file, so the exit code is unchanged.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            not_found_manifests: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("manifest_404");
-    let started = std::time::Instant::now();
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect_err("no manifests means the run cannot plan");
-    let elapsed = started.elapsed();
-    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
-    assert!(
-        elapsed < std::time::Duration::from_secs(5),
-        "a 404 must not be retried at all, took {elapsed:?}"
-    );
-    // Asked once. The manifest route has no per-chunk log, so this reads the
-    // server's own request log.
-    let manifests = mock
+    let (summary, code) = run(ctx).await.expect("print-plan runs");
+    assert_eq!(code, RunExit::Success);
+    let builds = mock
         .request_targets()
         .into_iter()
-        .filter(|t| t.contains("/manifests/"))
-        .count();
-    assert_eq!(manifests, 1, "the manifest was asked once");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn purge_only_deletes_a_scoped_path_that_is_absent_from_the_new_manifest() {
-    // The `removed` capture class: a path on disk that the new manifest no
-    // longer contains. It is in no repair plan by construction, so the only
-    // work that can touch it is the cleanup — which is exactly what
-    // `--purge-only --include <that path>` asks for.
-    //
-    // An empty repair plan with non-empty purge candidates is a legitimate
-    // request, not a typo: the guard that says "an `--include` matching
-    // nothing is a typo" tests the *repair* plan's emptiness, and
-    // `--purge-only` has no repair plan to be empty.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_only_removed");
-    let fx2 = build_fixture();
-    // Intact manifest files, so the only candidate is the removed one.
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.purge_only = true;
-    ctx.path_scope = scope(&["game/removed.dat"], &[]);
-    let (summary, code) = repair::run(ctx)
-        .await
-        .expect("a cleanup run must not be refused");
+        .filter(|t| t.contains("getBuild"))
+        .collect::<Vec<_>>();
     assert_eq!(
-        code, 0,
-        "an empty repair plan is not a typo when there is cleanup to do"
+        builds.len(),
+        1,
+        "only the latest build is fetched: {builds:?}"
     );
     assert!(
-        read_game_file(&dir, "game/removed.dat").is_none(),
-        "the removed path is what --purge-only exists to delete"
+        !builds[0].contains("tag="),
+        "the one build request is the latest (tag omitted): {builds:?}"
     );
-    for f in &fx2.files {
-        assert_eq!(
-            read_game_file(&dir, &f.rel).unwrap(),
-            f.data,
-            "{} is out of scope and must survive",
-            f.rel
-        );
-    }
-    assert!(mock.chunk_hits().is_empty(), "nothing may be downloaded");
-    assert_eq!(summary.files_total, 0, "the repair plan really was empty");
-    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 0);
-    assert_eq!(summary.deleted_extra_bytes.load(Ordering::Relaxed), 512);
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("config_bumped=0"), "{line}");
-    assert!(line.contains("scoped=1"), "{line}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_include_that_selects_nothing_at_all_is_still_a_typo() {
-    // The guard survives the relaxation: a scope that matches neither a manifest
-    // path nor a purge candidate really is a typo, and a typo that costs 130 GB
-    // to discover is what the guard is for.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("scope_nothing_typed");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.purge_only = true; // asks for the cleanup…
-    ctx.path_scope = scope(&["game/never-existed.dat"], &[]); // …of nothing
-    let err = repair::run(ctx)
-        .await
-        .expect_err("a scope that selects nothing is still a typo");
-    assert_eq!(err.exit_code, 1);
-    let msg = format!("{:#}", err.source);
     assert!(
-        msg.contains("game/never-existed.dat"),
-        "must name the glob: {msg}"
+        summary.flags.local_manifest.is_none(),
+        "no local version means no lookup to report"
     );
-
-    // The message names both plans when a cleanup was asked for, so the error
-    // says which of the two came back empty.
-    assert!(msg.contains("plan_files=0"), "{msg}");
-    assert!(msg.contains("cleanup"), "{msg}");
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn purge_only_cleans_up_without_repairing() {
-    // The `removed` matrix class is reachable only through the purge path, and
-    // `gircap`'s own procedure said not to pass a purge flag — so it needed
-    // this. `check_only` inverted: "is it intact?" vs "make it match".
-    //
-    // Note the absence of `purge_after`: `--purge-only` **implies** the
-    // cleanup, and a flag that cleaned up nothing would be a lie.
-    let fx = build_fixture();
+async fn several_latest_manifests_are_selected_in_build_order() {
+    // The build advertises four manifests: the primary `game`, an unselected
+    // audio field, and two ordinary fields that describe the same path. Every
+    // selected manifest contributes its own files, but when two describe the
+    // same path the earlier selection wins — and an unselected audio field is
+    // never fetched at all.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "en-us",
+            vec![FileSpec::new(
+                "audio/english.dat",
+                vec![ChunkSpec::new("chunk_en", vec![0x45u8; 16], 0)],
+            )],
+        ))
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "alpha",
+            vec![FileSpec::new(
+                "game/shared.dat",
+                vec![ChunkSpec::new("chunk_alpha_shared", vec![0xAAu8; 48], 0)],
+            )],
+        ))
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "beta",
+            vec![
+                FileSpec::new(
+                    "game/shared.dat",
+                    vec![ChunkSpec::new("chunk_beta_shared", vec![0xBBu8; 48], 0)],
+                ),
+                FileSpec::new(
+                    "game/beta_only.dat",
+                    vec![ChunkSpec::new("chunk_beta_only", vec![0xCCu8; 16], 0)],
+                ),
+            ],
+        )),
+    );
+    let en_id = extra_manifest(&fx, "en-us").id.clone();
+    let alpha_id = extra_manifest(&fx, "alpha").id.clone();
+    let beta_id = extra_manifest(&fx, "beta").id.clone();
     let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_only");
-    let fx2 = build_fixture();
-    // One damaged file: purge-only must NOT repair it, but must not fail either.
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
+    let dir = temp_dir("multi_manifest_order");
 
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_only = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-only runs");
-    assert_eq!(code, 0);
+    // Explicit `--audio none` makes the audio manifest's exclusion a fact of
+    // the fixture rather than of the absent scan file's default.
+    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
+    ctx.audio_explicit = true;
+    ctx.audio.clear();
+    let (summary, code) = run(ctx).await.expect("the multi-manifest run succeeds");
+    assert_eq!(code, RunExit::Success);
+    assert_eq!(summary.files_total, 3, "base + shared + beta_only");
+    assert_eq!(summary.files_repaired.load(Ordering::Relaxed), 3);
+
+    // Both selected manifests contributed, and the earlier selection's claim
+    // about the shared path is the one that was written.
     assert_eq!(
-        summary.files_repaired.load(Ordering::Relaxed),
-        0,
-        "purge-only never repairs"
+        read_game_file(&dir, "game/base.dat").unwrap(),
+        vec![0x41u8; 32]
     );
-    assert!(mock.chunk_hits().is_empty(), "no chunk may be fetched");
     assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        777,
-        "the orphan was deleted with no purge flag at all"
+        read_game_file(&dir, "game/shared.dat").unwrap(),
+        vec![0xAAu8; 48],
+        "alpha is selected before beta, so alpha's shared path wins"
     );
-    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
-    // The damaged file was left exactly as it was.
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        b"not the game data"
+        read_game_file(&dir, "game/beta_only.dat").unwrap(),
+        vec![0xCCu8; 16]
     );
-    // A cleanup puts no bytes in place, so it does not advance config.ini.
+    assert!(
+        read_game_file(&dir, "audio/english.dat").is_none(),
+        "an unselected audio manifest must not contribute files"
+    );
+
+    // Only the selected manifests were requested, and only the chunks of the
+    // files the plan kept were downloaded.
+    let targets = mock.request_targets();
+    assert!(
+        targets.iter().any(|t| t.ends_with(&alpha_id)),
+        "{targets:?}"
+    );
+    assert!(targets.iter().any(|t| t.ends_with(&beta_id)), "{targets:?}");
+    assert!(
+        !targets.iter().any(|t| t.ends_with(&en_id)),
+        "the unselected audio manifest was fetched: {targets:?}"
+    );
+    let hits = mock.chunk_hits();
+    assert!(hits.iter().any(|id| id == "chunk_alpha_shared"), "{hits:?}");
+    assert!(hits.iter().any(|id| id == "chunk_beta_only"), "{hits:?}");
+    assert!(
+        !hits.iter().any(|id| id == "chunk_beta_shared"),
+        "the duplicate path from the later manifest was dropped: {hits:?}"
+    );
+    assert!(
+        !hits.iter().any(|id| id == "chunk_en"),
+        "the unselected audio chunk was fetched: {hits:?}"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn a_failed_selected_manifest_fails_the_binary_without_a_fallback() {
+    // The build advertises the primary `game` manifest and a second selected
+    // field whose body is gone. The run must fail as metadata (exit 2) instead
+    // of quietly planning only the manifest that did answer.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "extra",
+                vec![FileSpec::new(
+                    "game/extra.dat",
+                    vec![ChunkSpec::new("chunk_extra", vec![0x5Au8; 16], 0)],
+                )],
+            )
+            .not_served(),
+        ),
+    );
+    let game_id = fx.manifest_id.clone();
+    let extra_id = extra_manifest(&fx, "extra").id.clone();
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let dir = temp_dir("manifest_fallback");
+    let game = dir.join("install");
+    let game_arg = game.to_string_lossy().into_owned();
+
+    let (code, stdout, stderr) = run_binary(
+        &[
+            "--game-path",
+            &game_arg,
+            "--biz",
+            "hk4e_global",
+            "--jobs",
+            "1",
+            "--hyp-base",
+            &mock.hyp_base,
+            "--sophon-base",
+            &mock.sophon_base,
+        ],
+        &[],
+    )
+    .await;
+
+    assert_eq!(
+        code, 2,
+        "a selected manifest that is gone is metadata: {stderr}"
+    );
+    assert!(
+        stderr.contains("manifest extra"),
+        "the failing manifest is named: {stderr}"
+    );
+    assert!(
+        stderr.contains("404"),
+        "the failure is the missing body: {stderr}"
+    );
+    let fatal = stderr
+        .lines()
+        .find(|line| line.starts_with("FATAL"))
+        .unwrap_or_else(|| panic!("a fatal error line: {stderr}"));
+    assert!(
+        !fatal.contains("manifest game"),
+        "the successful manifest must not be blamed: {fatal}"
+    );
+    assert!(
+        !stdout.contains("SUMMARY"),
+        "a failed plan must not emit a success summary: {stdout}"
+    );
+    assert!(!game.exists(), "the plan failed before any write");
     assert!(
         !dir.join("config.ini").exists(),
-        "purge-only must not bump config.ini"
+        "the version was not bumped"
     );
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("config_bumped=0"), "{line}");
+    assert!(
+        read_game_file(&dir, "game/extra.dat").is_none(),
+        "nothing from the failed manifest was written"
+    );
+
+    // Both selected manifests were requested: the run did not skip the failing
+    // one, and did not fall back to the one that succeeded.
+    let targets = mock.request_targets();
+    assert!(targets.iter().any(|t| t.ends_with(&game_id)), "{targets:?}");
+    assert!(
+        targets.iter().any(|t| t.ends_with(&extra_id)),
+        "{targets:?}"
+    );
 
     mock.stop();
 }
 
 #[tokio::test]
-async fn purge_only_with_dry_run_deletes_and_moves_nothing() {
-    // `--dry-run` is documented as writing nothing. `post::run` has two call
-    // sites: the repair run, which reaches it only through `if !readonly`, and
-    // the `--purge-only` early return, which is not behind that gate — so the
-    // three destructive steps of the post-phase (deprecated deletes, the audio
-    // cache move, the cleanup pass) have to check the flag themselves.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            scan_dir: "Audio/scan.txt".to_string(),
-            res_dir: "Audio/res".to_string(),
-            cache_dir: "Audio/cache".to_string(),
-            deprecated_files: vec!["old/legacy.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("purge_only_dry");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 777]);
-    write_game_file(&dir, "Audio/cache/track_1.pcm", &[0x3Bu8; 128]);
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_only = true;
-    ctx.dry_run = true;
-    let (summary, code) = repair::run(ctx).await.expect("purge-only --dry-run runs");
-    assert_eq!(code, 0);
-
-    // Nothing moved, nothing deleted, nothing promoted.
-    assert_eq!(
-        read_game_file(&dir, "old/legacy.dll").unwrap(),
-        &[0x7Eu8; 50],
-        "dry-run must not delete deprecated files"
-    );
-    assert!(
-        read_game_file(&dir, "stray/orphan.dat").is_some(),
-        "dry-run must not delete orphans"
-    );
-    assert_eq!(
-        read_game_file(&dir, "Audio/cache/track_1.pcm").unwrap(),
-        &[0x3Bu8; 128],
-        "dry-run must not move the audio cache"
-    );
-    assert!(
-        read_game_file(&dir, "Audio/res/track_1.pcm").is_none(),
-        "nothing may appear in the res dir"
-    );
-    assert_eq!(
-        summary.deleted_extra_bytes.load(Ordering::Relaxed),
-        0,
-        "byte counters stay 0 in dry-run by design"
-    );
-    assert!(!dir.join("config.ini").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_read_only_run_issues_no_deprecated_file_call() {
-    // The deprecated list is fetched during the plan phase, and read-only
-    // modes skip that phase's network calls: `--dry-run`, `--check-only` and
-    // `--print-plan` must issue zero `getGameDeprecatedFileConfigs` requests.
-    for mode in ["dry", "check", "plan"] {
-        let fx = build_fixture();
-        let mock = MockServer::start(
-            fx,
-            MockOpts {
-                deprecated_files: vec!["old/legacy.dll".to_string()],
-                ..Default::default()
-            },
-        )
-        .await;
-        let dir = temp_dir("readonly_deprecated");
-        let fx2 = build_fixture();
-        for f in &fx2.files {
-            write_game_file(&dir, &f.rel, &f.data);
-        }
-        write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-
-        let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-        match mode {
-            "dry" => ctx.dry_run = true,
-            "check" => ctx.check_only = true,
-            _ => ctx.print_plan = true,
-        }
-        repair::run(ctx).await.expect("run");
-        assert!(
-            mock.first_target_with("getGameDeprecatedFileConfigs")
-                .is_none(),
-            "--{mode} must not fetch the deprecated list it would discard"
-        );
-        assert!(read_game_file(&dir, "old/legacy.dll").is_some());
-        mock.stop();
-    }
-}
-
-#[tokio::test]
-async fn a_hostile_chunk_range_refuses_every_read_only_mode_before_it_runs() {
-    // Option (b): the range gate is in `build_plan`, so `--check-only`,
-    // `--dry-run` and `--print-plan` all refuse the manifest at exit `2`
-    // instead of one of them reporting a false clean or printing an unrunnable
-    // plan. Nothing is written in any mode.
-    for mode in ["--check-only", "--dry-run", "--print-plan"] {
-        let fx = build_fixture_spec(
-            &FixtureSpec::new(vec![FileSpec::new(
-                "game/foo.dat",
-                vec![ChunkSpec::new("chunk_foo0", vec![0x41u8; 64], 0)],
-            )])
-            .with_lies(Lies {
-                huge_offset: vec!["chunk_foo0".into()],
-                ..Default::default()
-            }),
-        );
-        // The file on disk is the one the manifest's size and MD5 describe, so
-        // without the plan gate `--check-only` would call it intact and exit
-        // `0` for the wrong reason.
-        let expected = fx.files[0].data.clone();
-        let mock = MockServer::start(fx, MockOpts::default()).await;
-        let dir = temp_dir("readonly_hostile_range");
-        let game = dir.join("install");
-        write_game_file(&game, "game/foo.dat", &expected);
-        let game_arg = game.to_string_lossy().into_owned();
-
-        let (code, stdout, stderr) = run_binary(
-            &[
-                "--game-path",
-                &game_arg,
-                "--biz",
-                "hk4e_global",
-                "--io-threads",
-                "1",
-                mode,
-                "--hyp-base",
-                &mock.hyp_base,
-                "--sophon-base",
-                &mock.sophon_base,
-            ],
-            &[],
-        )
-        .await;
-        assert_eq!(code, 2, "{mode}: a hostile range is metadata: {stderr}");
-        assert_eq!(
-            read_game_file(&game, "game/foo.dat").as_deref(),
-            Some(expected.as_slice()),
-            "{mode}: the read-only run must not touch the target"
-        );
-        assert!(
-            !dir.join("config.ini").exists(),
-            "{mode}: config.ini must not be written"
-        );
-        assert!(
-            !stdout.contains("PLAN "),
-            "{mode}: no plan may be printed: {stdout}"
-        );
-        assert!(
-            !stdout.contains("CHECK"),
-            "{mode}: no CHECK line may call the file clean: {stdout}"
-        );
-        assert!(
-            mock.chunk_hits().is_empty(),
-            "{mode}: no chunk may be fetched"
-        );
-
-        mock.stop();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// zero-length manifest entries
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn a_legitimate_empty_file_passes_every_mode_untouched() {
-    // A `size = 0` entry whose digest is `EMPTY_MD5` describes a real, empty
-    // file. The fixture builder derives both from the (empty) layout, so this
-    // is the honest shape. Every mode must accept it, and the repair must not
-    // rewrite a file that is already correct.
-    let fx = build_fixture_spec(&FixtureSpec::new(vec![FileSpec::new(
-        "game/empty.dat",
-        vec![],
-    )]));
-    assert_eq!(fx.files[0].data, Vec::<u8>::new());
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("empty_legit");
-    let game = dir.join("install");
-    // Present and empty, exactly as the manifest describes it.
-    write_game_file(&game, "game/empty.dat", b"");
-    let game_arg = game.to_string_lossy().into_owned();
-    let base = [
-        "--game-path",
-        &game_arg,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    let mut args = base.to_vec();
-    args.push("--check-only");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(
-        code, 0,
-        "--check-only must call the empty file clean: {stderr}"
-    );
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "the check must not touch the file"
-    );
-
-    let mut args = base.to_vec();
-    args.push("--dry-run");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--dry-run: {stderr}");
-
-    let mut args = base.to_vec();
-    args.push("--print-plan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--print-plan: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "an empty file is still a planned file:\n{stdout}"
-    );
-
-    let (code, _, stderr) = run_binary(&base, &[]).await;
-    assert_eq!(
-        code, 0,
-        "the repair must accept the correct empty file: {stderr}"
-    );
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "the repair must leave the empty file empty"
-    );
-    assert!(!game.join("game").join("empty.dat_tmp").exists());
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_empty_file_with_a_non_empty_digest_is_refused_by_the_md5_gate() {
-    // A zero-length entry whose declared digest is not `EMPTY_MD5` cannot
-    // describe any byte string, so the size gate passes and the digest gate
-    // is the one that has to refuse. The read-only modes disagree on purpose:
-    // `--check-only` reports the file bad (exit `4`), `--dry-run` changes
-    // nothing (exit `0`), `--print-plan` still prints the plan (exit `0`); a
-    // real repair fails the file (exit `3`) without publishing a wrong one.
+async fn an_ignored_manifest_category_is_not_planned_by_the_binary() {
+    // The `res_category_dir` ignore list drops a manifest by its
+    // `category_id` as well as by its `matching_field`. This fixture advertises
+    // the category under a field the ignore file does not name, so only the
+    // category id can be what excludes it.
     let fx = build_fixture_spec(
-        &FixtureSpec::new(vec![FileSpec::new("game/empty.dat", vec![])]).with_lies(Lies {
-            wrong_file_md5: vec!["game/empty.dat".into()],
-            ..Default::default()
-        }),
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_base", vec![0x41u8; 32], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "extra",
+                vec![FileSpec::new(
+                    "game/skipped.dat",
+                    vec![ChunkSpec::new("chunk_skipped", vec![0x5Au8; 16], 0)],
+                )],
+            )
+            .with_category_id("10302"),
+        ),
     );
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("empty_bad_md5");
-    let game = dir.join("install");
-    write_game_file(&game, "game/empty.dat", b"");
-    let game_arg = game.to_string_lossy().into_owned();
-    let base = [
-        "--game-path",
-        &game_arg,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    let mut args = base.to_vec();
-    args.push("--check-only");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(
-        code, 4,
-        "--check-only must report the digest mismatch: {stderr}"
-    );
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "the check must not touch the file"
-    );
-
-    let mut args = base.to_vec();
-    args.push("--dry-run");
-    let (code, _, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--dry-run: {stderr}");
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "--dry-run must not touch the file"
-    );
-
-    let mut args = base.to_vec();
-    args.push("--print-plan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "--print-plan: {stderr}");
-    assert!(
-        stdout.lines().any(|l| l.starts_with("PLAN ")),
-        "the plan is printed even though the digest is wrong:\n{stdout}"
-    );
-
-    let (code, _, stderr) = run_binary(&base, &[]).await;
-    assert_eq!(
-        code, 3,
-        "the repair must fail the one file it cannot make true: {stderr}"
-    );
-    assert_eq!(
-        read_game_file(&game, "game/empty.dat"),
-        Some(Vec::new()),
-        "no wrong bytes may be published in its place"
-    );
-    assert!(
-        !game.join("game").join("empty.dat_tmp").exists(),
-        "a failed empty-file repair must leave no artefact"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn download_bytes_counts_only_promoted_files_even_after_a_retry() {
-    // `download_bytes` is the bytes of files that were actually
-    // promoted. The counter is live per-chunk so the runtime hard stop can
-    // read it mid-flight, which puts two ways of inflating it in reach of an
-    // unflagged run — and both are exactly what an *abandoned* attempt looks
-    // like:
-    //
-    //  - a reservation the `?` on a failed fetch never gave back, and
-    //  - the bytes that attempt had already downloaded.
-    //
-    // The mock serves one corrupt-but-well-formed chunk, so the first attempt
-    // really does transfer bytes and then fail its MD5.
-    let fx = build_fixture();
-    let est: u64 = fx.chunk_store.values().map(|b| b.len() as u64).sum();
+    let extra_id = extra_manifest(&fx, "extra").id.clone();
     let mock = MockServer::start(
         fx,
         MockOpts {
-            corrupt_first_chunks: 1,
+            res_category_dir: "res_category.txt".to_string(),
             ..Default::default()
         },
     )
     .await;
-    let dir = temp_dir("download_retry");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("the retry must recover");
-    assert_eq!(code, 0);
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[1].rel).unwrap(),
-        fx2.files[1].data
+    let dir = temp_dir("ignored_manifest");
+    write_game_file(
+        &dir,
+        "res_category.txt",
+        br#"{"category":"10302","is_delete":true}"#,
     );
-    // bar.dat sorts first and its single chunk is the corrupt one, so attempt 1
-    // really transfers a byte and then fails the chunk MD5. The total is still
-    // every chunk in the plan and nothing more: the abandoned attempt settles
-    // nothing, because its bytes are not part of the install.
-    assert_eq!(
-        summary.download.settled(),
-        est,
-        "a failed attempt's bytes must not survive into the total"
-    );
-    // The **live** figure is the other one, and it is larger: the abandoned
-    // attempt's bytes crossed the wire and were spent, whatever became of them.
-    // That is the difference between the two numbers — the waste.
-    assert!(
-        summary.download.live() > summary.download.settled(),
-        "the spent figure carries the abandoned attempt: {} > {}",
-        summary.download.live(),
-        summary.download.settled()
-    );
-    assert_eq!(
-        summary.files_repaired.load(Ordering::Relaxed),
-        2,
-        "both files were repaired, the first one on its second attempt"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_manifest_that_does_not_match_its_checksum_is_refused() {
-    // The checksum is the MD5 of the **decompressed** bytes, and it is
-    // verified before the protobuf parse. A manifest that does not match it
-    // cannot be planned from: the run fails as metadata, before a single byte
-    // is written.
-    //
-    // The blob the mock serves is unchanged — only the checksum the API
-    // advertises is wrong — so the checksum gate is the only thing that can
-    // catch it, and the decompressed bytes are the only thing it can be
-    // compared against.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            wrong_manifest_checksum: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("manifest_checksum");
-    let err = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect_err("a manifest that does not match its checksum cannot be planned from");
-    assert_eq!(err.exit_code, 2, "metadata, not a write failure");
-    assert!(!dir.join("config.ini").exists(), "nothing was written");
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_corrupt_chunk_is_not_resumed_as_already_complete() {
-    // The temp mode resumes by **length**: a chunk whose end is inside the
-    // `_tmp` is taken as done, with no hash check of its own. A streamed
-    // chunk's bytes are written before its digest is known, so a chunk that
-    // fails its digest leaves a `_tmp` that has grown past it — and the next
-    // attempt would keep the corrupt bytes and call the file complete.
-    //
-    // The rollback truncates the `_tmp` back to the chunk's offset, so the
-    // next attempt downloads *that* chunk again and keeps the good prefix
-    // before it. The mock serves one corrupt-but-well-formed chunk, so the
-    // first attempt really does write bad bytes and then fail its digest.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            corrupt_first_chunks: 1,
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("tmp_rollback");
-    let fx2 = build_fixture();
-
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 1);
-    ctx.repair_mode = RepairMode::Temp;
-    // Only foo.dat: its first chunk is the corrupt one, and its second chunk
-    // is the one that must **not** be downloaded twice.
-    ctx.path_scope = scope(&["game/foo.dat"], &[]);
-    let (summary, code) = repair::run(ctx).await.expect("the retry must recover");
-    assert_eq!(code, 0, "the file was repaired on the second attempt");
-    let (_, repaired, failed, _, _) = load_counters(&summary);
-    assert_eq!((repaired, failed), (1, 0));
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the file is correct"
-    );
-    // The corrupt chunk was asked for twice — once for the attempt that
-    // failed its digest, once for the attempt that repaired it — and the good
-    // chunk only once. Without the rollback the whole `_tmp` would be thrown
-    // away when the final MD5 failed, and the good chunk would be downloaded
-    // twice as well.
-    assert_eq!(
-        mock.chunk_hits(),
-        vec![
-            "chunk_foo0".to_string(),
-            "chunk_foo0".to_string(),
-            "chunk_foo1".to_string()
-        ],
-        "the corrupt chunk was re-downloaded, the good one was not"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn write_bytes_counts_the_bytes_that_passed_their_gate() {
-    // `SUMMARY write_bytes` counts the bytes written into the install **from
-    // sources that passed their gate**, so it is a function of the *input
-    // state*: the same install against a clean origin and against one that
-    // serves a corrupt-but-well-formed chunk reports the same number. The
-    // corrupt chunk contributes nothing — its bytes landed, but they were
-    // never a source that passed a gate.
-    //
-    // The live counter the `--max-write-bytes` ceiling reads is a *different*
-    // number, and it is larger in the corrupt run: the chunk was written and
-    // then written again. That is the disk the run actually took, and it is
-    // the number the ceiling bounds.
-    //
-    // A streamed chunk is what makes this a question: its bytes land before
-    // its digest is known, so "what was written" and "what was allowed to be
-    // written" are two different figures, and only the second one is a
-    // function of the install.
-    //
-    // The manifest claims a `compressed_size` a few bytes larger than the good
-    // body. That is not what the test is about: the streamed body is capped at
-    // what the caller reserved, and the mock's corrupt body recompresses one
-    // byte longer than the good one, so without the slack the cap would refuse
-    // it before a single decoded byte landed — and the write meter would have
-    // nothing to count. The corrupt body still has to pass its decode to fail
-    // its digest, which is the case this test names.
-    fn lying_fixture() -> common::GameFixture {
-        build_fixture_with_lies(Lies {
-            wrong_chunk_size: vec![
-                "chunk_foo0".to_string(),
-                "chunk_foo1".to_string(),
-                "chunk_bar0".to_string(),
-            ],
-            ..Default::default()
-        })
-    }
-
-    async fn run(opts: MockOpts, tag: &str) -> (u64, u64) {
-        let fx = lying_fixture();
-        let mock = MockServer::start(fx, opts).await;
-        let dir = temp_dir(tag);
-        let fx2 = lying_fixture();
-        for f in &fx2.files {
-            write_game_file(&dir, &f.rel, b"not the game data");
-        }
-        let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-            .await
-            .expect("run");
-        assert_eq!(code, 0, "the repair recovered");
-        for f in &fx2.files {
-            assert_eq!(
-                read_game_file(&dir, &f.rel).unwrap(),
-                f.data,
-                "{} is correct",
-                f.rel
-            );
-        }
-        mock.stop();
-        (summary.write.settled(), summary.write.live())
-    }
-
-    let (clean_reported, clean_spent) = run(MockOpts::default(), "write_bytes_clean").await;
-    let (corrupt_reported, corrupt_spent) = run(
-        MockOpts {
-            corrupt_first_chunks: 1,
-            ..Default::default()
-        },
-        "write_bytes_corrupt",
-    )
-    .await;
-
-    // The two files are 128 + 48 bytes of chunks, and every one of them is
-    // written from a source that passed its gate.
-    assert_eq!(clean_reported, 176, "the clean run's verified writes");
-    assert_eq!(
-        corrupt_reported, clean_reported,
-        "a corrupt chunk contributes nothing: the figure is a function of the \
-         install, not of the transport"
-    );
-    // The ceiling's number is the other one: the corrupt chunk landed and was
-    // charged, and then it landed again.
-    assert_eq!(
-        clean_spent, clean_reported,
-        "a clean run spends what it writes"
-    );
-    assert!(
-        corrupt_spent > corrupt_reported,
-        "the corrupt chunk's bytes are spent even though they never validated: \
-         {corrupt_spent} > {corrupt_reported}"
-    );
-}
-
-#[tokio::test]
-async fn purge_only_and_check_only_are_the_two_halves_of_the_cleanup_contract() {
-    // Read: "is it intact?" Write: "make it match". Both exit 0/3/4 by their own
-    // rules, and neither repairs.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("purge_only_pair");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[0].rel, b"not the game data");
-    write_game_file(&dir, &fx2.files[1].rel, b"not the game data");
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 100]);
-
-    // check-only: damage found, nothing written, orphan kept.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.check_only = true;
-    let (_, code) = repair::run(ctx).await.expect("check runs");
-    assert_eq!(code, 4);
-    assert!(read_game_file(&dir, "stray/orphan.dat").is_some());
-
-    // purge-only: the orphan is gone, the damage is untouched.
-    let mut ctx = ctx_for(dir.to_path_buf(), &mock, 2);
-    ctx.purge_only = true;
-    let (_, code) = repair::run(ctx).await.expect("purge-only runs");
-    assert_eq!(code, 0);
-    assert!(read_game_file(&dir, "stray/orphan.dat").is_none());
-    assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        b"not the game data"
-    );
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_reuse_run_and_a_no_reuse_run_are_distinguishable_on_the_data_plane() {
-    // A run that reused everything and a run that could not reuse anything are
-    // otherwise identical on the data plane: both exit `0`, and the second's
-    // `download_bytes` is simply larger. That matters most to
-    // `--max-download-bytes`, whose pre-flight estimate is computed against the
-    // same empty map — so a degraded run silently moves the ceiling and the
-    // refusal a caller expected never fires.
-    //
-    // The mock answers `getBuild?tag=<local>` with the manifest only when the
-    // tag is the latest one, which is exactly the "the local manifest loaded" /
-    // "the server no longer serves that tag" pair.
-    let est: u64 = build_fixture()
-        .chunk_store
-        .values()
-        .map(|b| b.len() as u64)
-        .sum();
-
-    // (a) local version at the latest tag → the manifest loads → reuse works.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("local_manifest_ok");
-    std::fs::write(
-        dir.join("config.ini"),
-        format!("[General]\ngame_version={}\n", LATEST_TAG),
-    )
-    .unwrap();
-    let fx2 = build_fixture();
-    // bar intact (skipped) and foo half-intact, so its first chunk is copied
-    // from a verified local slice and only the second is fetched. That is a real
-    // reuse, not an absent one.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("run");
-    assert_eq!(code, 0);
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("local_manifest=ok"), "{line}");
-    assert_eq!(mock.chunk_hits(), vec!["chunk_foo1".to_string()]);
-    assert!(
-        summary.download.settled() < est,
-        "a run with a loaded local manifest reuses something: {} vs {est}",
-        summary.download.settled()
-    );
-    mock.stop();
-
-    // (b) a local version the server does not serve → lookup attempted and
-    //     failed → the fallback is full-fetch, and the run says so.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("local_manifest_gone");
-    std::fs::write(
-        dir.join("config.ini"),
-        "[General]\ngame_version=1.0.0-long-gone\n",
-    )
-    .unwrap();
-    let fx2 = build_fixture();
-    // The same tree as (a), so the only difference between the two runs is
-    // whether the local manifest loaded.
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    let mut half_bad = fx2.files[0].data.clone();
-    for b in half_bad.iter_mut().skip(64) {
-        *b ^= 0xFF;
-    }
-    write_game_file(&dir, &fx2.files[0].rel, &half_bad);
-    let (summary, code) = repair::run(ctx_for(dir.to_path_buf(), &mock, 1))
-        .await
-        .expect("a degraded run still succeeds");
-    assert_eq!(code, 0, "the fallback is not an error");
-    let line = girpr::report::summary_record(&summary, code).text();
-    assert!(line.contains("local_manifest=unavailable"), "{line}");
-    assert_eq!(
-        mock.chunk_hits(),
-        vec!["chunk_foo1".to_string()],
-        "with no local manifest there is no reuse *map*, but the in-place \
-         repair keeps the chunk that is already correct where it belongs — \
-         the scan finds it without any manifest"
-    );
-    // The estimate is what still moves: with no local manifest the plan's
-    // estimate is every chunk, while the run only fetched the corrupt one.
-    // That is the "the estimate is an upper bound" property, and it is why the
-    // `local_manifest` key has to be there.
-    assert_eq!(
-        summary.flags.plan_download_bytes, None,
-        "the estimate is only reported when the ceiling asked for it"
-    );
-    assert!(
-        summary.download.settled() < est,
-        "the degraded run still fetched less than the whole plan: {} vs {est}",
-        summary.download.settled()
-    );
-    mock.stop();
-}
-
-// ---------------------------------------------------------------------------
-// endpoint overrides, through the real binary
-// ---------------------------------------------------------------------------
-
-/// Run the shipped binary. The endpoint overrides are the only seam a
-/// *binary-level* test can use, and this is where that seam is exercised: the
-/// library tests inject `RunCtx::hyp_base_override` directly,
-/// which proves nothing about whether a flag reaches `HypClient`.
-///
-/// Async on purpose: a blocking `Command` inside `#[tokio::test]` would occupy
-/// the single runtime thread the mock server needs to answer on.
-async fn run_binary(args: &[&str], env: &[(&str, &str)]) -> (i32, String, String) {
-    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_girpr"));
-    cmd.args(args);
-    for (k, v) in env {
-        cmd.env(k, v);
-    }
-    let out = cmd.output().await.expect("run girpr");
-    (
-        out.status.code().expect("process must exit normally"),
-        String::from_utf8_lossy(&out.stdout).into_owned(),
-        String::from_utf8_lossy(&out.stderr).into_owned(),
-    )
-}
-
-#[tokio::test]
-async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
-    // A mock at 127.0.0.1 standing in for the whole CDN, driven by the real
-    // binary through `--hyp-base` / `--sophon-base`. This is the shape
-    // `gircap`'s artifact-serving shim will take.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_flags");
-    let fx2 = build_fixture();
-    write_game_file(&dir, &fx2.files[1].rel, &fx2.files[1].data);
-    // A purge flag *and* a scope, so the run exercises the whole narrowed
-    // pipeline rather than the trivial path.
-    write_game_file(&dir, "stray/orphan.dat", &[0x5Au8; 64]);
-    let game = dir.to_string_lossy().into_owned();
+    let game_arg = dir.to_string_lossy().into_owned();
 
     let (code, stdout, stderr) = run_binary(
         &[
             "--game-path",
-            &game,
+            &game_arg,
             "--biz",
             "hk4e_global",
-            "--io-threads",
+            "--jobs",
             "1",
-            "--include",
-            "game/foo.dat",
-            "--purge-after",
             "--hyp-base",
             &mock.hyp_base,
             "--sophon-base",
@@ -4626,256 +1066,191 @@ async fn the_endpoint_override_flags_serve_the_whole_pipeline() {
         &[],
     )
     .await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-    assert!(stdout.contains("REPORT "), "{stdout}");
-    assert!(stdout.contains("SUMMARY "), "{stdout}");
     assert_eq!(
-        read_game_file(&dir, &fx2.files[0].rel).unwrap(),
-        fx2.files[0].data,
-        "the included file was repaired against the mock"
+        code, 0,
+        "an ignored manifest is not an error: {stderr}\n{stdout}"
     );
-    assert!(
-        read_game_file(&dir, "stray/orphan.dat").is_some(),
-        "the out-of-scope orphan survives the purge"
-    );
-    // The flags reached `HypClient::new_with_bases`: a miss would have been a
-    // connection failure against production, i.e. exit 2.
-    assert!(mock.first_target_with("getBuild").is_some());
 
-    mock.stop();
-}
-
-#[tokio::test]
-async fn a_scoped_cleanup_of_a_removed_path_works_through_the_binary() {
-    // The same case as the library-level case, through the real binary and its
-    // flags — because the guard this exercises is a *usage* guard, so exit 1 is
-    // what a caller sees, and only the process boundary shows that.
-    //
-    // This is `gircap`'s `removed` capture class verbatim: one `--include` for a
-    // path that is on disk and absent from the new manifest, `--purge-only`, and
-    // an assertion that the path is gone and nothing was downloaded.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("binary_removed");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "game/removed.dat", &[0x7Eu8; 512]);
-    let game = dir.to_string_lossy().into_owned();
-
-    let (code, stdout, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--include",
-            "game/removed.dat",
-            "--purge-only",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[],
-    )
-    .await;
-    assert_eq!(code, 0, "must not be refused as a typo: {stderr}");
-    assert!(
-        read_game_file(&dir, "game/removed.dat").is_none(),
-        "the removed path is gone"
-    );
-    for f in &fx2.files {
-        assert_eq!(
-            read_game_file(&dir, &f.rel).unwrap(),
-            f.data,
-            "{} must survive",
-            f.rel
-        );
-    }
-    assert!(mock.chunk_hits().is_empty(), "nothing was downloaded");
-    // The machine contract for this shape, from the process's own stdout.
-    assert!(stdout.contains("SUMMARY "), "{stdout}");
-    assert!(stdout.contains("total=0"), "{stdout}");
-    assert!(stdout.contains("scoped=1"), "{stdout}");
-    assert!(stdout.contains("config_bumped=0"), "{stdout}");
-
-    mock.stop();
-}
-
-#[tokio::test]
-async fn output_json_is_pure_ndjson_and_output_text_is_the_default() {
-    // The property downstream tooling depends on: under `--output json` *every*
-    // stdout line is a JSON object, so the stream can be parsed line by line
-    // without a fallback. This needs a server, which is why it lives here rather
-    // than in `cli_contract.rs` — that file has never had one, and the bridge
-    // test will keep it that way.
-    //
-    // `--print-plan` is here deliberately: `--print-plan --output json` must
-    // still be pure NDJSON, so the plan record is exercised on the JSON plane
-    // too. One record per line is what keeps that true.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("output_json");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
-    let base: Vec<&str> = vec![
-        "--game-path",
-        &game,
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1",
-        "--hyp-base",
-        &mock.hyp_base,
-        "--sophon-base",
-        &mock.sophon_base,
-    ];
-
-    let mut json_args = base.clone();
-    json_args.extend_from_slice(&["--print-plan", "--output", "json"]);
-    let (code, stdout, stderr) = run_binary(&json_args, &[]).await;
-    assert_eq!(code, 0, "stderr: {stderr}");
-
-    let events: Vec<String> = stdout
+    let summary = stdout
         .lines()
-        .map(|l| {
-            let v: serde_json::Value =
-                serde_json::from_str(l).unwrap_or_else(|e| panic!("not JSON: {e:?}\n{l}"));
-            assert!(v.get("event").is_some(), "every record names itself: {l}");
-            v["event"].as_str().unwrap().to_string()
+        .find(|line| line.starts_with("SUMMARY "))
+        .unwrap_or_else(|| panic!("the run ends with a SUMMARY: {stdout}"));
+    assert_eq!(
+        field(summary, "total"),
+        1,
+        "only game/base.dat is planned: {summary}"
+    );
+    assert_eq!(field(summary, "repaired"), 1, "{summary}");
+    assert_eq!(field(summary, "failed"), 0, "{summary}");
+
+    assert_eq!(
+        read_game_file(&dir, "game/base.dat").unwrap(),
+        vec![0x41u8; 32]
+    );
+    assert!(
+        read_game_file(&dir, "game/skipped.dat").is_none(),
+        "the ignored manifest contributes no files"
+    );
+
+    let targets = mock.request_targets();
+    assert!(
+        !targets.iter().any(|t| t.ends_with(&extra_id)),
+        "the ignored manifest was fetched: {targets:?}"
+    );
+    assert!(
+        !mock.chunk_hits().iter().any(|id| id == "chunk_skipped"),
+        "the ignored manifest's chunk was fetched"
+    );
+
+    mock.stop();
+}
+
+#[tokio::test]
+async fn an_unserved_extra_manifest_contributes_no_chunk_bytes() {
+    // A manifest that `getBuild` advertises but the origin does not serve is
+    // a `404` for its body, so nothing can ever reference its chunks. Its
+    // manifest body is still built (it is advertised), but the chunk route
+    // must not publish bytes no reachable manifest names — including when it
+    // names an id the served side already uses with different bytes.
+    let fx = build_fixture_spec(
+        &FixtureSpec::new(vec![FileSpec::new(
+            "game/base.dat",
+            vec![ChunkSpec::new("chunk_shared", vec![0x41u8; 16], 0)],
+        )])
+        .with_extra_manifest(
+            ExtraManifestSpec::new(
+                "gone",
+                vec![FileSpec::new(
+                    "game/gone.dat",
+                    vec![
+                        // The same id as the served manifest, with different
+                        // bytes: merging the absent manifest's chunks would
+                        // replace the bytes the served manifest published.
+                        ChunkSpec::new("chunk_shared", vec![0x47u8; 16], 0),
+                        ChunkSpec::new("chunk_gone", vec![0x47u8; 16], 16),
+                    ],
+                )],
+            )
+            .not_served(),
+        )
+        .with_extra_manifest(ExtraManifestSpec::new(
+            "kept",
+            vec![FileSpec::new(
+                "game/kept.dat",
+                vec![ChunkSpec::new("chunk_kept", vec![0x4Bu8; 16], 0)],
+            )],
+        )),
+    );
+    let gone_id = extra_manifest(&fx, "gone").id.clone();
+    let kept_id = extra_manifest(&fx, "kept").id.clone();
+    // The mock serves this body for the kept manifest's route, so the `200`
+    // below can be checked against the bytes the fixture published rather than
+    // against the status alone.
+    let kept_bytes = extra_manifest(&fx, "kept").zstd.clone();
+
+    // The store is what the mock serves: the shared id must still hold the
+    // served manifest's bytes, not the absent one's, and the absent-only id
+    // must not be published at all.
+    let served = fx
+        .chunk_store
+        .get("chunk_shared")
+        .expect("the served manifest publishes its chunk");
+    let served = zstd::stream::decode_all(std::io::Cursor::new(served.clone()))
+        .expect("the served chunk is a zstd frame");
+    assert_eq!(
+        served,
+        vec![0x41u8; 16],
+        "the unserved manifest must not overwrite a served chunk"
+    );
+    assert!(fx.chunk_store.contains_key("chunk_kept"));
+    assert!(
+        !fx.chunk_store.contains_key("chunk_gone"),
+        "an absent manifest's chunks are unreachable"
+    );
+    assert!(!fx.corrupt_chunk_store.contains_key("chunk_gone"));
+
+    // The advertisement is the mock's own `getBuild` answer, not a restatement
+    // of the fixture description: both extras are present under the identities
+    // the build publishes.
+    let mock = MockServer::start(fx, MockOpts::default()).await;
+    let client = reqwest::Client::new();
+    let body: serde_json::Value = client
+        .get(format!("{}/getBuild", mock.sophon_base))
+        .send()
+        .await
+        .expect("getBuild answers")
+        .json()
+        .await
+        .expect("getBuild is JSON");
+    let manifests = body["data"]["manifests"]
+        .as_array()
+        .expect("a manifests array");
+    let advertised: Vec<(&str, &str)> = manifests
+        .iter()
+        .map(|m| {
+            (
+                m["matching_field"]
+                    .as_str()
+                    .expect("a matching_field per manifest"),
+                m["manifest"]["id"].as_str().expect("an id per manifest"),
+            )
         })
         .collect();
-    assert_eq!(
-        events,
-        vec!["report", "plan", "summary"],
-        "one record per event, in order, and nothing else on stdout:\n{stdout}"
-    );
-    // No `KEY=value` text anywhere: that substring is what a text-plane leak
-    // would look like, and `total=0` is a substring of nothing in JSON.
     assert!(
-        !stdout.contains("total=") && !stdout.contains("REPORT ") && !stdout.contains("PLAN "),
-        "text plane leaked into the JSON stream:\n{stdout}"
+        advertised.contains(&("gone", gone_id.as_str())),
+        "the absent manifest is still advertised: {advertised:?}"
     );
-    // And the counts are still there, by name, as numbers.
-    let last: serde_json::Value = serde_json::from_str(stdout.lines().last().unwrap()).unwrap();
-    assert_eq!(last["total"], fx2.files.len() as u64);
-    assert_eq!(last["exit"], 0);
-    let plan: serde_json::Value = serde_json::from_str(stdout.lines().nth(1).unwrap()).unwrap();
-    assert_eq!(plan["files"], fx2.files.len() as u64);
-    assert_eq!(plan["scoped"], 0);
-
-    // The default is the text plane, and it is unchanged by any of this.
-    let mut text_args = base.clone();
-    text_args.push("--print-plan");
-    let (code, stdout, stderr) = run_binary(&text_args, &[]).await;
-    assert_eq!(code, 0, "stderr: {stderr}");
     assert!(
-        stdout.starts_with("REPORT local_version=")
-            && stdout.contains(&format!("PLAN files={}", fx2.files.len())),
-        "{stdout}"
+        advertised.contains(&("kept", kept_id.as_str())),
+        "the served extra manifest is advertised: {advertised:?}"
     );
-    assert!(stdout.trim_end().ends_with("exit=0"), "{stdout}");
 
-    mock.stop();
-}
-
-#[tokio::test]
-async fn an_explicit_base_beats_the_env_var() {
-    // The env seams are pointed at a **dead** port, so if the env won the run
-    // would fail with exit 2 instead of exiting 0.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_precedence");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &[
-            "--game-path",
-            &game,
-            "--biz",
-            "hk4e_global",
-            "--check-only",
-            "--hyp-base",
-            &mock.hyp_base,
-            "--sophon-base",
-            &mock.sophon_base,
-        ],
-        &[
-            ("GIRPR_HYP_BASE", "http://127.0.0.1:1"),
-            ("GIRPR_SOPHON_BASE", "http://127.0.0.1:1"),
-        ],
-    )
-    .await;
-    assert_eq!(code, 0, "the flag must win over the env var: {stderr}");
-    mock.stop();
-}
-
-#[tokio::test]
-async fn the_env_seam_still_works_without_the_flags() {
-    // The env seam every offline e2e run already uses must keep working.
-    let fx = build_fixture();
-    let mock = MockServer::start(fx, MockOpts::default()).await;
-    let dir = temp_dir("base_env");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    let game = dir.to_string_lossy().into_owned();
-    let (code, _, stderr) = run_binary(
-        &["--game-path", &game, "--biz", "hk4e_global", "--check-only"],
-        &[
-            ("GIRPR_HYP_BASE", &mock.hyp_base),
-            ("GIRPR_SOPHON_BASE", &mock.sophon_base),
-        ],
-    )
-    .await;
-    assert_eq!(code, 0, "env overrides must still work: {stderr}");
-    mock.stop();
-}
-
-#[tokio::test]
-async fn deprecated_files_call_carries_the_per_launcher_channel() {
-    // `getGameDeprecatedFileConfigs` is the one call that needs
-    // channel/sub_channel, and the values are per launcher: bilibili is 14/0,
-    // not the global 1/0.
-    let fx = build_fixture();
-    let mock = MockServer::start(
-        fx,
-        MockOpts {
-            deprecated_files: vec!["old/legacy.dll".to_string()],
-            ..Default::default()
-        },
-    )
-    .await;
-    let dir = temp_dir("channel");
-    let fx2 = build_fixture();
-    for f in &fx2.files {
-        write_game_file(&dir, &f.rel, &f.data);
-    }
-    write_game_file(&dir, "old/legacy.dll", &[0x7Eu8; 50]);
-    repair::run(ctx_for_biz(dir.to_path_buf(), &mock, 1, Biz::Hk4eBilibili))
+    // Servability follows the advertisement: asking the URL the build
+    // publishes for each manifest gets the body the origin has, so the absent
+    // one is a `404` and the kept one is a `200` carrying the fixture's bytes.
+    // The URL is production's join of a manifest prefix and id.
+    let body_url = |field: &str| {
+        let manifest = manifests
+            .iter()
+            .find(|m| m["matching_field"].as_str() == Some(field))
+            .unwrap_or_else(|| panic!("the build advertises {field}: {advertised:?}"));
+        let prefix = manifest["manifest_download"]["url_prefix"]
+            .as_str()
+            .expect("a manifest url_prefix per manifest");
+        let id = manifest["manifest"]["id"]
+            .as_str()
+            .expect("an id per manifest");
+        join_url(prefix, id)
+    };
+    let kept_body = client
+        .get(body_url("kept"))
+        .send()
         .await
-        .expect("bilibili run");
-
-    let dep = mock
-        .first_target_with("getGameDeprecatedFileConfigs")
-        .expect("deprecated call made");
-    assert!(dep.contains("channel=14"), "{dep}");
-    assert!(dep.contains("sub_channel=0"), "{dep}");
-    assert!(dep.contains("game_ids[]=T2S0Gz4Dr2"), "{dep}");
-    // The two channel-less APIs must not carry the params.
-    for api in ["getGameConfigs", "getGameBranches"] {
-        let t = mock.first_target_with(api).expect("call made");
-        assert!(!t.contains("channel="), "{api} must omit channel: {t}");
-    }
+        .expect("the kept manifest route answers");
+    assert_eq!(
+        kept_body.status(),
+        reqwest::StatusCode::OK,
+        "the advertised kept manifest is served"
+    );
+    let kept_body = kept_body
+        .bytes()
+        .await
+        .expect("the kept manifest body is readable");
+    assert_eq!(
+        kept_body.as_ref(),
+        kept_bytes.as_slice(),
+        "the kept route serves the fixture's manifest bytes"
+    );
+    let gone_body = client
+        .get(body_url("gone"))
+        .send()
+        .await
+        .expect("the gone manifest route answers");
+    assert_eq!(
+        gone_body.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "the advertised gone manifest is not served"
+    );
 
     mock.stop();
 }

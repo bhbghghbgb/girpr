@@ -1,0 +1,5 @@
+# Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+# Integration targets are not covered by these options and keep their own
+# file-level allows.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true

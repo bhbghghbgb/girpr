@@ -52,6 +52,9 @@
 //! example uses checked by nothing. See `the_documented_usage_resolves_a_plan`
 //! below.
 
+// Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod filter;
 pub mod level;
 pub mod plan;

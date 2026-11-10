@@ -992,16 +992,17 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    What it names is what makes it useful:
 
    ```
-   CHECK fail: md5 expect_md5=d992a789… actual_md5=1e210ff1…
+   CHECK fail: md5 file=GenshinImpact_Data/… expect_md5=d992a789… actual_md5=1e210ff1…
    ```
 
    this capture's `new.md5` and `old.md5`. Those two come from `tracing::warn!`
-   in `src/repair/check.rs`, so they reach **stderr and the log file only, never
-   stdout** — on the data plane the only signal is `exit 4`. A mismatch means
-   the fixture and the tool disagree about the file before a single byte moves.
+   in `src/repair/phases/check.rs`, so they reach **stderr and the log file
+   only, never stdout** — on the data plane the only signal is `exit 4`. A
+   mismatch means the fixture and the tool disagree about the file before a
+   single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1`, `--io-threads 1` and `--fail-fast`. `--max-files 1`
+   path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
@@ -1127,8 +1128,8 @@ figures to the byte. Ten reused chunks across the three captures that declare
 them, none of them downloaded. Only the six captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
 `identical` one was left alone, and the other three were modified in place — so
-the scope held across all six runs. The bundle itself was never a working tree
-and still verifies.
+the scope held across all twelve runs (a `--print-plan` pre-pass plus a real run
+per capture). The bundle itself was never a working tree and still verifies.
 
 **One capture, one class.** The class set is a partition on the content, so a
 file answers exactly one class and the bundle holds six captures for six

@@ -1,0 +1,87 @@
+name: msrv
+
+# Advisory: the default branch does not require these checks, so a docs-only
+# change correctly produces no `msrv` run. If this becomes a required check,
+# remove the path filters or add an always-run summary job: GitHub leaves a
+# required check that never runs pending.
+on:
+  push:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'tests/scripts/check-msrv.ps1'
+      - '.github/workflows/msrv.yml'
+  pull_request:
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'tests/scripts/check-msrv.ps1'
+      - '.github/workflows/msrv.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msrv-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  msrv:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The script installs the older toolchains itself. The cache is keyed by
+      # the host toolchain and the manifests/lockfiles; cargo fingerprints
+      # artifacts by compiler version, so sharing the target directory across
+      # the per-member `cargo +<version>` builds is safe.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-all-crates: 'true'
+      - name: Check every member at its declared rust-version
+        shell: pwsh
+        run: ./tests/scripts/check-msrv.ps1
+
+  iot-bench:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      # The bench pins redb to the newest line that still supports the
+      # workspace MSRV. Build it with that toolchain, not the runner's default
+      # stable, so a dependency bump that raises the bench's floor fails here.
+      # Read the version from the root manifest instead of repeating it here;
+      # the job then follows the workspace when its MSRV moves.
+      - name: Read the workspace MSRV
+        id: msrv
+        shell: pwsh
+        run: |
+          $rootManifest = (Resolve-Path Cargo.toml).Path
+          $metadataJson = cargo metadata --no-deps --format-version 1 --locked
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo metadata --no-deps --format-version 1 --locked failed with exit code $LASTEXITCODE"
+          }
+          $version = ($metadataJson | ConvertFrom-Json).packages |
+            Where-Object { $_.manifest_path -eq $rootManifest } |
+            Select-Object -ExpandProperty rust_version
+          if (-not $version) {
+            throw "the root package does not declare rust-version"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+      # The bench is a standalone workspace with its own lockfile, so this is
+      # the only job that compiles its pinned dependency.
+      - name: Install Rust ${{ steps.msrv.outputs.version }}
+        shell: pwsh
+        run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal --no-self-update
+      - uses: Swatinem/rust-cache@v2
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
+        with:
+          workspaces: |
+            tests/scripts/io-profile/iot-bench -> target
+      - name: Check the standalone I/O bench
+        env:
+          RUSTUP_TOOLCHAIN: ${{ steps.msrv.outputs.version }}
+        run: cargo check --locked --manifest-path tests/scripts/io-profile/iot-bench/Cargo.toml
