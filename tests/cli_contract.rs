@@ -32,6 +32,7 @@ use clap::Parser;
 use girpr::Args;
 use girpr_tempdir::TempDir;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use common::{
     MockOpts, MockServer, PLAN_SCAN_BYTES_KEY, build_fixture, read_game_file,
@@ -297,6 +298,69 @@ fn help_entry_finds_the_help_option_behind_its_short_alias() {
         "the --help entry starts at its short-alias line:\n{help}"
     );
     assert!(help.contains("Print help"), "{help}");
+}
+
+/// The real `--help` output, captured once.
+///
+/// The layout constants above are claims about clap, and the fixture tests
+/// only ever build text *from* those claims. The tests below check the claims
+/// against the text clap actually writes, so they all read the same capture:
+/// the binary's help cannot change while the suite runs, and one process is
+/// enough to see it.
+fn real_help() -> &'static str {
+    static HELP: OnceLock<String> = OnceLock::new();
+    HELP.get_or_init(|| {
+        let (code, stdout, stderr) = run(&["--help"]);
+        assert_eq!(code, 0, "--help exits 0:\n{stderr}");
+        stdout
+    })
+    .as_str()
+}
+
+/// The width of a help line's leading indent.
+///
+/// The indent is measured, not searched for: a line that carries *more*
+/// spaces than the constant is not a line that starts at the constant.
+fn indent_width(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+/// The short-alias indent is clap's, and this is where clap puts it.
+///
+/// [`HELP_SHORT_OPTION_INDENT`] says where a line that begins with a short
+/// alias starts. The fixture tests build their text from the constant, so
+/// they cannot tell a right constant from a wrong one — they only show that
+/// the suite agrees with itself. This reads the real help, where clap puts
+/// its one short alias (`-h, --help`) in its own column, and pins the column
+/// to the constant: a clap upgrade that moves it fails here, as the layout
+/// change it is, instead of passing on the fixtures' word.
+#[test]
+fn the_real_help_puts_its_short_option_line_at_the_short_option_indent() {
+    let help = real_help();
+    let short_lines: Vec<&str> = help
+        .lines()
+        .filter(|line| line.trim_start().starts_with("-h,"))
+        .collect();
+    assert_eq!(
+        short_lines.len(),
+        1,
+        "the real help has exactly one short-option line:\n{help}"
+    );
+    let line = short_lines[0];
+    assert_eq!(
+        line.trim_start(),
+        "-h, --help",
+        "the short-option line is the help flag's own:\n{help}"
+    );
+    assert!(
+        line.starts_with(HELP_SHORT_OPTION_INDENT),
+        "the short option starts at the pinned indent:\n{line:?}"
+    );
+    assert_eq!(
+        indent_width(line),
+        HELP_SHORT_OPTION_INDENT.len(),
+        "the short option's column moved:\n{help}"
+    );
 }
 
 #[test]
