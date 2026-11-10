@@ -890,7 +890,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-09 | F514, F515 | done | Wave E; junction metadata error cause and unreachable skip branch; low; cc7ba1f, b2634eb |
 | INI-10 | F583, F584 | done | Wave E; shared junction test helper and `%VAR%` caveat; low; 1a822ca |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
-| INI-12 | F586 | todo | Wave E; pin the link-missing junction branch; low |
+| INI-12 | F586 | in_progress | Wave E; pin the link-missing junction branch; low |
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
