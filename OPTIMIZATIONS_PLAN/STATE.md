@@ -884,7 +884,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-08 | F548, F549 | done | Wave E; pin name and checked pre-epoch construction; low; b7bbfbf, 30f4b7f |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
-| CHECK-09 | F552 | todo | Wave E; pin the remaining check warn arms; low |
+| CHECK-09 | F552 | in_progress | Wave E; pin the remaining check warn arms; low |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
 | CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
