@@ -216,11 +216,26 @@ pub mod test_support {
     mod tests {
         use super::*;
 
+        /// A host whose clock has no room before the Unix epoch cannot build
+        /// the instants the crossing cases need.
+        ///
+        /// The case that needs one reports that and skips rather than
+        /// panicking on a subtraction the host refuses. The wording is the
+        /// suite's: a case that never ran is not a case that passed.
+        fn skip_pre_epoch(subject: &str) {
+            eprintln!("SKIP precondition: this host cannot represent {subject}");
+        }
+
         /// The age is exact on both sides of the epoch and across it, and the
         /// clock itself is never handed back as if it were older. A pre-epoch
         /// clock is the case that used to silently lose the age, and a clock
         /// shortly after the epoch is the other direction of the same
         /// crossing.
+        ///
+        /// Both crossings need a moment before the epoch, so each one is
+        /// built with a checked subtraction: a host whose clock cannot
+        /// represent that moment skips the case that needs it instead of
+        /// panicking on it.
         #[test]
         fn an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch_and_across_it_backward() {
             let day = Duration::from_secs(24 * 60 * 60);
@@ -232,34 +247,46 @@ pub mod test_support {
                 "an ordinary clock gets exactly the requested age"
             );
 
-            let before_epoch = SystemTime::UNIX_EPOCH - Duration::from_secs(60);
-            let aged = stamp_ago_from(before_epoch, day)
-                .expect("a clock a minute before the epoch has a day of history");
-            assert_eq!(
-                aged,
-                before_epoch - day,
-                "a pre-epoch clock gets the requested age, not itself"
-            );
-            assert!(
-                aged < before_epoch,
-                "an ago stamp is never in the clock's future"
-            );
+            // A clock before the epoch. The instant is built with a checked
+            // subtraction, so a host whose clock cannot represent it says so
+            // instead of panicking on it.
+            let before_epoch = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(60));
+            let aged = before_epoch.and_then(|clock| stamp_ago_from(clock, day));
+            let expected = before_epoch.and_then(|clock| clock.checked_sub(day));
+            match (before_epoch, aged, expected) {
+                (Some(before_epoch), Some(aged), Some(expected)) => {
+                    assert_eq!(
+                        aged, expected,
+                        "a pre-epoch clock gets the requested age, not itself"
+                    );
+                    assert!(
+                        aged < before_epoch,
+                        "an ago stamp is never in the clock's future"
+                    );
+                }
+                _ => skip_pre_epoch("a clock a minute before the epoch with a day of history"),
+            }
 
             // A clock shortly after the epoch is the other way the age can
             // cross it: the subtraction reaches back past the epoch, so a
             // floor there would return a stamp younger than requested.
             let after_epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(60);
-            let aged = stamp_ago_from(after_epoch, day)
-                .expect("a clock a minute after the epoch has a day of history");
-            assert_eq!(
-                aged,
-                after_epoch - day,
-                "a clock less than the age past the epoch is aged past it, not clamped to it"
-            );
-            assert!(
-                aged < SystemTime::UNIX_EPOCH && aged < after_epoch,
-                "the backward crossing lands before the epoch and before the clock"
-            );
+            match (
+                stamp_ago_from(after_epoch, day),
+                after_epoch.checked_sub(day),
+            ) {
+                (Some(aged), Some(expected)) => {
+                    assert_eq!(
+                        aged, expected,
+                        "a clock less than the age past the epoch is aged past it, not clamped to it"
+                    );
+                    assert!(
+                        aged < SystemTime::UNIX_EPOCH && aged < after_epoch,
+                        "the backward crossing lands before the epoch and before the clock"
+                    );
+                }
+                _ => skip_pre_epoch("a clock a minute after the epoch with a day of history"),
+            }
         }
 
         /// A platform that cannot reach the age reports it instead of passing
