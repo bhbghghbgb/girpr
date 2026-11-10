@@ -1128,8 +1128,8 @@ figures to the byte. Ten reused chunks across the three captures that declare
 them, none of them downloaded. Only the six captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
 `identical` one was left alone, and the other three were modified in place — so
-the scope held across all six runs. The bundle itself was never a working tree
-and still verifies.
+the scope held across all twelve runs (a `--print-plan` pre-pass plus a real run
+per capture). The bundle itself was never a working tree and still verifies.
 
 **One capture, one class.** The class set is a partition on the content, so a
 file answers exactly one class and the bundle holds six captures for six

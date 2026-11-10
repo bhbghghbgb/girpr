@@ -61,11 +61,14 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈98 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`expected/` is ≈20 MiB, `game/` ≈20 MiB, `chunks/` ≈17 MiB and `manifests/`
-≈41 MiB) and regenerable, so they belong on disk, not in history. **This is the
-project location**: anything a test or another tool is expected to rely on lives
-here.
+bundles are large (≈97.7 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`expected/` is ≈18.7 MiB, `game/` ≈19.9 MiB, `chunks/` ≈15.8 MiB and
+`manifests/` ≈41.4 MiB; MiB = 1 048 576 B, measured on the reference bundle) and
+regenerable, so they belong on disk, not in history. Of `manifests/`, only the
+four served `*.manifest.zst` archives are ever fetched — ≈19 MiB — while the
+rest is the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv`
+sidecars. **This is the project location**: anything a test or another tool is
+expected to rely on lives here.
 
 **When to re-capture.** A bundle is out of date when the world moved or when
 this tool moved:

@@ -110,8 +110,9 @@ pub fn pair_sides<'a, T>(pair: &'a [T], what: &str) -> Result<(&'a T, &'a T), Fa
 /// **All at once, and filed in input order.** The loop this replaces was
 /// `for field { for tag { capture().await } }`, which put a 9 MB download after a
 /// 2 MB download after a 9 MB download after a 2 MB download for no reason:
-/// nothing here depends on anything else here. On the reference bundle that is
-/// ~20 MB strictly in series.
+/// nothing here depends on anything else here. On the reference bundle those
+/// four served `.manifest.zst` archives are ≈19 MiB strictly in series; the
+/// `manifests/` directory is ≈41 MiB, but only the archives are ever fetched.
 ///
 /// The order they are *verified and filed* in is unchanged and is still input
 /// order, because `map_concurrently` returns input order — so which download
