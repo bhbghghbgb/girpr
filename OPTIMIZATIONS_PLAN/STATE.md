@@ -957,7 +957,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-23 | F709 | skipped | Wave E; the only item was a generic visibility tidy; low |
 | INI-19 | F688 | skipped | Wave E; the only item was a doc nit; low |
 | INI-20 | F690, F691 | skipped | Wave E; the items were generic coverage and style nits; low |
-| INI-21 | F692, F694, F705, F706 | todo | Wave E; the junction and symlink fixture guards; low |
+| INI-21 | F692, F694, F705, F706 | pending_review | Wave E; the junction and symlink fixture guards; low; bd73f2e, bd07822, 5bbee73 |
 | INI-22 | F705, F706 | skipped | Wave E; merged into INI-21; low |
 | DOCS-USER-14 | F632, F633, F634 | skipped | Wave E; merged into PATHHELPERS-12 and TEST-REGRESSION-11; low |
 | CHECK-15 | F638, F641, F642, F643, F646, F647 | todo | Wave E; the check phase's failure shapes and its log assertions; low |
