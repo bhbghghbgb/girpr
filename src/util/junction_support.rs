@@ -261,6 +261,15 @@ pub(super) fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
     }
 }
 
+/// Whether the junction cases must run on this host.
+///
+/// The switch is presence-based: any value, including `0`, requires the
+/// junction case, so a run meant to prove the junction behaviour cannot pass
+/// having checked nothing.
+pub(super) fn require_junction() -> bool {
+    std::env::var_os("GIRPR_TEST_REQUIRE_JUNCTION").is_some()
+}
+
 mod tests {
     use super::*;
 

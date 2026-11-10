@@ -551,7 +551,9 @@ fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     #[cfg(windows)]
-    use crate::util::junction_support::{junction_skip_reason, try_junction_dir};
+    use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
+    #[cfg(windows)]
+    use crate::util::junction_support::{junction_skip_reason, require_junction, try_junction_dir};
     use crate::util::path::temp_sibling;
     use std::collections::HashSet;
 
@@ -1173,7 +1175,10 @@ mod tests {
     /// refusal must name the dangling link instead of "does not exist".
     /// Junctions need no privilege, so only a proven host refusal (an
     /// unsupported platform or the known privilege denial) skips; any other
-    /// failure is a broken test environment and must fail loudly.
+    /// failure is a broken test environment and must fail loudly. A host that
+    /// provably refuses the junction cannot confirm the refusal here, so that
+    /// case is skipped rather than failed unless `GIRPR_TEST_REQUIRE_JUNCTION`
+    /// is present.
     #[cfg(windows)]
     #[test]
     fn config_bump_refuses_a_dangling_junction_game_dir() {
@@ -1184,7 +1189,11 @@ mod tests {
         if let Err(e) = try_junction_dir(&target, &link) {
             match junction_skip_reason(&e) {
                 Some(why) => {
-                    eprintln!("SKIP precondition: {why}: {e}");
+                    skip_junction(
+                        &format!("{why}: {e}"),
+                        require_junction(),
+                        FixtureRefusal::Host,
+                    );
                     return;
                 }
                 None => panic!("could not create the test directory junction: {e}"),
@@ -1207,6 +1216,41 @@ mod tests {
             "the writer must not create the junction target"
         );
         cleanup.remove().expect("the junction is removable");
+    }
+
+    /// Report that the junction could not be created, or fail when
+    /// `GIRPR_TEST_REQUIRE_JUNCTION` says the case must not be skipped. A run
+    /// meant to prove the dangling-junction refusal must not pass having
+    /// checked nothing.
+    ///
+    /// The refusal is the shared one, so the junction cases report a host
+    /// refusal the same way wherever they live.
+    #[cfg(windows)]
+    fn skip_junction(why: &str, required: bool, refusal: FixtureRefusal) {
+        skip_fixture_refusal(
+            refusal,
+            "a directory junction",
+            "GIRPR_TEST_REQUIRE_JUNCTION",
+            why,
+            required,
+        );
+    }
+
+    /// Without the switch, a proven host refusal skips the junction case out
+    /// loud instead of failing it.
+    #[cfg(windows)]
+    #[test]
+    fn a_junction_fixture_refusal_skips_without_the_switch() {
+        skip_junction("injected refusal", false, FixtureRefusal::Injected);
+    }
+
+    /// The same refusal is a failure when the switch is set, whatever its
+    /// value: the case must not pass having proved nothing.
+    #[cfg(windows)]
+    #[test]
+    #[should_panic(expected = "GIRPR_TEST_REQUIRE_JUNCTION is set")]
+    fn a_junction_fixture_refusal_fails_with_the_switch() {
+        skip_junction("injected refusal", true, FixtureRefusal::Injected);
     }
 
     /// Removes a link or junction — never its target — when the guard leaves
