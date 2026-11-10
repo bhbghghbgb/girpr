@@ -952,6 +952,14 @@ fn write_explicit_audio(
 /// caller that scoped a subscriber (a test, or any explicit `with_default`)
 /// seeing the step's log lines, which are part of the operator contract.
 ///
+/// The dispatcher is read from the calling thread at call time, so the call
+/// must be made on the thread carrying the subscriber — not from inside a
+/// spawned task, which a runtime may run on a worker without it. Called from
+/// such a task, this captures whatever dispatcher that worker carries instead
+/// of the caller's (for a scoped subscriber, none), so the closure's lines
+/// silently go there rather than to the scoped subscriber: the work still runs,
+/// the log record does not reach the caller.
+///
 /// The task is spawned before the handle is returned, so a caller can start a
 /// read alongside other work and await it later. Dropping the handle detaches
 /// the task rather than cancelling it: it still runs to completion on the
