@@ -592,7 +592,7 @@ async fn verify_and_retry(
     // The digest and, when the layout has an overlap, the verdicts the
     // terminal decision needs are the same read: the scan hashes the whole
     // file as it sweeps the ranges.
-    let scan = read_after_redo(file, dest_ranges, |ranges| {
+    let (scan, checked) = read_after_redo(file, dest_ranges, |ranges| {
         util::scan_reader(handle, ranges, &[])
     })?;
     let final_md5 = scan.file_md5;
@@ -601,7 +601,7 @@ async fn verify_and_retry(
             "final md5 mismatch for {}: expect {} got {}",
             file.rel, file.md5, final_md5
         );
-        if redo_mismatch_is_terminal(&scan) {
+        if redo_mismatch_is_terminal(&scan, checked) {
             return Err(FinalDigestMismatch(message).into());
         }
         return Err(anyhow::anyhow!(message));
@@ -620,13 +620,18 @@ async fn verify_and_retry(
 /// settle the digest. A plan with no overlap is proved by the layout alone, so
 /// it is given no ranges: the same single pass still answers the digest, just
 /// without building per-range digests.
+///
+/// The second value is how many verdicts the terminal decision reads: the
+/// number of ranges the pass was given. A scan that answers fewer is missing
+/// answers, not correct ones — see [`redo_mismatch_is_terminal`].
 fn read_after_redo(
     file: &PlannedFile,
     dest_ranges: &[util::ScanRange<'_>],
     read: impl FnOnce(&[util::ScanRange<'_>]) -> Result<util::Scan>,
-) -> Result<util::Scan> {
+) -> Result<(util::Scan, usize)> {
     let ranges = overlapping_ranges(file, dest_ranges);
-    read(&ranges)
+    let checked = ranges.len();
+    Ok((read(&ranges)?, checked))
 }
 
 /// The chunk ranges the layout says overlap, in the order the scan was given
@@ -681,8 +686,14 @@ fn overlapping_ranges<'a>(
 /// lengths; only the bytes can. The scan therefore carries one verdict per
 /// overlapping range, and the mismatch is final exactly when every one of
 /// them now matches.
-fn redo_mismatch_is_terminal(scan: &util::Scan) -> bool {
-    scan.dest_ok.iter().all(|&ok| ok)
+///
+/// `expected` is how many verdicts the decision reads: the ranges
+/// [`read_after_redo`] asked the scan for. A verdict list that is shorter is
+/// missing answers, not correct ones, so it decides nothing and the mismatch
+/// keeps its retries — the same defensive shape [`verify_in_place`] uses for
+/// the chunks it has to redo.
+fn redo_mismatch_is_terminal(scan: &util::Scan, expected: usize) -> bool {
+    (0..expected).all(|i| scan.dest_ok.get(i).copied().unwrap_or(false))
 }
 
 /// A whole-file digest mismatch that no retry can change.
@@ -1408,7 +1419,7 @@ mod tests {
         };
         let gapped_dest = [(0u64, 1u64, "md5-a"), (2, 1, "md5-b")];
         let mut reads = 0;
-        let scan = read_after_redo(&gapped, &gapped_dest, |ranges| {
+        let (scan, checked) = read_after_redo(&gapped, &gapped_dest, |ranges| {
             reads += 1;
             assert!(
                 ranges.is_empty(),
@@ -1423,8 +1434,9 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reads, 1, "the post-redo tail reads the file exactly once");
+        assert_eq!(checked, 0, "no range was asked for, so no verdict is read");
         assert!(
-            redo_mismatch_is_terminal(&scan),
+            redo_mismatch_is_terminal(&scan, checked),
             "a gap is zero-filled and does not make the digest changeable"
         );
 
@@ -1432,7 +1444,7 @@ mod tests {
         // the next attempt would write nothing and repeat the same bytes.
         let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
         let mut reads = 0;
-        let scan = read_after_redo(&overlapping, &overlap_dest, |ranges| {
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |ranges| {
             reads += 1;
             assert_eq!(
                 ranges.len(),
@@ -1452,8 +1464,9 @@ mod tests {
             "the whole-file digest and the range verdicts are one pass, not a \
              digest followed by a rescan"
         );
+        assert_eq!(checked, 3, "every overlapping range was asked for");
         assert!(
-            redo_mismatch_is_terminal(&scan),
+            redo_mismatch_is_terminal(&scan, checked),
             "identical duplicates cannot make a retry assemble different bytes"
         );
         // This is the branch that builds `FinalDigestMismatch`, so the file
@@ -1463,7 +1476,7 @@ mod tests {
         // A genuine overlap: at least one range cannot match, so the next
         // attempt may assemble different bytes.
         let mut reads = 0;
-        let scan = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
             reads += 1;
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
@@ -1475,7 +1488,7 @@ mod tests {
         .unwrap();
         assert_eq!(reads, 1, "one pass decides either way");
         assert!(
-            !redo_mismatch_is_terminal(&scan),
+            !redo_mismatch_is_terminal(&scan, checked),
             "an overlapping plan whose ranges cannot all match keeps its retries"
         );
     }
@@ -1508,7 +1521,7 @@ mod tests {
         let dest = [(0u64, 4u64, "md5-a"), (2, 4, "md5-b"), (8, 4, "md5-c")];
 
         let mut reads = 0;
-        let scan = read_after_redo(&file, &dest, |ranges| {
+        let (scan, checked) = read_after_redo(&file, &dest, |ranges| {
             reads += 1;
             assert_eq!(
                 ranges.len(),
@@ -1528,8 +1541,9 @@ mod tests {
         })
         .unwrap();
         assert_eq!(reads, 1, "the narrowing costs no extra pass");
+        assert_eq!(checked, 2, "the decision reads two verdicts");
         assert!(
-            redo_mismatch_is_terminal(&scan),
+            redo_mismatch_is_terminal(&scan, checked),
             "the overlapping chunks match, so the mismatch is final"
         );
 
@@ -1540,6 +1554,75 @@ mod tests {
             file.layout().overlaps,
             vec![(0, 2)],
             "the layout names the two offsets of the overlap"
+        );
+    }
+
+    /// A verdict list that is shorter than the ranges the decision needs is
+    /// missing answers, not correct ones.
+    ///
+    /// The scan answers one verdict per range it was given, so a shorter list
+    /// means the scan did not say what the decision asked. Treating the
+    /// missing verdicts as passes would mark a mismatch final — a file the
+    /// next attempt could still repair — so the decision reads them the way
+    /// [`verify_in_place`] reads the chunks it has to redo: a missing verdict
+    /// is a wrong one.
+    #[test]
+    fn a_short_verdict_list_is_never_a_pass() {
+        let overlapping = PlannedFile {
+            rel: "f.dat".into(),
+            size: 2,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 2),
+                chunk_at("b", "md5-b", 0, 2),
+                chunk_at("c", "md5-c", 1, 1),
+            ],
+        };
+        let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
+
+        // The scan answers one verdict for one of the three overlapping
+        // ranges. The two it did not answer are not passes.
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: vec![true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(checked, 3, "the overlap needs a verdict for every range");
+        assert!(
+            !redo_mismatch_is_terminal(&scan, checked),
+            "a missing verdict is a missing answer, never a pass"
+        );
+
+        // And the same for the empty list: no verdict at all decides nothing.
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: Vec::new(),
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert!(
+            !redo_mismatch_is_terminal(&scan, checked),
+            "no verdict at all decides nothing"
+        );
+
+        // The complete list is the only one that decides.
+        let complete = util::Scan {
+            file_md5: Md5::EMPTY,
+            file_len: 2,
+            dest_ok: vec![true, true, true],
+            source_ok: Vec::new(),
+        };
+        assert!(
+            redo_mismatch_is_terminal(&complete, checked),
+            "every overlapping range matches, so the mismatch is final"
         );
     }
 
