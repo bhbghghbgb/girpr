@@ -52,10 +52,11 @@
 //! ```
 //!
 //! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
-//! own scratch tree and listeners (§6.2), so the cases are parallel-safe, and
-//! the `[[profile.default.overrides]]` in `.config/nextest.toml` whose `filter`
-//! names these six cases sets `success-output = "immediate"`, so the
-//! precondition and per-capture lines are printed even though the cases pass.
+//! own scratch tree (§6.3) and its own listeners (§6.2), so the cases are
+//! parallel-safe, and the `[[profile.default.overrides]]` in
+//! `.config/nextest.toml` whose `filter` names these six cases sets
+//! `success-output = "immediate"`, so the precondition and per-capture lines
+//! are printed even though the cases pass.
 //!
 //! To reproduce one failure, narrow the run with nextest's filter, for example
 //! `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.

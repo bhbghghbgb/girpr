@@ -169,8 +169,8 @@ cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only
 ```
 
-The cases run in parallel: each capture has its own scratch tree and its own
-listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
+The cases run in parallel: each capture has its own scratch tree (§6.3) and its
+own listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
 `success-output` override in `.config/nextest.toml` prints each case's
 precondition and summary lines even though it passes, so `--no-capture` is not
 needed either. To reproduce one failure, narrow the run with nextest's filter,
