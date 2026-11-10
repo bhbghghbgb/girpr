@@ -781,9 +781,9 @@ until the main tasks and rework are done.
 | F680 | JOBS-08 review | `tests/cli_contract.rs` | The `real_help()` doc comment says "they all read the same capture", which is true under `cargo test` but not under nextest's process-per-test. | todo |
 | F681 | JOBS-08 review | `tests/cli_contract.rs` | The description test pins the wording "Game install directory", so rewording `--game-path`'s doc comment would break a layout test. | todo |
 | F682 | JOBS-08 review | `tests/cli_contract.rs` | `help_entry_finds_the_help_option_behind_its_short_alias` spawns its own `--help` instead of reusing `real_help()`, so the file can spawn the binary twice per process. | todo |
-| F683 | INI-12 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch ("could not be inspected") still has no direct end-to-end drive; the seam could inject the inspection error. | pending_review |
-| F684 | INI-12 implementer | `src/util/ini.rs` | `util::ini` uses the same shared helper but not the new seam, so its equivalent branch is still only covered indirectly. | pending_review |
-| F685 | INI-12 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | The two callers classify differently: path uses a local `JunctionFixture`/`classify_junction_fixture` while ini still uses an inline `match`, which is the drift the shared module exists to prevent. | todo |
+| F683 | INI-12 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch ("could not be inspected") still has no direct end-to-end drive; the seam could inject the inspection error. | completed |
+| F684 | INI-12 implementer | `src/util/ini.rs` | `util::ini` uses the same shared helper but not the new seam, so its equivalent branch is still only covered indirectly. | completed |
+| F685 | INI-12 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | The two callers classify differently: path uses a local `JunctionFixture`/`classify_junction_fixture` while ini still uses an inline `match`, which is the drift the shared module exists to prevent. | completed |
 | F686 | INI-12 review | `src/util/path.rs` | The containment case's panic arm is still only driven indirectly; driving it directly needs the skip/panic decision lifted into a shared helper. | todo |
 | F687 | INI-12 review | `OPTIMIZATIONS_PLAN/GUIDE.md` | The commit-shape convention asks for an `opt(<task-id>):` prefix while another rule forbids a task id in commit messages. | skipped (the no-task-id rule wins; the commit message satisfies it) |
 | F688 | INI-13 implementer | `src/util/junction_support.rs` | `reject_percent_path` renders components lossily, which matches what `cmd` receives; the coupling between the check and the command deserves a one-line note in the doc. | todo |
@@ -806,6 +806,8 @@ until the main tasks and rework are done.
 | F705 | INI-16 review | `src/util/path.rs`, `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink fixtures `unwrap()` the symlink creation, so on a Unix host that refuses symlinks they panic instead of skipping; they need their own skip reason and a `GIRPR_TEST_REQUIRE_SYMLINK` path. | todo |
 | F706 | INI-16 review | `src/util/ini.rs` | The Unix `link_creation_denied` treats `EPERM`/`EACCES` as a host refusal, but the `Unsupported`-means-skip rule leans on std's platform mapping, which could widen and let a broken environment skip. | todo |
 | F707 | INI-17 implementer | `src/util/junction_support.rs` | The classification's `HostRefused` arm is reachable only from a real spawn-level refusal, so unlike `Broken` it cannot be driven through the seam; the callers' injected-refusal cases cover the skip path separately. | todo |
+| F708 | INI-17 review | `src/util/ini.rs`, `src/util/path.rs` | The new broken-fixture cases re-implement the caller's own `match classify_junction_fixture(..)` instead of driving the caller's decision code, so a caller that flipped the `Broken` arm to skip would still leave them green; lift the decision into one shared helper (the goal F686 also names). | todo |
+| F709 | INI-17 review | `src/util/junction_support.rs` | `junction_skip_reason` is still `pub(super)` although no sibling module imports it any more; it could be a private `fn`. | todo |
 
 ## Follow-up batches
 
@@ -950,8 +952,9 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | TEST-REGRESSION-12 | F699, F704 | todo | Wave E; skip reporting wording in the shared helper; low |
 | INI-16 | F631 | done | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
-| INI-17 | F683, F684 | pending_review | Wave E; drive the uninspectable-link branch for both callers; low; 3a22365 |
-| INI-18 | F685, F686, F695, F698, F701, F707 | todo | Wave E; one classification shape and a directly driven panic arm; low |
+| INI-17 | F683, F684 | done | Wave E; drive the uninspectable-link branch for both callers; low; 3a22365 |
+| INI-18 | F686, F695, F698, F701, F707, F708 | todo | Wave E; one classification shape and a directly driven panic arm; low |
+| INI-23 | F709 | todo | Wave E; narrow the shared classifier's unused visibility; low |
 | INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
 | INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
