@@ -550,14 +550,16 @@ fn publish_ini(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
+    use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
     use crate::util::junction_support::{
         JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
         junction_result_with, require_junction, skip_junction, try_junction_dir,
     };
     use crate::util::path::temp_sibling;
-    use crate::util::symlink_support::symlink_skip_reason;
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
     use std::collections::HashSet;
 
     #[test]
@@ -1148,17 +1150,10 @@ mod tests {
         let link = root.join("dangling-game-dir");
         let mut cleanup = LinkGuard::new(&link);
         if let Err(e) = try_symlink_dir(&target, &link) {
-            match symlink_skip_reason(&e) {
-                Some(why) => {
-                    skip_symlink(
-                        &format!("{why}: {e}"),
-                        require_symlink(),
-                        FixtureRefusal::Host,
-                    );
-                    return;
-                }
-                None => panic!("could not create the test directory symlink: {e}"),
-            }
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
         }
 
         let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
@@ -1177,47 +1172,6 @@ mod tests {
             "the writer must not create the symlink target"
         );
         cleanup.remove().expect("the symlink is removable");
-    }
-
-    /// Report that the directory symlink could not be created, or fail when
-    /// `GIRPR_TEST_REQUIRE_SYMLINK` says the case must not be skipped. A run
-    /// meant to prove the dangling-symlink refusal must not pass having
-    /// checked nothing.
-    ///
-    /// The refusal is the shared one, so the symlink cases report a host
-    /// refusal the same way wherever they live.
-    fn skip_symlink(why: &str, required: bool, refusal: FixtureRefusal) {
-        skip_fixture_refusal(
-            refusal,
-            "a directory symlink",
-            "GIRPR_TEST_REQUIRE_SYMLINK",
-            why,
-            required,
-        );
-    }
-
-    /// Whether the symlink case must run on this host.
-    ///
-    /// The switch is presence-based: any value, including `0`, requires the
-    /// case, so a run meant to prove the dangling-symlink refusal cannot pass
-    /// having checked nothing.
-    fn require_symlink() -> bool {
-        std::env::var_os("GIRPR_TEST_REQUIRE_SYMLINK").is_some()
-    }
-
-    /// Without the switch, a proven host refusal skips the symlink case out
-    /// loud instead of failing it.
-    #[test]
-    fn a_symlink_fixture_refusal_skips_without_the_switch() {
-        skip_symlink("injected refusal", false, FixtureRefusal::Injected);
-    }
-
-    /// The same refusal is a failure when the switch is set, whatever its
-    /// value: the case must not pass having proved nothing.
-    #[test]
-    #[should_panic(expected = "GIRPR_TEST_REQUIRE_SYMLINK is set")]
-    fn a_symlink_fixture_refusal_fails_with_the_switch() {
-        skip_symlink("injected refusal", true, FixtureRefusal::Injected);
     }
 
     /// A directory junction whose target does not exist is a name-surrogate
@@ -1406,24 +1360,6 @@ mod tests {
     #[cfg(not(windows))]
     fn remove_link_at(link: &Path) -> std::io::Result<()> {
         std::fs::remove_file(link)
-    }
-
-    #[cfg(unix)]
-    fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::unix::fs::symlink(target, link)
-    }
-
-    #[cfg(windows)]
-    fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-        std::os::windows::fs::symlink_dir(target, link)
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    fn try_symlink_dir(_target: &Path, _link: &Path) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "directory symlinks are not supported on this platform",
-        ))
     }
 
     /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`
