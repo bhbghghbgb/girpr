@@ -182,8 +182,8 @@ cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_captur
 
 The `-E` expression narrows the set nextest has already selected; it does not
 add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
-runs none of them, and `cargo nextest list` needs `--run-ignored all` to list
-them at all.
+runs none of them, and `cargo nextest list` needs `--run-ignored only` (or
+`all`) to list them at all.
 
 Nothing else runs it. `cargo nextest run` still *compiles* the file, which is
 what keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`

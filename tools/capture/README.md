@@ -169,8 +169,8 @@ cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_captur
 
 The `-E` expression narrows the set nextest has already selected; it does not
 add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
-runs none of them, and `cargo nextest list` needs `--run-ignored all` to list
-them at all.
+runs none of them, and `cargo nextest list` needs `--run-ignored only` (or
+`all`) to list them at all.
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple
