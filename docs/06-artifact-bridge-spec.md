@@ -148,7 +148,7 @@ depend on the reader — so the reader is not what they use.
 ### 3.1 Gate 1 — every bridge test is `#[ignore]`d, because the suite is expensive
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
-four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
+four manifests — ~19 MiB of real bundle bytes — before it can plan a single file.
 The six cases take roughly a minute of wall-clock in a debug build (measured:
 63 s wall for the whole six-test run — the cases run in parallel, so that is
 not the sum of their durations — and 67 s wall including the rebuild, on a
@@ -399,15 +399,20 @@ visibly rather than after fifteen seconds of silence.
 
 ### 4.6 Cache served manifest bytes
 
-Each run fetches four manifests and the `manifests/` directory is ~41 MiB of the
-~98 MiB bundle; across the suite's runs that is over a hundred megabytes
-re-read for nothing. They are immutable per bundle, so cache them.
+Each run fetches four manifests (§4.5) — the `game` and `en-us` archives of the
+latest build and of the local build — and those four `.manifest.zst` files are
+~19 MiB of the ~98 MiB bundle. The `manifests/` **directory** is ~41 MiB, but
+the cache holds the archives and nothing else: the rest of that directory is
+the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv` sidecars,
+which the server never serves. Across the suite's runs the served archives are
+over a hundred megabytes re-read for nothing. They are immutable per bundle, so
+cache them.
 
 The cache is process-global, keyed by the archive's own path —
 `<bundle>/manifests/<tag>/<field>.manifest.zst`, the `(bundle, tag, field)`
-triple spelled as a path — and shared by every listener: it holds bytes that
-are a function of the bundle alone, so nothing about per-capture isolation is
-lost by sharing it.
+triple spelled as a path, so only the `.manifest.zst` archives are ever in it —
+and shared by every listener: it holds bytes that are a function of the bundle
+alone, so nothing about per-capture isolation is lost by sharing it.
 
 ### 4.7 The request log is not optional, and it is the primary source
 

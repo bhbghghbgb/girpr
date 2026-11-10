@@ -741,9 +741,13 @@ fn last_two(path: &str) -> Option<(String, String)> {
 // served-manifest bytes cache (`docs/06` §4.6)
 // ---------------------------------------------------------------------------
 
-/// Manifest archives are immutable per bundle and ~41 MiB of the ~98 MiB
-/// bundle, so every run re-reading them is over a hundred megabytes across the
-/// suite's six runs for nothing.
+/// Manifest archives are immutable per bundle, and the four a run fetches —
+/// `game` and `en-us` for the latest build and for the local build — are
+/// ~19 MiB of the ~98 MiB bundle. The `manifests/` **directory** is ~41 MiB,
+/// but the rest of it is the `.manifest.json.gz` copies and the `.meta.json` /
+/// `.paths.tsv` sidecars, which the server never serves: the cache holds the
+/// archives and nothing else. So every run re-reading them is over a hundred
+/// megabytes across the suite's six runs for nothing.
 ///
 /// The cache is **outside the listeners and shared by all of them** — including
 /// across the six per-capture bridges — because it holds bytes that are a
