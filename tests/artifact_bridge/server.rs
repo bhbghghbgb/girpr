@@ -747,13 +747,20 @@ fn last_two(path: &str) -> Option<(String, String)> {
 /// but the rest of it is the `.manifest.json.gz` copies and the `.meta.json` /
 /// `.paths.tsv` sidecars, which the server never serves: the cache holds the
 /// archives and nothing else. So every run re-reading them is over a hundred
-/// megabytes across the suite's six runs for nothing.
+/// megabytes across the suite's six captures — twelve `girpr` runs, a
+/// `--print-plan` pre-pass and a real run each — for nothing.
 ///
-/// The cache is **outside the listeners and shared by all of them** — including
-/// across the six per-capture bridges — because it holds bytes that are a
-/// function of the bundle alone, so nothing about per-capture isolation
-/// (`docs/06` §6.2) is lost by sharing it, and every capture pays the disk read
-/// once instead of six times.
+/// The cache is **outside the listeners and process-global** — one static for
+/// the whole process, not per bridge and not per capture. Under `cargo test`
+/// the six per-capture bridges share one process, so they share the cache;
+/// under `cargo nextest` every case gets a process of its own, so there the
+/// cache is per case. Sharing it is safe either way, because it holds bytes
+/// that are a function of the bundle alone: nothing about per-capture
+/// isolation (`docs/06` §6.2) is lost by sharing it.
+///
+/// What the cache saves is the **read**, not the request: each of the four
+/// archives is read from disk once per process instead of once per request,
+/// and every run asks for all four.
 static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 
 fn manifest_bytes(path: &Path) -> Arc<Vec<u8>> {
