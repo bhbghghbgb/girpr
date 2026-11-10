@@ -28,7 +28,7 @@
 //!
 //! Not "it would be rude under `cargo nextest run`". These cases are
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
-//! each run fetches four manifests — ~20 MB of real bundle bytes — before it
+//! each run fetches four manifests — ~19 MiB of real bundle bytes — before it
 //! can plan a single file. The six cases take roughly a minute of wall-clock
 //! in a debug build (measured: 63 s wall for the whole six-test run — the
 //! cases run in parallel, so that is not the sum of their durations — and 67 s

@@ -587,7 +587,7 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   the built binary against a `gircap` artifact bundle replayed over loopback,
   which is what proves `--include` and `--hyp-base` / `--sophon-base` reach
   `HypClient` through the real flag-parsing path. It is **`#[ignore]`d because
-  it costs real binary runs over ~20 MB of bundle bytes per run**, and it is a
+  it costs real binary runs over ~19 MiB of bundle bytes per run**, and it is a
   **pre-release gate: run it by hand before any release that changes the repair
   spec, and whenever a regression in that spec is suspected**:
   ```powershell
