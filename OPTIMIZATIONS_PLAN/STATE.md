@@ -696,10 +696,10 @@ until the main tasks and rework are done.
 | F595 | INI-10 review | `src/util/ini.rs` | The ini junction test ignores `GIRPR_TEST_REQUIRE_JUNCTION` while the path test honours it, so ini's junction case can silently skip under the require switch. | completed |
 | F596 | INI-10 review | `src/util/junction_support.rs` | The inner `mod tests` relies on the module's `#[cfg(all(test, windows))]` gate instead of carrying `#[cfg(test)]` like the rest of the crate. | skipped (redundant under the module gate; not a behaviour difference) |
 | F597 | INI-10 review | `src/util/mod.rs` | Unix compilation of the `#[cfg(all(test, windows))]` gate was not exercised on this host. | skipped (gating is structurally sound; a Unix CI run confirms it) |
-| F598 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The install-failure throw drops rustup's installer output, so mirror/network errors are silent. | todo |
-| F599 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The absence regex matches any toolchain name, not the requested `$ver`, so a bad `rust-version` still triggers an install attempt. | todo |
+| F598 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The install-failure throw drops rustup's installer output, so mirror/network errors are silent. | pending_review |
+| F599 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The absence regex matches any toolchain name, not the requested `$ver`, so a bad `rust-version` still triggers an install attempt. | pending_review |
 | F600 | BUILD-14 review | `tests/scripts/check-msrv.ps1` | The script has no automated test; its branches were verified with throwaway `PATH` shims only. | dropped (generic improvement, not a problem that needs attention) |
-| F601 | BUILD-16 review | `tools/sync/Cargo.toml` | The pin comment says "redb 4.1 needs 1.89", series wording next to the exact `=4.1.0` pin. | todo |
+| F601 | BUILD-16 review | `tools/sync/Cargo.toml` | The pin comment says "redb 4.1 needs 1.89", series wording next to the exact `=4.1.0` pin. | pending_review |
 | F602 | BUILD-16 review | `README.md` | Registry-derived prose ("4.2 and later need 1.90") will drift with redb releases, and `check-msrv.ps1` reads only member `rust-version`s. | skipped (same as F532; prose literals are deliberate and not metadata-derivable) |
 | F603 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_reuse_copy_tells_a_read_error_from_a_short_slice` checks the copy outcome but not `out.bytes`/on-disk length after its `ReadFailed` and `Truncated` cases; the short-slice case writes a partial piece. | dropped (generic improvement, not a problem that needs attention) |
 | F604 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_missing_reuse_source_falls_back_to_download` asserts the recorder's `seeks`/`bytes` only, without the on-disk length its siblings use. | dropped (generic improvement, not a problem that needs attention) |
@@ -927,7 +927,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
 | INI-15 | F592, F593, F594, F595 | done | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1, 430566d |
-| BUILD-20 | F598, F599, F601 | in_progress | Wave E; MSRV script failure output and the redb pin comment; low |
+| BUILD-20 | F598, F599, F601 | pending_review | Wave E; MSRV script failure output and the redb pin comment; low; 4d664c58 |
 | BUILD-21 | F600 | skipped | Wave E; the only item was a generic test-harness addition; low |
 | BUILD-22 | F601 | skipped | Wave E; merged into BUILD-20; low |
 | TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
