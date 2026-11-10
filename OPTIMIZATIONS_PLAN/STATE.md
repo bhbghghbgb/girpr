@@ -687,7 +687,7 @@ until the main tasks and rework are done.
 | F586 | INI-08 review | `src/util/path.rs` | The exit-0-but-link-missing branch has no direct test; only its `ErrorKind::Other` class is covered through the non-zero-exit case, so a seam over `Output`/`ExitStatus` would pin it. | completed |
 | F587 | INI-09 implementer | `src/util/ini.rs`, `src/util/path.rs` | `link_creation_denied` exists only in `ini.rs`; `path.rs` inlines the same 1314 test. | skipped (duplicate of F583, which covers sharing the 1314 check) |
 | F588 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | `junction_inspection_error` collapses the original error to `Error::other`, so its kind and raw code cannot be recovered. | skipped (deliberate; classification is fail-closed by contract) |
-| F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | todo |
+| F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | pending_review |
 | F590 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `junction_skip_reason`'s doc says the raw-code arm "belongs to the spawn path", but spawning `cmd` never needs `SeCreateSymbolicLinkPrivilege`; "defensive" is the accurate framing. | todo |
 | F591 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir` verifies only that something exists at the link path, not that it is a reparse point, so a mis-created directory would be reported later with a less direct message. | todo |
 | F592 | INI-10 implementer | `src/util/ini.rs` | `link_creation_denied`'s doc says it classifies "a directory symlink or a junction", but junction classification now lives in the shared module. | todo |
@@ -786,6 +786,8 @@ until the main tasks and rework are done.
 | F685 | INI-12 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | The two callers classify differently: path uses a local `JunctionFixture`/`classify_junction_fixture` while ini still uses an inline `match`, which is the drift the shared module exists to prevent. | todo |
 | F686 | INI-12 review | `src/util/path.rs` | The containment case's panic arm is still only driven indirectly; driving it directly needs the skip/panic decision lifted into a shared helper. | todo |
 | F687 | INI-12 review | `OPTIMIZATIONS_PLAN/GUIDE.md` | The commit-shape convention asks for an `opt(<task-id>):` prefix while another rule forbids a task id in commit messages. | skipped (the no-task-id rule wins; the commit message satisfies it) |
+| F688 | INI-13 implementer | `src/util/junction_support.rs` | `reject_percent_path` renders components lossily, which matches what `cmd` receives; the coupling between the check and the command deserves a one-line note in the doc. | todo |
+| F689 | INI-13 implementer | `src/util/junction_support.rs` | A host whose temp path contains a percent can no longer run the junction fixtures at all; a future relaxation could allow a percent that provably cannot form a pair. | skipped (conditional; failing loudly with the offending path named is the intended trade) |
 
 ## Follow-up batches
 
@@ -896,7 +898,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-10 | F583, F584 | done | Wave E; shared junction test helper and `%VAR%` caveat; low; 1a822ca |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
 | INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
-| INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
+| INI-13 | F589 | pending_review | Wave E; guard the percent-expansion hazard; low; 7021c14 |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
@@ -931,6 +933,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
 | INI-17 | F683, F684 | todo | Wave E; drive the uninspectable-link branch for both callers; low |
 | INI-18 | F685, F686 | todo | Wave E; one classification shape and a directly driven panic arm; low |
+| INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
 | CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
