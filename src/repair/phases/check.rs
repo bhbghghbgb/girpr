@@ -362,6 +362,7 @@ mod tests {
     use super::*;
     use crate::util::Md5;
     use std::time::{Duration, Instant};
+    use tracing::Level;
 
     /// The live-progress test's whole budget for a stuck gate. The harness
     /// waits and the injected slow check's release wait all measure against one
@@ -412,11 +413,22 @@ mod tests {
         }
     }
 
-    /// The failure lines from a captured log, without the timestamp prefix, so
-    /// two runs can be compared for the same warning set and order.
-    fn check_warnings(logs: &str) -> Vec<String> {
+    /// The failure lines from a captured log, each with the level it was
+    /// logged at, so two runs can be compared for the same warning set and
+    /// order and a failure line that stops being a warning is caught too.
+    ///
+    /// The level is taken from the line's own prefix — the subscriber prints
+    /// it ahead of the target — so the message and the level it was logged at
+    /// are one thing to assert.
+    fn check_warnings(logs: &str) -> Vec<(Level, &str)> {
         logs.lines()
-            .filter_map(|line| line.find("CHECK fail").map(|at| line[at..].to_string()))
+            .filter_map(|line| {
+                let at = line.find("CHECK fail")?;
+                let level = line[..at]
+                    .split_whitespace()
+                    .find_map(|token| token.parse::<Level>().ok())?;
+                Some((level, &line[at..]))
+            })
             .collect()
     }
 
@@ -503,12 +515,18 @@ mod tests {
         );
         assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
         assert!(
-            one_warnings[0].contains("b.dat") && one_warnings[0].contains("CHECK fail: md5"),
+            one_warnings.iter().all(|(level, _)| *level == Level::WARN),
+            "every check failure is a warning: {:?}",
+            one_warnings
+        );
+        let messages: Vec<&str> = one_warnings.iter().map(|(_, message)| *message).collect();
+        assert!(
+            messages[0].contains("b.dat") && messages[0].contains("CHECK fail: md5"),
             "{:?}",
             one_warnings
         );
         assert!(
-            one_warnings[1].contains("c.dat") && one_warnings[1].contains("CHECK fail: size"),
+            messages[1].contains("c.dat") && messages[1].contains("CHECK fail: size"),
             "{:?}",
             one_warnings
         );
@@ -626,9 +644,10 @@ mod tests {
         });
 
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
+        let expected = format!("CHECK fail: test double: {why} file={rel}");
         assert_eq!(
             check_warnings(&logs),
-            vec![format!("CHECK fail: test double: {why} file={rel}")],
+            vec![(Level::WARN, expected.as_str())],
             "the expired gate is logged once, through the one warn site"
         );
     }
@@ -719,15 +738,36 @@ mod tests {
         assert_eq!(
             check_warnings(&logs),
             vec![
-                "CHECK fail: path escapes the game dir file=escaped.dat error=the rel escapes the game dir",
-                "CHECK fail: unreadable file=unreadable.dat error=the file could not be statted",
-                "CHECK fail: size file=absent.dat expect_size=13 actual_size=None",
-                "CHECK fail: size file=sized.dat expect_size=17 actual_size=Some(19)",
-                "CHECK fail: md5 file=md5.dat expect_md5=55555555555555555555555555555555 actual_md5=66666666666666666666666666666666",
-                "CHECK fail: md5 file=scanned_md5.dat expect_md5=77777777777777777777777777777777 actual_md5=88888888888888888888888888888888 damaged_chunks=2",
-                "CHECK fail: unreadable: the digest read failed file=read.dat",
+                (
+                    Level::WARN,
+                    "CHECK fail: path escapes the game dir file=escaped.dat error=the rel escapes the game dir",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: unreadable file=unreadable.dat error=the file could not be statted",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: size file=absent.dat expect_size=13 actual_size=None",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: size file=sized.dat expect_size=17 actual_size=Some(19)",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: md5 file=md5.dat expect_md5=55555555555555555555555555555555 actual_md5=66666666666666666666666666666666",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: md5 file=scanned_md5.dat expect_md5=77777777777777777777777777777777 actual_md5=88888888888888888888888888888888 damaged_chunks=2",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: unreadable: the digest read failed file=read.dat",
+                ),
             ],
-            "each failure shape has its own line, in plan order"
+            "each failure shape has its own line, in plan order, at the warn level"
         );
         assert_eq!(summary.files_failed.load(Ordering::Relaxed), 7);
         assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
