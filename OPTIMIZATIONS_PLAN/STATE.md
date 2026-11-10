@@ -860,7 +860,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-13 | F615 | todo | Wave E; narrow the post-redo pass to the rewritten chunks; low |
 | MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
-| PURGE-PERF-11 | F545, F546 | todo | Wave E; release-wakes-a-parked-party test and doc wording; low |
+| PURGE-PERF-11 | F545, F546 | in_progress | Wave E; release-wakes-a-parked-party test and doc wording; low |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | TEST-REGRESSION-08 | F548, F549 | todo | Wave E; pin name and checked pre-epoch construction; low |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
