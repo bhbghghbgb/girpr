@@ -933,7 +933,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
 | TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
 | TEMP-PUBLISH-09 | F606 | done | Wave E; the rename path must reach the alias refusal; low; 464b8f2d; reviewer: completed, no fixes (679 passed, 9 skipped; Unix case compiled only) |
-| TEMP-PUBLISH-10 | F714, F715 | todo | Wave F; the refused-target ordering and its warn; low |
+| TEMP-PUBLISH-10 | F714, F715 | in_progress | Wave F; the refused-target ordering and its warn; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
