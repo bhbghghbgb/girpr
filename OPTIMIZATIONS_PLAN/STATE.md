@@ -705,8 +705,8 @@ until the main tasks and rework are done.
 | F604 | TEMP-WRITER-08 implementer | `src/repair/file/temp.rs` tests | `a_missing_reuse_source_falls_back_to_download` asserts the recorder's `seeks`/`bytes` only, without the on-disk length its siblings use. | dropped (generic improvement, not a problem that needs attention) |
 | F605 | TEMP-WRITER-08 review | `src/repair/file/temp.rs` tests | The new assertion message calls the on-disk length "in the sink" while the siblings phrase it as bytes landing in the sink. | skipped (cosmetic; all three assert the same exact length and the message states its intent) |
 | F606 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | `move_audio_cache_with` tries `std::fs::rename` before the copy fallback, so on Unix a cache file named `foo.` can still be published as `res/foo.` without reaching the new refusal. | completed |
-| F714 | TEMP-PUBLISH-09 review | `src/repair/phases/post.rs` | `create_dir_all(target.parent())` runs before the target-name check, so a refused nested spelling (`dir./foo.pck`) still leaves an empty `res/dir.` behind on Unix; hoisting the check would also skip the redundant second refusal inside `copy_publish_with`. | pending_review |
-| F715 | TEMP-PUBLISH-09 review | `src/repair/phases/post.rs` | A target-name refusal on the move path now reports "audio cache move failed; source kept" with the same error in both fields, though no rename or copy was attempted; a dedicated refusal warn would keep the operator contract honest. | pending_review |
+| F714 | TEMP-PUBLISH-09 review | `src/repair/phases/post.rs` | `create_dir_all(target.parent())` runs before the target-name check, so a refused nested spelling (`dir./foo.pck`) still leaves an empty `res/dir.` behind on Unix; hoisting the check would also skip the redundant second refusal inside `copy_publish_with`. | completed |
+| F715 | TEMP-PUBLISH-09 review | `src/repair/phases/post.rs` | A target-name refusal on the move path now reports "audio cache move failed; source kept" with the same error in both fields, though no rename or copy was attempted; a dedicated refusal warn would keep the operator contract honest. | completed |
 | F607 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | The copy alias refusal message omits the path; the caller's warn line supplies both paths. | skipped (informational only; the caller names both paths) |
 | F608 | TEMP-PUBLISH-08 review | `src/repair/phases/post.rs` tests | The copy test's "no destination directory" assertion is vacuous because `copy_publish_with` never creates directories; an integration test through `move_audio_cache_with` would cover the real sequence. | dropped (generic improvement, not a problem that needs attention) |
 | F609 | TEMP-PUBLISH-08 review | `src/util/path.rs`, `src/util/atomic.rs` | Windows verbatim targets (`\\?\…`) do not strip dot/space, so the lexical rule can refuse a spelling verbatim would accept. | skipped (conditional; no caller produces verbatim publish targets) |
@@ -715,7 +715,7 @@ until the main tasks and rework are done.
 | F612 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The first verify now hashes the chunk ranges as well as the file (roughly twice the MD5 work per repaired file) to save one read on the rare mismatch path; the ignored `md5_throughput`/`scan_throughput` benchmarks could size it. | todo |
 | F613 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The "no overlap implies terminal" invariant now lives in the caller asking for no ranges, so a future caller handing the predicate a scan built from an empty range list for an overlapping layout would wrongly get `true`. | todo |
 | F614 | MANIFEST-09 review | `src/repair/file/inplace.rs` tests | The post-redo tail is still covered only at unit level, never through `verify_and_retry`. | skipped (duplicate of F610; it would need a download mock for the redo) |
-| F615 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The post-redo pass could be narrowed further to the chunks intersecting a rewritten chunk (the `still_bad` list), a strict subset of the contested set; `read_after_redo` does not receive `still_bad` today. | todo |
+| F615 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The post-redo pass could be narrowed further to the chunks intersecting a rewritten chunk (the `still_bad` list), a strict subset of the contested set; `read_after_redo` does not receive `still_bad` today. | dropped (generic optimization; the contested set is already a strict subset and the reads sit on a failure path) |
 | F616 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | `overlapping_ranges` re-derives the contested offsets from `Layout::overlaps` and allocates a `Vec` per call. | skipped (cost is negligible; once per attempt) |
 | F617 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The narrowing leans on `PlannedFile::layout()` skipping negative-offset chunks, so a hand-built plan with a negative offset would leave that chunk unchecked. | skipped (defence in depth; `validate_chunk_ranges` refuses such a plan twice) |
 | F618 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The terminal predicate reads exactly `expected` verdicts, so a scan returning more verdicts than asked for would go unnoticed. | todo |
@@ -933,7 +933,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
 | TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
 | TEMP-PUBLISH-09 | F606 | done | Wave E; the rename path must reach the alias refusal; low; 464b8f2d; reviewer: completed, no fixes (679 passed, 9 skipped; Unix case compiled only) |
-| TEMP-PUBLISH-10 | F714, F715 | pending_review | Wave F; the refused-target ordering and its warn; low; f6bcfd68 |
+| TEMP-PUBLISH-10 | F714, F715 | done | Wave F; the refused-target ordering and its warn; low; f6bcfd68; reviewer: completed, no fixes (679 passed, 9 skipped; Unix cases compiled only) |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
@@ -950,7 +950,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
 | MANIFEST-09 | F539, F540 | done | Wave E; single-pass digest and range scan on failure paths; low; 1481a45, 98b58de |
 | MANIFEST-10 | F541, F542 | done | Wave E; overlap-only rescan and verdict-length guard; low; a5b0d6f, df5b20f, 6b22854 |
-| MANIFEST-15 | F612, F613, F615, F618, F620 | todo | Wave E; the post-redo pass, the terminal rule and the overlap property; low |
+| MANIFEST-15 | F612, F613, F618, F620 | in_progress | Wave F; the verify digests, the terminal rule and the overlap property; low |
 | MANIFEST-12 | F613, F618 | skipped | Wave E; merged into MANIFEST-15; low |
 | MANIFEST-13 | F615 | skipped | Wave E; merged into MANIFEST-15; low |
 | MANIFEST-14 | F619, F620 | skipped | Wave E; merged into MANIFEST-15; low |
