@@ -930,7 +930,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | BUILD-22 | F601 | skipped | Wave E; merged into BUILD-20; low |
 | TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
 | TEMP-WRITER-11 | F605 | done | Wave E; assertion-message wording; low |
-| TEMP-PUBLISH-09 | F606 | in_progress | Wave E; the rename path must reach the alias refusal; low |
+| TEMP-PUBLISH-09 | F606 | pending_review | Wave E; the rename path must reach the alias refusal; low |
 | BUILD-08 | F517 | done | Wave E; name the command and exit code in the MSRV script failure; low; d4bc74f |
 | BUILD-09 | F518, F519 | done | Wave E; MSRV pin comments and standalone bench floor; low |
 | BUILD-10 | F520 | done | Wave E; make the README workspace floor robust to a member above the root; low; 7c87314 |
