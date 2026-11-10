@@ -911,7 +911,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-11 | F554, F555 | done | Wave E; pin the warn level and trim the helper doc; low; 3f7f1e0, e0bf1fe |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | done | Wave E; qualify the bridge override filter; low; 4fdce0e |
-| PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
+| PATHHELPERS-11 | F559, F560, F561 | in_progress | Wave E; module-doc filter, README cross-reference, section citation; low |
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
 | DOCS-USER-10 | F565 | todo | Wave E; bundle-search failure wording; low |
