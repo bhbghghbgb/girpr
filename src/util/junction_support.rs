@@ -7,7 +7,9 @@
 //!
 //! The command's outcome handling is split from the command's execution, so
 //! a test can drive both branches — a successful exit that created no link,
-//! and a failing exit — without running `mklink` at all.
+//! and a failing exit — without running `mklink` at all. The command line
+//! is split from its execution too, so a test can prove that a path `cmd`
+//! would rewrite is refused before anything is run.
 //!
 //! This is test support, not a production helper: it is deliberately not
 //! reachable from the integration tests' `test_support` seam.
@@ -44,6 +46,12 @@ pub(super) enum JunctionOutcome {
 /// cannot be proved, so the test fails loudly instead of guessing that the
 /// host refused the junction.
 ///
+/// A path `cmd` would rewrite is refused before the command line is built,
+/// so a fixture path can never be silently changed: the refusal names the
+/// path and the reason, and it is an ordinary error rather than a spawn
+/// failure, so [`junction_skip_reason`] cannot read it as a proven host
+/// refusal.
+///
 /// The command's outcome is handled by [`junction_result`], split from the
 /// command's execution so a test can drive both branches without running
 /// `mklink`.
@@ -53,7 +61,18 @@ pub(super) enum JunctionOutcome {
 /// inspection that fails for another reason keeps that cause, so a
 /// permission or transient I/O failure is never reported as missing.
 pub(super) fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-    let out = run_mklink(target, link)?;
+    try_junction_dir_with(target, link, run_command_line)
+}
+
+/// The same, with the command's execution injected, so a test can prove
+/// that a refusal happened before the command line was built and run.
+fn try_junction_dir_with(
+    target: &Path,
+    link: &Path,
+    run: impl FnOnce(&str) -> std::io::Result<std::process::Output>,
+) -> std::io::Result<()> {
+    let command = junction_command(target, link)?;
+    let out = run(&command)?;
     let outcome = if out.status.success() {
         JunctionOutcome::Success
     } else {
@@ -65,20 +84,65 @@ pub(super) fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()
     junction_result(&outcome, link)
 }
 
-/// Run the `mklink /J` command and hand back what it reported.
+/// The `mklink /J` command line for `target` and `link`.
 ///
 /// `cmd` reparses the command line itself, and `Command::arg` quotes for
 /// the argv convention `cmd` does not follow: a temp path with a space or
 /// a command separator could split into extra arguments. Pass one
 /// pre-quoted line verbatim instead, so each path reaches `mklink` as a
 /// single argument. Windows paths cannot contain `"`, so a plain quote
-/// pair is enough. Quotes do not stop `cmd`'s `%VAR%` expansion, though:
-/// a path carrying a literal `%NAME%` would still be rewritten, so the
-/// caller must keep percent pairs out of the fixture paths.
-fn run_mklink(target: &Path, link: &Path) -> std::io::Result<std::process::Output> {
+/// pair is enough.
+///
+/// Quotes do not stop `cmd`'s percent expansion, though: a `%NAME%` pair
+/// is expanded when that variable is set, inside quotes as well. A path
+/// that carries a percent is refused before the line exists — see
+/// [`reject_percent_path`].
+fn junction_command(target: &Path, link: &Path) -> Result<String, std::io::Error> {
+    reject_percent_path(target)?;
+    reject_percent_path(link)?;
+    Ok(format!(
+        "mklink /J \"{}\" \"{}\"",
+        link.display(),
+        target.display()
+    ))
+}
+
+/// Refuse a path that `cmd` would rewrite, before any command is built.
+///
+/// `cmd` expands a `%NAME%` pair when that variable is set — inside
+/// double quotes as well — and whether a name is set depends on the
+/// environment, so a fixture path carrying one would reach `mklink` as a
+/// path nobody asked for, silently.
+///
+/// A stray percent is refused with it. The pair is not a property of one
+/// path: both paths share the one command line, so a percent in one of
+/// them can close a pair with a percent in the other, and whether that
+/// name is set is the environment's business. The rule therefore has to be
+/// decidable from the paths alone — a fixture path carries no percent at
+/// all — because a path `cmd` may rewrite cannot be relied on to arrive
+/// as it was given.
+///
+/// The refusal names the path and the reason, and it is an ordinary error
+/// rather than a spawn failure: [`junction_skip_reason`] classifies only a
+/// spawn failure, so this can never be read as a proven host refusal — the
+/// case fails instead of skipping, and nothing was created.
+fn reject_percent_path(path: &Path) -> std::io::Result<()> {
+    let carries_a_percent = path
+        .components()
+        .any(|component| component.as_os_str().to_string_lossy().contains('%'));
+    if carries_a_percent {
+        return Err(std::io::Error::other(format!(
+            "refusing the junction fixture path {}: cmd expands a %NAME% pair when that variable is set, even inside quotes, and both paths share one command line, so a percent in the path can leave mklink with a path other than the one given",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// Run the command line `cmd` was given and hand back what it reported.
+fn run_command_line(command: &str) -> std::io::Result<std::process::Output> {
     use std::os::windows::process::CommandExt;
 
-    let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
     std::process::Command::new("cmd")
         .arg("/C")
         .raw_arg(command)
@@ -292,5 +356,103 @@ mod tests {
             junction_skip_reason(&err).is_none(),
             "a failed mklink has no provable raw code and must fail, not skip: {msg}"
         );
+    }
+
+    /// A path that carries a percent pair is refused, and the refusal is
+    /// the only thing that happens: `cmd` expands a `%NAME%` pair when
+    /// that variable is set — inside quotes as well — so the path
+    /// `mklink` received could be a path nobody asked for, silently.
+    ///
+    /// The command's execution is injected, so a command that was built
+    /// would be seen; and the refusal names the path and the reason, so
+    /// the fixture that cannot be used says which path it was.
+    #[test]
+    fn a_path_with_a_percent_pair_is_refused_before_anything_is_run() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "percent_pair");
+        let target = dir.join("tar%get");
+        let link = dir.join("game-dir-link");
+
+        let mut ran = false;
+        let err = try_junction_dir_with(&target, &link, |command| {
+            ran = true;
+            Err(std::io::Error::other(format!(
+                "the command was run: {command}"
+            )))
+        })
+        .expect_err("a path with a percent pair must be refused");
+        assert!(!ran, "the command must not be built or run");
+        assert!(!link.exists(), "a refused path must leave no link behind");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert!(err.raw_os_error().is_none(), "{err}");
+        let msg = format!("{err}");
+        assert!(msg.contains(&target.display().to_string()), "{msg}");
+        assert!(msg.contains("percent"), "the reason is named: {msg}");
+        assert!(msg.contains("%NAME%"), "the reason is named: {msg}");
+        assert!(msg.contains("cmd"), "the reason is named: {msg}");
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "a refused path is not a host refusal and must fail, not skip: {msg}"
+        );
+    }
+
+    /// A stray percent is refused with the pair, and the refusal names the
+    /// path that carries it — the rule is decidable from the path alone,
+    /// and a path `cmd` may rewrite cannot be relied on to arrive as it
+    /// was given.
+    #[test]
+    fn a_stray_percent_in_the_link_path_is_refused_too() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "stray_percent");
+        let target = dir.join("real");
+        let link = dir.join("game-dir%link");
+
+        let mut ran = false;
+        let err = try_junction_dir_with(&target, &link, |command| {
+            ran = true;
+            Err(std::io::Error::other(format!(
+                "the command was run: {command}"
+            )))
+        })
+        .expect_err("a stray percent must be refused");
+        assert!(!ran, "the command must not be built or run");
+        assert!(!link.exists(), "a refused path must leave no link behind");
+
+        let msg = format!("{err}");
+        assert!(msg.contains(&link.display().to_string()), "{msg}");
+        assert!(
+            !msg.contains(&target.display().to_string()),
+            "the refusal names the offending path, not the other one: {msg}"
+        );
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "a refused path is not a host refusal and must fail, not skip: {msg}"
+        );
+    }
+
+    /// A path without a percent is still accepted, so the refusal is a
+    /// refusal of the percent and not of the path: the command line is
+    /// built, with both paths quoted as one argument each.
+    #[test]
+    fn a_path_without_a_percent_still_builds_the_command() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "no_percent");
+        let target = dir.join("real");
+        let link = dir.join("game-dir-link");
+
+        let mut built: Option<String> = None;
+        let err = try_junction_dir_with(&target, &link, |command| {
+            built = Some(command.to_string());
+            Err(std::io::Error::other("the command was not run to the end"))
+        })
+        .expect_err("the injected run fails on purpose");
+        let command = built.expect("the command line was built");
+        assert_eq!(
+            command,
+            format!("mklink /J \"{}\" \"{}\"", link.display(), target.display())
+        );
+        assert!(
+            !command.contains('%'),
+            "a path without a percent reaches the command line as it was: {command}"
+        );
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
     }
 }
