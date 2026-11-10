@@ -1557,6 +1557,69 @@ mod tests {
         );
     }
 
+    /// The narrowing is only sound while a chunk the layout does not name is
+    /// one **no other chunk claims**: the redo moves the bytes of the chunk
+    /// it rewrites and nothing else, so a chunk nobody else claims keeps the
+    /// verdict the verify pass gave it.
+    ///
+    /// The layout names both sides of every overlap, so the ranges it leaves
+    /// out are exactly the ones whose verdict cannot change — and therefore
+    /// the ones the terminal decision does not have to read again.
+    #[test]
+    fn the_ranges_the_layout_leaves_out_are_claimed_by_no_other_chunk() {
+        // `a` and `b` claim the same bytes; `c` follows `b` and `d` follows a
+        // gap. The layout names the first two and leaves the last two out.
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 14,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 4),
+                chunk_at("b", "md5-b", 2, 4),
+                chunk_at("c", "md5-c", 6, 2),
+                chunk_at("d", "md5-d", 10, 4),
+            ],
+        };
+        let dest = [
+            (0u64, 4u64, "md5-a"),
+            (2, 4, "md5-b"),
+            (6, 2, "md5-c"),
+            (10, 4, "md5-d"),
+        ];
+
+        let named = overlapping_ranges(&file, &dest);
+        assert_eq!(
+            named.len(),
+            2,
+            "the layout names the two chunks that claim the same bytes"
+        );
+
+        // The ranges the layout leaves out claim bytes no other range claims.
+        for (i, a) in dest.iter().enumerate() {
+            if named.contains(a) {
+                continue;
+            }
+            for (j, b) in dest.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert!(
+                    disjoint(a, b),
+                    "the range {a:?} is claimed by {b:?}, so the layout has to \
+                     name it and the decision has to read it"
+                );
+            }
+        }
+    }
+
+    /// Do two byte ranges share a byte?
+    fn disjoint(a: &util::ScanRange<'_>, b: &util::ScanRange<'_>) -> bool {
+        let (a_off, a_len, _) = *a;
+        let (b_off, b_len, _) = *b;
+        a_off.saturating_add(a_len) <= b_off || b_off.saturating_add(b_len) <= a_off
+    }
+
     /// A verdict list that is shorter than the ranges the decision needs is
     /// missing answers, not correct ones.
     ///
