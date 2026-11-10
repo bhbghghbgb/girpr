@@ -57,6 +57,9 @@
 //! names these six cases sets `success-output = "immediate"`, so the
 //! precondition and per-capture lines are printed even though the cases pass.
 //!
+//! To reproduce one failure, narrow the run with nextest's filter, for example
+//! `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+//!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
 //! contract — a broken bridge would fail to build rather than fail silently.
