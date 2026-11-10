@@ -688,8 +688,8 @@ until the main tasks and rework are done.
 | F587 | INI-09 implementer | `src/util/ini.rs`, `src/util/path.rs` | `link_creation_denied` exists only in `ini.rs`; `path.rs` inlines the same 1314 test. | skipped (duplicate of F583, which covers sharing the 1314 check) |
 | F588 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | `junction_inspection_error` collapses the original error to `Error::other`, so its kind and raw code cannot be recovered. | skipped (deliberate; classification is fail-closed by contract) |
 | F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | completed |
-| F590 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `junction_skip_reason`'s doc says the raw-code arm "belongs to the spawn path", but spawning `cmd` never needs `SeCreateSymbolicLinkPrivilege`; "defensive" is the accurate framing. | pending_review |
-| F591 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir` verifies only that something exists at the link path, not that it is a reparse point, so a mis-created directory would be reported later with a less direct message. | pending_review |
+| F590 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `junction_skip_reason`'s doc says the raw-code arm "belongs to the spawn path", but spawning `cmd` never needs `SeCreateSymbolicLinkPrivilege`; "defensive" is the accurate framing. | completed |
+| F591 | INI-09 review | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir` verifies only that something exists at the link path, not that it is a reparse point, so a mis-created directory would be reported later with a less direct message. | completed |
 | F592 | INI-10 implementer | `src/util/ini.rs` | `link_creation_denied`'s doc says it classifies "a directory symlink or a junction", but junction classification now lives in the shared module. | todo |
 | F593 | INI-10 implementer | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not in the `success-output = "immediate"` override, so a future host skip there would be invisible under the default gate. | todo |
 | F594 | INI-10 implementer | `src/util/ini.rs` | The ini junction test prints its skip manually while the path test routes through `skip_fixture_refusal`; the two styles still differ. | todo |
@@ -792,6 +792,7 @@ until the main tasks and rework are done.
 | F691 | INI-13 review | `src/util/junction_support.rs` | `junction_command` spells `Result<String, std::io::Error>` where the file uses `std::io::Result<String>`, and an assertion message claims more than the flag proves. | todo |
 | F692 | INI-14 implementer | `src/util/junction_support.rs` | `tools/sync` notes that `FileType::is_symlink` was false for a junction on some toolchains, so the new reparse-point check relies on std's name-surrogate reparse-tag test alone and could refuse a good fixture on an older toolchain. | todo |
 | F693 | INI-14 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch still has no direct end-to-end drive. | skipped (duplicate of F683, which INI-17 covers) |
+| F694 | INI-14 review | `src/util/junction_support.rs` | The guard proves "is a name-surrogate reparse point", not "is a junction": a symbolic link at the link path would also pass, and std exposes no reparse tag publicly. | todo |
 
 ## Follow-up batches
 
@@ -903,7 +904,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
 | INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
-| INI-14 | F590, F591 | pending_review | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
+| INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
@@ -939,7 +940,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-18 | F685, F686 | todo | Wave E; one classification shape and a directly driven panic arm; low |
 | INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
-| INI-21 | F692 | todo | Wave E; reparse-point check across toolchains; low |
+| INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
 | DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
 | CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
