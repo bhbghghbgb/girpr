@@ -363,6 +363,69 @@ fn the_real_help_puts_its_short_option_line_at_the_short_option_indent() {
     );
 }
 
+/// The option indent is clap's, and this is where clap puts it.
+///
+/// The same claim as above, for the long-only shape: a line that begins with
+/// a long flag starts at [`HELP_OPTION_INDENT`]. The measured width is
+/// compared as well as the prefix, so a line that carries *more* indent than
+/// the constant says is a failure and not a match.
+#[test]
+fn the_real_help_puts_an_option_line_at_the_option_indent() {
+    let help = real_help();
+    let line = help
+        .lines()
+        .find(|line| line.trim_start().starts_with("--"))
+        .expect("the real help has a long option line");
+    assert!(
+        line.trim_start().starts_with("--game-path"),
+        "the first long option line is the game path's:\n{line}"
+    );
+    assert!(
+        line.starts_with(HELP_OPTION_INDENT),
+        "the option starts at the pinned indent:\n{line:?}"
+    );
+    assert_eq!(
+        indent_width(line),
+        HELP_OPTION_INDENT.len(),
+        "the option's column moved:\n{help}"
+    );
+}
+
+/// The description indent is clap's, and this is where clap puts it.
+///
+/// A description follows its option on the next line, in clap's own column.
+/// The fixtures build their descriptions from [`HELP_DESCRIPTION_INDENT`], so
+/// nothing so far has asked whether that column is where clap puts one. This
+/// reads the real help: the line after an option line is that option's
+/// description, and it starts at the pinned indent.
+#[test]
+fn the_real_help_puts_a_description_line_at_the_description_indent() {
+    let help = real_help();
+    let lines: Vec<&str> = help.lines().collect();
+    let at = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("--game-path"))
+        .expect("the real help has a --game-path entry");
+    let description = lines
+        .get(at + 1)
+        .expect("an option line is followed by its description");
+    assert!(
+        description
+            .trim_start()
+            .starts_with("Game install directory"),
+        "the line after the option is its description:\n{description}"
+    );
+    assert!(
+        description.starts_with(HELP_DESCRIPTION_INDENT),
+        "the description starts at the pinned indent:\n{description:?}"
+    );
+    assert_eq!(
+        indent_width(description),
+        HELP_DESCRIPTION_INDENT.len(),
+        "the description's column moved:\n{help}"
+    );
+}
+
 #[test]
 fn help_entry_reads_a_crlf_capture() {
     // A Windows-console capture ends its lines with `\r\n`; the flag's token
