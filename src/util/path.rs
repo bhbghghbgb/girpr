@@ -486,7 +486,7 @@ mod tests {
     use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
     #[cfg(windows)]
     use crate::util::junction_support::{
-        JunctionOutcome, junction_result, junction_skip_reason, try_junction_dir,
+        JunctionOutcome, junction_result, junction_skip_reason, require_junction, try_junction_dir,
     };
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
@@ -972,13 +972,6 @@ mod tests {
                 "a file used as a parent is NotADirectory, not missing: {got:?}"
             );
         }
-    }
-
-    /// The switch is presence-based: any value, including `0`, requires the
-    /// junction cases.
-    #[cfg(windows)]
-    fn require_junction() -> bool {
-        std::env::var_os("GIRPR_TEST_REQUIRE_JUNCTION").is_some()
     }
 
     /// Report that the junction could not be created, or fail when
