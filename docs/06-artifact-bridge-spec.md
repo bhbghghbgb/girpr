@@ -384,9 +384,12 @@ audio fields the capture stored. Do not hardcode a language.
 `zh-cn`, `en-us`, `ja-jp`, `ko-kr`. `sophon::select_manifests` drops every field
 whose name is five or ten characters and contains a hyphen, then re-adds only the
 selected languages; the bundle's scan file selects `en-us`, and only the blobs
-the capture stored are present. So a run fetches **`game` + `en-us`** — four
-manifests per run, plus four more for the `--print-plan` pre-pass (§6.1) — and
-the other three are never requested.
+the capture stored are present. So a run fetches **`game` + `en-us`** — and it
+does so **twice**: once for the latest build and once for the local build (the
+one the installed game names, for the chunk-reuse map — the bridge's scratch
+tree always installs one), which is **four manifests per run**, plus four more
+for the `--print-plan` pre-pass (§6.1) — while the other three of the five are
+never requested.
 
 The rule generalises to whatever the bundle holds, so the run's selection and the
 bundle's contents decide the set between them. **Keep the `--audio` warning:**
