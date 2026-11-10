@@ -729,12 +729,12 @@ until the main tasks and rework are done.
 | F626 | PURGE-PERF-11 review | `src/util/counter.rs` tests | The new test pins "the party is parked" only indirectly through `release_count == 1`, which turned out racy under a gate that no longer blocks; a direct precondition check (`done_rx.try_recv()` is `Err` right after the parked-state assertions) would pin it deterministically. | completed |
 | F627 | PURGE-PERF-11 review | `src/util/counter.rs` | The release doc says a repeat release "leaves the gate's state unchanged" although `GateState::releases` is incremented; naming the open/arrival state would be literally exact. | skipped (cosmetic; the next sentence discloses the count) |
 | F628 | PURGE-PERF-11 review | `src/util/counter.rs` tests | No test pins that the gate actually blocks an unreleased party; with the wait loop disabled, three existing tests still pass. | completed |
-| F629 | TEST-REGRESSION-08 implementer | `src/repair/file/inplace.rs` tests | The local `ago()` helper calls `stamp_ago(age).expect(...)`, so that unit test fails loudly instead of skipping on a host that cannot represent the age. | pending_review |
+| F629 | TEST-REGRESSION-08 implementer | `src/repair/file/inplace.rs` tests | The local `ago()` helper calls `stamp_ago(age).expect(...)`, so that unit test fails loudly instead of skipping on a host that cannot represent the age. | completed |
 | F630 | TEST-REGRESSION-08 implementer | `src/lib.rs` | The ordinary-clock assertion's `now - day` is the only remaining unchecked subtraction in the clock tests. | todo |
 | F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | completed |
 | F632 | TEST-REGRESSION-08 implementer | `README.md`, `.config/nextest.toml` | The skip-switch bullet and the `success-output` override only cover the two existing switches; a skip line from an unlisted test is invisible under the plain gate. | dropped (generic improvement, not a problem that needs attention) |
 | F633 | TEST-REGRESSION-08 review | `.config/nextest.toml` | The renamed epoch test has no `success-output = "immediate"` override, so its skip line would be invisible under the plain gate, unlike every other skip-printing test. | todo |
-| F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | pending_review |
+| F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | completed |
 | F635 | TEST-REGRESSION-08 review | `src/lib.rs` | The pre-epoch reference value is now the same expression the helper uses, so the assertion no longer pins "the platform's unchecked subtraction does not panic"; a short comment would stop a reader mistaking it for a tautology. | dropped (generic improvement, not a problem that needs attention) |
 | F636 | CHECK-09 implementer | `src/repair/phases/check.rs` tests | `parallel_checks_match_one_job_and_stay_in_plan_order` still asserts the md5/size lines only by substring, and the new exact test now subsumes it. | dropped (generic improvement, not a problem that needs attention) |
 | F637 | CHECK-09 implementer | `src/repair/phases/check.rs` | `CheckOutcome`/`CheckFailure` are not `Clone`, so the test helper rebuilds outcomes per rel instead of holding a shared table. | dropped (generic improvement, not a problem that needs attention) |
@@ -799,7 +799,7 @@ until the main tasks and rework are done.
 | F696 | INI-15 implementer | `.config/nextest.toml` | The ini symlink case's host skip is still invisible under the plain gate; it is in no `success-output` override even though it can skip on a host without symlink privilege. | todo |
 | F697 | INI-15 implementer | `src/util/ini.rs`, `src/util/path.rs` | The injected-refusal probes print "simulated refusal" to stderr but are covered by no `success-output` override. | skipped (consistent with the path module's equivalents; the output is diagnostic only) |
 | F698 | INI-15 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | Both test modules keep a private `skip_junction` wrapper with identical arguments; the wrapper could live in the shared module once. | completed |
-| F699 | INI-15 review | `src/lib.rs` | `skip_fixture_refusal`'s panic message says "this host cannot create …" even for `FixtureRefusal::Injected`, where no host was consulted; the printed skip line distinguishes the two but the panic does not. | pending_review |
+| F699 | INI-15 review | `src/lib.rs` | `skip_fixture_refusal`'s panic message says "this host cannot create …" even for `FixtureRefusal::Injected`, where no host was consulted; the printed skip line distinguishes the two but the panic does not. | completed |
 | F700 | INI-15 review | `.config/nextest.toml` | The first override (`test(=a_non_utf8_audio_cache_name_moves_*)`) is still unqualified by package/binary. | skipped (duplicate of F648, which PATHHELPERS-12 covers) |
 | F701 | INI-16 implementer | `src/util/ini.rs` | `link_creation_denied` and `symlink_skip_reason` are Unix-relevant but live beside the extracted junction classifier; a symlink home for them would need a different module or a widened gate. | completed |
 | F702 | INI-16 implementer | `tools/sync/tests/symlink.rs` | That crate has its own `skip_if_no_link!` macro with a different skip-line format; the girpr test-support seam is not reachable from girsync's integration tests. | skipped (separate crate; a shared seam would need its own design) |
@@ -956,7 +956,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-14 | F619, F620 | skipped | Wave E; merged into MANIFEST-15; low |
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
 | PURGE-PERF-14 | F626, F628 | done | Wave E; pin the gate's blocking contract directly; low; 87659610; reviewer: both completed, no fixes (13 runs, broken-gate check) |
-| TEST-REGRESSION-11 | F629, F630, F634, F699 | pending_review | Wave E; panic-free clock fixtures and the skip wording; low; 06b364e1 |
+| TEST-REGRESSION-11 | F629, F630, F634, F699 | done | Wave E; panic-free clock fixtures and the skip wording; low; 06b364e1; reviewer: all four completed, no fixes (684 passed, 9 skipped) |
 | TEST-REGRESSION-12 | F699, F704 | skipped | Wave E; merged into TEST-REGRESSION-11; low |
 | INI-16 | F631 | done | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
 | INI-17 | F683, F684 | done | Wave E; drive the uninspectable-link branch for both callers; low; 3a22365 |
@@ -968,7 +968,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | SYMLINK-01 | F710, F711 | done | Wave F; the symlink refusal codes and skip wording; low; afd2e6da, 688b8f1a, 381b25ff; reviewer: Apple ENOTSUP 45 added, README reflowed (678 passed, 9 skipped) |
 | INI-22 | F705, F706 | skipped | Wave E; merged into INI-21; low |
 | DOCS-USER-14 | F632, F633, F634 | skipped | Wave E; merged into PATHHELPERS-12 and TEST-REGRESSION-11; low |
-| CHECK-15 | F638, F641, F642, F643, F646, F647 | todo | Wave E; the check phase's failure shapes and its log assertions; low |
+| CHECK-15 | F638, F641, F642, F643, F646, F647 | in_progress | Wave E; the check phase's failure shapes and its log assertions; low |
 | CHECK-13 | F638 | skipped | Wave E; merged into CHECK-15; low |
 | DOCS-USER-15 | F641 | skipped | Wave E; merged into CHECK-15; low |
 | CHECK-14 | F642, F643, F646, F647 | skipped | Wave E; merged into CHECK-15; low |
