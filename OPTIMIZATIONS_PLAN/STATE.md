@@ -928,7 +928,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
 | DOCS-USER-10 | F565 | done | Wave E; bundle-search failure wording; low; 236cffa, f6a3777 |
-| DOCS-USER-11 | F566, F567 | todo | Wave E; manifest-count wording and served-archive scale; low |
+| DOCS-USER-11 | F566, F567 | in_progress | Wave E; manifest-count wording and served-archive scale; low |
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | DOCS-USER-13 | F569, F570, F571 | todo | Wave E; cache comment scope and count wording; low |
 | HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
