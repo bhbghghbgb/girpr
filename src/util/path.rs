@@ -485,7 +485,9 @@ mod tests {
     #[cfg(windows)]
     use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
     #[cfg(windows)]
-    use crate::util::junction_support::{junction_skip_reason, try_junction_dir};
+    use crate::util::junction_support::{
+        JunctionOutcome, junction_result, junction_skip_reason, try_junction_dir,
+    };
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
     /// be refused; `a/b.dat` is the only legitimate shape.
@@ -996,6 +998,34 @@ mod tests {
         );
     }
 
+    /// What the containment case does with a junction it could not create.
+    ///
+    /// A proven host refusal skips the case; every other failure is a broken
+    /// test environment that must fail loudly, so a run meant to prove the
+    /// escape cannot pass having checked nothing.
+    #[cfg(windows)]
+    enum JunctionFixture {
+        /// The host refused to create the junction; the case skips with this
+        /// reason.
+        HostRefused(&'static str),
+        /// The junction was not created for another reason; the case fails
+        /// with this error.
+        Broken(std::io::Error),
+    }
+
+    /// Classify a failed junction creation for the containment case.
+    ///
+    /// The decision is the shared classifier's, so it is taken here once and
+    /// can be driven directly: a link that `mklink` claimed but never created
+    /// is not a host refusal, and the case must fail rather than skip.
+    #[cfg(windows)]
+    fn classify_junction_fixture(e: std::io::Error) -> JunctionFixture {
+        match junction_skip_reason(&e) {
+            Some(why) => JunctionFixture::HostRefused(why),
+            None => JunctionFixture::Broken(e),
+        }
+    }
+
     /// A directory junction inside the install that points out of it is an
     /// escape, exactly like a Unix symlink, so the resolution path needs a
     /// test on the platform whose reparse points it will meet.
@@ -1015,12 +1045,14 @@ mod tests {
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "junction_in");
         let link = dir.join("game");
         if let Err(e) = try_junction_dir(&outside, &link) {
-            match junction_skip_reason(&e) {
-                Some(why) => {
+            match classify_junction_fixture(e) {
+                JunctionFixture::HostRefused(why) => {
                     skip_junction(why, require_junction(), FixtureRefusal::Host);
                     return;
                 }
-                None => panic!("could not create the test directory junction: {e}"),
+                JunctionFixture::Broken(e) => {
+                    panic!("could not create the test directory junction: {e}")
+                }
             }
         }
         let got = contained_join(&dir, "game/evil.dat");
@@ -1036,6 +1068,36 @@ mod tests {
         try_junction_dir(&dir.join("real"), &alias)
             .expect("this host already created one junction");
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
+    }
+
+    /// A junction `mklink` claims but never creates is a broken fixture, not
+    /// a host refusal: the containment case must fail loudly instead of
+    /// skipping, so a run meant to prove the escape cannot pass having
+    /// checked nothing.
+    ///
+    /// The shared helper's exit-`0` branch is driven directly, so the case
+    /// runs on every host — no `mklink` is run, and no host skip is needed.
+    #[cfg(windows)]
+    #[test]
+    fn a_claimed_junction_that_never_appeared_fails_instead_of_skipping() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "missing_junction");
+        let link = dir.join("game");
+
+        let err = junction_result(&JunctionOutcome::Success, &link)
+            .expect_err("a claimed link that never appeared must fail");
+        match classify_junction_fixture(err) {
+            JunctionFixture::HostRefused(why) => {
+                panic!("a link that never appeared is not a host refusal: {why}")
+            }
+            JunctionFixture::Broken(e) => {
+                // The failure is honest about the link being missing, and it
+                // is not a host refusal, so the case fails rather than skips.
+                assert_eq!(e.kind(), std::io::ErrorKind::Other, "{e}");
+                let msg = format!("{e}");
+                assert!(msg.contains("is missing"), "{msg}");
+                assert!(msg.contains(&link.display().to_string()), "{msg}");
+            }
+        }
     }
 
     /// Both junction branches are reachable without a host that refuses one.

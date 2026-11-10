@@ -5,10 +5,33 @@
 //! here once so the two test modules cannot drift on its messages or its skip
 //! set. The module is declared only for the crate's unit tests on Windows.
 //!
+//! The command's outcome handling is split from the command's execution, so
+//! a test can drive both branches — a successful exit that created no link,
+//! and a failing exit — without running `mklink` at all.
+//!
 //! This is test support, not a production helper: it is deliberately not
 //! reachable from the integration tests' `test_support` seam.
 
 use std::path::Path;
+
+/// What the `mklink /J` command reported.
+///
+/// The outcome is split from the command's execution so a test can hand the
+/// helper an exit without running `mklink`: a successful exit that created
+/// no link, and a failing exit, are both reachable on a host that cannot
+/// create a junction at all.
+pub(super) enum JunctionOutcome {
+    /// The command exited with a success status. That only claims the link
+    /// exists; the link is still inspected.
+    Success,
+    /// The command exited with a failure status.
+    Failed {
+        /// The exit status, spelled as `ExitStatus` spells it.
+        status: String,
+        /// The command's error output, trimmed.
+        stderr: String,
+    },
+}
 
 /// Create a directory junction with `mklink /J`, which (unlike a symlink)
 /// needs no privilege. `target` need not exist: Windows stores the path in
@@ -21,31 +44,61 @@ use std::path::Path;
 /// cannot be proved, so the test fails loudly instead of guessing that the
 /// host refused the junction.
 ///
+/// The command's outcome is handled by [`junction_result`], split from the
+/// command's execution so a test can drive both branches without running
+/// `mklink`.
+///
 /// An exit of `0` only claims that the link exists; the test still inspects
 /// it. A link that did not appear fails closed as missing, and an
 /// inspection that fails for another reason keeps that cause, so a
 /// permission or transient I/O failure is never reported as missing.
 pub(super) fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    let out = run_mklink(target, link)?;
+    let outcome = if out.status.success() {
+        JunctionOutcome::Success
+    } else {
+        JunctionOutcome::Failed {
+            status: out.status.to_string(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        }
+    };
+    junction_result(&outcome, link)
+}
+
+/// Run the `mklink /J` command and hand back what it reported.
+///
+/// `cmd` reparses the command line itself, and `Command::arg` quotes for
+/// the argv convention `cmd` does not follow: a temp path with a space or
+/// a command separator could split into extra arguments. Pass one
+/// pre-quoted line verbatim instead, so each path reaches `mklink` as a
+/// single argument. Windows paths cannot contain `"`, so a plain quote
+/// pair is enough. Quotes do not stop `cmd`'s `%VAR%` expansion, though:
+/// a path carrying a literal `%NAME%` would still be rewritten, so the
+/// caller must keep percent pairs out of the fixture paths.
+fn run_mklink(target: &Path, link: &Path) -> std::io::Result<std::process::Output> {
     use std::os::windows::process::CommandExt;
 
-    // `cmd` reparses the command line itself, and `Command::arg` quotes for
-    // the argv convention `cmd` does not follow: a temp path with a space or
-    // a command separator could split into extra arguments. Pass one
-    // pre-quoted line verbatim instead, so each path reaches `mklink` as a
-    // single argument. Windows paths cannot contain `"`, so a plain quote
-    // pair is enough. Quotes do not stop `cmd`'s `%VAR%` expansion, though:
-    // a path carrying a literal `%NAME%` would still be rewritten, so the
-    // caller must keep percent pairs out of the fixture paths.
     let command = format!("mklink /J \"{}\" \"{}\"", link.display(), target.display());
-    let out = std::process::Command::new("cmd")
+    std::process::Command::new("cmd")
         .arg("/C")
         .raw_arg(command)
-        .output()?;
-    if !out.status.success() {
+        .output()
+}
+
+/// The result of one `mklink /J` outcome.
+///
+/// A failing exit keeps the command's own report. A successful exit is only
+/// a claim that the link exists, so the link is inspected: a link that never
+/// appeared fails closed as missing, and an inspection that fails for
+/// another reason keeps that cause, so a permission or transient I/O
+/// failure is never reported as missing.
+///
+/// Both failures stay `Other`, so neither can be mistaken for a proven host
+/// refusal by [`junction_skip_reason`].
+pub(super) fn junction_result(outcome: &JunctionOutcome, link: &Path) -> std::io::Result<()> {
+    if let JunctionOutcome::Failed { status, stderr } = outcome {
         return Err(std::io::Error::other(format!(
-            "mklink /J exited with {}: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr).trim()
+            "mklink /J exited with {status}: {stderr}"
         )));
     }
     std::fs::symlink_metadata(link)
@@ -190,6 +243,54 @@ mod tests {
         assert!(
             junction_skip_reason(&inspected).is_none(),
             "an inspection failure must fail, not skip: {msg}"
+        );
+    }
+
+    /// The exit-`0` branch, driven through the outcome seam: `mklink`
+    /// claims the link exists, and the link never appeared. The failure
+    /// must be honest — the link is missing — and must not read as a
+    /// proven host refusal, so the case fails instead of skipping.
+    ///
+    /// The link path is a scratch directory's child that was never
+    /// created, so the case runs on every host: no `mklink` is run.
+    #[test]
+    fn a_successful_exit_without_a_link_fails_closed_as_missing() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "missing_link");
+        let link = dir.join("game-dir-link");
+
+        let err = junction_result(&JunctionOutcome::Success, &link)
+            .expect_err("a claimed link that never appeared must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        let msg = format!("{err}");
+        assert!(msg.contains("is missing"), "{msg}");
+        assert!(msg.contains(&link.display().to_string()), "{msg}");
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "a link that never appeared must fail, not skip: {msg}"
+        );
+    }
+
+    /// The failing exit, driven through the same seam: the command's own
+    /// report is the error. `mklink` reports every refusal as exit `1`
+    /// plus localized text and no Win32 code, so the cause cannot be
+    /// proved and the failure must not be read as a host refusal.
+    #[test]
+    fn a_failing_exit_keeps_the_command_report_and_does_not_skip() {
+        let err = junction_result(
+            &JunctionOutcome::Failed {
+                status: "exit code: 1".to_string(),
+                stderr: "access denied".to_string(),
+            },
+            Path::new("game-dir-link"),
+        )
+        .expect_err("a failed mklink must fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        let msg = format!("{err}");
+        assert!(msg.contains("exited with exit code: 1"), "{msg}");
+        assert!(msg.contains("access denied"), "{msg}");
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "a failed mklink has no provable raw code and must fail, not skip: {msg}"
         );
     }
 }
