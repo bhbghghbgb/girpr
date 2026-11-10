@@ -111,20 +111,30 @@ const HELP_SHORT_ALIAS_SEPARATOR: &str = ", ";
 /// not an option line. Returning the body lets the caller look for the flag
 /// without caring which of the two shapes the line has.
 ///
-/// A line that starts at the short-alias column with `-` must match that shape.
-/// Panicking instead of returning `None` keeps a layout change loud: `None`
-/// would read as "not an option line" and let a neighbouring entry swallow it.
+/// A line before the description column that starts with a single `-` is a
+/// short-alias option line. It must match that shape. Panicking instead of
+/// returning `None` keeps a layout change loud: `None` would read as "not an
+/// option line" and let a neighbouring entry swallow it.
 fn option_body(line: &str) -> Option<&str> {
-    if let Some(body) = line.strip_prefix(HELP_OPTION_INDENT) {
-        return body.starts_with("--").then_some(body);
+    let indent = indent_width(line);
+    let body = &line[indent..];
+    if indent >= HELP_DESCRIPTION_INDENT.len() {
+        return None;
     }
-    let body = line.strip_prefix(HELP_SHORT_OPTION_INDENT)?;
+    if body.starts_with("--") {
+        return (indent == HELP_OPTION_INDENT.len()).then_some(body);
+    }
     let alias_and_long = body.strip_prefix('-')?;
     let (short, long) = alias_and_long
         .split_once(HELP_SHORT_ALIAS_SEPARATOR)
         .unwrap_or_else(|| {
             panic!("short option line is not `-X{HELP_SHORT_ALIAS_SEPARATOR}--long`: {line:?}")
         });
+    assert_eq!(
+        indent,
+        HELP_SHORT_OPTION_INDENT.len(),
+        "short option line starts at the wrong indent: {line:?}"
+    );
     assert!(
         short.chars().count() == 1,
         "short option line does not carry a one-character alias: {line:?}"
