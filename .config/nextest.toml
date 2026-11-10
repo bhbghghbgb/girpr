@@ -105,13 +105,23 @@ success-output = "immediate"
 # discards a passing test's captured output by default, so show it for this
 # filter: that is what lets the hand-run command in `tests/artifact_bridge.rs`
 # leave `--no-capture` off.
+#
+# The filter names the binary as well as the cases. A `test(=name)` predicate
+# on its own matches the same name in *any* binary, so a test elsewhere that
+# happened to share one of these names would silently inherit the override.
+# `package(=girpr) and binary(=artifact_bridge)` pins the six cases to the
+# integration test they live in.
 [[profile.default.overrides]]
 filter = """
-    test(=the_identical_capture_fetches_nothing)
-    or test(=the_no_reuse_capture_fetches_the_whole_file)
-    or test(=the_reuse_in_place_capture_fetches_only_what_it_must)
-    or test(=the_reuse_moved_capture_fetches_only_what_it_must)
-    or test(=the_added_capture_writes_the_new_file)
-    or test(=the_removed_capture_purges_the_file)
+    package(=girpr)
+    and binary(=artifact_bridge)
+    and (
+        test(=the_identical_capture_fetches_nothing)
+        or test(=the_no_reuse_capture_fetches_the_whole_file)
+        or test(=the_reuse_in_place_capture_fetches_only_what_it_must)
+        or test(=the_reuse_moved_capture_fetches_only_what_it_must)
+        or test(=the_added_capture_writes_the_new_file)
+        or test(=the_removed_capture_purges_the_file)
+    )
 """
 success-output = "immediate"
