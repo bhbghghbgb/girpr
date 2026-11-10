@@ -97,19 +97,43 @@ const HELP_SHORT_OPTION_INDENT: &str = "  ";
 /// spaces) plus four more.
 const HELP_DESCRIPTION_INDENT: &str = "          ";
 
+/// The punctuation between a short alias and the long spelling clap gives it.
+///
+/// An option with both spellings is written `-j, --jobs`: the one-character
+/// alias, then this separator, then the long flag. A clap change to either
+/// half of it moves the long flag out of the shape [`option_body`] matches.
+const HELP_SHORT_ALIAS_SEPARATOR: &str = ", ";
+
 /// The part of an option line that starts at its long flag, when `line` is one.
 ///
 /// clap writes a long-only option as `      --jobs <JOBS>` and one with a short
 /// alias as `  -j, --jobs <JOBS>`; a description line is indented further and is
 /// not an option line. Returning the body lets the caller look for the flag
 /// without caring which of the two shapes the line has.
+///
+/// A line that starts at the short-alias column with `-` must match that shape.
+/// Panicking instead of returning `None` keeps a layout change loud: `None`
+/// would read as "not an option line" and let a neighbouring entry swallow it.
 fn option_body(line: &str) -> Option<&str> {
     if let Some(body) = line.strip_prefix(HELP_OPTION_INDENT) {
         return body.starts_with("--").then_some(body);
     }
     let body = line.strip_prefix(HELP_SHORT_OPTION_INDENT)?;
-    let (short, long) = body.strip_prefix('-')?.split_once(", ")?;
-    (short.chars().count() == 1 && long.starts_with("--")).then_some(long)
+    let alias_and_long = body.strip_prefix('-')?;
+    let (short, long) = alias_and_long
+        .split_once(HELP_SHORT_ALIAS_SEPARATOR)
+        .unwrap_or_else(|| {
+            panic!("short option line is not `-X{HELP_SHORT_ALIAS_SEPARATOR}--long`: {line:?}")
+        });
+    assert!(
+        short.chars().count() == 1,
+        "short option line does not carry a one-character alias: {line:?}"
+    );
+    assert!(
+        long.starts_with("--"),
+        "short option line is not followed by a long flag: {line:?}"
+    );
+    Some(long)
 }
 
 /// The slice of `--help` output that belongs to one option: from the option's
@@ -121,7 +145,9 @@ fn option_body(line: &str) -> Option<&str> {
 fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
     let mut start = None;
     for line in std::iter::once(0).chain(help.match_indices('\n').map(|(i, _)| i + 1)) {
-        let Some(body) = option_body(&help[line..]) else {
+        let rest = &help[line..];
+        let current = rest.split('\n').next().unwrap_or(rest);
+        let Some(body) = option_body(current) else {
             continue;
         };
         if let Some(start) = start {
@@ -150,7 +176,7 @@ fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
     let Some(start) = start else {
         panic!(
             "help has no {flag} entry as an option line \
-             (`{HELP_OPTION_INDENT}{flag}` or `{HELP_SHORT_OPTION_INDENT}-x, {flag}`):\n{help}"
+             (`{HELP_OPTION_INDENT}{flag}` or `{HELP_SHORT_OPTION_INDENT}-x{HELP_SHORT_ALIAS_SEPARATOR}{flag}`):\n{help}"
         )
     };
     &help[start..]
@@ -227,6 +253,29 @@ fn help_entry_panic_names_both_option_shapes() {
          {HELP_DESCRIPTION_INDENT}jobs text\n"
     );
     let _ = help_entry(&help, "--absent");
+}
+
+#[test]
+fn option_body_reports_a_short_alias_line_with_an_unexpected_separator() {
+    // A short-alias line whose punctuation clap changed must be named as a
+    // layout change, not skipped: a skipped line would be swallowed by the
+    // preceding entry instead of ending it.
+    let line = format!("{HELP_SHORT_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR} --jobs <JOBS>");
+    let panic = std::panic::catch_unwind(|| option_body(&line))
+        .expect_err("a short-alias line with the wrong separator must be reported");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .expect("the panic carries a message");
+    assert!(
+        message.contains(&line),
+        "the report names the line it could not read: {message}"
+    );
+    assert!(
+        message.contains("short option line"),
+        "the report says the short-option layout changed: {message}"
+    );
 }
 
 #[test]
@@ -349,7 +398,7 @@ fn the_real_help_puts_its_short_option_line_at_the_short_option_indent() {
     let line = short_lines[0];
     assert_eq!(
         line.trim_start(),
-        "-h, --help",
+        format!("-h{HELP_SHORT_ALIAS_SEPARATOR}--help"),
         "the short-option line is the help flag's own:\n{help}"
     );
     assert!(
