@@ -646,8 +646,8 @@ until the main tasks and rework are done.
 | F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | completed |
 | F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | completed |
 | F547 | PURGE-PERF-09 review | `src/util/counter.rs` | `release` uses `lock().unwrap()`; `unwrap_or_else(PoisonError::into_inner)` would make the drop immune to a poisoned mutex. | skipped (poisoning is unreachable through this code; robustness only) |
-| F548 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The test name `an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch` does not mention the backward crossing now pinned. | pending_review |
-| F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | pending_review |
+| F548 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The test name `an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch` does not mention the backward crossing now pinned. | completed |
+| F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | completed |
 | F550 | TEST-REGRESSION-07 implementer | `OPTIMIZATIONS_PLAN` gates | Positional nextest filters like `girpr lib` or `girpr machinery` select zero tests; `--lib` / `--test <name>` are the working spellings. | skipped (harness/nextest filter behaviour, not repo code) |
 | F551 | TEST-REGRESSION-07 review | `tests/repair_machinery.rs` | `MtimeAge` is local; if another test file needs the same named skip outcome it should live beside the shared clock helpers. | skipped (conditional; only one test file uses it today) |
 | F552 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | The other warn-site arms (`PathEscaped`, `Unreadable`, `Read`, `Absent`) are only indirect; one injected-outcome test could pin all six arms. | todo |
@@ -731,6 +731,9 @@ until the main tasks and rework are done.
 | F630 | TEST-REGRESSION-08 implementer | `src/lib.rs` | The ordinary-clock assertion's `now - day` is the only remaining unchecked subtraction in the clock tests. | todo |
 | F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | todo |
 | F632 | TEST-REGRESSION-08 implementer | `README.md`, `.config/nextest.toml` | The skip-switch bullet and the `success-output` override only cover the two existing switches; a skip line from an unlisted test is invisible under the plain gate. | todo |
+| F633 | TEST-REGRESSION-08 review | `.config/nextest.toml` | The renamed epoch test has no `success-output = "immediate"` override, so its skip line would be invisible under the plain gate, unlike every other skip-printing test. | todo |
+| F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | todo |
+| F635 | TEST-REGRESSION-08 review | `src/lib.rs` | The pre-epoch reference value is now the same expression the helper uses, so the assertion no longer pins "the platform's unchecked subtraction does not panic"; a short comment would stop a reader mistaking it for a tautology. | todo |
 
 ## Follow-up batches
 
@@ -872,13 +875,13 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
 | PURGE-PERF-14 | F626, F628 | todo | Wave E; pin the gate's blocking contract directly; low |
-| TEST-REGRESSION-11 | F629, F630 | todo | Wave E; panic-free clock fixtures; low |
+| TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
-| DOCS-USER-14 | F632 | todo | Wave E; document and surface the skip switches; low |
+| DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
-| TEST-REGRESSION-08 | F548, F549 | pending_review | Wave E; pin name and checked pre-epoch construction; low; b7bbfbf, 30f4b7f |
+| TEST-REGRESSION-08 | F548, F549 | done | Wave E; pin name and checked pre-epoch construction; low; b7bbfbf, 30f4b7f |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | CHECK-09 | F552 | todo | Wave E; pin the remaining check warn arms; low |
