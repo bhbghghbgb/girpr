@@ -456,6 +456,7 @@ cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 
 # the artifact bridge: #[ignore]d, needs a bundle (docs/06); a pre-release run
 # builds gircap first so the `gircap verify` precondition executes
+# the same commands, explained in "Real bytes, real flags — and expensive" below
 # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap
 cargo nextest run -p girpr --test artifact_bridge --run-ignored only
