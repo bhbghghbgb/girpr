@@ -381,10 +381,7 @@ mod tests {
         deadline.checked_duration_since(Instant::now())
     }
 
-    /// Time left before `deadline`, or zero once it has passed. A passed
-    /// deadline means the wait that uses this expires immediately, which is
-    /// what the harness wants: the assertion after the wait reports the shared
-    /// deadline, so the wait itself only has to wake.
+    /// A passed deadline means the wait that uses this expires immediately.
     fn remaining_or_zero(deadline: Instant) -> Duration {
         before(deadline).unwrap_or_default()
     }
