@@ -230,13 +230,13 @@ Per file `F`:
    the attempt and retries the whole file (up to 5×).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
-5. **Verify** — one read that answers the gate and the culprit list together: the whole-file
-   digest and the per-chunk verdicts come out of the same sweep. `if md5==F.md5` the file is
+5. **Verify** — one read answers the gate: the whole-file digest. `if md5==F.md5` the file is
    good, and the structured `repaired` event is logged (`chunks_total`/`chunks_reused`/
-   `chunks_downloaded`/`chunks_kept`, `download_bytes`, `final_md5`). Else the per-chunk verdicts
-   name the culprit, and only those are redone; if they still do not match, the file is
-   counted as failed and the run continues — after all files, `Ok(summary, 3)` (skips the
-   post-phase so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
+   `chunks_downloaded`/`chunks_kept`, `download_bytes`, `final_md5`). Else a second read
+   supplies the per-chunk verdicts that name the culprit, and only those are redone; if they
+   still do not match, the file is counted as failed and the run continues — after all files,
+   `Ok(summary, 3)` (skips the post-phase so `config.ini` is not bumped while damaged) — not
+   `Err(RunFailure::write)`.
 6. A target that cannot be opened for writing is written the temp way, loudly: write
    `{path}_tmp` (kept, not truncated), work only on chunks with
    `offset+uncompressed_size > have` (the already-complete prefix is kept; the final

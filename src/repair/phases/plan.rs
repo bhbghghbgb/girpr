@@ -613,6 +613,72 @@ mod tests {
         assert_eq!(forward, backward);
     }
 
+    /// [`Layout::overlaps`] names **both** sides of every overlap: the offsets
+    /// it records contain the offset of each chunk in every pair whose ranges
+    /// share a byte.
+    ///
+    /// The in-place writer relies on this when it narrows the post-redo scan:
+    /// a chunk the layout does not name is one no other chunk claims, so its
+    /// verdict cannot change when the redo writes. A layout that named only
+    /// one side would silently make a rewrite of the unnamed side invisible.
+    #[test]
+    fn every_overlapping_pair_is_named_from_both_sides() {
+        let cases: [(&str, Vec<SophonChunk>); 5] = [
+            ("two chunks", vec![chunk("a", 0, 4), chunk("b", 2, 4)]),
+            ("nested", vec![chunk("a", 0, 8), chunk("b", 2, 2)]),
+            ("identical copies", vec![chunk("a", 0, 4), chunk("b", 0, 4)]),
+            (
+                "chain",
+                vec![chunk("a", 0, 4), chunk("b", 2, 4), chunk("c", 4, 4)],
+            ),
+            (
+                // The layout records the chunk that last extended the
+                // coverage, which is not always one of the two chunks that
+                // overlap.
+                "a later pair behind a long first chunk",
+                vec![chunk("a", 0, 100), chunk("b", 10, 50), chunk("c", 20, 5)],
+            ),
+        ];
+        for (name, chunks) in cases {
+            let file = file_with(128, chunks);
+            let layout = file.layout();
+            assert!(!layout.overlaps.is_empty(), "{name}: the case must overlap");
+            let named: Vec<u64> = layout.overlaps.iter().flat_map(|&(a, b)| [a, b]).collect();
+            for (i, a) in file.chunks.iter().enumerate() {
+                for b in file.chunks.iter().skip(i + 1) {
+                    if !chunks_overlap(a, b) {
+                        continue;
+                    }
+                    assert!(
+                        named.contains(&(a.offset as u64)),
+                        "{name}: {} overlaps {} but the layout does not name it",
+                        a.id,
+                        b.id
+                    );
+                    assert!(
+                        named.contains(&(b.offset as u64)),
+                        "{name}: {} overlaps {} but the layout does not name it",
+                        b.id,
+                        a.id
+                    );
+                }
+            }
+        }
+
+        // The simplest case, stated exactly: one pair, both offsets named. A
+        // layout that remembered only the earlier side would fail here.
+        let layout = file_with(96, vec![chunk("a", 0, 64), chunk("b", 32, 64)]).layout();
+        assert_eq!(layout.overlaps, vec![(0, 32)]);
+    }
+
+    /// Do two chunk ranges share a byte? An empty range shares none.
+    fn chunks_overlap(a: &SophonChunk, b: &SophonChunk) -> bool {
+        if a.uncompressed_size <= 0 || b.uncompressed_size <= 0 {
+            return false;
+        }
+        a.offset < b.offset + b.uncompressed_size && b.offset < a.offset + a.uncompressed_size
+    }
+
     #[test]
     fn a_file_with_no_chunks_and_no_size_is_tiled() {
         let f = file_with(0, vec![]);
