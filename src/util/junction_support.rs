@@ -208,11 +208,19 @@ pub(super) fn junction_inspection_error(link: &Path, e: std::io::Error) -> std::
 /// exit `1` plus localized text and no Win32 code, so its failure arrives
 /// as `Other` and stays unclassified: guessing from the exit status or the
 /// message text would also hide a broken `cmd`/`mklink` environment, which
-/// is exactly what this classifier exists to expose. The raw-code arm
-/// therefore belongs to the spawn path — and to the injected test that
-/// pins the classifier's contract — not to a `mklink` refusal that only
-/// looks like it. A host whose volume cannot hold a junction still fails
-/// loudly rather than silently skipping.
+/// is exactly what this classifier exists to expose.
+///
+/// The raw-code arm is defensive, not a path a junction creation takes:
+/// spawning `cmd` never needs `SeCreateSymbolicLinkPrivilege`, and `cmd`'s
+/// own refusals arrive as an `ExitStatus` failure that carries no raw code,
+/// so a `mklink` refusal can never reach the arm. It is kept because a
+/// spawn error that does carry the raw code `1314` is a host refusal, and
+/// dropping the arm would turn that refusal into a panic instead of a skip.
+/// Only the test that pins the classifier's contract reaches it in practice,
+/// and that is what keeps it honest.
+///
+/// A host whose volume cannot hold a junction still fails loudly rather
+/// than silently skipping.
 pub(super) fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
     if e.kind() == std::io::ErrorKind::Unsupported {
         Some("directory junctions are not supported on this platform")
