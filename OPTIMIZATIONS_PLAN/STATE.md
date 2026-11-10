@@ -793,6 +793,9 @@ until the main tasks and rework are done.
 | F692 | INI-14 implementer | `src/util/junction_support.rs` | `tools/sync` notes that `FileType::is_symlink` was false for a junction on some toolchains, so the new reparse-point check relies on std's name-surrogate reparse-tag test alone and could refuse a good fixture on an older toolchain. | todo |
 | F693 | INI-14 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch still has no direct end-to-end drive. | skipped (duplicate of F683, which INI-17 covers) |
 | F694 | INI-14 review | `src/util/junction_support.rs` | The guard proves "is a name-surrogate reparse point", not "is a junction": a symbolic link at the link path would also pass, and std exposes no reparse tag publicly. | todo |
+| F695 | INI-15 implementer | `src/util/path.rs`, `src/util/junction_support.rs` | `path.rs` keeps private copies of `require_junction()` and `skip_junction()`; the junction fixture support could have one home in the shared module. | todo |
+| F696 | INI-15 implementer | `.config/nextest.toml` | The ini symlink case's host skip is still invisible under the plain gate; it is in no `success-output` override even though it can skip on a host without symlink privilege. | todo |
+| F697 | INI-15 implementer | `src/util/ini.rs`, `src/util/path.rs` | The injected-refusal probes print "simulated refusal" to stderr but are covered by no `success-output` override. | skipped (consistent with the path module's equivalents; the output is diagnostic only) |
 
 ## Follow-up batches
 
@@ -905,7 +908,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
-| INI-15 | F592, F593, F594, F595 | in_progress | Wave E; ini junction skip visibility and link-denial doc; low |
+| INI-15 | F592, F593, F594, F595 | pending_review | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1 |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
@@ -937,7 +940,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
 | INI-17 | F683, F684 | todo | Wave E; drive the uninspectable-link branch for both callers; low |
-| INI-18 | F685, F686 | todo | Wave E; one classification shape and a directly driven panic arm; low |
+| INI-18 | F685, F686, F695 | todo | Wave E; one classification shape and a directly driven panic arm; low |
 | INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
 | INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
@@ -946,7 +949,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
 | DOCS-USER-15 | F641 | todo | Wave E; capture spec log shape and path; low |
 | CHECK-14 | F642, F643, F646, F647 | todo | Wave E; fallible level extraction and the info line's level; low |
-| PATHHELPERS-12 | F648, F649, F657 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
+| PATHHELPERS-12 | F648, F649, F657, F696 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
 | PATHHELPERS-13 | F654 | todo | Wave E; capture README bridge command completeness; low |
 | DOCS-USER-16 | F653, F656 | todo | Wave E; spec section citation for the listeners; low |
 | DOCS-USER-17 | F658, F659, F662 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
