@@ -166,15 +166,24 @@ executes instead of skipping:
 ```
 # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
 
 The cases run in parallel: each capture has its own scratch tree (§6.3) and its
 own listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
 `success-output` override in `.config/nextest.toml` prints each case's
 precondition and summary lines even though it passes, so `--no-capture` is not
-needed either. To reproduce one failure, narrow the run with nextest's filter,
-for example `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+needed either. To reproduce one failure, put the case in the filter of the same
+command:
+
+```
+cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+```
+
+The `-E` expression narrows the set nextest has already selected; it does not
+add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
+runs none of them, and `cargo nextest list` needs `--run-ignored all` to list
+them at all.
 
 Nothing else runs it. `cargo nextest run` still *compiles* the file, which is
 what keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`

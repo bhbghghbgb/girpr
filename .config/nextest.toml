@@ -91,10 +91,20 @@ slow-timeout = { period = "60s" }
 # These cases report a host-dependent skip on stderr and then pass. Nextest's
 # default profile discards a passing test's captured output, so the skip would
 # be invisible under the plain gate; show it for these tests only.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters below do: a `test(=name)` predicate on its own matches the same name
+# in *any* binary, so a test elsewhere that happened to share one of these
+# names would silently inherit the override. `package(=girpr)` and
+# `binary(=repair_post)` pin the two cases to the integration test they live in.
 [[profile.default.overrides]]
 filter = """
-    test(=a_non_utf8_audio_cache_name_moves_byte_for_byte)
-    or test(=a_non_utf8_audio_cache_name_moves_through_the_binary)
+    package(=girpr)
+    and binary(=repair_post)
+    and (
+        test(=a_non_utf8_audio_cache_name_moves_byte_for_byte)
+        or test(=a_non_utf8_audio_cache_name_moves_through_the_binary)
+    )
 """
 success-output = "immediate"
 

@@ -459,7 +459,7 @@ cargo clippy -p girsync -p gircap --all-targets -- -D warnings
 # the same commands, explained in "Real bytes, real flags — and expensive" below
 # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 
 # the hash and scan throughput measurements: #[ignore]d, print MiB/s
 cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(md5_throughput)' --no-capture
@@ -612,14 +612,22 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   ```powershell
   # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
   cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
-  cargo nextest run -p girpr --test artifact_bridge --run-ignored only
+  cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
   ```
   The six cases run in parallel — each capture gets its own scratch tree and its
   own listeners — so neither `--no-capture` nor `--test-threads=1` is needed:
   the per-case `success-output` override in `.config/nextest.toml` prints each
   case's precondition and summary lines even though it passes. To reproduce one
-  failure, narrow the run with nextest's filter, for example
-  `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+  failure, put the case in the filter of the same command:
+
+  ```powershell
+  cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+  ```
+
+  The `-E` expression narrows the set nextest has already selected; it does not
+  add `#[ignore]`d cases to it. A command without `--run-ignored only` (or
+  `all`) runs none of them, and `cargo nextest list` needs `--run-ignored all`
+  to list them at all.
   It still *compiles* under `cargo nextest run`, so a broken bridge fails to
   build rather than failing silently. And because it only ever runs
   deliberately, a **missing prerequisite is an error**: no bundle under the

@@ -154,15 +154,23 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 # in the girpr package. Needs exactly one bundle and FAILS without one.
 # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
 
 The cases run in parallel — one scratch tree and one set of listeners per
 capture — so no `--test-threads=1` is needed; `girpr`'s
 `.config/nextest.toml` shows each case's output through a per-case
 `success-output` override, so no `--no-capture` is needed either. Narrow a run
-to one failure with nextest's filter, for example
-`-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+to one failure by putting the case in the filter of the same command:
+
+```powershell
+cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+```
+
+The `-E` expression narrows the set nextest has already selected; it does not
+add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
+runs none of them, and `cargo nextest list` needs `--run-ignored all` to list
+them at all.
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple

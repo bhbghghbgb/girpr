@@ -48,7 +48,7 @@
 //! ```text
 //! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
 //! cargo build -p gircap
-//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only
+//! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 //! ```
 //!
 //! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
@@ -58,8 +58,16 @@
 //! `success-output = "immediate"`, so the precondition and per-capture lines
 //! are printed even though the cases pass.
 //!
-//! To reproduce one failure, narrow the run with nextest's filter, for example
-//! `-E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'`.
+//! To reproduce one failure, put the case in the filter of the same command:
+//!
+//! ```text
+//! cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+//! ```
+//!
+//! The `-E` expression narrows the set nextest has already selected; it does
+//! not add `#[ignore]`d cases to it. A command without `--run-ignored only`
+//! (or `all`) runs none of them, and `cargo nextest list` needs
+//! `--run-ignored all` to list them at all.
 //!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
