@@ -671,8 +671,8 @@ until the main tasks and rework are done.
 | F570 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "every capture pays the disk read once instead of six times" mixes a per-capture subject with a suite-wide count. | completed |
 | F571 | DOCS-USER-08 review | `tests/artifact_bridge/server.rs` | "the suite's six runs" counts test cases, but each case is a pre-pass plus a real run (twelve `girpr` invocations). | completed |
 | F572 | HYP-08 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The async `logs_of` now exists twice; consolidating needs a public async test helper. | skipped (would add public API surface for a private test helper) |
-| F573 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | "the future ... may be polled on worker threads" is over-broad: a multi-thread `#[tokio::test]` still polls the awaited body on the calling thread; only spawned tasks migrate. | pending_review |
-| F574 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | `spawn_blocking_traced` captures the dispatcher at spawn time, so on a multi-thread runtime the spawn site may already lack the subscriber; the "blocking lines are captured too" claim is scoped to correct usage. | pending_review |
+| F573 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | "the future ... may be polled on worker threads" is over-broad: a multi-thread `#[tokio::test]` still polls the awaited body on the calling thread; only spawned tasks migrate. | completed |
+| F574 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | `spawn_blocking_traced` captures the dispatcher at spawn time, so on a multi-thread runtime the spawn site may already lack the subscriber; the "blocking lines are captured too" claim is scoped to correct usage. | completed |
 | F575 | HYP-08 review | `src/repair/test_support.rs` | An async `logs_of` could live behind `cfg(test)`, but it would be unreachable from integration tests and still duplicated. | skipped (only worth revisiting if a third copy appears) |
 | F576 | JOBS-07 implementer | `tests/cli_contract.rs` | `HELP_SHORT_OPTION_INDENT` likewise has no automated tie to clap's actual layout; only fixture-based tests exercise it. | todo |
 | F577 | JOBS-07 implementer | `tests/cli_contract.rs` | No test asserts that a real `--help` description line begins at `HELP_DESCRIPTION_INDENT`; output is only checked through `help_entry`. | todo |
@@ -774,6 +774,7 @@ until the main tasks and rework are done.
 | F673 | HYP-10 implementer | `src/repair/mod.rs` | Nothing documents at `spawn_blocking_traced`'s definition that it must be called from the thread carrying the dispatcher; a future refactor into a spawned task would silently lose its log lines. | todo |
 | F674 | HYP-10 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The two async `logs_of` copies are still duplicated. | skipped (duplicate of F572 and F645; consolidating needs a public async test helper) |
 | F675 | HYP-10 implementer | `src/repair/scan.rs`, `src/repair/phases/check.rs`, `src/repair/mod.rs` | Raw `tokio::task::spawn_blocking` calls produce lines no scoped subscriber can capture. | skipped (conditional; only matters if a test ever needs those lines) |
+| F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | todo |
 
 ## Follow-up batches
 
@@ -928,7 +929,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-17 | F658, F659, F662 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
 | DOCS-USER-18 | F664, F666, F667, F671 | todo | Wave E; harmonise the bundle-size figures; low |
 | DOCS-USER-19 | F669, F670 | todo | Wave E; cache scope wording in the spec and the comment; low |
-| HYP-12 | F673 | todo | Wave E; document the spawn_blocking_traced contract; low |
+| HYP-12 | F673, F676 | todo | Wave E; document the spawn_blocking_traced contract; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -948,7 +949,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | DOCS-USER-13 | F569, F570, F571 | done | Wave E; cache comment scope and count wording; low; 2a932cc |
 | HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
-| HYP-10 | F573, F574 | pending_review | Wave E; runtime-flavor doc scoping in both log helpers; low; 9f68fd5 |
+| HYP-10 | F573, F574 | done | Wave E; runtime-flavor doc scoping in both log helpers; low; 9f68fd5 |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
 | JOBS-08 | F576, F577 | todo | Wave E; real help output indent pins; low |
 | LOCK-09 | F578, F579, F580 | done | Wave E; argv terminator, lock-scan arity, hyphen values; low |
