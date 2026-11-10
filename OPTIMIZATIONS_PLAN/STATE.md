@@ -729,7 +729,7 @@ until the main tasks and rework are done.
 | F628 | PURGE-PERF-11 review | `src/util/counter.rs` tests | No test pins that the gate actually blocks an unreleased party; with the wait loop disabled, three existing tests still pass. | todo |
 | F629 | TEST-REGRESSION-08 implementer | `src/repair/file/inplace.rs` tests | The local `ago()` helper calls `stamp_ago(age).expect(...)`, so that unit test fails loudly instead of skipping on a host that cannot represent the age. | todo |
 | F630 | TEST-REGRESSION-08 implementer | `src/lib.rs` | The ordinary-clock assertion's `now - day` is the only remaining unchecked subtraction in the clock tests. | todo |
-| F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | pending_review |
+| F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | completed |
 | F632 | TEST-REGRESSION-08 implementer | `README.md`, `.config/nextest.toml` | The skip-switch bullet and the `success-output` override only cover the two existing switches; a skip line from an unlisted test is invisible under the plain gate. | todo |
 | F633 | TEST-REGRESSION-08 review | `.config/nextest.toml` | The renamed epoch test has no `success-output = "immediate"` override, so its skip line would be invisible under the plain gate, unlike every other skip-printing test. | todo |
 | F634 | TEST-REGRESSION-08 review | `src/lib.rs`, `README.md`, `.config/nextest.toml` | The new pre-epoch skip has no presence-based switch, so a run that means to prove the backward crossing cannot insist on it. | todo |
@@ -803,6 +803,8 @@ until the main tasks and rework are done.
 | F702 | INI-16 implementer | `tools/sync/tests/symlink.rs` | That crate has its own `skip_if_no_link!` macro with a different skip-line format; the girpr test-support seam is not reachable from girsync's integration tests. | skipped (separate crate; a shared seam would need its own design) |
 | F703 | INI-16 implementer | `src/util/ini.rs` | The shared helper's panic message reads "this host cannot create …" even for `FixtureRefusal::Injected`. | skipped (duplicate of F699, which TEST-REGRESSION-12 covers) |
 | F704 | INI-16 implementer | `src/lib.rs` | `skip_pre_epoch` prints its own `SKIP precondition:` line, the last self-printed one in the crate; the shared fixture helper does not fit a clock subject. | todo |
+| F705 | INI-16 review | `src/util/path.rs`, `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink fixtures `unwrap()` the symlink creation, so on a Unix host that refuses symlinks they panic instead of skipping; they need their own skip reason and a `GIRPR_TEST_REQUIRE_SYMLINK` path. | todo |
+| F706 | INI-16 review | `src/util/ini.rs` | The Unix `link_creation_denied` treats `EPERM`/`EACCES` as a host refusal, but the `Unsupported`-means-skip rule leans on std's platform mapping, which could widen and let a broken environment skip. | todo |
 
 ## Follow-up batches
 
@@ -946,12 +948,13 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-14 | F626, F628 | todo | Wave E; pin the gate's blocking contract directly; low |
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | TEST-REGRESSION-12 | F699, F704 | todo | Wave E; skip reporting wording in the shared helper; low |
-| INI-16 | F631 | pending_review | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
+| INI-16 | F631 | done | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
 | INI-17 | F683, F684 | todo | Wave E; drive the uninspectable-link branch for both callers; low |
 | INI-18 | F685, F686, F695, F698, F701 | todo | Wave E; one classification shape and a directly driven panic arm; low |
 | INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
 | INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
+| INI-22 | F705, F706 | todo | Wave E; Unix symlink fixture skips and classifier framing; low |
 | DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
 | CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
