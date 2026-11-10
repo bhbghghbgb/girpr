@@ -198,13 +198,21 @@ Resolution order:
    bundle, and it outranks the default root only — (1) still wins over it;
 3. then, under that root, `gircap list --root <root>`, which reports one
    `bundle` record per bundle on stdout;
-4. otherwise a directory scan under `<root>`, which must agree with (3) —
-   `gircap`'s own `tests/bundle_consistency.rs` asserts the two name the same
-   bundles in the same order, so which one ran never depends on whether a
-   sibling workspace member happened to be compiled;
-5. otherwise **fail**, naming the reason, the root it searched, and the command
-   that produces a bundle there: `cargo run -p gircap -- capture --out <root>`
-   (by default `cargo run -p gircap -- capture --out artifacts`).
+4. otherwise — and **only** when (3) is unavailable or fails, that is when
+   `gircap` is not built beside the test binary, cannot be started, or exits
+   non-zero — a **directory scan** under `<root>` for
+   `<root>/<biz>/<old>__<new>/<capture-id>/MANIFEST.json`. The scan must agree
+   with (3): `gircap`'s own `tests/bundle_consistency.rs` asserts the two name
+   the same bundles in the same order, so the fallback is a faithful stand-in
+   for (3) rather than a second, looser notion of what a bundle is;
+5. otherwise **fail**, naming the reason, the root it searched, and which of
+   (3) or (4) ran. **No bundle under the root** is the failure the capture
+   command answers: the message names `cargo run -p gircap -- capture --out
+   <root>` (by default `cargo run -p gircap -- capture --out artifacts`) and
+   points at an existing bundle with `set GIRPR_ARTIFACT_BUNDLE=<dir>`. **More
+   than one bundle under the root** is a different failure with a different
+   answer: the message lists the candidates, says the suite needs exactly one,
+   and points at `set GIRPR_ARTIFACT_BUNDLE=<dir>` to name one.
 
 The same rule applies one level down: a capture the suite names must be in the
 bundle. **The capture is resolved through the matrix**, not by looking for a
