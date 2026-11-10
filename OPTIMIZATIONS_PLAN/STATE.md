@@ -643,8 +643,8 @@ until the main tasks and rework are done.
 | F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | completed |
 | F543 | PURGE-PERF-09 implementer | `src/util/counter.rs` | The test-only `Gate` is deliberately two-party (`arrived == 2`); N-party reuse would need generalizing. | skipped (conditional; no N-party fixture exists) |
 | F544 | PURGE-PERF-09 implementer | `src/util/counter.rs` tests | The new regression test's simulated panic text reaches captured test output. | skipped (harmless; visible only in verbose runs) |
-| F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | pending_review |
-| F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | pending_review |
+| F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | completed |
+| F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | completed |
 | F547 | PURGE-PERF-09 review | `src/util/counter.rs` | `release` uses `lock().unwrap()`; `unwrap_or_else(PoisonError::into_inner)` would make the drop immune to a poisoned mutex. | skipped (poisoning is unreachable through this code; robustness only) |
 | F548 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The test name `an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch` does not mention the backward crossing now pinned. | todo |
 | F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | todo |
@@ -724,6 +724,9 @@ until the main tasks and rework are done.
 | F623 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `wait_for_arrivals` takes a count but has one caller, and `is_open` is derivable from the same lock as `arrival_count`; the helpers could fold into one snapshot accessor. | skipped (conditional; one caller today) |
 | F624 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::release` calls `notify_all` even when the gate was already open. | skipped (harmless with the current one-waiter shape) |
 | F625 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `ReleaseOnPanic` records no reason for the release, so a diagnostic consumer sees the count but not the cause. | skipped (conditional; no consumer needs the cause today) |
+| F626 | PURGE-PERF-11 review | `src/util/counter.rs` tests | The new test pins "the party is parked" only indirectly through `release_count == 1`, which turned out racy under a gate that no longer blocks; a direct precondition check (`done_rx.try_recv()` is `Err` right after the parked-state assertions) would pin it deterministically. | todo |
+| F627 | PURGE-PERF-11 review | `src/util/counter.rs` | The release doc says a repeat release "leaves the gate's state unchanged" although `GateState::releases` is incremented; naming the open/arrival state would be literally exact. | skipped (cosmetic; the next sentence discloses the count) |
+| F628 | PURGE-PERF-11 review | `src/util/counter.rs` tests | No test pins that the gate actually blocks an unreleased party; with the wait loop disabled, three existing tests still pass. | todo |
 
 ## Follow-up batches
 
@@ -864,8 +867,9 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-13 | F615 | todo | Wave E; narrow the post-redo pass to the rewritten chunks; low |
 | MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
+| PURGE-PERF-14 | F626, F628 | todo | Wave E; pin the gate's blocking contract directly; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
-| PURGE-PERF-11 | F545, F546 | pending_review | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
+| PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | TEST-REGRESSION-08 | F548, F549 | todo | Wave E; pin name and checked pre-epoch construction; low |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
