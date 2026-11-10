@@ -643,8 +643,8 @@ until the main tasks and rework are done.
 | F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | completed |
 | F543 | PURGE-PERF-09 implementer | `src/util/counter.rs` | The test-only `Gate` is deliberately two-party (`arrived == 2`); N-party reuse would need generalizing. | skipped (conditional; no N-party fixture exists) |
 | F544 | PURGE-PERF-09 implementer | `src/util/counter.rs` tests | The new regression test's simulated panic text reaches captured test output. | skipped (harmless; visible only in verbose runs) |
-| F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | todo |
-| F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | todo |
+| F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | pending_review |
+| F546 | PURGE-PERF-09 review | `src/util/counter.rs` | `Gate::release`'s doc says repeating it is "a no-op", but it increments the diagnostic `releases` counter. | pending_review |
 | F547 | PURGE-PERF-09 review | `src/util/counter.rs` | `release` uses `lock().unwrap()`; `unwrap_or_else(PoisonError::into_inner)` would make the drop immune to a poisoned mutex. | skipped (poisoning is unreachable through this code; robustness only) |
 | F548 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The test name `an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch` does not mention the backward crossing now pinned. | todo |
 | F549 | TEST-REGRESSION-07 implementer | `src/lib.rs` | The pre-epoch pin builds `UNIX_EPOCH - Duration::from_secs(60)` with unchecked subtraction, which would panic on a host without pre-epoch time. | todo |
@@ -720,6 +720,10 @@ until the main tasks and rework are done.
 | F619 | MANIFEST-10 review | `src/repair/file/inplace.rs` tests | The invariant test pins one fixed layout; a generated sweep over layouts would pin the narrowed-set property far more broadly. | todo |
 | F620 | MANIFEST-10 review | `src/repair/phases/plan.rs` | The narrowing's soundness rests on `Layout::overlaps` naming both sides of every overlap; a unit test in `plan.rs` stating that property would make the dependency explicit. | todo |
 | F621 | MANIFEST-10 review | `src/repair/file/inplace.rs` | `overlapping_ranges` recomputes `file.layout()` although `patch_chunks` already computed it. | skipped (negligible next to the read; not worth the churn) |
+| F622 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::arrive_and_wait` opens the gate only on the exact transition `arrived == 2`; a third arrival while the gate is closed would never open it. | skipped (unreachable today; arrivals increase by one, so the count passes through 2) |
+| F623 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `wait_for_arrivals` takes a count but has one caller, and `is_open` is derivable from the same lock as `arrival_count`; the helpers could fold into one snapshot accessor. | skipped (conditional; one caller today) |
+| F624 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::release` calls `notify_all` even when the gate was already open. | skipped (harmless with the current one-waiter shape) |
+| F625 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `ReleaseOnPanic` records no reason for the release, so a diagnostic consumer sees the count but not the cause. | skipped (conditional; no consumer needs the cause today) |
 
 ## Follow-up batches
 
@@ -859,8 +863,9 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-12 | F613, F618 | todo | Wave E; keep the terminal rule's no-overlap invariant with the predicate; low |
 | MANIFEST-13 | F615 | todo | Wave E; narrow the post-redo pass to the rewritten chunks; low |
 | MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
+| PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
-| PURGE-PERF-11 | F545, F546 | in_progress | Wave E; release-wakes-a-parked-party test and doc wording; low |
+| PURGE-PERF-11 | F545, F546 | pending_review | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
 | TEST-REGRESSION-08 | F548, F549 | todo | Wave E; pin name and checked pre-epoch construction; low |
 | TEST-REGRESSION-09 | F550 | done | Wave E; nextest gate spellings; low |
