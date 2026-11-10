@@ -81,6 +81,44 @@ pub(super) fn link_creation_denied(e: &std::io::Error) -> bool {
     }
 }
 
+/// The Unix errno values that mean "there is no directory symlink here":
+/// `ENOSYS`, the syscall is not implemented on this platform, and
+/// `EOPNOTSUPP`, the filesystem cannot hold symlinks.
+///
+/// The numbers are the platform's own, not Rust's, and the Unix flavours
+/// number them differently, so each target names its own pair: 38 and 95 in
+/// Linux's asm-generic errno table, which Android shares; 78 and 102 on
+/// Apple platforms; 78 and 45 on the BSDs. A Unix target this table does not
+/// name — the MIPS and SPARC Linux targets, which number their errors
+/// differently, and every other flavour — names no code at all, so its
+/// refusals fail closed instead of skipping.
+#[cfg(unix)]
+fn unix_unsupported_codes() -> &'static [i32] {
+    if cfg!(target_vendor = "apple") {
+        &[78, 102]
+    } else if cfg!(any(
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd"
+    )) {
+        &[78, 45]
+    } else if cfg!(any(target_os = "linux", target_os = "android"))
+        && !cfg!(any(
+            target_arch = "mips",
+            target_arch = "mips32r6",
+            target_arch = "mips64",
+            target_arch = "mips64r6",
+            target_arch = "sparc",
+            target_arch = "sparc64"
+        ))
+    {
+        &[38, 95]
+    } else {
+        &[]
+    }
+}
+
 /// Whether the platform itself cannot create a directory symlink.
 ///
 /// The answer comes from the raw OS code, never from `std`'s
@@ -90,8 +128,9 @@ pub(super) fn link_creation_denied(e: &std::io::Error) -> bool {
 ///
 /// The codes are the platform's own "there is no symlink here" answers:
 ///
-/// - Unix: `ENOSYS` (38), the syscall is not implemented here, and
-///   `EOPNOTSUPP` (95), the filesystem does not hold symlinks.
+/// - Unix: `ENOSYS` and `EOPNOTSUPP`, as [`unix_unsupported_codes`] numbers
+///   them for this target. A Unix target that table does not name names no
+///   code.
 /// - Windows: `ERROR_CALL_NOT_IMPLEMENTED` (1201).
 ///
 /// An `Unsupported` error that carries no raw code did not come from a
@@ -103,7 +142,7 @@ pub(super) fn link_creation_denied(e: &std::io::Error) -> bool {
 fn platform_cannot_create_symlinks(kind: std::io::ErrorKind, raw: Option<i32>) -> bool {
     match raw {
         #[cfg(unix)]
-        Some(38) | Some(95) => true,
+        Some(code) => unix_unsupported_codes().contains(&code),
         #[cfg(windows)]
         Some(1201) => true,
         _ => kind == std::io::ErrorKind::Unsupported && raw.is_none(),
@@ -265,11 +304,47 @@ mod tests {
 
     /// The platform's own "there is no symlink here" answers are proven
     /// refusals, so a host that cannot hold one skips instead of failing.
+    /// The numbers are the platform's, not this module's: they are pinned per
+    /// target below, so a flavour that renumbers them fails here rather than
+    /// skipping on a code that means something else.
     #[test]
     fn the_platforms_own_unsupported_codes_are_a_proven_refusal() {
         #[cfg(unix)]
         {
-            for code in [38, 95] {
+            #[cfg(target_vendor = "apple")]
+            assert_eq!(
+                unix_unsupported_codes(),
+                [78, 102],
+                "ENOSYS and EOPNOTSUPP on Apple platforms"
+            );
+            #[cfg(any(
+                target_os = "freebsd",
+                target_os = "dragonfly",
+                target_os = "openbsd",
+                target_os = "netbsd"
+            ))]
+            assert_eq!(
+                unix_unsupported_codes(),
+                [78, 45],
+                "ENOSYS and EOPNOTSUPP on the BSDs"
+            );
+            #[cfg(all(
+                any(target_os = "linux", target_os = "android"),
+                not(any(
+                    target_arch = "mips",
+                    target_arch = "mips32r6",
+                    target_arch = "mips64",
+                    target_arch = "mips64r6",
+                    target_arch = "sparc",
+                    target_arch = "sparc64"
+                ))
+            ))]
+            assert_eq!(
+                unix_unsupported_codes(),
+                [38, 95],
+                "ENOSYS and EOPNOTSUPP in Linux's asm-generic errno table"
+            );
+            for &code in unix_unsupported_codes() {
                 assert!(
                     platform_cannot_create_symlinks(std::io::ErrorKind::Unsupported, Some(code)),
                     "the platform's own code {code} is a refusal"
