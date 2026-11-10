@@ -117,6 +117,17 @@ filter = """
 """
 success-output = "immediate"
 
+# The dangling-symlink case reports a host-dependent skip on stderr and then
+# passes, so its skip line must be visible under the plain gate too: it names
+# the switch that turns that skip into a failure.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and test(=util::ini::tests::config_bump_refuses_a_dangling_symlink_game_dir)
+"""
+success-output = "immediate"
+
 # The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
 # optional sibling binary. When it is not built, `assert_bundle_verifies`
 # prints the same kind of host-dependent skip and the case still passes. Nextest
