@@ -674,8 +674,8 @@ until the main tasks and rework are done.
 | F573 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | "the future ... may be polled on worker threads" is over-broad: a multi-thread `#[tokio::test]` still polls the awaited body on the calling thread; only spawned tasks migrate. | completed |
 | F574 | HYP-08 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | `spawn_blocking_traced` captures the dispatcher at spawn time, so on a multi-thread runtime the spawn site may already lack the subscriber; the "blocking lines are captured too" claim is scoped to correct usage. | completed |
 | F575 | HYP-08 review | `src/repair/test_support.rs` | An async `logs_of` could live behind `cfg(test)`, but it would be unreachable from integration tests and still duplicated. | skipped (only worth revisiting if a third copy appears) |
-| F576 | JOBS-07 implementer | `tests/cli_contract.rs` | `HELP_SHORT_OPTION_INDENT` likewise has no automated tie to clap's actual layout; only fixture-based tests exercise it. | todo |
-| F577 | JOBS-07 implementer | `tests/cli_contract.rs` | No test asserts that a real `--help` description line begins at `HELP_DESCRIPTION_INDENT`; output is only checked through `help_entry`. | todo |
+| F576 | JOBS-07 implementer | `tests/cli_contract.rs` | `HELP_SHORT_OPTION_INDENT` likewise has no automated tie to clap's actual layout; only fixture-based tests exercise it. | pending_review |
+| F577 | JOBS-07 implementer | `tests/cli_contract.rs` | No test asserts that a real `--help` description line begins at `HELP_DESCRIPTION_INDENT`; output is only checked through `help_entry`. | pending_review |
 | F578 | LOCK-08 implementer | `tests/common/run_lock.rs` | The mirror does not model `--` or bare positionals; the helper could still name a game path seen before them. | skipped (the CLI has no positionals and every caller passes flags plus values only; lock removal is a no-op when wrong) |
 | F579 | LOCK-08 implementer | `tests/common/run_lock.rs` | `args_take_lock` still tokenizes without arity, so invalid argv gets an arbitrary (no-op) answer. | skipped (its documented reason holds for every argv clap accepts) |
 | F580 | LOCK-08 implementer | `tests/run_lock.rs` | A future value-taking flag using `allow_hyphen_values` or a short value form would need the table and rule revisited; the drift test covers arity and aliases only. | skipped (the drift test fails first if arity changes) |
@@ -775,6 +775,9 @@ until the main tasks and rework are done.
 | F674 | HYP-10 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The two async `logs_of` copies are still duplicated. | skipped (duplicate of F572 and F645; consolidating needs a public async test helper) |
 | F675 | HYP-10 implementer | `src/repair/scan.rs`, `src/repair/phases/check.rs`, `src/repair/mod.rs` | Raw `tokio::task::spawn_blocking` calls produce lines no scoped subscriber can capture. | skipped (conditional; only matters if a test ever needs those lines) |
 | F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | todo |
+| F677 | JOBS-08 implementer | `tests/cli_contract.rs` | `-h` (short help) renders a different layout, with descriptions beside the flags, and nothing in the suite pins it. | todo |
+| F678 | JOBS-08 implementer | `tests/cli_contract.rs` | The new tests sample one option line and one description line; a sweep over every entry would pin each column. | todo |
+| F679 | JOBS-08 implementer | `tests/cli_contract.rs` | `option_body` requires the short alias to be exactly one char followed by ", ", so a clap change to the separator would silently stop matching rather than fail loudly. | todo |
 
 ## Follow-up batches
 
@@ -951,7 +954,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-09 | F572 | done | Wave E; duplicated async log helper; low |
 | HYP-10 | F573, F574 | done | Wave E; runtime-flavor doc scoping in both log helpers; low; 9f68fd5 |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
-| JOBS-08 | F576, F577 | todo | Wave E; real help output indent pins; low |
+| JOBS-08 | F576, F577 | pending_review | Wave E; real help output indent pins; low; 43d336b, 2c0f279 |
+| JOBS-09 | F677, F678, F679 | todo | Wave E; short-help layout and full help sweep; low |
 | LOCK-09 | F578, F579, F580 | done | Wave E; argv terminator, lock-scan arity, hyphen values; low |
 | LOCK-10 | F581, F582 | done | Wave E; inline-value validation and conflict shapes; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
