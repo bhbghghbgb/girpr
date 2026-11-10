@@ -663,7 +663,7 @@ until the main tasks and rework are done.
 | F562 | DOCS-USER-07 implementer | `tests/artifact_bridge.rs` | The module docs still say "63 s for the six tests" and show a resolution order without `GIRPR_ARTIFACT_ROOT`, mirroring the old wording. | completed |
 | F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the measured 97.7 MiB bundle and 41.4 MiB of manifests. | completed |
 | F564 | DOCS-USER-07 review | `tests/artifact_bridge/server.rs` | Manifests are described as "~40 MB of a ~130 MB bundle" and "~320 MB across eight runs"; the bundle is 97.7 MiB with 41.4 MiB under `manifests/`, and there are six tests. | skipped (duplicate of F563, which now carries these measurements) |
-| F565 | DOCS-USER-07 review | `docs/06-artifact-bridge-spec.md` | §3.2 step 4 says "otherwise a directory scan" though the scan runs only when `gircap list` is unavailable or fails, and step 5's `--out <root>` text covers the zero-bundle failure while the multiple-bundle failure points at `GIRPR_ARTIFACT_BUNDLE`. | pending_review |
+| F565 | DOCS-USER-07 review | `docs/06-artifact-bridge-spec.md` | §3.2 step 4 says "otherwise a directory scan" though the scan runs only when `gircap list` is unavailable or fails, and step 5's `--out <root>` text covers the zero-bundle failure while the multiple-bundle failure points at `GIRPR_ARTIFACT_BUNDLE`. | completed |
 | F566 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs` | The comments say "a `getBuild` body declares five manifests and the bundle stores two", while §4.6 says "four manifests per run"; both can be true but read as a contradiction. | todo |
 | F567 | DOCS-USER-08 implementer | `tests/artifact_bridge/server.rs`, `docs/06-artifact-bridge-spec.md` | The cache holds only the served `.manifest.zst` archives (~19.0 MiB), not the whole 41.4 MiB `manifests/` tree both texts cite for scale. | todo |
 | F568 | DOCS-USER-08 implementer | `tests/artifact_bridge.rs` | The `#[ignore]` reason mentions the `.config/nextest.toml` success-output override. | skipped (the override exists and was exercised in the parallel bridge run) |
@@ -760,6 +760,7 @@ until the main tasks and rework are done.
 | F659 | DOCS-USER-10 implementer | `docs/06-artifact-bridge-spec.md` | §3.2 step 3 says `gircap list` "reports one `bundle` record per bundle on stdout", naming only the text form although the bridge also accepts the JSON form's `"event":"bundle"`. | todo |
 | F660 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `scan_for_bundles` is fixed-depth while `gircap`'s own consistency test scans recursively, so a bundle outside the fixed layout would be missed by the bridge's scan. | skipped (conditional; only bundles outside the documented layout are affected) |
 | F661 | DOCS-USER-10 implementer | `tests/artifact_bridge.rs` | `gircap list` can exit non-zero (for example an unreadable root), in which case the bridge silently falls back to the scan and never surfaces the reason. | skipped (the fallback is the documented behaviour; surfacing it would change the bridge's contract) |
+| F662 | DOCS-USER-10 review | `tests/artifact_bridge.rs` | `scan_for_bundles` has no comment stating the fixed-depth layout the spec now names, although the recursive listing can find a root one level deeper. | todo |
 
 ## Follow-up batches
 
@@ -911,7 +912,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-12 | F648, F649, F657 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
 | PATHHELPERS-13 | F654 | todo | Wave E; capture README bridge command completeness; low |
 | DOCS-USER-16 | F653, F656 | todo | Wave E; spec section citation for the listeners; low |
-| DOCS-USER-17 | F658, F659 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
+| DOCS-USER-17 | F658, F659, F662 | todo | Wave E; bundle-discovery wording in the module doc and the spec; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -926,7 +927,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PATHHELPERS-11 | F559, F560, F561 | done | Wave E; module-doc filter, README cross-reference, section citation; low; 38cd738, 9c1a9a3, d17517c |
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
-| DOCS-USER-10 | F565 | pending_review | Wave E; bundle-search failure wording; low; 236cffa |
+| DOCS-USER-10 | F565 | done | Wave E; bundle-search failure wording; low; 236cffa, f6a3777 |
 | DOCS-USER-11 | F566, F567 | todo | Wave E; manifest-count wording and served-archive scale; low |
 | DOCS-USER-12 | F568 | done | Wave E; ignore-reason override reference; low |
 | DOCS-USER-13 | F569, F570, F571 | todo | Wave E; cache comment scope and count wording; low |
