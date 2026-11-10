@@ -101,8 +101,8 @@ for atomicity and for tests that pin both halves.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync --test convert
-cargo test -p girsync
+cargo nextest run -p girsync --test convert
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

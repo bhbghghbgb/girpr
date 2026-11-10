@@ -112,10 +112,10 @@ value that is one error or none.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync planner::
-cargo test -p girsync scan::
-cargo test -p girsync apply::
-cargo test -p girsync
+cargo nextest run -p girsync planner::
+cargo nextest run -p girsync scan::
+cargo nextest run -p girsync apply::
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

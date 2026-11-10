@@ -35,7 +35,7 @@ tasks:
     review: A
     note: null
   - id: T03
-    title: One documented case fold
+    title: Document the case-fold rules
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
     batch: B
     report: [L88-L116, L576-L579]
@@ -170,7 +170,7 @@ tasks:
     review: G
     note: null
   - id: T18
-    title: Feature-gate sled and trim windows-sys features
+    title: Feature-gate sled
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T18-feature-gate-sled.md
     batch: G
     report: [L597-L610]
@@ -269,5 +269,13 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — plan revision against the post-merge tree (`opt/girpr`, merge
+  `a783a9e5`). T03 rescoped to "Document the case-fold rules" (the merge
+  landed `util::path_key`), T01 re-grounded on the current `get_algo` /
+  `get_named` behaviour, T18's `windows-sys` trim step withdrawn (the feature
+  is required), T12 corrected so `case_sensitive` stays on `CommonOpts`, T10
+  re-pointed at the command-start resolution, and every verification block
+  moved to `cargo nextest run`. No task's status changed; all are still
+  `pending`.
 - (not started) — `phase: blocked-on-spawn`; waiting for the user's spawn
   mechanism.

@@ -91,9 +91,9 @@ heuristic: a wrong return would skip a refusal.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync sync::
-cargo test -p girsync plan::
-cargo test -p girsync
+cargo nextest run -p girsync sync::
+cargo nextest run -p girsync plan::
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

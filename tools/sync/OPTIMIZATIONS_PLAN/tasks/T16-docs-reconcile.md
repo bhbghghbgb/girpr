@@ -25,6 +25,7 @@ old one. In particular:
 - the `Filter` bundle and pre-built side labels from T12 (only where the docs
   named the old triple);
 - the phase names from T15;
+- the case-fold rules T03 recorded, if T16 finds them stated differently;
 - source-layout paths that have moved (`apply/` directory, `cache/db/` files,
   `planner/`, `report/`, etc.).
 
@@ -34,6 +35,22 @@ Both documents are treated as the contract. A stale “must be true” statement
 worse than no statement, because it teaches the next reader the wrong
 invariant. The report's §3.6 says the by-name note is the safest rule for 1.1,
 but the code has now moved, so the note must move with it.
+
+## Already stale before this task
+
+Two things are stale in `README.md` right now, independent of T01–T15, and
+this task should fix them rather than leave them for a later reader to trip
+over:
+
+- The **source-layout table** names `commands/sync/plan.rs`,
+  `commands/sync/apply.rs`, `cache/db.rs`, and `hash.rs` as files. All four are
+  directories now (`commands/sync/plan/`, `commands/sync/apply/`,
+  `cache/db/`, `hash/`), and the `hash/` tree has four modules
+  (`algo.rs`, `set.rs`, `digestset.rs`, `stream.rs`). The last row
+  (`filter.rs, hash.rs, util.rs, logging.rs`) names `hash.rs` the same way.
+- The **test-count line** says "430 test functions, one of them `#[ignore]`d
+  (429 run by default)". The suite is larger now, and the count moves whenever
+  a task adds a test — so say how to get the number rather than hard-coding it.
 
 ## Files to read
 
@@ -45,6 +62,7 @@ but the code has now moved, so the note must move with it.
 - `src/hash/digestset.rs` — the final `get_algo`/`get_named` behaviour
 - `src/config/common.rs`, `src/filter.rs`, `src/cache/db/backend.rs`,
   `src/commands/sync/mod.rs` — the final shapes
+- `src/` itself, recursively — the real layout the README table must match
 
 ## Constraints
 
@@ -106,7 +124,7 @@ but the code has now moved, so the note must move with it.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync
+cargo nextest run -p girsync
 ```
 
 Docs-only; the test run is to prove no code change slipped in.

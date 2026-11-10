@@ -30,6 +30,10 @@ and must survive every task:
 - `plan_pairs`' coverage check and `pair_verdict`'s `unverifiable` clause.
 - The `--hash-any-of` tie-break following flag order.
 - The diff's always-on classification.
+- The two case-fold rules staying separate: `util::path_key` folds ASCII case
+  only and is the key for every relative-path index, while
+  `util::component_eq` keeps a Unicode fallback for path *identity*. They
+  answer different questions and are meant to disagree.
 
 If a task appears to require breaking one of these, stop and report it rather
 than working around it.
@@ -56,7 +60,7 @@ Run at least:
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync
+cargo nextest run -p girsync
 ```
 
 For a task that changes the converter, also run the feature-gated command the

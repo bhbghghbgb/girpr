@@ -130,9 +130,9 @@ copy of dst's. The report's §4.2 asks for cost proportional to the work, and
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync cache::
-cargo test -p girsync --test migration_lock
-cargo test -p girsync
+cargo nextest run -p girsync cache::
+cargo nextest run -p girsync --test migration_lock
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

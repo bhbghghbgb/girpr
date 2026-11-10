@@ -107,9 +107,9 @@ reordering easy.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync apply::
-cargo test -p girsync --test sync
-cargo test -p girsync
+cargo nextest run -p girsync apply::
+cargo nextest run -p girsync --test sync
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

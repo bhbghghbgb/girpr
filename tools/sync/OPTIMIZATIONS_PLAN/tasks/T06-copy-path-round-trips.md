@@ -37,7 +37,7 @@ especially on Windows, both are measurable.
 - `src/commands/sync/apply/copy.rs` — `copy_one`, `copy_and_digest`,
   `verify_digests`
 - `src/commands/sync/apply/phases.rs` — `copy_files`
-- `src/hash/digestset.rs` — `AlgoSet` construction/iteration
+- `src/hash/set.rs` — `AlgoSet` construction/iteration
 - README `### What a copy costs` and `DESIGN-NOTES.md`'s copy notes
 
 ## Constraints
@@ -94,9 +94,9 @@ especially on Windows, both are measurable.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync apply::
-cargo test -p girsync --test sync
-cargo test -p girsync
+cargo nextest run -p girsync apply::
+cargo nextest run -p girsync --test sync
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

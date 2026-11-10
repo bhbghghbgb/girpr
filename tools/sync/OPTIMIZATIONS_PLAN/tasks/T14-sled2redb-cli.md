@@ -97,8 +97,8 @@ and its `--help` does not match the main binary.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync --test convert
-cargo test -p girsync
+cargo nextest run -p girsync --test convert
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

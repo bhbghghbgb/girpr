@@ -5,8 +5,8 @@ batch: B
 checkpoint: B
 report: [L216-L244]
 design_notes: "DESIGN-NOTES.md: the planner's Lowercase pairing differs from the diff's Exact pairing"
-depends_on: [T03]
-size: L
+depends_on: []
+size: M
 risk: medium
 ---
 
@@ -14,27 +14,41 @@ risk: medium
 
 ## Goal
 
-Build the "lowercase key -> original key (and value)" index in one place and use
-it from every insensitive join, without moving any pairing decision into the
-helper.
+Build one helper that constructs the "folded key → original key" index, and use
+it at the sites that build that exact shape. The fold itself already exists
+(`util::path_key`); this task is about the *index*, not the fold.
 
 ## Why
 
-`shared_pairs`, `diff_maps`, `case_renames`, `ensure_mkdir_targets_free`, and
-`phase_a`'s alternate index each lowercase one or both full trees and keep their
-own map. A sync lowercases every key several times and retains several duplicate
-maps at once. The helper may own normalization and index construction; it must
-not decide which paths are the same path.
+Five places build a folded-key index over one or both trees, and four of them
+build the same shape:
+
+| site | shape | notes |
+| --- | --- | --- |
+| `planner/pairs.rs::shared_pairs` | `HashMap<String, &String>` | src side only |
+| `diff/mod.rs::diff_maps` | `HashMap<String, &String>` × 2 | src and dst |
+| `commands/sync/rename.rs::case_renames` | `HashMap<String, &String>` × 2 | src and dst |
+| `commands/sync/plan/safety.rs::ensure_mkdir_targets_free` | `HashMap<String, &EffRec>` | folded → **value**, not key |
+| `commands/sync/plan/link.rs::folded_keys` | `HashMap<String, String>` | Windows only; owns its strings |
+
+Only the first three build the same thing, and they build it three times each.
+The other two have a different shape and stay as they are — with a comment
+saying why.
+
+The performance argument is now weaker than the report assumed: `path_key` is
+already one function, so the win is not "one fold instead of three" but "one
+index construction instead of three", plus fewer chances for two sites to
+disagree about which spelling wins a collision.
 
 ## Files to read
 
-- `src/util.rs` — `fold_key` from T03
+- `src/util.rs` — `path_key`, and where the shared helper should live
 - `src/planner/pairs.rs` — `shared_pairs`
-- `src/diff/mod.rs` — the insensitive branch
+- `src/diff/mod.rs` — `diff_maps`, the insensitive branch
 - `src/commands/sync/rename.rs` — `case_renames`
-- `src/effective/phase_a.rs` — `alt_index`
 - `src/commands/sync/plan/safety.rs` — `ensure_mkdir_targets_free`
 - `src/commands/sync/plan/link.rs` — `folded_keys`, `map_spelling`
+- `src/effective/phase_a.rs` — the alternate-key index
 
 ## Constraints
 
@@ -42,79 +56,90 @@ not decide which paths are the same path.
   `CasePairing::Exact` deliberately different.
 - Keep each caller's collision policy and direction:
   - `shared_pairs` looks dst up in src;
-  - `diff_maps` walks src then dst-only keys, keyed by src spelling;
+  - `diff_maps` walks src keys then dst-only keys, keyed by src spelling;
   - `case_renames` moves dst onto src;
   - `ensure_mkdir_targets_free` asks the post-rename dst view;
   - `link.rs` is deliberately Windows-only.
 - Keep every explicit sort. These maps are iterated to produce records, and
   unsorted `HashMap` order is not a contract.
-- Do not keep several indexes alive longer than the current code does. Build,
+- The helper owns **construction only**. It must not decide pairing, direction,
+  or which side's spelling wins.
+- `ensure_mkdir_targets_free` folds to a *value*, not a key. Either leave it
+  alone or give it its own one-liner; do not force it through the key-shaped
+  helper.
+- `phase_a`'s alternate-key index stores a `Vec` of stale spellings per folded
+  key. It is not the same shape and stays as it is, with a comment saying why.
+- `link.rs::folded_keys` owns its strings and is Windows-only. Leave it alone.
+- Do not build or drop indexes earlier or later than they are today. Build,
   use, drop.
 
 ## Implementation
 
-1. In `src/util.rs`, add one generic helper:
+1. In `src/util.rs`, add one helper that builds the folded-key index over a
+   map's keys. Something like:
+
    ```rust
-   pub(crate) fn folded_index<'a, V>(
+   pub(crate) fn folded_keys<'a, V>(
        map: &'a HashMap<String, V>,
    ) -> HashMap<String, (&'a String, &'a V)>
    ```
-   It maps `fold_key(k) -> (k, v)`. Document that a mixed-case collision is
+
+   It maps `path_key(k) → (k, v)`. Document that a mixed-case collision is
    already fatal before any caller reaches this helper, so the map is
    unambiguous, and that the helper does **not** pair anything.
-2. Use it in `shared_pairs`: build the src index once, fold each dst key once,
-   and keep the existing `out.sort()`.
-3. Use it in `diff_maps`' insensitive branch: build `slow` and `dlow` from the
-   helper, keep the two passes (src keys then dst-only keys), and keep the
-   bucket sorts.
-4. Use it in `case_renames`: build both indexes from the helper, keep the
-   `by_lower.sort()` ordering.
-5. Use it in `ensure_mkdir_targets_free` for the `dst_lower` value map; keep
-   `dst_after_rename`'s exact-first lookup in `case_sensitive` mode.
-6. Leave `phase_a`'s alternate index as an exception: it stores a `Vec` of
-   stale spellings per folded key, not one value, so it continues to use
-   `fold_key` directly (from T03). Write one comment saying why it is not the
-   shared one-value index.
-7. Leave `link.rs`'s `folded_keys`/`map_spelling` as the Windows-only filesystem
-   view; call `fold_key` inside them but do not route them through the helper,
-   because the helper must not become Windows-only.
-8. Add unit tests for the helper:
+
+2. Use it in `shared_pairs`, `diff_maps`, and `case_renames`. Each currently
+   builds one or two such maps inline; each becomes one or two calls.
+
+   `diff_maps` and `case_renames` each build a src map and a dst map. The
+   helper is per-map, so each of those two sites calls it twice — which is
+   still one definition of the shape rather than two hand-rolled copies.
+
+3. Leave `ensure_mkdir_targets_free`, `phase_a`'s alternate-key index, and
+   `link.rs::folded_keys` as they are, and add a one-line comment at each
+   saying why it does not share the helper. That comment is the point of the
+   task: the next reader should not "fix" the inconsistency.
+
+4. Add unit tests for the helper:
    - every key is present under its folded spelling;
-   - the original key and value are returned;
+   - the original key and the value are both returned;
    - an exact key and a differently-cased key are one entry only when
-     `fold_key` says they are.
+     `path_key` says they are.
+
    Then rely on the existing planner/diff/rename tests for pairing.
 
 ## Commit plan
 
-1. `refactor(sync): add a shared one-side case index`
-2. `refactor(sync): build every insensitive join from the shared index`
-3. `test(sync): pin the shared index's key and value mapping`
+1. `refactor(sync): add a shared folded-key index helper`
+2. `refactor(sync): build every folded-key index from the shared helper`
+3. `test(sync): pin the shared folded-key index`
 
 ## Verification
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync util::
-cargo test -p girsync planner::
-cargo test -p girsync diff::
-cargo test -p girsync sync::
-cargo test -p girsync
+cargo nextest run -p girsync util::
+cargo nextest run -p girsync planner::
+cargo nextest run -p girsync diff::
+cargo nextest run -p girsync sync::
+cargo nextest run -p girsync
 ```
 
 ## Acceptance
 
-- One lowercase pass per side per join, not one per caller site.
-- The planner still pairs pre-rename by lowercase and the diff still pairs
-  post-rename exactly.
-- Record order is unchanged in text and JSON output.
+- One definition of the folded-key index shape, used by `shared_pairs`,
+  `diff_maps`, and `case_renames`.
+- The three non-conforming sites each carry a comment saying why they differ.
 - The helper contains no pairing, direction, or collision policy.
-- `case_renames` still sorts by lowercase src key.
+- `case_renames` still sorts by folded src key.
+- Record order in the text and JSON output is unchanged.
 
 ## Reviewer focus
 
-- Compare each rewritten join with the old one for *which side wins* on a
+- Compare each rewritten index with the old one for *which side wins* on a
   collision and for the exact output order.
 - Did any index gain a lifetime that keeps a second full map alive?
 - Is the helper generic without becoming a trait or a policy object?
 - Does anything now fold a name that used to be compared exactly?
+- Do the three exception comments explain the *shape* difference, or just say
+  "different"?

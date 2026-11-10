@@ -33,6 +33,17 @@ omits inserted where the report's own within-category ordering puts them:
   the same product decision and the same documentation.
 - `3.6` is last in the clean-code group, after the changes it has to describe.
 
+The report's §7 ordering was written against the tree before the `opt/girpr`
+merge. That merge landed `util::path_key` (the shared ASCII-only fold) and the
+ASCII-only hash-name parse, so:
+
+- §1.2's "replace the ad-hoc folds with one helper" is **done**. The
+  surviving work is documentation and the missing boundary test, which is
+  what T03 now does. T03 therefore no longer blocks T04.
+- §6's "trim the `windows-sys` features" is **wrong**: `CreateFileW` is gated
+  behind `Win32_Security` in `windows-sys` 0.61. T18 keeps the features and
+  only feature-gates `sled`.
+
 ## Task queue and review checkpoints
 
 Each row is one implementing session. A checkpoint is one review-and-fix
@@ -43,8 +54,8 @@ session covering the rows above it.
 | A | T01 | By-name digest lookup and its test | §1.1, §5.1 | S | low |
 | A | T02 | Plan-time early returns and prefix memoization | §2.5, §1.6, §5.4 | M | low–medium |
 | **A** | | **review checkpoint A** | | | |
-| B | T03 | One documented case fold | §1.2, §5.2 | M | medium |
-| B | T04 | Shared one-side case index | §2.1 | L | medium |
+| B | T03 | Document the case-fold rules | §1.2, §5.2 | S | low |
+| B | T04 | Shared one-side case index | §2.1 | M | medium |
 | B | T05 | Cache meta open fast path | §1.4 | S | low–medium |
 | **B** | | **review checkpoint B** | | | |
 | C | T06 | Copy-path round trips | §2.4 | S | low–medium |
@@ -63,7 +74,7 @@ session covering the rows above it.
 | F | T16 | Reconcile documentation with the code | §3.6 | M | low |
 | **F** | | **review checkpoint F** | | | |
 | G | T17 | Converter atomicity and failure tests | §1.5, §5.5 | M | medium |
-| G | T18 | Feature-gate `sled`, trim `windows-sys` features | §6 | S | low–medium |
+| G | T18 | Feature-gate `sled` | §6 | S | low–medium |
 | G | T19 | Benchmark harness over three tree shapes | §5.6 | S | low |
 | **G** | | **review checkpoint G** | | | |
 
@@ -72,9 +83,9 @@ session covering the rows above it.
 - **A** is two small, foundational tasks. Reviewing them together catches the
   lookup invariant and the early-return safety argument before later work
   depends on either.
-- **B** is the case-fold/index pair plus the cache meta fast path. The first
-  two must be reviewed together because the second consumes the first; the
-  meta change is small and cache-local.
+- **B** is the case-fold/index pair plus the cache meta fast path. T03 records
+  the fold rules and T04 builds its shared index on them, so they are
+  reviewed together; the meta change is small and cache-local.
 - **C** is three medium risk-sensitive tasks: copy safety, cache phase
   boundaries, and phase A inclusion. They are separate files but share the
   "same rows, same order, same refusals" acceptance test.
@@ -94,7 +105,9 @@ session covering the rows above it.
 The metadata block of each task is authoritative. This section is the readable
 view; if the two disagree, the task file wins.
 
-- T04 depends on T03 (the fold helper).
+- T04 is independent of T03: the fold helper (`util::path_key`) already
+  exists, so T04 builds its index on it without waiting for T03's
+  documentation.
 - T09 depends on T02 only for context (the plan-time early returns); it must
   not revert them.
 - T11 depends on T06 (the copy-path `AlgoSet` and worker-result shape).
@@ -126,7 +139,13 @@ alone". They are not tasks; a reviewer should reject a change that does them:
 - folding the planner's and the diff's `CasePairing` values together;
 - changing the `--hash-any-of` tie-break away from flag order;
 - gating the diff's classification on `--why`;
-- `RwRuntime`/`Gate` changes for performance.
+- `RwRuntime`/`Gate` changes for performance;
+- **unifying the two case-fold rules.** `util::path_key` (ASCII only, for map
+  keys) and `util::component_eq` (Unicode fallback, for path identity) answer
+  different questions and are meant to disagree. T03 documents that; it does
+  not merge them;
+- **trimming the `windows-sys` features.** `Win32_Security` is required by
+  `CreateFileW` in `windows-sys` 0.61.
 
 The report's §8 is the long form of this list.
 
@@ -135,7 +154,7 @@ The report's §8 is the long form of this list.
 1. Every task is `completed` or `reverted` in `STATE.md`, with a review record.
 2. Every follow-up is `completed`, `reverted`, or explicitly `skipped` with a
    reason in the state.
-3. `cargo fmt --all -- --check` and `cargo test -p girsync` pass (plus the
+3. `cargo fmt --all -- --check` and `cargo nextest run -p girsync` pass (plus the
    feature-gated converter command in T18).
 4. No source, test, or doc file mentions `OPTIMIZATIONS_REPORT.md`,
    `OPTIMIZATIONS_PLAN`, a task id, or this plan.

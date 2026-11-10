@@ -82,8 +82,8 @@ common path where the cache is already correct.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync cache::
-cargo test -p girsync
+cargo nextest run -p girsync cache::
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

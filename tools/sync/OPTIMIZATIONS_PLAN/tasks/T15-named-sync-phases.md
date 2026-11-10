@@ -85,7 +85,7 @@ The right deliverable is a named-phase contract, not a riskier refactor.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

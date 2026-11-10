@@ -35,7 +35,9 @@ change what the tests are for. The crate currently has no benchmark target.
 
 - `Cargo.toml` — dev-dependencies and target layout
 - `src/scan.rs` — `walk_live`, `LiveEnt`
-- `src/hash.rs` — `hash_file`, `HashAlg`, `AlgoSet`
+- `src/hash/stream.rs` — `hash_file`
+- `src/hash/set.rs` — `AlgoSet`, `AlgoSet::one`
+- `src/hash/algo.rs` — `HashAlg`
 - `girpr-tempdir` (dev-dependency) — `TempDir::new`, `subdir`, `join`
 - `README.md` — how to run tests/builds
 
@@ -104,7 +106,7 @@ change what the tests are for. The crate currently has no benchmark target.
 cargo fmt --all -- --check
 cargo bench -p girsync --bench tree_shapes --no-run
 cargo bench -p girsync --bench tree_shapes
-cargo test -p girsync
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

@@ -21,9 +21,9 @@ The orchestrator must also confirm:
 - the working directory is `tools/sync` (or the repo root with that path);
 - the current branch is the intended work branch, and `git status` is clean
   except for this plan directory and the report;
-- whether the user wants the orchestrator to run `cargo test` itself or leave
-  it to the sessions. Default: the orchestrator runs the cheap full check at
-  each checkpoint, the sessions run it per task.
+- whether the user wants the orchestrator to run `cargo nextest run -p girsync`
+  itself or leave it to the sessions. Default: the orchestrator runs the cheap
+  full check at each checkpoint, the sessions run it per task.
 
 ## 1. State file
 
@@ -213,8 +213,8 @@ decision.
 1. Run the final gate:
    ```text
    cargo fmt --all -- --check
-   cargo test -p girsync
-   cargo test -p girsync --features convert
+   cargo nextest run -p girsync
+   cargo nextest run -p girsync --features convert
    ```
 2. Search for leftover references:
    ```text

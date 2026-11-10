@@ -92,9 +92,9 @@ entry.
 
 ```text
 cargo fmt --all -- --check
-cargo test -p girsync effective::
-cargo test -p girsync filter::
-cargo test -p girsync
+cargo nextest run -p girsync effective::
+cargo nextest run -p girsync filter
+cargo nextest run -p girsync
 ```
 
 ## Acceptance

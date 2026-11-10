@@ -67,10 +67,11 @@ algorithm X" must use the by-name lookup. In practice the planner uses the typed
 `get_algo`, which matches a foreign entry only by the algorithm's canonical
 spelling. A known name stored with an unexpected length under a differently
 cased spelling (for example `MD5` rather than `md5`) is therefore invisible to the
-planner, while `get_named` would find it. The result is a false "must compute"
-(which is benign but wasteful) or, on a record side, a false coverage refusal.
+planner. `get_named` is not the escape hatch it looks like: it parses its
+argument case-insensitively but matches the foreign arm by the spelling it was
+given, so `get_named("MD5")` finds that row and `get_named("md5")` does not.
 
-**Risk:** Low. Only hand-written, converted, or newer-build cache rows with a
+**Risk:** Low. Only hand-written, converted, or newer-build cache rows with an
 unusual spelling are affected. The change is local and does not touch pair
 semantics.
 
@@ -78,25 +79,24 @@ semantics.
 for those rows. Ordinary caches see no change.
 
 **Gain:** Restores the documented "lookup by name" invariant and removes a
-disagreement between the design notes and the code.
+disagreement between the design notes and the code. An unknown name never
+matches, because it does not parse to an algorithm at all.
 
-**Tradeoff:** The by-name route needs a string; either extend the typed lookup to
-fold names consistently, or route these callers through the name-keyed one. The
-first is cheaper at the call site but must be documented as a deliberate widening
-of `get_algo`.
+**Tradeoff:** Names already fold ASCII-case-only here, so the fix is to resolve
+a foreign entry by parsing its stored name and comparing the parsed algorithm.
 
 ### 1.2 Two different case folds are used for the same filesystem
 
-**Where:** `util::check_mixed_case_keys` (Unicode `to_lowercase`) versus
-`util::component_eq` / `same_path` / `path_within` (ASCII fast path, Unicode
-lowercase fallback) and the ad-hoc `to_lowercase` indexes in `planner/pairs.rs`,
-`diff/mod.rs`, `effective/phase_a.rs`, `commands/sync/rename.rs`,
-`commands/sync/plan/safety.rs`, and `commands/sync/plan/link.rs`.
+**Where:** `util::path_key` (the ASCII-only key every relative-path index uses)
+versus `util::component_eq` / `same_path` / `path_within` (ASCII fast path, Unicode
+lowercase fallback) and `commands/sync/plan/link.rs::on_disk_name` (Unicode
+`to_lowercase`, Windows only).
 
 **What:** On Windows, path identity and mixed-case collision detection are both
-approximations of the filesystem's own upcase table. The crate currently uses at
-least three spellings of the rule: ASCII-only, Unicode lowercase, and the
-`to_lowercase` index key. For most names they agree; for characters where Unicode
+approximations of the filesystem's own upcase table. The crate now uses two
+rules rather than three: `util::path_key` folds **ASCII case only** for every
+relative-path key, while `component_eq` keeps a Unicode lowercase fallback for
+path *identity*. For most names they agree; for characters where Unicode
 lowercasing and the NTFS upcase table differ (dotted/dotless I, some ligatures,
 case-mapping expansions, non-BMP names), they can disagree. That can produce a
 false collision (a harmless-looking refusal) or a missed collision.
@@ -108,12 +108,12 @@ change touches several modules.
 **Behaviour:** A different (hopefully more consistent) set of names is treated as
 the same path. On POSIX this should remain exact byte equality.
 
-**Gain:** One documented fold instead of several accidental ones; fewer
-surprising refusals or missed collisions on Windows.
+**Gain:** The index side is already one helper; what is left is the *identity*
+rule, and one deliberate exception that has no note at all.
 
 **Tradeoff:** A truly exact NTFS fold is not available portably. The practical
-choice is to centralize the existing approximation, state its limits, and make
-every index use the same helper. That is a coherence win, not a perfect one.
+choice is to keep the two rules apart, document why they differ, and make every
+index use the same helper. That is a coherence win, not a perfect one.
 
 ### 1.3 Backup and snapshot creation is unconditional and unbounded
 
@@ -220,8 +220,8 @@ round trips in the copy path. The order below is roughly gain-to-risk.
 key index), `commands/sync/plan/safety.rs` (`ensure_mkdir_targets_free`), and
 `commands/sync/plan/link.rs` (`folded_keys`).
 
-**What:** In insensitive mode each of these builds its own lowercased index over
-one or both full trees. A sync can therefore lowercase every key several times
+**What:** In insensitive mode each of these builds its own folded index over
+one or both full trees. A sync can therefore fold every key several times
 and retain several duplicate maps at once. Each implementation also carries its
 own assumptions about collisions and about which side's spelling wins.
 
@@ -235,7 +235,7 @@ callers keep their own pairing rules. Ordering of emitted records must be
 preserved explicitly, because some of these maps are iterated to produce sorted
 output.
 
-**Gain:** One full-tree lowercasing pass per index can become one shared
+**Gain:** One full-tree folding pass per index can become one shared
 normalization; on a large tree this removes multiple string allocations and
 hash inserts per run. It also reduces the chance of the folds drifting (see 1.2).
 
@@ -573,10 +573,10 @@ additions are not "more of the same"; they target the drift risks above.
    an unexpected length and an unusual spelling, on a record side, and assert the
    planner either accepts it (by-name) or refuses for the documented reason.
    This is the missing counterpart to the existing lowercase-foreign tests.
-2. **One case-fold rule.** Add tests for names where Unicode lowercasing and the
-   platform's identity rule differ, on the platforms where it matters, and pin
-   whatever rule is chosen. This is the only way to keep the shared helper from
-   silently diverging again.
+2. **One case-fold rule.** The rule is now chosen: `util::path_key` folds ASCII
+   case only. What is left is a test that pins where it deliberately differs
+   from the identity rule (`component_eq`), so the two cannot be merged by a
+   later edit without a test failing.
 3. **No-op run cost.** A test or benchmark that a sync with no work does not scan
    the cache more than once, and (if backups become conditional) does not copy
    the cache at all. Cache-scan counts are easier to observe than wall time.
@@ -605,8 +605,8 @@ additions are not "more of the same"; they target the drift risks above.
 - `chrono` is used for timestamps. It is a reasonable choice; replacing it with
   `std::time` formatting would save a dependency but cost clarity and correctness
   for UTC formatting. Not recommended unless dependency count is a hard goal.
-- `windows-sys` enables `Win32_Security`; confirm it is actually needed by the
-  handle calls. Trimming unused features is a small, low-risk build win.
+- `windows-sys` enables `Win32_Security`, and it **is** needed: in `windows-sys`
+  0.61 `CreateFileW` is gated behind it, so there is nothing to trim.
 - `clap` is both a normal and a dev dependency, which is expected here. No action.
 
 ---
@@ -616,9 +616,8 @@ additions are not "more of the same"; they target the drift risks above.
 ### Within each category
 
 **Correctness:** 1.1 (by-name lookup) → 1.6 (copy-free preflight early return) →
-1.2 (one case fold, because it needs tests first) → 1.4 (meta write path) → 1.3
-(backup policy, because it is a product decision) → 1.5 (converter atomicity,
-because it is a one-shot path).
+1.2 (case rules, because they need tests first) → 1.4 (meta write path) → 1.3
+(backup policy) → 1.5 (converter atomicity, because it is a one-shot path).
 
 **Performance:** 2.1 (shared case index) → 2.5 (plan-time early returns and prefix
 memoization) → 2.4 (mtime handle and per-copy `AlgoSet`) → 2.3 (cache scan
@@ -641,9 +640,10 @@ backup, and conversion changes; 5.6 whenever a performance claim needs checking.
    code.
 2. **Add the cheap plan-time early returns (2.5, 1.6).** They are low-risk, need
    no new abstraction, and help every link-free or copy-free run.
-3. **Centralize the case fold and the one-side index (1.2 / 2.1).** This is the
-   largest structural performance win, but it must be done as a pure helper with
-   the pairing policies left in place. Do it after the tests in 5.2 exist.
+3. **Record the case rules (1.2) and build the one-side index on them (2.1).**
+   The fold is already one helper; what is left is to write down which rule
+   answers which question, and to stop building the same index three times.
+   The helper must stay a pure helper with the pairing policies left in place.
 4. **Trim copy-path round trips (2.4).** One open per file and one `AlgoSet` per
    run are easy; consolidating destination metadata is a separate, more delicate
    step.
