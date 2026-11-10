@@ -639,8 +639,8 @@ until the main tasks and rework are done.
 | F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | completed |
 | F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | completed |
 | F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | completed |
-| F541 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `redo_mismatch_is_terminal` rescans the whole file through `scan_reader`; only the overlapping ranges need re-checking. | pending_review |
-| F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | pending_review |
+| F541 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `redo_mismatch_is_terminal` rescans the whole file through `scan_reader`; only the overlapping ranges need re-checking. | completed |
+| F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | completed |
 | F543 | PURGE-PERF-09 implementer | `src/util/counter.rs` | The test-only `Gate` is deliberately two-party (`arrived == 2`); N-party reuse would need generalizing. | skipped (conditional; no N-party fixture exists) |
 | F544 | PURGE-PERF-09 implementer | `src/util/counter.rs` tests | The new regression test's simulated panic text reaches captured test output. | skipped (harmless; visible only in verbose runs) |
 | F545 | PURGE-PERF-09 review | `src/util/counter.rs` | The panic-release path with a party actually parked at the gate (`arrived == 1`, `open == false`) is not directly exercised; current tests release an already-open gate. | todo |
@@ -717,6 +717,9 @@ until the main tasks and rework are done.
 | F616 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | `overlapping_ranges` re-derives the contested offsets from `Layout::overlaps` and allocates a `Vec` per call. | skipped (cost is negligible; once per attempt) |
 | F617 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The narrowing leans on `PlannedFile::layout()` skipping negative-offset chunks, so a hand-built plan with a negative offset would leave that chunk unchecked. | skipped (defence in depth; `validate_chunk_ranges` refuses such a plan twice) |
 | F618 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The terminal predicate reads exactly `expected` verdicts, so a scan returning more verdicts than asked for would go unnoticed. | todo |
+| F619 | MANIFEST-10 review | `src/repair/file/inplace.rs` tests | The invariant test pins one fixed layout; a generated sweep over layouts would pin the narrowed-set property far more broadly. | todo |
+| F620 | MANIFEST-10 review | `src/repair/phases/plan.rs` | The narrowing's soundness rests on `Layout::overlaps` naming both sides of every overlap; a unit test in `plan.rs` stating that property would make the dependency explicit. | todo |
+| F621 | MANIFEST-10 review | `src/repair/file/inplace.rs` | `overlapping_ranges` recomputes `file.layout()` although `patch_chunks` already computed it. | skipped (negligible next to the read; not worth the churn) |
 
 ## Follow-up batches
 
@@ -851,10 +854,11 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
 | MANIFEST-09 | F539, F540 | done | Wave E; single-pass digest and range scan on failure paths; low; 1481a45, 98b58de |
-| MANIFEST-10 | F541, F542 | pending_review | Wave E; overlap-only rescan and verdict-length guard; low; a5b0d6f, df5b20f, 6b22854 |
+| MANIFEST-10 | F541, F542 | done | Wave E; overlap-only rescan and verdict-length guard; low; a5b0d6f, df5b20f, 6b22854 |
 | MANIFEST-11 | F612 | todo | Wave E; measure the one-pass hashing trade; low |
 | MANIFEST-12 | F613, F618 | todo | Wave E; keep the terminal rule's no-overlap invariant with the predicate; low |
 | MANIFEST-13 | F615 | todo | Wave E; narrow the post-redo pass to the rewritten chunks; low |
+| MANIFEST-14 | F619, F620 | todo | Wave E; pin the overlap property from both sides; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | todo | Wave E; release-wakes-a-parked-party test and doc wording; low |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
