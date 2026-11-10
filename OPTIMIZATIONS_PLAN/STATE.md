@@ -726,9 +726,9 @@ until the main tasks and rework are done.
 | F623 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `wait_for_arrivals` takes a count but has one caller, and `is_open` is derivable from the same lock as `arrival_count`; the helpers could fold into one snapshot accessor. | skipped (conditional; one caller today) |
 | F624 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::release` calls `notify_all` even when the gate was already open. | skipped (harmless with the current one-waiter shape) |
 | F625 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `ReleaseOnPanic` records no reason for the release, so a diagnostic consumer sees the count but not the cause. | skipped (conditional; no consumer needs the cause today) |
-| F626 | PURGE-PERF-11 review | `src/util/counter.rs` tests | The new test pins "the party is parked" only indirectly through `release_count == 1`, which turned out racy under a gate that no longer blocks; a direct precondition check (`done_rx.try_recv()` is `Err` right after the parked-state assertions) would pin it deterministically. | pending_review |
+| F626 | PURGE-PERF-11 review | `src/util/counter.rs` tests | The new test pins "the party is parked" only indirectly through `release_count == 1`, which turned out racy under a gate that no longer blocks; a direct precondition check (`done_rx.try_recv()` is `Err` right after the parked-state assertions) would pin it deterministically. | completed |
 | F627 | PURGE-PERF-11 review | `src/util/counter.rs` | The release doc says a repeat release "leaves the gate's state unchanged" although `GateState::releases` is incremented; naming the open/arrival state would be literally exact. | skipped (cosmetic; the next sentence discloses the count) |
-| F628 | PURGE-PERF-11 review | `src/util/counter.rs` tests | No test pins that the gate actually blocks an unreleased party; with the wait loop disabled, three existing tests still pass. | pending_review |
+| F628 | PURGE-PERF-11 review | `src/util/counter.rs` tests | No test pins that the gate actually blocks an unreleased party; with the wait loop disabled, three existing tests still pass. | completed |
 | F629 | TEST-REGRESSION-08 implementer | `src/repair/file/inplace.rs` tests | The local `ago()` helper calls `stamp_ago(age).expect(...)`, so that unit test fails loudly instead of skipping on a host that cannot represent the age. | todo |
 | F630 | TEST-REGRESSION-08 implementer | `src/lib.rs` | The ordinary-clock assertion's `now - day` is the only remaining unchecked subtraction in the clock tests. | todo |
 | F631 | TEST-REGRESSION-08 implementer | `src/util/ini.rs` tests | Two fixtures still print their own `SKIP precondition:` lines instead of using the shared `skip_fixture_refusal` helper. | completed |
@@ -955,8 +955,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | MANIFEST-13 | F615 | skipped | Wave E; merged into MANIFEST-15; low |
 | MANIFEST-14 | F619, F620 | skipped | Wave E; merged into MANIFEST-15; low |
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
-| PURGE-PERF-14 | F626, F628 | pending_review | Wave E; pin the gate's blocking contract directly; low; 87659610 |
-| TEST-REGRESSION-11 | F629, F630, F634, F699 | todo | Wave E; panic-free clock fixtures and the skip wording; low |
+| PURGE-PERF-14 | F626, F628 | done | Wave E; pin the gate's blocking contract directly; low; 87659610; reviewer: both completed, no fixes (13 runs, broken-gate check) |
+| TEST-REGRESSION-11 | F629, F630, F634, F699 | in_progress | Wave E; panic-free clock fixtures and the skip wording; low |
 | TEST-REGRESSION-12 | F699, F704 | skipped | Wave E; merged into TEST-REGRESSION-11; low |
 | INI-16 | F631 | done | Wave E; use the shared skip helper in the ini fixtures; low; 3cff9b3 |
 | INI-17 | F683, F684 | done | Wave E; drive the uninspectable-link branch for both callers; low; 3a22365 |
