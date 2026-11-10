@@ -541,6 +541,17 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
   Nextest's default profile shows these tests' output even when they pass
   (`.config/nextest.toml`), so a skip is visible under the plain gate.
 
+- **A clock that cannot reach before the Unix epoch skips the crossing
+  cases.** The age rule's fixtures place an instant on either side of the
+  epoch; a host whose `SystemTime` cannot represent a moment before it cannot
+  build those fixtures, so the cases that need one report that and pass
+  instead of panicking. Set `GIRPR_TEST_REQUIRE_PRE_EPOCH` to turn that skip
+  into a failure, so a run meant to prove the backward crossing cannot pass
+  having checked nothing. The switch is presence-based, like the fixture
+  switches above: any value, including `0`, requires the cases. Nextest's
+  default profile shows these tests' output even when they pass
+  (`.config/nextest.toml`), so a skip is visible under the plain gate.
+
 - No test touches the internet: every case builds a `MockServer` on
   `127.0.0.1:<ephemeral>` and injects it via `RunCtx::hyp_base_override` /
   `sophon_base_override` (`src/config.rs`; resolved in `src/repair/phases/metadata.rs`;

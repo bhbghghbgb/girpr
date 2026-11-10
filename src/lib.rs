@@ -149,16 +149,30 @@ pub mod test_support {
                 ),
             }
         }
+
+        /// What the required-case failure says about where the refusal came
+        /// from. An injected refusal never consulted the host, so blaming the
+        /// host there would name a cause the test did not observe.
+        fn failure_lead(self, subject: &str) -> String {
+            match self {
+                Self::Host => format!("this host cannot create {subject}"),
+                Self::Injected => {
+                    format!("the refusal to create {subject} was injected; no host was consulted")
+                }
+            }
+        }
     }
 
     /// Report that a host-dependent fixture could not be created, or fail when
     /// `required_env` says the case must not be skipped.
     ///
-    /// `subject` completes "this host cannot create …" (`a directory junction`,
-    /// `a non-UTF-8 name`) and `detail` is the reason the attempt failed. A run
-    /// meant to prove the fixture must not pass having checked nothing, so the
+    /// `subject` names the fixture (`a directory junction`, `a non-UTF-8
+    /// name`) and `detail` is the reason the attempt failed. A run meant to
+    /// prove the fixture must not pass having checked nothing, so the
     /// presence-based switch named by `required_env` turns the skip into a
-    /// failure.
+    /// failure. Only a host refusal blames the host: a required injected
+    /// refusal fails saying the refusal was injected and no host was
+    /// consulted.
     pub fn skip_fixture_refusal(
         refusal: FixtureRefusal,
         subject: &str,
@@ -168,7 +182,8 @@ pub mod test_support {
     ) {
         assert!(
             !required,
-            "{required_env} is set, but this host cannot create {subject}: {detail}"
+            "{required_env} is set, but {}: {detail}",
+            refusal.failure_lead(subject)
         );
         eprintln!(
             "{}: {detail}; set {required_env} (to any value) to fail instead",
@@ -215,16 +230,7 @@ pub mod test_support {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        /// A host whose clock has no room before the Unix epoch cannot build
-        /// the instants the crossing cases need.
-        ///
-        /// The case that needs one reports that and skips rather than
-        /// panicking on a subtraction the host refuses. The wording is the
-        /// suite's: a case that never ran is not a case that passed.
-        fn skip_pre_epoch(subject: &str) {
-            eprintln!("SKIP precondition: this host cannot represent {subject}");
-        }
+        use crate::clock_support::skip_pre_epoch;
 
         /// The age is exact on both sides of the epoch and across it, and the
         /// clock itself is never handed back as if it were older. A pre-epoch
@@ -243,7 +249,7 @@ pub mod test_support {
             let now = SystemTime::UNIX_EPOCH + Duration::from_secs(3 * day.as_secs());
             assert_eq!(
                 stamp_ago_from(now, day),
-                Some(now - day),
+                now.checked_sub(day),
                 "an ordinary clock gets exactly the requested age"
             );
 
@@ -314,6 +320,56 @@ pub mod test_support {
                 None,
                 "an offset no platform can represent is not the current clock"
             );
+        }
+    }
+}
+
+/// The clock fixtures' skip, shared by the unit tests that need an instant the
+/// host's `SystemTime` may not be able to represent.
+#[cfg(test)]
+pub(crate) mod clock_support {
+    /// Report that a host cannot represent an instant a clock fixture needs,
+    /// or fail when `GIRPR_TEST_REQUIRE_PRE_EPOCH` says the case must not be
+    /// skipped.
+    ///
+    /// A run meant to prove the backward crossing must not pass having
+    /// checked nothing, so the presence-based switch turns the skip into a
+    /// failure. The printed line keeps the `SKIP precondition:` wording the
+    /// runner is configured to surface.
+    pub(crate) fn skip_pre_epoch(subject: &str) {
+        skip_pre_epoch_decision(
+            std::env::var_os("GIRPR_TEST_REQUIRE_PRE_EPOCH").is_some(),
+            subject,
+        );
+    }
+
+    fn skip_pre_epoch_decision(required: bool, subject: &str) {
+        assert!(
+            !required,
+            "GIRPR_TEST_REQUIRE_PRE_EPOCH is set, but this host cannot represent {subject}"
+        );
+        eprintln!(
+            "SKIP precondition: this host cannot represent {subject}; set \
+             GIRPR_TEST_REQUIRE_PRE_EPOCH (to any value) to fail instead"
+        );
+    }
+
+    mod tests {
+        use super::*;
+
+        /// Without the switch, a host that cannot represent the instant skips
+        /// the clock case out loud instead of failing it.
+        #[test]
+        fn a_pre_epoch_fixture_skips_without_the_switch() {
+            skip_pre_epoch_decision(false, "a clock a minute before the epoch");
+        }
+
+        /// The same host is a failure when the switch is set, whatever its
+        /// value: the case must not pass having proved nothing.
+        #[test]
+        #[should_panic(expected = "GIRPR_TEST_REQUIRE_PRE_EPOCH is set")]
+        fn a_pre_epoch_fixture_fails_with_the_switch() {
+            skip_pre_epoch_decision(true, "a clock a minute before the epoch");
         }
     }
 }

@@ -149,6 +149,27 @@ filter = """
 """
 success-output = "immediate"
 
+# The clock fixtures that need a moment before the Unix epoch report a
+# host-dependent skip on stderr and then pass, so their skip line must be
+# visible under the plain gate too: it names the switch that turns that skip
+# into a failure.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters above do.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=test_support::tests::an_ago_stamp_keeps_its_age_on_either_side_of_the_epoch_and_across_it_backward)
+        or test(=repair::file::inplace::tests::a_stale_damaged_verdict_never_makes_the_writer_skip)
+        or test(=repair::file::inplace::tests::the_guard_rejects_a_verdict_that_does_not_describe_the_file)
+        or test(=repair::file::inplace::tests::the_guard_reuses_only_an_unchanged_plan_scan)
+        or test(=repair::file::inplace::tests::the_reuse_age_rule_requires_more_than_one_coarse_tick)
+    )
+"""
+success-output = "immediate"
+
 # The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
 # optional sibling binary. When it is not built, `assert_bundle_verifies`
 # prints the same kind of host-dependent skip and the case still passes. Nextest

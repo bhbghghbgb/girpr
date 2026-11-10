@@ -1925,14 +1925,19 @@ mod tests {
             .unwrap();
     }
 
-    /// A stamp a given age before the current clock, shared with the
-    /// integration fixtures.
+    /// A stamp a given age before the current clock, or `None` after
+    /// reporting the skip when this host cannot represent that age.
     ///
     /// The fixture asserts the age the test needs instead of silently running
-    /// with a younger stamp: on a host that cannot represent it, the case
-    /// would otherwise stop exercising the age rule without saying so.
-    fn ago(age: Duration) -> SystemTime {
-        stamp_ago(age).expect("this host can represent the fixture's age")
+    /// with a younger stamp: on a host that cannot represent it, the caller
+    /// returns without having exercised the age rule, using the clock-skip
+    /// reason the shared helper prints.
+    fn ago(age: Duration) -> Option<SystemTime> {
+        let stamp = stamp_ago(age);
+        if stamp.is_none() {
+            crate::clock_support::skip_pre_epoch("the fixture's age, a day before the clock");
+        }
+        stamp
     }
 
     /// The natural coarse-timestamp window: the recorded mtime must share a
@@ -2017,7 +2022,9 @@ mod tests {
         let mut damaged = good.clone();
         damaged[5] ^= 0xff;
         std::fs::write(&path, &damaged).unwrap();
-        let stamp = ago(Duration::from_secs(24 * 60 * 60));
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
         set_modified(&path, stamp);
         let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
         let scanned_at = SystemTime::now();
@@ -2095,7 +2102,9 @@ mod tests {
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = ago(Duration::from_secs(24 * 60 * 60));
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -2175,7 +2184,9 @@ mod tests {
         let path = dir.join("a.dat");
         let bytes = b"abcdef";
         std::fs::write(&path, bytes).unwrap();
-        let stamp = ago(Duration::from_secs(24 * 60 * 60));
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
         std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
@@ -2261,7 +2272,9 @@ mod tests {
     /// and the exact boundary all mean "read it again".
     #[test]
     fn the_reuse_age_rule_requires_more_than_one_coarse_tick() {
-        let recorded = ago(Duration::from_secs(24 * 60 * 60));
+        let Some(recorded) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
         assert!(
             !mtime_predates_scan(recorded, None),
             "a report with no scan time cannot prove the window is closed"
