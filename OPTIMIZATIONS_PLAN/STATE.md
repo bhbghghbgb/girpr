@@ -657,9 +657,9 @@ until the main tasks and rework are done.
 | F556 | PATHHELPERS-08 implementer | `README.md`, `docs/06-artifact-bridge-spec.md` | The default parallel bridge run (69.4 s here) is not faster than the recorded serial 63 s on this 4-core host; a timing claim should say which mode it measured. | skipped (the docs say "roughly a minute", which both measurements support) |
 | F557 | PATHHELPERS-08 implementer | `tests/artifact_bridge.rs` | Parallel safety is stated in prose only; asserting that scratch paths differ would test the tempdir crate rather than the bridge. | skipped (the property belongs to the tempdir crate) |
 | F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | completed |
-| F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | todo |
-| F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | todo |
-| F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | todo |
+| F559 | PATHHELPERS-08 review | `tests/artifact_bridge.rs` | The module doc explains the no-flag run and the override but not the `-E 'test(...)'` narrowing the recipes now mention. | pending_review |
+| F560 | PATHHELPERS-08 review | `README.md` | The top bridge command block has no cross-reference to the detailed note further down, so the two copies can drift. | pending_review |
+| F561 | PATHHELPERS-08 review | `docs/06-artifact-bridge-spec.md` | The note cites §6.2 for both the scratch tree and the listeners, but the scratch tree is §6.3. | pending_review |
 | F562 | DOCS-USER-07 implementer | `tests/artifact_bridge.rs` | The module docs still say "63 s for the six tests" and show a resolution order without `GIRPR_ARTIFACT_ROOT`, mirroring the old wording. | completed |
 | F563 | DOCS-USER-07 implementer | `tests/artifact_bridge/server.rs` | The §4.6 comment says "eight per-capture bridges"/"eight runs" while the suite has six tests, and its size wording (~40 MB of ~130 MB) disagrees with the measured 97.7 MiB bundle and 41.4 MiB of manifests. | completed |
 | F564 | DOCS-USER-07 review | `tests/artifact_bridge/server.rs` | Manifests are described as "~40 MB of a ~130 MB bundle" and "~320 MB across eight runs"; the bundle is 97.7 MiB with 41.4 MiB under `manifests/`, and there are six tests. | skipped (duplicate of F563, which now carries these measurements) |
@@ -751,6 +751,9 @@ until the main tasks and rework are done.
 | F650 | PATHHELPERS-10 implementer | `tests/` across `girpr`, `gircap`, `girsync` | Duplicate test leaf names already exist across three binaries, which is the mechanism that makes the unqualified override risky. | skipped (informational; qualifying the filter removes the consequence) |
 | F651 | PATHHELPERS-10 review | `.config/nextest.toml` | The sibling override block still names three host-skip tests by bare `test(=...)` without a binary qualifier. | skipped (duplicate of F648, which PATHHELPERS-12 covers) |
 | F652 | PATHHELPERS-10 review | `.config/nextest.toml` | `config_bump_refuses_a_dangling_junction_game_dir` is not covered by either `success-output = "immediate"` override, so a future host skip there would be invisible under the plain gate. | skipped (duplicate of F593, which INI-15 covers) |
+| F653 | PATHHELPERS-11 implementer | `docs/06-artifact-bridge-spec.md` | §5's driver table intro cites §6.3 for the per-capture listeners, whose rationale is §6.2. | todo |
+| F654 | PATHHELPERS-11 implementer | `tools/capture/README.md` | The bridge command there lacks the `cargo build -p gircap` line both the README and the spec carry, so a reader following only the capture tool's README gets a `gircap verify` skip instead of the precondition. | todo |
+| F655 | PATHHELPERS-11 implementer | `README.md`, `tests/artifact_bridge.rs` | The "run in parallel" wording could be read as intra-process threads, although nextest runs each case in its own process. | skipped (noting only; the wording is correct as written) |
 
 ## Follow-up batches
 
@@ -900,6 +903,8 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-15 | F641 | todo | Wave E; capture spec log shape and path; low |
 | CHECK-14 | F642, F643, F646, F647 | todo | Wave E; fallible level extraction and the info line's level; low |
 | PATHHELPERS-12 | F648, F649 | todo | Wave E; qualify the sibling override and document the ignored-test filter; low |
+| PATHHELPERS-13 | F654 | todo | Wave E; capture README bridge command completeness; low |
+| DOCS-USER-16 | F653 | todo | Wave E; spec section citation for the listeners; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -911,7 +916,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-11 | F554, F555 | done | Wave E; pin the warn level and trim the helper doc; low; 3f7f1e0, e0bf1fe |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | done | Wave E; qualify the bridge override filter; low; 4fdce0e |
-| PATHHELPERS-11 | F559, F560, F561 | in_progress | Wave E; module-doc filter, README cross-reference, section citation; low |
+| PATHHELPERS-11 | F559, F560, F561 | pending_review | Wave E; module-doc filter, README cross-reference, section citation; low; 38cd738, 9c1a9a3, d17517c |
 | DOCS-USER-08 | F563 | done | Wave E; bridge module docs and server comment accuracy; low; df90dfc |
 | DOCS-USER-09 | F564 | done | Wave E; duplicate of F563; low |
 | DOCS-USER-10 | F565 | todo | Wave E; bundle-search failure wording; low |
