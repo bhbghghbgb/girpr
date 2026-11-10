@@ -553,10 +553,11 @@ mod tests {
     use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
     #[cfg(windows)]
     use crate::util::junction_support::{
-        JunctionFixture, JunctionOutcome, classify_junction_fixture, junction_result_with,
-        require_junction, try_junction_dir,
+        JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
+        junction_result_with, require_junction, skip_junction, try_junction_dir,
     };
     use crate::util::path::temp_sibling;
+    use crate::util::symlink_support::symlink_skip_reason;
     use std::collections::HashSet;
 
     #[test]
@@ -1236,19 +1237,10 @@ mod tests {
         let link = root.join("dangling-game-dir");
         let mut cleanup = LinkGuard::new(&link);
         if let Err(e) = try_junction_dir(&target, &link) {
-            match classify_junction_fixture(e) {
-                JunctionFixture::HostRefused { why, error } => {
-                    skip_junction(
-                        &format!("{why}: {error}"),
-                        require_junction(),
-                        FixtureRefusal::Host,
-                    );
-                    return;
-                }
-                JunctionFixture::Broken(e) => {
-                    panic!("could not create the test directory junction: {e}")
-                }
-            }
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            junction_fixture_decision(e, require_junction(), FixtureRefusal::Host);
+            return;
         }
 
         let err = write_config_ini(&link, "5.1.0", "hk4e_cn", ("1", "1", "hyp_mihoyo"))
@@ -1274,8 +1266,11 @@ mod tests {
     /// instead of skipping, so a run meant to prove the dangling-junction
     /// refusal cannot pass having checked nothing.
     ///
-    /// The shared helper's inspection is injected, so the case runs on every
-    /// host — no `mklink` is run, and no host skip is needed.
+    /// The shared helper's inspection is injected and the shared decision is
+    /// driven with its result, so the case runs on every host — no `mklink` is
+    /// run, and no host skip is needed. The decision is the caller's own, so a
+    /// decision that turned the broken arm into a skip would fail this case
+    /// instead of leaving it green.
     #[cfg(windows)]
     #[test]
     fn an_uninspectable_junction_fails_instead_of_skipping() {
@@ -1290,48 +1285,49 @@ mod tests {
         })
         .expect_err("a junction that cannot be inspected must fail");
 
-        match classify_junction_fixture(err) {
-            JunctionFixture::HostRefused { why, .. } => {
-                panic!("an uninspectable junction is not a host refusal: {why}")
+        // The failure names its own cause — an unreadable link is not a
+        // missing one.
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert!(err.raw_os_error().is_none(), "{err}");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("could not be inspected"),
+            "the failure names the inspection's cause: {msg}"
+        );
+        assert!(
+            msg.contains("the link could not be read"),
+            "the cause survives: {msg}"
+        );
+        assert!(
+            !msg.contains("is missing"),
+            "an unreadable junction is not a missing one: {msg}"
+        );
+
+        match drive_junction_decision(err, false, FixtureRefusal::Host) {
+            JunctionDecision::Skipped => {
+                panic!("an uninspectable junction is not a host refusal")
             }
-            JunctionFixture::Broken(e) => {
+            JunctionDecision::Failed(message) => {
                 // The case fails loudly here, exactly as it does for a link
                 // that never appeared.
-                assert_eq!(e.kind(), std::io::ErrorKind::Other, "{e}");
-                assert!(e.raw_os_error().is_none(), "{e}");
-                let msg = format!("{e}");
                 assert!(
-                    msg.contains("could not be inspected"),
-                    "the failure names the inspection's cause: {msg}"
+                    message.contains("could not create the test directory junction"),
+                    "the failure names the fixture: {message}"
                 );
                 assert!(
-                    msg.contains("the link could not be read"),
-                    "the cause survives: {msg}"
+                    message.contains("could not be inspected"),
+                    "the failure names the inspection's cause: {message}"
                 );
                 assert!(
-                    !msg.contains("is missing"),
-                    "an unreadable junction is not a missing one: {msg}"
+                    message.contains("the link could not be read"),
+                    "the cause survives: {message}"
+                );
+                assert!(
+                    !message.contains("is missing"),
+                    "an unreadable junction is not a missing one: {message}"
                 );
             }
         }
-    }
-
-    /// Report that the junction could not be created, or fail when
-    /// `GIRPR_TEST_REQUIRE_JUNCTION` says the case must not be skipped. A run
-    /// meant to prove the dangling-junction refusal must not pass having
-    /// checked nothing.
-    ///
-    /// The refusal is the shared one, so the junction cases report a host
-    /// refusal the same way wherever they live.
-    #[cfg(windows)]
-    fn skip_junction(why: &str, required: bool, refusal: FixtureRefusal) {
-        skip_fixture_refusal(
-            refusal,
-            "a directory junction",
-            "GIRPR_TEST_REQUIRE_JUNCTION",
-            why,
-            required,
-        );
     }
 
     /// Without the switch, a proven host refusal skips the junction case out
@@ -1412,57 +1408,6 @@ mod tests {
         std::fs::remove_file(link)
     }
 
-    /// Whether a failed **directory symlink** creation is the known privilege
-    /// denial that means the test cannot run on this host. Every other error
-    /// is a broken test environment and must fail loudly instead of silently
-    /// skipping.
-    ///
-    /// A junction's refusal is not classified here: `mklink` reports it
-    /// without a raw code, so the shared junction classifier owns that case.
-    fn link_creation_denied(e: &std::io::Error) -> bool {
-        #[cfg(windows)]
-        {
-            // A directory symlink the host's policy refuses to create reports
-            // `ERROR_PRIVILEGE_NOT_HELD` (1314); a directory symlink without
-            // the privilege (or developer mode) is the usual case. Rust maps
-            // it to `Uncategorized`, so the raw code is the reliable check.
-            e.raw_os_error() == Some(1314)
-        }
-        #[cfg(unix)]
-        {
-            // `symlink(2)` reports `EPERM` (1) or `EACCES` (13) when the
-            // caller lacks permission. Anything else (a read-only filesystem,
-            // for example) is not the privilege denial this test skips on.
-            matches!(e.raw_os_error(), Some(1) | Some(13))
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            let _ = e;
-            false
-        }
-    }
-
-    /// Why a failed directory-symlink creation means the case cannot run on
-    /// this host, or `None` when it is a broken test environment that must
-    /// fail loudly.
-    ///
-    /// A platform without directory symlinks reports `Unsupported`; the known
-    /// privilege denial is the other untestable host.
-    ///
-    /// Treating every `Unsupported` as a host skip is deliberate: `std` may map
-    /// more platform failures there over time, and a host that cannot make the
-    /// link cannot exercise the case. Any other error is a broken test
-    /// environment and must still panic rather than quietly skip.
-    fn symlink_skip_reason(e: &std::io::Error) -> Option<&'static str> {
-        if e.kind() == std::io::ErrorKind::Unsupported {
-            Some("directory symlinks are not supported on this platform")
-        } else if link_creation_denied(e) {
-            Some("creating a directory symlink is denied on this host")
-        } else {
-            None
-        }
-    }
-
     #[cfg(unix)]
     fn try_symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
         std::os::unix::fs::symlink(target, link)
@@ -1479,64 +1424,6 @@ mod tests {
             std::io::ErrorKind::Unsupported,
             "directory symlinks are not supported on this platform",
         ))
-    }
-
-    /// Only the known privilege denial or a platform without directory
-    /// symlinks is a skip; other failures would hide a broken test
-    /// environment.
-    #[test]
-    fn only_a_denied_or_unsupported_symlink_skips_the_link_test() {
-        assert!(
-            symlink_skip_reason(&std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "not a creation-denied error",
-            ))
-            .is_none(),
-            "an unexpected failure must still fail the test"
-        );
-        assert_eq!(
-            symlink_skip_reason(&std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "no directory symlinks",
-            )),
-            Some("directory symlinks are not supported on this platform"),
-            "an unsupported platform is a skip, not a panic"
-        );
-        #[cfg(windows)]
-        {
-            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(
-                1314
-            )));
-            assert!(!link_creation_denied(&std::io::Error::from_raw_os_error(5)));
-            assert_eq!(
-                symlink_skip_reason(&std::io::Error::from_raw_os_error(1314)),
-                Some("creating a directory symlink is denied on this host"),
-                "the privilege denial skips, not panics"
-            );
-            assert!(
-                symlink_skip_reason(&std::io::Error::from_raw_os_error(5)).is_none(),
-                "another access failure must still fail the test"
-            );
-        }
-        #[cfg(unix)]
-        {
-            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(1)));
-            assert!(link_creation_denied(&std::io::Error::from_raw_os_error(13)));
-            assert!(!link_creation_denied(&std::io::Error::from_raw_os_error(
-                30
-            )));
-            for denied in [1, 13] {
-                assert_eq!(
-                    symlink_skip_reason(&std::io::Error::from_raw_os_error(denied)),
-                    Some("creating a directory symlink is denied on this host"),
-                    "the privilege denial skips, not panics"
-                );
-            }
-            assert!(
-                symlink_skip_reason(&std::io::Error::from_raw_os_error(30)).is_none(),
-                "a read-only filesystem must still fail the test"
-            );
-        }
     }
 
     /// A failed explicit removal must leave `LinkGuard` armed, so `Drop`

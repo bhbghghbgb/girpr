@@ -28,6 +28,11 @@ pub mod ini;
 mod junction_support;
 pub mod md5;
 pub mod path;
+// Unit-test-only classifier for a refused directory symlink. It is a module
+// of its own because the junction support above is declared for Windows only,
+// and this rule runs on every host.
+#[cfg(test)]
+mod symlink_support;
 
 pub use self::ini::{read_blacklist, read_game_version, read_ignore_categories, write_config_ini};
 pub use self::md5::{EMPTY_MD5, Md5, Scan, ScanRange, read_range, scan_file, scan_reader};

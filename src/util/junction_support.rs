@@ -5,6 +5,11 @@
 //! here once so the two test modules cannot drift on its messages or its skip
 //! set. The module is declared only for the crate's unit tests on Windows.
 //!
+//! The skip-or-fail decision lives here as well: both callers take it at the
+//! point where the fixture failed, and the cases that need a broken fixture
+//! drive it directly, so a decision that turned a broken fixture into a skip
+//! would fail those cases instead of passing them.
+//!
 //! The command's outcome handling is split from the command's execution, so
 //! a test can drive both branches — a successful exit that created no link,
 //! a successful exit that created something that is not a junction, and a
@@ -18,6 +23,7 @@
 //! This is test support, not a production helper: it is deliberately not
 //! reachable from the integration tests' `test_support` seam.
 
+use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
 use std::path::Path;
 
 /// What the `mklink /J` command reported.
@@ -268,8 +274,9 @@ pub(super) fn junction_inspection_error(link: &Path, e: std::io::Error) -> std::
 /// so a `mklink` refusal can never reach the arm. It is kept because a
 /// spawn error that does carry the raw code `1314` is a host refusal, and
 /// dropping the arm would turn that refusal into a panic instead of a skip.
-/// Only the test that pins the classifier's contract reaches it in practice,
-/// and that is what keeps it honest.
+/// The arm is reached through the command seam — a spawn failure that
+/// carries the raw code — and through the test that pins the classifier's
+/// contract, and those are what keep it honest.
 ///
 /// A host whose volume cannot hold a junction still fails loudly rather
 /// than silently skipping.
@@ -290,7 +297,11 @@ pub(super) fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
 /// A proven host refusal skips the case; every other failure is a broken
 /// test environment that must fail loudly, so a run meant to prove the
 /// junction behaviour cannot pass having checked nothing.
-pub(super) enum JunctionFixture {
+///
+/// The enum is private to this module on purpose: the decision that reads it
+/// is [`junction_fixture_decision`], so a caller cannot take the broken arm
+/// into a skip of its own.
+enum JunctionFixture {
     /// The host refused to create the junction; the case skips with this
     /// reason and reports the failure it came from.
     HostRefused {
@@ -310,11 +321,90 @@ pub(super) enum JunctionFixture {
 /// be driven directly: a link that `mklink` claimed but never created, and a
 /// link that could not be inspected, are broken fixtures and not host
 /// refusals, so the case must fail rather than skip.
-pub(super) fn classify_junction_fixture(e: std::io::Error) -> JunctionFixture {
+fn classify_junction_fixture(e: std::io::Error) -> JunctionFixture {
     match junction_skip_reason(&e) {
         Some(why) => JunctionFixture::HostRefused { why, error: e },
         None => JunctionFixture::Broken(e),
     }
+}
+
+/// The one skip-or-fail decision for a junction fixture.
+///
+/// A proven host refusal skips the case — or fails it when the switch says the
+/// case must run — and every other failure is a broken test environment that
+/// must fail loudly, so a run meant to prove the junction behaviour cannot
+/// pass having checked nothing.
+///
+/// Both callers take this decision here, at the point where the fixture
+/// failed, and the cases that need a broken fixture drive this function
+/// directly: a decision that turned the broken arm into a skip would fail
+/// those cases instead of leaving them green.
+pub(super) fn junction_fixture_decision(
+    e: std::io::Error,
+    required: bool,
+    refusal: FixtureRefusal,
+) {
+    match classify_junction_fixture(e) {
+        JunctionFixture::HostRefused { why, error } => {
+            skip_junction(&format!("{why}: {error}"), required, refusal);
+        }
+        JunctionFixture::Broken(e) => {
+            panic!("could not create the test directory junction: {e}");
+        }
+    }
+}
+
+/// What the shared decision did, for a case that drives it directly.
+pub(super) enum JunctionDecision {
+    /// The case skipped: the host refused the fixture.
+    Skipped,
+    /// The case failed: the fixture is broken, and the message is the
+    /// failure's own.
+    Failed(String),
+}
+
+/// Drive [`junction_fixture_decision`] and report what it did.
+///
+/// The decision fails a broken fixture by panicking, so a case that drives it
+/// catches that panic: the outcome says whether the case skipped or failed,
+/// and the failure carries the message the panic showed.
+pub(super) fn drive_junction_decision(
+    e: std::io::Error,
+    required: bool,
+    refusal: FixtureRefusal,
+) -> JunctionDecision {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        junction_fixture_decision(e, required, refusal);
+    })) {
+        Ok(()) => JunctionDecision::Skipped,
+        Err(payload) => JunctionDecision::Failed(panic_message(payload)),
+    }
+}
+
+/// The message of a caught panic.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_else(|| "the panic carried no message".to_string())
+}
+
+/// Report that the junction could not be created, or fail when
+/// `GIRPR_TEST_REQUIRE_JUNCTION` says the case must not be skipped. A run
+/// meant to prove the junction behaviour must not pass having checked
+/// nothing.
+///
+/// The refusal is the shared one, so the junction cases report a host
+/// refusal the same way wherever they live.
+pub(super) fn skip_junction(why: &str, required: bool, refusal: FixtureRefusal) {
+    skip_fixture_refusal(
+        refusal,
+        "a directory junction",
+        "GIRPR_TEST_REQUIRE_JUNCTION",
+        why,
+        required,
+    );
 }
 
 /// Whether the junction cases must run on this host.
@@ -374,6 +464,91 @@ mod tests {
             Some("creating a directory junction is denied on this host"),
             "the privilege denial skips, not panics"
         );
+    }
+
+    /// A proven host refusal reaches the decision through the command seam: a
+    /// spawn failure that carries the raw code proves the host refused, and
+    /// the shared decision skips instead of failing the case.
+    ///
+    /// The command's execution is injected, so the case runs on every host: no
+    /// `mklink` is run, and no host that refuses a junction is needed. The
+    /// refusal is injected, so it is reported as such; the classification it
+    /// reaches is the host refusal one either way.
+    #[test]
+    fn a_proven_host_refusal_skips_through_the_command_seam() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "host_refused");
+        let target = dir.join("real");
+        let link = dir.join("game-dir-link");
+
+        let mut ran = false;
+        let err = try_junction_dir_with(&target, &link, |command| {
+            ran = true;
+            assert!(
+                command.starts_with("mklink /J "),
+                "the injected run sees the command line: {command}"
+            );
+            // The raw code `1314` is `ERROR_PRIVILEGE_NOT_HELD`: the one
+            // refusal a spawn failure can prove.
+            Err(std::io::Error::from_raw_os_error(1314))
+        })
+        .expect_err("the refused spawn must fail the creation");
+        assert!(
+            ran,
+            "the command line was built and handed to the injected run"
+        );
+
+        let outcome = drive_junction_decision(err, false, FixtureRefusal::Injected);
+        assert!(
+            matches!(outcome, JunctionDecision::Skipped),
+            "a proven host refusal skips the case instead of failing it"
+        );
+    }
+
+    /// The same refusal is a failure when the switch is set, whatever its
+    /// value: the case must not pass having proved nothing.
+    #[test]
+    fn a_proven_host_refusal_fails_when_the_switch_is_set() {
+        let err = std::io::Error::from_raw_os_error(1314);
+        let outcome = drive_junction_decision(err, true, FixtureRefusal::Injected);
+        match outcome {
+            JunctionDecision::Skipped => {
+                panic!("the switch must turn the skip into a failure")
+            }
+            JunctionDecision::Failed(message) => {
+                assert!(
+                    message.contains("GIRPR_TEST_REQUIRE_JUNCTION is set"),
+                    "the failure names the switch: {message}"
+                );
+            }
+        }
+    }
+
+    /// A broken fixture fails the case through the same decision: the link
+    /// was never created, so nothing about the host was proved and the case
+    /// must fail loudly.
+    ///
+    /// The exit-`0` branch is driven through the outcome seam, so no `mklink`
+    /// is run and the case runs on every host.
+    #[test]
+    fn a_broken_fixture_fails_the_case_through_the_shared_decision() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "broken_decision");
+        let link = dir.join("game-dir-link");
+
+        let err = junction_result(&JunctionOutcome::Success, &link)
+            .expect_err("a claimed link that never appeared must fail");
+        let outcome = drive_junction_decision(err, false, FixtureRefusal::Injected);
+        match outcome {
+            JunctionDecision::Skipped => {
+                panic!("a link that never appeared is not a host refusal")
+            }
+            JunctionDecision::Failed(message) => {
+                assert!(
+                    message.contains("could not create the test directory junction"),
+                    "the failure names the fixture: {message}"
+                );
+                assert!(message.contains("is missing"), "{message}");
+            }
+        }
     }
 
     /// `mklink` exiting `0` is a claim, not proof: the inspection that follows
