@@ -245,7 +245,7 @@ until the main tasks and rework are done.
 | F144 | LOGGING-01 review | `src/logging.rs` | Only the first sink's flush error is reported; later failures are silent by design. | completed |
 | F145 | LOCK-01 review | `src/repair/lock.rs` | `may_write_body` still accepts a hard link to an empty/`pid=` regular file, and a symlink swapped between open and metadata defeats the check. | completed |
 | F146 | LOCK-01 review | `src/repair/lock.rs` tests | Lock files now persist, so tests leave `girpr-*.lock` files and a dangling symlink in the temp directory. | completed |
-| F147 | LOCK-01 review | `src/repair/lock.rs` | The Unix-only lock cases never ran on this host; they need a Linux/macOS run. | blocked (needs a Linux/macOS host) |
+| F147 | LOCK-01 review | `src/repair/lock.rs` | The Unix-only lock cases never ran on this host; they need a Linux/macOS run. | dropped (environment-limited: Windows-only host and CI, so the cases are compile-checked only) |
 | F148 | INI-01 review | `src/util/ini.rs` | The refusal says "does not exist" even when the path exists as a non-directory. | completed |
 | F149 | INI-01 review | `tests/` | No CLI-level case for the game dir vanishing between `prepare_install` and the post-phase bump. | completed |
 | F150 | INI-01 review | `src/util/ini.rs` | `split_first_eq` is a thin wrapper over `split_once`; keep it only while the shared rule earns its name. | completed |
@@ -266,7 +266,7 @@ until the main tasks and rework are done.
 | F165 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | Five tests still spell `.girpr_tmp` literally instead of deriving it from `temp_sibling`. | completed |
 | F166 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | The fallback test could assert source-present/target-absent inside the injected copy, not only after. | completed |
 | F167 | TEMP-PUBLISH-01 review | `src/repair/phases/post.rs` | `copy_publish_with`'s no-file-name refusal has no direct test. | completed |
-| F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | blocked (needs a Linux/macOS host) |
+| F168 | TEMP-PUBLISH-01 review | `src/repair/scope/report.rs` | The `#[cfg(unix)]` symlink test and Unix non-UTF-8 arm never ran on this host; they need a Unix run. | dropped (environment-limited: Windows-only host and CI, so the arms are compile-checked only) |
 | F169 | INPLACE-01 review | `src/repair/file/inplace.rs`, `src/repair/scan.rs` | An intact scan verdict on a coarse-mtime filesystem can still be accepted after a same-tick rewrite, so the run reports the file skipped and leaves it unrepaired until a later run. | completed |
 | F170 | INPLACE-01 review | `src/repair/file/inplace.rs` | The natural evasion window is narrower than the forced test suggests; the recorded mtime must share the coarse tick with the post-scan rewrite. | completed |
 | F171 | INPLACE-01 review | `src/repair/file/inplace.rs` | `trim_is_free` uses `is_none_or`, so an overflowing `r + s` would read as inside the target if the offset type ever widens. | completed |
@@ -1046,7 +1046,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | LOGGING-02 | F142, F143, F144 | done | Wave D; sink registry lifetime, install-to-flush coverage and per-sink errors; low; 04d8474, f6be025 |
 | LOGGING-03 | F235, F236, F237 | done | Wave E; sink registry typing, rejected-install test and flush doc; low; 81d3ef5, 3433b1c |
 | LOGGING-04 | F318, F319 | done | Wave E; sink naming and rejected-install test strength; low; 9b87298, a2ea354, 281878b |
-| LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 blocked on a Unix host |
+| LOCK-02 | F145, F146, F147 | done | Wave D; lock handle-identity hardening, test litter and Unix-only coverage; medium; f60e44f, 0cb311e; F147 dropped as environment-limited |
 | LOCK-03 | F224, F225 | done | Wave E; integration lock litter and nlink wording; low; abf0516, ae143c3 |
 | LOCK-04 | F320, F321, F322 | done | Wave E; lock-cleanup helper consolidation and edge notes; low; aa0c802, b59ecd1, e4fcba8 |
 | LOCK-05 | F340, F341, F342, F343, F344 | done | Wave E; lock-policy mirror tests and cleanup edge cases; low; 78b827c, 3a64ea9, a3690de, 7a0a7a4, 6dc6a34, 145fcc0 |
@@ -1074,7 +1074,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-03 | F247, F248 | done | Wave E; sink genericity and broader cursor pinning; low; 953db0b, 563a178 |
 | TEMP-WRITER-04 | F292, F293, F294 | done | Wave E; reservation-order pin, generic doc and counter name; low; c156617, 740f5d0, 076bbfc |
 | TEMP-WRITER-05 | F382, F383, F384, F385, F386 | done | Wave E; recorder naming and doc precision; low; 7a3b573, b3011d4, fe59130, 5ef5c89 |
-| TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 blocked on a Unix host |
+| TEMP-PUBLISH-02 | F165, F166, F167, F168 | done | Wave D; publish test naming, ordering assertion, refusal test and Unix run; low; f0a42f0, bae3465, 86c6fc1; F168 dropped as environment-limited |
 | TEMP-PUBLISH-03 | F249, F250 | done | Wave E; temp-sibling doc edge and guard reachability note; low; 1e96ab6, 02b346d |
 | TEMP-PUBLISH-04 | F295, F296 | skipped | Wave E; fallback-decision and future walk-reachability notes; low |
 | TEMP-PUBLISH-05 | F387, F388, F389 | done | Wave E; no-file-name publish refusal and temp-sibling resolution pin; low; 1697a35, 0d58148, f11563c |
