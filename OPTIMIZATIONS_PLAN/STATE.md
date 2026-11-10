@@ -895,7 +895,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | CHECK-09 | F552 | done | Wave E; pin the remaining check warn arms; low; 63bd985 |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
-| CHECK-11 | F554, F555 | todo | Wave E; pin the warn level and trim the helper doc; low |
+| CHECK-11 | F554, F555 | in_progress | Wave E; pin the warn level and trim the helper doc; low |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
