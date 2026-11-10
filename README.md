@@ -525,8 +525,14 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
 - **The non-UTF-8 audio-cache cases, the Windows junction case and the
   directory-symlink cases can skip.** A host whose filesystem cannot create a
   name with an unpaired surrogate (or a non-UTF-8 byte), a Windows host that
-  refuses `mklink /J`, and a host that refuses a directory symlink skip those
-  cases rather than failing. Set `GIRPR_TEST_REQUIRE_NON_UTF8`,
+  refuses `mklink /J`, and a host whose directory-symlink call reports a
+  refusal the fixture names skip those cases rather than failing. The named
+  refusals are a privilege denial (`EPERM`/`EACCES` on Unix,
+  `ERROR_PRIVILEGE_NOT_HELD` on Windows) and the platform's own "no symlinks
+  here" codes (`ENOSYS`/`EOPNOTSUPP` on the Unix targets the fixture covers,
+  `ERROR_CALL_NOT_IMPLEMENTED` on Windows); a directory-symlink failure
+  outside that set is a broken test environment and fails the case. Set
+  `GIRPR_TEST_REQUIRE_NON_UTF8`,
   `GIRPR_TEST_REQUIRE_JUNCTION` or `GIRPR_TEST_REQUIRE_SYMLINK` to turn the
   corresponding skip into a failure, so a run meant to prove the byte-exact
   move, the junction escape or the symlink refusals cannot pass having
