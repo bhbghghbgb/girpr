@@ -808,8 +808,10 @@ until the main tasks and rework are done.
 | F707 | INI-17 implementer | `src/util/junction_support.rs` | The classification's `HostRefused` arm is reachable only from a real spawn-level refusal, so unlike `Broken` it cannot be driven through the seam; the callers' injected-refusal cases cover the skip path separately. | completed |
 | F708 | INI-17 review | `src/util/ini.rs`, `src/util/path.rs` | The new broken-fixture cases re-implement the caller's own `match classify_junction_fixture(..)` instead of driving the caller's decision code, so a caller that flipped the `Broken` arm to skip would still leave them green; lift the decision into one shared helper (the goal F686 also names). | completed |
 | F709 | INI-17 review | `src/util/junction_support.rs` | `junction_skip_reason` is still `pub(super)` although no sibling module imports it any more; it could be a private `fn`. | dropped (generic improvement, not a problem that needs attention) |
-| F710 | INI-21 review | `src/util/symlink_support.rs` | `platform_cannot_create_symlinks` hardcodes `ENOSYS`/`EOPNOTSUPP` as 38/95 under `cfg(unix)`, which are Linux values (macOS 78/102, FreeBSD 78/45); on those hosts a genuine platform refusal fails the fixture instead of skipping and the raw-code pin test asserts the wrong premise. | todo |
-| F711 | INI-21 review | `README.md` | The skip wording says a host that refuses a directory symlink skips, but only recognized refusal codes skip now; an unrecognized filesystem refusal fails the fixture. | todo |
+| F710 | INI-21 review | `src/util/symlink_support.rs` | `platform_cannot_create_symlinks` hardcodes `ENOSYS`/`EOPNOTSUPP` as 38/95 under `cfg(unix)`, which are Linux values (macOS 78/102, FreeBSD 78/45); on those hosts a genuine platform refusal fails the fixture instead of skipping and the raw-code pin test asserts the wrong premise. | completed |
+| F711 | INI-21 review | `README.md` | The skip wording says a host that refuses a directory symlink skips, but only recognized refusal codes skip now; an unrecognized filesystem refusal fails the fixture. | completed |
+| F712 | SYMLINK-01 review | `README.md` | "A directory-symlink failure outside that set fails the case" is false on a target that is neither Unix nor Windows, where the raw-less `Unsupported` intentionally skips; only wasm-class targets can reach it. | dropped (unreachable target class; the wording holds for every target the crate builds for) |
+| F713 | SYMLINK-01 review | `.github/workflows/msrv.yml` | The Apple/BSD errno pins only execute on those hosts, and CI is Windows-only, so they never run anywhere. | dropped (a non-Windows runner is a CI expansion outside the closing scope; the values are compile-checked against libc and pinned for hosts that do run) |
 
 ## Follow-up batches
 
@@ -960,7 +962,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-19 | F688 | skipped | Wave E; the only item was a doc nit; low |
 | INI-20 | F690, F691 | skipped | Wave E; the items were generic coverage and style nits; low |
 | INI-21 | F692, F694, F705, F706 | done | Wave E; the junction and symlink fixture guards; low; bd73f2e, bd07822, 5bbee73; reviewer: all four completed, no fixes (678 passed, 9 skipped; Unix paths inspected only) |
-| SYMLINK-01 | F710, F711 | pending_review | Wave F; the symlink refusal codes and skip wording; low; afd2e6da, 688b8f1a |
+| SYMLINK-01 | F710, F711 | done | Wave F; the symlink refusal codes and skip wording; low; afd2e6da, 688b8f1a, 381b25ff; reviewer: Apple ENOTSUP 45 added, README reflowed (678 passed, 9 skipped) |
 | INI-22 | F705, F706 | skipped | Wave E; merged into INI-21; low |
 | DOCS-USER-14 | F632, F633, F634 | skipped | Wave E; merged into PATHHELPERS-12 and TEST-REGRESSION-11; low |
 | CHECK-15 | F638, F641, F642, F643, F646, F647 | todo | Wave E; the check phase's failure shapes and its log assertions; low |
