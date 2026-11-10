@@ -663,10 +663,20 @@ fn move_audio_cache_with(
             continue;
         }
         let target = res.join(rel_path);
+        // Refuse an alias-shaped destination before creating its parent: the
+        // refusal must not leave an empty directory behind, and no rename or
+        // copy may run for a name the copy path would refuse anyway.
+        if let Err(e) = check_publish_target(&target) {
+            kept += 1;
+            tracing::warn!(
+                target = %target.display(),
+                error = %e,
+                "audio cache move: destination refused; source kept"
+            );
+            continue;
+        }
         // `rename` first (cheap, same volume); fall back to copy+remove when
-        // the file is in use or the rename is otherwise refused. The target
-        // name rule is the copy fallback's, so a spelling it refuses is not
-        // published by the rename either.
+        // the file is in use or the rename is otherwise refused.
         if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
             tracing::warn!(
                 src = %src.display(),
@@ -676,7 +686,7 @@ fn move_audio_cache_with(
             kept += 1;
             continue;
         }
-        match check_publish_target(&target).and_then(|()| rename(&src, &target)) {
+        match rename(&src, &target) {
             Ok(()) => moved += 1,
             Err(rename_err) => {
                 // The copy fallback publishes through a temp sibling, so a
@@ -1057,10 +1067,82 @@ mod tests {
             !target.exists(),
             "the alias-shaped target is never published"
         );
+        assert!(
+            !base.join("Audio/res").exists(),
+            "a refused destination creates no parent directory"
+        );
         assert_eq!(
             std::fs::read(&src).unwrap(),
             b"cache bytes",
             "the refused move keeps its source"
+        );
+        assert!(
+            logs.contains("audio cache move: destination refused; source kept"),
+            "a refused destination has its own warning: {logs}"
+        );
+        assert!(
+            !logs.contains("audio cache move failed; source kept"),
+            "the refusal is not reported as a failed move: {logs}"
+        );
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=0")
+                && logs.contains("kept=1"),
+            "the refused move is reported as kept: {logs}"
+        );
+    }
+
+    /// A refused nested spelling must fail before its parent is created: the
+    /// old order created `res/dir.` and only then refused the target, leaving
+    /// an empty directory behind. Windows strips the fixture's trailing dot,
+    /// so this case cannot run here; the helper test above pins the rule.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_nested_audio_target_creates_no_parent_directory() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "nested_refusal");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache/dir.")).unwrap();
+        let src = base.join("Audio/cache/dir./foo.pck");
+        std::fs::write(&src, b"cache bytes").unwrap();
+        let res = base.join("Audio/res");
+
+        let renamed = std::cell::Cell::new(false);
+        let copied = std::cell::Cell::new(false);
+        let logs = logs_of(|| {
+            move_audio_cache_with(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+                |_, _| {
+                    renamed.set(true);
+                    Ok(())
+                },
+                |_, _| {
+                    copied.set(true);
+                    Ok(0)
+                },
+            )
+        });
+
+        assert!(!renamed.get(), "the refused name never reaches the rename");
+        assert!(!copied.get(), "the refused name never reaches the copy");
+        assert!(
+            !res.exists(),
+            "the refusal must not create the destination parent"
+        );
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"cache bytes",
+            "the refused move keeps its source"
+        );
+        assert!(
+            logs.contains("audio cache move: destination refused; source kept"),
+            "a refused destination has its own warning: {logs}"
+        );
+        assert!(
+            !logs.contains("audio cache move failed; source kept"),
+            "the refusal is not reported as a failed move: {logs}"
         );
         assert!(
             logs.contains("audio cache -> res")
