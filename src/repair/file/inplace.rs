@@ -625,12 +625,43 @@ fn read_after_redo(
     dest_ranges: &[util::ScanRange<'_>],
     read: impl FnOnce(&[util::ScanRange<'_>]) -> Result<util::Scan>,
 ) -> Result<util::Scan> {
-    let ranges = if file.layout().overlaps.is_empty() {
-        &[][..]
-    } else {
-        dest_ranges
-    };
-    read(ranges)
+    let ranges = overlapping_ranges(file, dest_ranges);
+    read(&ranges)
+}
+
+/// The chunk ranges the layout says overlap, in the order the scan was given
+/// them.
+///
+/// The layout names the two offsets of every overlap — the chunk that claims
+/// the bytes and the chunk that claims them again — so the ranges whose offset
+/// it names are the contested ones. Every chunk that claims bytes another
+/// chunk claims is named: the layout records an overlap whenever a chunk
+/// starts before the coverage ends, and it names both sides of that overlap.
+///
+/// The chunks it leaves out are the ones **no other chunk claims**. Nothing
+/// but their own write moves their bytes, so the redo cannot change their
+/// verdict: they are still the chunks the verify pass found, and the redo
+/// wrote them correctly when they were wrong. Their verdict is therefore
+/// already known, and asking the scan for it again only hashes their bytes a
+/// second time.
+fn overlapping_ranges<'a>(
+    file: &PlannedFile,
+    dest_ranges: &'a [util::ScanRange<'a>],
+) -> Vec<util::ScanRange<'a>> {
+    let layout = file.layout();
+    if layout.overlaps.is_empty() {
+        // No overlap: the layout is the whole proof, and there is no verdict
+        // to ask for.
+        return Vec::new();
+    }
+    let mut contested: Vec<u64> = layout.overlaps.iter().flat_map(|&(a, b)| [a, b]).collect();
+    contested.sort_unstable();
+    contested.dedup();
+    dest_ranges
+        .iter()
+        .copied()
+        .filter(|(offset, _, _)| contested.binary_search(offset).is_ok())
+        .collect()
 }
 
 /// Can another attempt change the bytes a post-redo mismatch was computed
@@ -648,8 +679,8 @@ fn read_after_redo(
 /// identical duplicates, where both match and no write can change either.
 /// The layout cannot tell the two apart, because it only knows offsets and
 /// lengths; only the bytes can. The scan therefore carries one verdict per
-/// range, and the mismatch is final exactly when every one of them now
-/// matches.
+/// overlapping range, and the mismatch is final exactly when every one of
+/// them now matches.
 fn redo_mismatch_is_terminal(scan: &util::Scan) -> bool {
     scan.dest_ok.iter().all(|&ok| ok)
 }
@@ -1406,7 +1437,7 @@ mod tests {
             assert_eq!(
                 ranges.len(),
                 3,
-                "an overlap needs a verdict for every range"
+                "an overlap needs a verdict for every overlapping range"
             );
             Ok(util::Scan {
                 file_md5: Md5::EMPTY,
@@ -1446,6 +1477,69 @@ mod tests {
         assert!(
             !redo_mismatch_is_terminal(&scan),
             "an overlapping plan whose ranges cannot all match keeps its retries"
+        );
+    }
+
+    /// The post-redo pass reads the whole file for the digest, but the
+    /// verdicts it needs are only the ones the layout says overlap.
+    ///
+    /// A chunk no other chunk claims cannot change when the redo writes: the
+    /// redo only moves the bytes of the chunk it rewrites, and a chunk that
+    /// claims the same bytes as none of them keeps its verdict — it is still
+    /// the chunk the verify pass found, and the redo wrote it correctly when
+    /// it was wrong. Its verdict is known, so the pass does not hash it again.
+    ///
+    /// The chunks that *do* overlap are the ones a rewrite can undo, and they
+    /// are the ones the terminal decision reads.
+    #[test]
+    fn the_post_redo_pass_asks_only_for_the_overlapping_ranges() {
+        // `a` and `b` claim the same bytes; `c` claims its own, past a gap.
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 12,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 4),
+                chunk_at("b", "md5-b", 2, 4),
+                chunk_at("c", "md5-c", 8, 4),
+            ],
+        };
+        let dest = [(0u64, 4u64, "md5-a"), (2, 4, "md5-b"), (8, 4, "md5-c")];
+
+        let mut reads = 0;
+        let scan = read_after_redo(&file, &dest, |ranges| {
+            reads += 1;
+            assert_eq!(
+                ranges.len(),
+                2,
+                "only the chunks that overlap need a verdict"
+            );
+            assert!(
+                ranges.iter().all(|(offset, _, _)| *offset != 8),
+                "the chunk no other chunk claims is not asked for"
+            );
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 12,
+                dest_ok: vec![true, true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(reads, 1, "the narrowing costs no extra pass");
+        assert!(
+            redo_mismatch_is_terminal(&scan),
+            "the overlapping chunks match, so the mismatch is final"
+        );
+
+        // The chunk that claims its own bytes cannot be wrong after the redo,
+        // so the decision is the same one the whole chunk list gave: the two
+        // overlapping chunks match and the third one cannot have changed.
+        assert_eq!(
+            file.layout().overlaps,
+            vec![(0, 2)],
+            "the layout names the two offsets of the overlap"
         );
     }
 
