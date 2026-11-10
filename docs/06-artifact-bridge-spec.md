@@ -199,12 +199,13 @@ Resolution order:
 3. then, under that root, `gircap list --root <root>`, which reports one
    `bundle` record per bundle on stdout;
 4. otherwise — and **only** when (3) is unavailable or fails, that is when
-   `gircap` is not built beside the test binary, cannot be started, or exits
-   non-zero — a **directory scan** under `<root>` for
+   `gircap` is not built next to `CARGO_BIN_EXE_girpr`, cannot be started, or
+   exits non-zero — a **directory scan** under `<root>` for
    `<root>/<biz>/<old>__<new>/<capture-id>/MANIFEST.json`. The scan must agree
-   with (3): `gircap`'s own `tests/bundle_consistency.rs` asserts the two name
-   the same bundles in the same order, so the fallback is a faithful stand-in
-   for (3) rather than a second, looser notion of what a bundle is;
+   with (3): `gircap`'s own `tests/bundle_consistency.rs` asserts that
+   `gircap list` and a plain directory scan of the same root name the same
+   bundles in the same order, so the fallback is a faithful stand-in for (3)
+   rather than a second, looser notion of what a bundle is;
 5. otherwise **fail**, naming the reason, the root it searched, and which of
    (3) or (4) ran. **No bundle under the root** is the failure the capture
    command answers: the message names `cargo run -p gircap -- capture --out
