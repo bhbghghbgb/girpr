@@ -10,7 +10,10 @@
 //! a successful exit that created something that is not a junction, and a
 //! failing exit — without running `mklink` at all. The command line is
 //! split from its execution too, so a test can prove that a path `cmd`
-//! would rewrite is refused before anything is run.
+//! would rewrite is refused before anything is run. The link's inspection
+//! is split from the outcome handling as well, so a test can drive the
+//! branch for a link that could not be looked at — a missing one and an
+//! uninspectable one — without a filesystem that has to fail.
 //!
 //! This is test support, not a production helper: it is deliberately not
 //! reachable from the integration tests' `test_support` seam.
@@ -171,12 +174,28 @@ fn run_command_line(command: &str) -> std::io::Result<std::process::Output> {
 /// Every failure stays `Other`, so none of them can be mistaken for a proven
 /// host refusal by [`junction_skip_reason`].
 pub(super) fn junction_result(outcome: &JunctionOutcome, link: &Path) -> std::io::Result<()> {
+    junction_result_with(outcome, link, inspect_link)
+}
+
+/// The same, with the link's inspection injected, so a test can drive the
+/// branch for a link that could not be looked at — a permission or a
+/// transient I/O failure — without a filesystem that has to refuse to be
+/// read.
+///
+/// Only the inspection is replaced: the outcome's own handling and every
+/// failure message stay the shared ones, so an injected inspection reaches
+/// the same [`junction_inspection_error`] a real one does.
+pub(super) fn junction_result_with(
+    outcome: &JunctionOutcome,
+    link: &Path,
+    inspect: impl FnOnce(&Path) -> std::io::Result<std::fs::Metadata>,
+) -> std::io::Result<()> {
     if let JunctionOutcome::Failed { status, stderr } = outcome {
         return Err(std::io::Error::other(format!(
             "mklink /J exited with {status}: {stderr}"
         )));
     }
-    match std::fs::symlink_metadata(link) {
+    match inspect(link) {
         // A junction is a name-surrogate reparse point, so std reports it as
         // a link: the link itself is what the case needs.
         Ok(md) if md.file_type().is_symlink() => Ok(()),
@@ -186,6 +205,11 @@ pub(super) fn junction_result(outcome: &JunctionOutcome, link: &Path) -> std::io
         Ok(_) => Err(junction_not_a_reparse_point_error(link)),
         Err(e) => Err(junction_inspection_error(link, e)),
     }
+}
+
+/// Inspect the link path itself, without following it.
+fn inspect_link(link: &Path) -> std::io::Result<std::fs::Metadata> {
+    std::fs::symlink_metadata(link)
 }
 
 /// The failure for a link path that holds something that is not a reparse
@@ -258,6 +282,38 @@ pub(super) fn junction_skip_reason(e: &std::io::Error) -> Option<&'static str> {
         Some("creating a directory junction is denied on this host")
     } else {
         None
+    }
+}
+
+/// What a caller does with a junction it could not create.
+///
+/// A proven host refusal skips the case; every other failure is a broken
+/// test environment that must fail loudly, so a run meant to prove the
+/// junction behaviour cannot pass having checked nothing.
+pub(super) enum JunctionFixture {
+    /// The host refused to create the junction; the case skips with this
+    /// reason and reports the failure it came from.
+    HostRefused {
+        /// Why this host cannot create the junction.
+        why: &'static str,
+        /// The failure the host reported.
+        error: std::io::Error,
+    },
+    /// The junction was not created for another reason; the case fails with
+    /// this error.
+    Broken(std::io::Error),
+}
+
+/// Classify a failed junction creation for a caller's case.
+///
+/// The decision is the shared classifier's, so it is taken here once and can
+/// be driven directly: a link that `mklink` claimed but never created, and a
+/// link that could not be inspected, are broken fixtures and not host
+/// refusals, so the case must fail rather than skip.
+pub(super) fn classify_junction_fixture(e: std::io::Error) -> JunctionFixture {
+    match junction_skip_reason(&e) {
+        Some(why) => JunctionFixture::HostRefused { why, error: e },
+        None => JunctionFixture::Broken(e),
     }
 }
 
@@ -384,6 +440,42 @@ mod tests {
         assert!(
             junction_skip_reason(&err).is_none(),
             "a link that never appeared must fail, not skip: {msg}"
+        );
+    }
+
+    /// The exit-`0` branch for a link that could not be inspected, driven
+    /// through the inspection seam: `mklink` claims the link exists, and
+    /// the link cannot be looked at. The failure must name its own cause —
+    /// an unreadable link is not a missing one — and must not read as a
+    /// proven host refusal, so the case fails instead of skipping.
+    ///
+    /// The inspection is injected, so no `mklink` is run and no filesystem
+    /// has to refuse to be read: the case runs on every host.
+    #[test]
+    fn an_uninspectable_link_names_its_cause_and_does_not_skip() {
+        let link = Path::new("game-dir-link");
+
+        let err = junction_result_with(&JunctionOutcome::Success, link, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the link could not be read",
+            ))
+        })
+        .expect_err("a link that cannot be inspected must fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "mklink /J reported success but {} could not be inspected: the link could not be read",
+                link.display()
+            ),
+            "the failure names the link and the inspection's own cause"
+        );
+        assert!(err.raw_os_error().is_none(), "{err}");
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "an uninspectable link is a broken fixture, not a host refusal: {err}"
         );
     }
 

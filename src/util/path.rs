@@ -486,7 +486,8 @@ mod tests {
     use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
     #[cfg(windows)]
     use crate::util::junction_support::{
-        JunctionOutcome, junction_result, junction_skip_reason, require_junction, try_junction_dir,
+        JunctionFixture, JunctionOutcome, classify_junction_fixture, junction_result,
+        require_junction, try_junction_dir,
     };
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
@@ -991,34 +992,6 @@ mod tests {
         );
     }
 
-    /// What the containment case does with a junction it could not create.
-    ///
-    /// A proven host refusal skips the case; every other failure is a broken
-    /// test environment that must fail loudly, so a run meant to prove the
-    /// escape cannot pass having checked nothing.
-    #[cfg(windows)]
-    enum JunctionFixture {
-        /// The host refused to create the junction; the case skips with this
-        /// reason.
-        HostRefused(&'static str),
-        /// The junction was not created for another reason; the case fails
-        /// with this error.
-        Broken(std::io::Error),
-    }
-
-    /// Classify a failed junction creation for the containment case.
-    ///
-    /// The decision is the shared classifier's, so it is taken here once and
-    /// can be driven directly: a link that `mklink` claimed but never created
-    /// is not a host refusal, and the case must fail rather than skip.
-    #[cfg(windows)]
-    fn classify_junction_fixture(e: std::io::Error) -> JunctionFixture {
-        match junction_skip_reason(&e) {
-            Some(why) => JunctionFixture::HostRefused(why),
-            None => JunctionFixture::Broken(e),
-        }
-    }
-
     /// A directory junction inside the install that points out of it is an
     /// escape, exactly like a Unix symlink, so the resolution path needs a
     /// test on the platform whose reparse points it will meet.
@@ -1039,7 +1012,7 @@ mod tests {
         let link = dir.join("game");
         if let Err(e) = try_junction_dir(&outside, &link) {
             match classify_junction_fixture(e) {
-                JunctionFixture::HostRefused(why) => {
+                JunctionFixture::HostRefused { why, .. } => {
                     skip_junction(why, require_junction(), FixtureRefusal::Host);
                     return;
                 }
@@ -1079,7 +1052,7 @@ mod tests {
         let err = junction_result(&JunctionOutcome::Success, &link)
             .expect_err("a claimed link that never appeared must fail");
         match classify_junction_fixture(err) {
-            JunctionFixture::HostRefused(why) => {
+            JunctionFixture::HostRefused { why, .. } => {
                 panic!("a link that never appeared is not a host refusal: {why}")
             }
             JunctionFixture::Broken(e) => {

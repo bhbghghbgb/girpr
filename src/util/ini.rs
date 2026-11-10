@@ -552,7 +552,10 @@ mod tests {
     use super::*;
     use crate::test_support::{FixtureRefusal, skip_fixture_refusal};
     #[cfg(windows)]
-    use crate::util::junction_support::{junction_skip_reason, require_junction, try_junction_dir};
+    use crate::util::junction_support::{
+        JunctionFixture, JunctionOutcome, classify_junction_fixture, junction_result_with,
+        require_junction, try_junction_dir,
+    };
     use crate::util::path::temp_sibling;
     use std::collections::HashSet;
 
@@ -1233,16 +1236,18 @@ mod tests {
         let link = root.join("dangling-game-dir");
         let mut cleanup = LinkGuard::new(&link);
         if let Err(e) = try_junction_dir(&target, &link) {
-            match junction_skip_reason(&e) {
-                Some(why) => {
+            match classify_junction_fixture(e) {
+                JunctionFixture::HostRefused { why, error } => {
                     skip_junction(
-                        &format!("{why}: {e}"),
+                        &format!("{why}: {error}"),
                         require_junction(),
                         FixtureRefusal::Host,
                     );
                     return;
                 }
-                None => panic!("could not create the test directory junction: {e}"),
+                JunctionFixture::Broken(e) => {
+                    panic!("could not create the test directory junction: {e}")
+                }
             }
         }
 
@@ -1262,6 +1267,53 @@ mod tests {
             "the writer must not create the junction target"
         );
         cleanup.remove().expect("the junction is removable");
+    }
+
+    /// A junction `mklink` claims but that cannot be inspected is a broken
+    /// fixture, not a host refusal: the config writer's case must fail loudly
+    /// instead of skipping, so a run meant to prove the dangling-junction
+    /// refusal cannot pass having checked nothing.
+    ///
+    /// The shared helper's inspection is injected, so the case runs on every
+    /// host — no `mklink` is run, and no host skip is needed.
+    #[cfg(windows)]
+    #[test]
+    fn an_uninspectable_junction_fails_instead_of_skipping() {
+        let root = girpr_tempdir::TempDir::new("girpr_test_cfg", "uninspectable_junction");
+        let link = root.join("dangling-game-dir");
+
+        let err = junction_result_with(&JunctionOutcome::Success, &link, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the link could not be read",
+            ))
+        })
+        .expect_err("a junction that cannot be inspected must fail");
+
+        match classify_junction_fixture(err) {
+            JunctionFixture::HostRefused { why, .. } => {
+                panic!("an uninspectable junction is not a host refusal: {why}")
+            }
+            JunctionFixture::Broken(e) => {
+                // The case fails loudly here, exactly as it does for a link
+                // that never appeared.
+                assert_eq!(e.kind(), std::io::ErrorKind::Other, "{e}");
+                assert!(e.raw_os_error().is_none(), "{e}");
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("could not be inspected"),
+                    "the failure names the inspection's cause: {msg}"
+                );
+                assert!(
+                    msg.contains("the link could not be read"),
+                    "the cause survives: {msg}"
+                );
+                assert!(
+                    !msg.contains("is missing"),
+                    "an unreadable junction is not a missing one: {msg}"
+                );
+            }
+        }
     }
 
     /// Report that the junction could not be created, or fail when
