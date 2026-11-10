@@ -774,7 +774,7 @@ until the main tasks and rework are done.
 | F670 | DOCS-USER-13 review | `docs/06-artifact-bridge-spec.md` | §4.6 and §6.2 still describe the cache in the old terms ("over a hundred megabytes", "shared by every listener") without the runner distinction the code comment now carries. | todo |
 | F671 | DOCS-USER-13 review | `tools/capture/docs/00-spec.md` | It says "the scope held across all six runs", the same six-cases-versus-twelve-runs slip in a different document. | todo |
 | F672 | DOCS-USER-13 review | `docs/06-artifact-bridge-spec.md` | A sharper figure than "over a hundred megabytes" would match the twelve-run count the batch introduced. | skipped (duplicate of F667, which DOCS-USER-18 covers) |
-| F673 | HYP-10 implementer | `src/repair/mod.rs` | Nothing documents at `spawn_blocking_traced`'s definition that it must be called from the thread carrying the dispatcher; a future refactor into a spawned task would silently lose its log lines. | todo |
+| F673 | HYP-10 implementer | `src/repair/mod.rs` | Nothing documents at `spawn_blocking_traced`'s definition that it must be called from the thread carrying the dispatcher; a future refactor into a spawned task would silently lose its log lines. | pending_review |
 | F674 | HYP-10 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | The two async `logs_of` copies are still duplicated. | skipped (duplicate of F572 and F645; consolidating needs a public async test helper) |
 | F675 | HYP-10 implementer | `src/repair/scan.rs`, `src/repair/phases/check.rs`, `src/repair/mod.rs` | Raw `tokio::task::spawn_blocking` calls produce lines no scoped subscriber can capture. | skipped (conditional; only matters if a test ever needs those lines) |
 | F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | dropped (generic improvement, not a problem that needs attention) |
@@ -979,7 +979,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | DOCS-USER-17 | F658, F659, F662 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
 | DOCS-USER-18 | F664, F666, F667, F671 | skipped | Wave E; merged into DOCS-BRIDGE-20 and DOCS-CAPTURE-21; low |
 | DOCS-USER-19 | F669, F670 | skipped | Wave E; merged into DOCS-BRIDGE-20; low |
-| HYP-12 | F673 | in_progress | Wave E; document the spawn_blocking_traced contract; low |
+| HYP-12 | F673 | pending_review | Wave E; document the spawn_blocking_traced contract; low; 47dd55c2 |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
