@@ -265,19 +265,30 @@ fn help_entry_panic_names_both_option_shapes() {
     let _ = help_entry(&help, "--absent");
 }
 
-#[test]
-fn option_body_reports_a_short_alias_line_with_an_unexpected_separator() {
-    // A short-alias line whose punctuation clap changed must be named as a
-    // layout change, not skipped: a skipped line would be swallowed by the
-    // preceding entry instead of ending it.
-    let line = format!("{HELP_SHORT_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR} --jobs <JOBS>");
-    let panic = std::panic::catch_unwind(|| option_body(&line))
-        .expect_err("a short-alias line with the wrong separator must be reported");
-    let message = panic
+/// The message from the panic [`option_body`] must raise for `line`.
+///
+/// A short-alias line outside the pinned shape has to be reported, not read as
+/// "no option here": `None` would let a neighbouring entry swallow the line.
+fn short_alias_layout_panic(line: &str) -> String {
+    let panic = std::panic::catch_unwind(|| option_body(line))
+        .expect_err("a short-alias line outside the pinned shape must be reported");
+    panic
         .downcast_ref::<String>()
         .map(String::as_str)
         .or_else(|| panic.downcast_ref::<&str>().copied())
-        .expect("the panic carries a message");
+        .expect("the panic carries a message")
+        .to_owned()
+}
+
+#[test]
+fn option_body_reports_a_short_alias_line_with_an_unexpected_separator() {
+    // clap writes `-j, --jobs`: the alias, the pinned separator, the long
+    // flag. If clap changes the punctuation between them, the long flag is no
+    // longer behind the separator. The line must be named as a layout change,
+    // not skipped: a skipped line would be swallowed by the preceding entry
+    // instead of ending it.
+    let line = format!("{HELP_SHORT_OPTION_INDENT}-j --jobs <JOBS>");
+    let message = short_alias_layout_panic(&line);
     assert!(
         message.contains(&line),
         "the report names the line it could not read: {message}"
@@ -286,6 +297,38 @@ fn option_body_reports_a_short_alias_line_with_an_unexpected_separator() {
         message.contains("short option line"),
         "the report says the short-option layout changed: {message}"
     );
+}
+
+#[test]
+fn option_body_reports_every_other_short_alias_line_outside_the_pinned_shape() {
+    // The rest of the ways a line that carries a short alias can stop matching
+    // the pinned shape. Each must be named for the same reason: `None` would
+    // read as "not an option line" and let the preceding entry run past it.
+    let cases = [
+        (
+            format!("{HELP_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR}--jobs <JOBS>"),
+            "wrong indent",
+        ),
+        (
+            format!("{HELP_SHORT_OPTION_INDENT}-jj{HELP_SHORT_ALIAS_SEPARATOR}--jobs <JOBS>"),
+            "one-character alias",
+        ),
+        (
+            format!("{HELP_SHORT_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR} --jobs <JOBS>"),
+            "long flag",
+        ),
+    ];
+    for (line, expected) in cases {
+        let message = short_alias_layout_panic(&line);
+        assert!(
+            message.contains(&line),
+            "the report names the line it could not read: {message}"
+        );
+        assert!(
+            message.contains(expected),
+            "the report names what is wrong with `{line}`: {message}"
+        );
+    }
 }
 
 #[test]
