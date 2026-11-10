@@ -95,7 +95,25 @@ slow-timeout = { period = "60s" }
 filter = """
     test(=a_non_utf8_audio_cache_name_moves_byte_for_byte)
     or test(=a_non_utf8_audio_cache_name_moves_through_the_binary)
-    or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
+"""
+success-output = "immediate"
+
+# The junction cases report a host-dependent skip on stderr and then pass, so
+# their skip line must be visible under the plain gate too.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# bridge filter below does: a `test(=name)` predicate on its own matches the
+# same name in *any* binary, so a test elsewhere that happened to share one of
+# these names would silently inherit the override. `package(=girpr)` and
+# `binary(=girpr)` pin the two cases to the library's own test binary.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=util::ini::tests::config_bump_refuses_a_dangling_junction_game_dir)
+        or test(=util::path::tests::contained_join_resolves_a_junction_and_refuses_the_escape)
+    )
 """
 success-output = "immediate"
 
