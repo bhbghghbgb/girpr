@@ -458,18 +458,12 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
     classify_deprecated(std::fs::metadata(path))
 }
 
-/// Copy `src` to `target` without ever publishing a partial file.
+/// The target name a publish may write under.
 ///
-/// The bytes go to a temp sibling in the destination directory (same volume, so
-/// the publish is a rename, not another copy), and only a complete temp file is
-/// renamed over `target`. `util::path::temp_sibling` names that sibling, so
-/// this writer and the other atomic publishes agree on the whole-name rule. On
-/// any failure the temp sibling is removed, `target` is left exactly as it was,
-/// and the caller keeps `src`.
-///
-/// A `target` with no file name has no name to publish under, and the temp
-/// helper's no-file-name fallback would put the bytes somewhere else, so it is
-/// refused before any copy is attempted.
+/// Both writers that relocate a cache file apply this rule — the copy fallback
+/// and the rename the move tries first — so a spelling one refuses is refused
+/// by the other. A `target` with no file name has no name to publish under, and
+/// the temp helper's no-file-name fallback would put the bytes somewhere else.
 ///
 /// The same refusal covers a target with a Windows-trailing dot or space in any
 /// component. Windows strips the character when it resolves a name, so `foo.`
@@ -478,14 +472,7 @@ fn stat_deprecated(path: &Path) -> DeprecatedStat {
 /// applied on every host. It is
 /// [`any_component_has_windows_trailing_dot_or_space`], shared with the atomic
 /// publisher.
-///
-/// The caller creates the destination directory and removes `src` only after
-/// this returns `Ok`.
-fn copy_publish_with(
-    src: &Path,
-    target: &Path,
-    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
-) -> std::io::Result<()> {
+fn check_publish_target(target: &Path) -> std::io::Result<()> {
     // `temp_sibling` still names a path with no file name (see its contract:
     // the suffix is pushed under the path's directories, keeping a trailing
     // `..`), so refuse rather than publish under a different name.
@@ -499,8 +486,8 @@ fn copy_publish_with(
     // reached only when a caller builds `target` without a file name, as a
     // path ending in `..` does. When such a production caller appears, add a
     // test that drives it through `move_audio_cache_with` (or that caller) and
-    // asserts the refusal before the copy and the temp; until then this
-    // writer's direct unit test is the whole coverage.
+    // asserts the refusal before the copy and the temp; until then the direct
+    // unit test is the whole coverage.
     if target.file_name().is_none() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -517,6 +504,31 @@ fn copy_publish_with(
             "audio cache destination has a Windows-trailing dot or space",
         ));
     }
+    Ok(())
+}
+
+/// Copy `src` to `target` without ever publishing a partial file.
+///
+/// The bytes go to a temp sibling in the destination directory (same volume, so
+/// the publish is a rename, not another copy), and only a complete temp file is
+/// renamed over `target`. `util::path::temp_sibling` names that sibling, so
+/// this writer and the other atomic publishes agree on the whole-name rule. On
+/// any failure the temp sibling is removed, `target` is left exactly as it was,
+/// and the caller keeps `src`.
+///
+/// `target` must pass [`check_publish_target`], so a name with no file name or
+/// with a Windows-trailing dot or space in any component is refused before any
+/// copy is attempted. The rename path in [`move_audio_cache_with`] applies the
+/// same rule, so neither publish path writes an alias-shaped name.
+///
+/// The caller creates the destination directory and removes `src` only after
+/// this returns `Ok`.
+fn copy_publish_with(
+    src: &Path,
+    target: &Path,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> std::io::Result<()> {
+    check_publish_target(target)?;
     let tmp = util::path::temp_sibling(target);
     if let Err(e) = copy(src, &tmp) {
         let _ = std::fs::remove_file(&tmp);
@@ -652,7 +664,9 @@ fn move_audio_cache_with(
         }
         let target = res.join(rel_path);
         // `rename` first (cheap, same volume); fall back to copy+remove when
-        // the file is in use or the rename is otherwise refused.
+        // the file is in use or the rename is otherwise refused. The target
+        // name rule is the copy fallback's, so a spelling it refuses is not
+        // published by the rename either.
         if let Err(e) = std::fs::create_dir_all(target.parent().unwrap_or(&res)) {
             tracing::warn!(
                 src = %src.display(),
@@ -662,7 +676,7 @@ fn move_audio_cache_with(
             kept += 1;
             continue;
         }
-        match rename(&src, &target) {
+        match check_publish_target(&target).and_then(|()| rename(&src, &target)) {
             Ok(()) => moved += 1,
             Err(rename_err) => {
                 // The copy fallback publishes through a temp sibling, so a
@@ -980,6 +994,80 @@ mod tests {
                 "the refused publish keeps its source"
             );
         }
+    }
+
+    /// The rename the move tries first applies the same target-name rule as
+    /// the copy fallback, so the two paths cannot disagree about an alias
+    /// spelling.
+    ///
+    /// A Windows host strips the trailing character when the name is created,
+    /// so the cache fixture cannot exist here; this pins the shared rule, and
+    /// the Unix case below drives it through the move.
+    #[test]
+    fn the_rename_path_shares_the_copy_paths_target_name_rule() {
+        for name in ["foo.", "foo ", "dir./foo.pck"] {
+            let target = Path::new("Audio/res").join(name);
+            let err = check_publish_target(&target).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert_eq!(
+                err.to_string(),
+                "audio cache destination has a Windows-trailing dot or space",
+                "{name:?}"
+            );
+        }
+        check_publish_target(Path::new("Audio/res/foo.pck")).unwrap();
+    }
+
+    /// On a host that keeps the trailing character, a cache name Windows would
+    /// alias must not be published by the rename, which runs before the copy
+    /// fallback. Windows cannot create the fixture (it strips the dot), so this
+    /// case is Unix-only; the check above pins the same rule on every host.
+    #[cfg(unix)]
+    #[test]
+    fn an_alias_shaped_cache_name_is_not_published_by_the_rename() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_audio_move", "rename_alias");
+        let base = &*dir;
+        std::fs::create_dir_all(base.join("Audio/cache")).unwrap();
+        let src = base.join("Audio/cache/foo.");
+        std::fs::write(&src, b"cache bytes").unwrap();
+        let target = base.join("Audio/res/foo.");
+
+        let renamed = std::cell::Cell::new(false);
+        let copied = std::cell::Cell::new(false);
+        let logs = logs_of(|| {
+            move_audio_cache_with(
+                base,
+                &config("Audio/cache", "Audio/res"),
+                &PathScope::default(),
+                false,
+                |from, to| {
+                    renamed.set(true);
+                    std::fs::rename(from, to)
+                },
+                |from, to| {
+                    copied.set(true);
+                    std::fs::copy(from, to)
+                },
+            )
+        });
+
+        assert!(!renamed.get(), "the refused name never reaches the rename");
+        assert!(!copied.get(), "the refused name never reaches the copy");
+        assert!(
+            !target.exists(),
+            "the alias-shaped target is never published"
+        );
+        assert_eq!(
+            std::fs::read(&src).unwrap(),
+            b"cache bytes",
+            "the refused move keeps its source"
+        );
+        assert!(
+            logs.contains("audio cache -> res")
+                && logs.contains("moved=0")
+                && logs.contains("kept=1"),
+            "the refused move is reported as kept: {logs}"
+        );
     }
 
     /// The other half of the same line: a relocation that did happen is
