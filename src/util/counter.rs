@@ -236,6 +236,12 @@ mod tests {
     /// at its gate, so a broken gate fails the test instead of hanging it.
     const RECEIVE_WAIT: Duration = Duration::from_secs(10);
 
+    /// How long a test watches for a completion that a closed gate must hold
+    /// back. A gate that stopped blocking delivers it well inside this window;
+    /// a working gate never delivers it, so the window cannot pass a party that
+    /// is in fact parked.
+    const BLOCKED_WAIT: Duration = Duration::from_millis(100);
+
     /// Opens the two-party gate when a failing test unwinds.
     ///
     /// A helper parked at the gate on the failure path would otherwise stay
@@ -436,14 +442,73 @@ mod tests {
         );
     }
 
+    /// A gate keeps an unreleased party parked: a lone arrival does not open
+    /// the two-party rendezvous, so the party cannot record that it finished
+    /// until the test opens the gate.
+    ///
+    /// The blocked window is observed on the test receiver, so a gate that
+    /// stopped blocking fails here instead of passing on the strength of the
+    /// later release alone. The completion after the release has its own
+    /// deadline, so a gate that never opens the party fails instead of hanging
+    /// the suite.
+    #[test]
+    fn a_closed_gate_holds_an_unreleased_party() {
+        let gate = Arc::new(Gate::new());
+        let passed = Arc::new(AtomicBool::new(false));
+        let _release = ReleaseOnPanic {
+            gate: Arc::clone(&gate),
+            passed: Arc::clone(&passed),
+        };
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let party = {
+            let gate = Arc::clone(&gate);
+            let passed = Arc::clone(&passed);
+            std::thread::spawn(move || {
+                gate.arrive_and_wait();
+                passed.store(true, Ordering::Release);
+                done_tx.send(()).expect("the test receiver is alive");
+            })
+        };
+
+        assert!(
+            gate.wait_for_arrivals(1, RECEIVE_WAIT),
+            "the party arrives at the gate"
+        );
+        assert!(
+            !gate.is_open(),
+            "one arrival does not open the two-party gate"
+        );
+        assert!(
+            matches!(
+                done_rx.recv_timeout(BLOCKED_WAIT),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the unreleased party finishes while the gate is still closed"
+        );
+
+        gate.release();
+        done_rx
+            .recv_timeout(RECEIVE_WAIT)
+            .expect("the released party finishes once the gate opens");
+        party.join().expect("the released party finishes");
+        assert!(
+            passed.load(Ordering::Acquire),
+            "the released party recorded passed"
+        );
+    }
+
     /// The panic-release path must also open a gate that still has a party
     /// parked at it, not only a gate that is already open.
     ///
     /// The party parks at the gate with the gate closed, the guard releases
     /// it while unwinding, and the party must come out of the gate. The test
     /// waits for the arrival on the gate's own condition variable, so it
-    /// neither sleeps nor polls, and the receive has a deadline, so a guard
-    /// that failed to release the party fails the test instead of hanging it.
+    /// neither sleeps nor polls, and it watches the receiver for the whole
+    /// blocked window, so a party that was never held at the gate fails the
+    /// parked-state check instead of sliding past it. The receive after the
+    /// release has a deadline, so a guard that failed to release the party
+    /// fails the test instead of hanging it.
     #[test]
     fn a_panic_guard_releases_a_party_parked_at_the_gate() {
         let gate = Arc::new(Gate::new());
@@ -477,6 +542,13 @@ mod tests {
             gate.release_count(),
             0,
             "the gate has not been released before the guard fires"
+        );
+        assert!(
+            matches!(
+                done_rx.recv_timeout(BLOCKED_WAIT),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the party is parked at the gate: it has not finished while the gate is closed"
         );
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
