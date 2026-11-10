@@ -637,8 +637,8 @@ until the main tasks and rework are done.
 | F536 | TEMP-WRITER-07 review | `src/hyp.rs` | The reword dropped the pointer to the blob retry policy; linking `crate::sophon::stream::retryable` would restore it. | skipped (`sophon` is a private module, so that path is not publicly linkable and rustdoc rejects it) |
 | F537 | TEMP-PUBLISH-07 implementer | `src/util/atomic.rs` | `atomic::publish` checks only the target's final component for a Windows-trailing dot or space, while `contained_rel` checks every component. | completed |
 | F538 | TEMP-PUBLISH-07 implementer | `src/repair/phases/post.rs` | `copy_publish_with` does not share the trailing dot/space rule, so on Unix a game file literally named `foo.` would still be copied to `res/foo.`. | completed |
-| F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | todo |
-| F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | todo |
+| F539 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | The overlap failure path reads the file twice after the redo (final digest, then the rescan, which also digests); one `scan_reader` could answer both. | pending_review |
+| F540 | MANIFEST-08 implementer | `src/repair/file/inplace.rs` | `verify_in_place` digests and then scans on mismatch; the scan is failure-only and predates the redo change, but one pass could serve both answers. | pending_review |
 | F541 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `redo_mismatch_is_terminal` rescans the whole file through `scan_reader`; only the overlapping ranges need re-checking. | todo |
 | F542 | MANIFEST-08 review | `src/repair/file/inplace.rs` | `scan.dest_ok.iter().all(...)` assumes one verdict per chunk; a defensive length check like `verify_in_place`'s `.get(i)` would fail closed. | todo |
 | F543 | PURGE-PERF-09 implementer | `src/util/counter.rs` | The test-only `Gate` is deliberately two-party (`arrived == 2`); N-party reuse would need generalizing. | skipped (conditional; no N-party fixture exists) |
@@ -708,6 +708,8 @@ until the main tasks and rework are done.
 | F607 | TEMP-PUBLISH-08 implementer | `src/repair/phases/post.rs` | The copy alias refusal message omits the path; the caller's warn line supplies both paths. | skipped (informational only; the caller names both paths) |
 | F608 | TEMP-PUBLISH-08 review | `src/repair/phases/post.rs` tests | The copy test's "no destination directory" assertion is vacuous because `copy_publish_with` never creates directories; an integration test through `move_audio_cache_with` would cover the real sequence. | todo |
 | F609 | TEMP-PUBLISH-08 review | `src/util/path.rs`, `src/util/atomic.rs` | Windows verbatim targets (`\\?\…`) do not strip dot/space, so the lexical rule can refuse a spelling verbatim would accept. | skipped (conditional; no caller produces verbatim publish targets) |
+| F610 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` tests | No end-to-end test drives a real post-redo terminal mismatch through `verify_and_retry`; it would need a zstd origin whose redo still mismatches. | skipped (conditional; the unit test already covers the terminal decision) |
+| F611 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` | The verify success path hashes chunk ranges whose verdicts are unused, which is inherent to deciding the outcome in one pass. | skipped (inherent to the one-pass design; only worth revisiting if a profile shows it) |
 
 ## Follow-up batches
 
@@ -841,7 +843,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-WRITER-08 | F535 | done | Wave E; on-disk length after the failed read path; low; 3e38b4c |
 | TEMP-WRITER-09 | F536 | done | Wave E; retry-policy pointer in the rewording; low |
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
-| MANIFEST-09 | F539, F540 | in_progress | Wave E; single-pass digest and range scan on failure paths; low |
+| MANIFEST-09 | F539, F540 | pending_review | Wave E; single-pass digest and range scan on failure paths; low; 1481a45 |
 | MANIFEST-10 | F541, F542 | todo | Wave E; overlap-only rescan and verdict-length guard; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | todo | Wave E; release-wakes-a-parked-party test and doc wording; low |
