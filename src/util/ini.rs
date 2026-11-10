@@ -1270,14 +1270,17 @@ mod tests {
         std::fs::remove_file(link)
     }
 
-    /// Whether a failed link creation — a directory symlink or a junction —
-    /// is the known privilege denial that means the test cannot run on this
-    /// host. Every other error is a broken test environment and must fail
-    /// loudly instead of silently skipping.
+    /// Whether a failed **directory symlink** creation is the known privilege
+    /// denial that means the test cannot run on this host. Every other error
+    /// is a broken test environment and must fail loudly instead of silently
+    /// skipping.
+    ///
+    /// A junction's refusal is not classified here: `mklink` reports it
+    /// without a raw code, so the shared junction classifier owns that case.
     fn link_creation_denied(e: &std::io::Error) -> bool {
         #[cfg(windows)]
         {
-            // A link creation the host's policy denies reports
+            // A directory symlink the host's policy refuses to create reports
             // `ERROR_PRIVILEGE_NOT_HELD` (1314); a directory symlink without
             // the privilege (or developer mode) is the usual case. Rust maps
             // it to `Uncategorized`, so the raw code is the reliable check.
