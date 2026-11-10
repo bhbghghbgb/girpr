@@ -633,6 +633,111 @@ mod tests {
         );
     }
 
+    /// The failure shape one planned file reports, keyed by its rel.
+    ///
+    /// Every arm of the one warn site prints its own line, so the shapes are
+    /// named here once and the expected lines are written out in full below:
+    /// a message, a field, or an arm that stops firing has to fail the test.
+    fn injected_failure(rel: &str) -> Option<CheckFailure> {
+        Some(match rel {
+            "escaped.dat" => CheckFailure::PathEscaped("the rel escapes the game dir".to_string()),
+            "unreadable.dat" => {
+                CheckFailure::Unreadable("the file could not be statted".to_string())
+            }
+            "absent.dat" => CheckFailure::Absent,
+            "sized.dat" => CheckFailure::Size(19),
+            "md5.dat" => CheckFailure::Md5 {
+                actual: "66666666666666666666666666666666".to_string(),
+                damaged_chunks: None,
+            },
+            "scanned_md5.dat" => CheckFailure::Md5 {
+                actual: "88888888888888888888888888888888".to_string(),
+                damaged_chunks: Some(2),
+            },
+            "read.dat" => CheckFailure::Read("the digest read failed".to_string()),
+            _ => return None,
+        })
+    }
+
+    /// Every failure shape reaches the operator as its own line.
+    ///
+    /// The shapes are injected through the same seam the real check uses, so
+    /// the lines come from the one production warn site and not from a copy of
+    /// it. The plan's rels name the arms, and an unknown rel is a bug in the
+    /// plan rather than a silent clean file.
+    #[test]
+    fn every_failure_shape_is_logged_with_its_own_line() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "warn_arms");
+        let base = &*dir;
+        let plan = Arc::new(plan_of(vec![
+            planned("escaped.dat", 7, "11111111111111111111111111111111"),
+            planned("unreadable.dat", 11, "22222222222222222222222222222222"),
+            planned("absent.dat", 13, "33333333333333333333333333333333"),
+            planned("sized.dat", 17, "44444444444444444444444444444444"),
+            planned("md5.dat", 23, "55555555555555555555555555555555"),
+            planned("scanned_md5.dat", 29, "77777777777777777777777777777777"),
+            planned("read.dat", 31, "99999999999999999999999999999999"),
+            planned("clean.dat", 37, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let logs = crate::repair::test_support::logs_of(|| {
+            let bad = runtime
+                .block_on(verify_plan_with(
+                    base,
+                    None,
+                    plan,
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    None,
+                    1,
+                    None,
+                    |f: &PlannedFile,
+                     _: &anyhow::Result<PathBuf>,
+                     _: DigestSource<'_>|
+                     -> CheckOutcome {
+                        match injected_failure(&f.rel) {
+                            Some(failure) => CheckOutcome::failed(failure),
+                            None => {
+                                assert_eq!(
+                                    f.rel, "clean.dat",
+                                    "the plan holds the injected arms and one clean file"
+                                );
+                                CheckOutcome::clean()
+                            }
+                        }
+                    },
+                ))
+                .expect("the check tasks finish");
+            assert_eq!(bad, 7, "every injected failure counts as damage");
+        });
+
+        assert_eq!(
+            check_warnings(&logs),
+            vec![
+                "CHECK fail: path escapes the game dir file=escaped.dat error=the rel escapes the game dir",
+                "CHECK fail: unreadable file=unreadable.dat error=the file could not be statted",
+                "CHECK fail: size file=absent.dat expect_size=13 actual_size=None",
+                "CHECK fail: size file=sized.dat expect_size=17 actual_size=Some(19)",
+                "CHECK fail: md5 file=md5.dat expect_md5=55555555555555555555555555555555 actual_md5=66666666666666666666666666666666",
+                "CHECK fail: md5 file=scanned_md5.dat expect_md5=77777777777777777777777777777777 actual_md5=88888888888888888888888888888888 damaged_chunks=2",
+                "CHECK fail: unreadable: the digest read failed file=read.dat",
+            ],
+            "each failure shape has its own line, in plan order"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 7);
+        assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            summary.check_damaged_chunks(),
+            Some(2),
+            "only the scanned mismatch carries a chunk count"
+        );
+    }
+
     /// The ticker reads the counters while the pass is still running, so a
     /// finished check is folded before the slowest one returns. The gate keeps
     /// one task blocked without sleeping; the other task's counter must be
