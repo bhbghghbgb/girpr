@@ -94,8 +94,9 @@ fn try_junction_dir_with(
 /// pair is enough.
 ///
 /// Quotes do not stop `cmd`'s percent expansion, though: a `%NAME%` pair
-/// is expanded when that variable is set, inside quotes as well. A path
-/// that carries a percent is refused before the line exists — see
+/// is expanded when that variable is set, inside quotes as well, and the
+/// pair is resolved inside the one quoted path it sits in. A path that
+/// carries a percent is refused before the line exists — see
 /// [`reject_percent_path`].
 fn junction_command(target: &Path, link: &Path) -> Result<String, std::io::Error> {
     reject_percent_path(target)?;
@@ -114,13 +115,20 @@ fn junction_command(target: &Path, link: &Path) -> Result<String, std::io::Error
 /// environment, so a fixture path carrying one would reach `mklink` as a
 /// path nobody asked for, silently.
 ///
-/// A stray percent is refused with it. The pair is not a property of one
-/// path: both paths share the one command line, so a percent in one of
-/// them can close a pair with a percent in the other, and whether that
-/// name is set is the environment's business. The rule therefore has to be
-/// decidable from the paths alone — a fixture path carries no percent at
-/// all — because a path `cmd` may rewrite cannot be relied on to arrive
-/// as it was given.
+/// The pair is resolved inside the one quoted argument it sits in, so
+/// each path can carry one on its own: both paths are checked.
+///
+/// A stray percent is refused with the pairs. It cannot close a pair by
+/// itself — `cmd` leaves a lone percent as it is — but which names are
+/// set is the environment's business, so the rule cannot ask the
+/// environment which percents matter. It refuses every percent instead:
+/// the rule stays decidable from the paths alone, because a path `cmd`
+/// may rewrite cannot be relied on to arrive as it was given.
+///
+/// The check and the command read the path the same way: the command
+/// line writes it with `Path::display`, and the check searches that same
+/// lossy text component by component, so a percent the check finds is a
+/// percent `cmd` receives.
 ///
 /// The refusal names the path and the reason, and it is an ordinary error
 /// rather than a spawn failure: [`junction_skip_reason`] classifies only a
@@ -132,7 +140,7 @@ fn reject_percent_path(path: &Path) -> std::io::Result<()> {
         .any(|component| component.as_os_str().to_string_lossy().contains('%'));
     if carries_a_percent {
         return Err(std::io::Error::other(format!(
-            "refusing the junction fixture path {}: cmd expands a %NAME% pair when that variable is set, even inside quotes, and both paths share one command line, so a percent in the path can leave mklink with a path other than the one given",
+            "refusing the junction fixture path {}: cmd expands a %NAME% pair when that variable is set, even inside quotes, and the pair is resolved inside the one quoted path it sits in, so a percent in the path can leave mklink with a path other than the one given",
             path.display()
         )));
     }
