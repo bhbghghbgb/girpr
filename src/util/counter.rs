@@ -44,7 +44,8 @@ pub(crate) mod test_support {
     /// adding a party therefore parks itself when the rendezvous has already
     /// completed: the barrier has moved to its next generation. This gate keeps
     /// the normal path's meaning — both parties must arrive — and gives the
-    /// failure path an idempotent [`Gate::release`] that never adds a waiter.
+    /// failure path a [`Gate::release`] that opens the gate for a parked
+    /// party without ever adding a waiter.
     pub(crate) struct Gate {
         state: Mutex<GateState>,
         opened: Condvar,
@@ -79,7 +80,12 @@ pub(crate) mod test_support {
         }
 
         /// Open the gate for a waiting party and for any party that arrives
-        /// later. Repeating this after a normal release is a no-op.
+        /// later.
+        ///
+        /// Repeating this after a normal release leaves the gate's state
+        /// unchanged: the gate stays open and no party is added. The call
+        /// still counts in [`Gate::release_count`], so the tally records
+        /// every release and not only the ones that opened the gate.
         pub(crate) fn release(&self) {
             let mut state = self.state.lock().unwrap();
             state.releases += 1;
@@ -92,7 +98,8 @@ pub(crate) mod test_support {
             self.state.lock().unwrap().arrived
         }
 
-        /// How many times [`Gate::release`] was called.
+        /// How many times [`Gate::release`] was called, including the calls
+        /// that left the gate's state unchanged.
         pub(crate) fn release_count(&self) -> usize {
             self.state.lock().unwrap().releases
         }
@@ -204,9 +211,10 @@ mod tests {
     /// Opens the two-party gate when a failing test unwinds.
     ///
     /// A helper parked at the gate on the failure path would otherwise stay
-    /// there until the process exits. Opening an already-open gate is a no-op,
-    /// so a guard that drops after the normal release — but before the helper
-    /// records `passed` — cannot leave a waiter parked on a fresh generation.
+    /// there until the process exits. Opening an already-open gate leaves its
+    /// state unchanged, so a guard that drops after the normal release — but
+    /// before the helper records `passed` — cannot leave a waiter parked on a
+    /// fresh generation.
     struct ReleaseOnPanic {
         gate: Arc<Gate>,
         passed: Arc<AtomicBool>,
@@ -319,9 +327,9 @@ mod tests {
 
     /// Dropping the guard after the gate has released the helper but before
     /// the helper records `passed` must not add a waiter: the gate is already
-    /// open, and opening it again is a no-op. The helper then finishes
-    /// normally, so the window between its wake-up and its store is covered by
-    /// a test rather than left to interleaving.
+    /// open, and opening it again leaves its state unchanged. The helper then
+    /// finishes normally, so the window between its wake-up and its store is
+    /// covered by a test rather than left to interleaving.
     #[test]
     fn a_panic_guard_after_the_release_leaves_no_waiter() {
         let gate = Arc::new(Gate::new());
