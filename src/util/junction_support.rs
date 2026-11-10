@@ -7,8 +7,9 @@
 //!
 //! The command's outcome handling is split from the command's execution, so
 //! a test can drive both branches — a successful exit that created no link,
-//! and a failing exit — without running `mklink` at all. The command line
-//! is split from its execution too, so a test can prove that a path `cmd`
+//! a successful exit that created something that is not a junction, and a
+//! failing exit — without running `mklink` at all. The command line is
+//! split from its execution too, so a test can prove that a path `cmd`
 //! would rewrite is refused before anything is run.
 //!
 //! This is test support, not a production helper: it is deliberately not
@@ -57,9 +58,10 @@ pub(super) enum JunctionOutcome {
 /// `mklink`.
 ///
 /// An exit of `0` only claims that the link exists; the test still inspects
-/// it. A link that did not appear fails closed as missing, and an
-/// inspection that fails for another reason keeps that cause, so a
-/// permission or transient I/O failure is never reported as missing.
+/// it. A link that did not appear fails closed as missing, an entry that is
+/// not a reparse point is refused as the wrong fixture, and an inspection
+/// that fails for another reason keeps that cause, so a permission or
+/// transient I/O failure is never reported as missing.
 pub(super) fn try_junction_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     try_junction_dir_with(target, link, run_command_line)
 }
@@ -161,21 +163,47 @@ fn run_command_line(command: &str) -> std::io::Result<std::process::Output> {
 ///
 /// A failing exit keeps the command's own report. A successful exit is only
 /// a claim that the link exists, so the link is inspected: a link that never
-/// appeared fails closed as missing, and an inspection that fails for
-/// another reason keeps that cause, so a permission or transient I/O
-/// failure is never reported as missing.
+/// appeared fails closed as missing, an entry that is not a reparse point is
+/// refused as the wrong fixture, and an inspection that fails for another
+/// reason keeps that cause, so a permission or transient I/O failure is
+/// never reported as missing.
 ///
-/// Both failures stay `Other`, so neither can be mistaken for a proven host
-/// refusal by [`junction_skip_reason`].
+/// Every failure stays `Other`, so none of them can be mistaken for a proven
+/// host refusal by [`junction_skip_reason`].
 pub(super) fn junction_result(outcome: &JunctionOutcome, link: &Path) -> std::io::Result<()> {
     if let JunctionOutcome::Failed { status, stderr } = outcome {
         return Err(std::io::Error::other(format!(
             "mklink /J exited with {status}: {stderr}"
         )));
     }
-    std::fs::symlink_metadata(link)
-        .map(|_| ())
-        .map_err(|e| junction_inspection_error(link, e))
+    match std::fs::symlink_metadata(link) {
+        // A junction is a name-surrogate reparse point, so std reports it as
+        // a link: the link itself is what the case needs.
+        Ok(md) if md.file_type().is_symlink() => Ok(()),
+        // Something is there, but it is not the junction `mklink` claimed: a
+        // plain directory would stand in for the fixture and satisfy a later
+        // assertion for the wrong reason.
+        Ok(_) => Err(junction_not_a_reparse_point_error(link)),
+        Err(e) => Err(junction_inspection_error(link, e)),
+    }
+}
+
+/// The failure for a link path that holds something that is not a reparse
+/// point.
+///
+/// `mklink /J` reported success and the path exists, so the entry there is
+/// not the junction the case needs: the failure names the path and says why
+/// it was refused.
+///
+/// The failure stays `Other` and carries no raw code, so
+/// [`junction_skip_reason`] cannot read it as a proven host refusal — the
+/// case fails loudly instead of skipping, and a fixture that is not the
+/// fixture cannot pass for one.
+fn junction_not_a_reparse_point_error(link: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "mklink /J reported success but {} is not a reparse point, so it is not the directory junction the case needs",
+        link.display()
+    ))
 }
 
 /// Turn a failed inspection of the link that `mklink` claims to have
@@ -347,6 +375,56 @@ mod tests {
         assert!(
             junction_skip_reason(&err).is_none(),
             "a link that never appeared must fail, not skip: {msg}"
+        );
+    }
+
+    /// A successful exit that left something at the link path which is not a
+    /// reparse point: a plain directory would stand in for the junction and
+    /// satisfy a later assertion for the wrong reason, so the fixture must
+    /// be refused instead of used.
+    ///
+    /// The command's execution is injected with a successful exit, so no
+    /// `mklink` is run; the link path holds a plain directory, so the case
+    /// runs on every host.
+    #[test]
+    fn a_successful_exit_that_is_not_a_reparse_point_is_refused() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_junction", "not_a_reparse_point");
+        let target = dir.join("real");
+        let link = dir.join("game-dir-link");
+        std::fs::create_dir_all(&link).expect("the scratch directory is creatable");
+
+        let mut ran = false;
+        let err = try_junction_dir_with(&target, &link, |command| {
+            ran = true;
+            assert!(
+                command.starts_with("mklink /J "),
+                "the injected run sees the command line: {command}"
+            );
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        })
+        .expect_err("a path that is not a reparse point must be refused");
+        assert!(
+            ran,
+            "the command line was built and handed to the injected run"
+        );
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Other, "{err}");
+        assert!(err.raw_os_error().is_none(), "{err}");
+        let msg = format!("{err}");
+        assert!(msg.contains(&link.display().to_string()), "{msg}");
+        assert!(
+            msg.contains("is not a reparse point"),
+            "the reason is named: {msg}"
+        );
+        assert!(
+            junction_skip_reason(&err).is_none(),
+            "a path that is not a reparse point is not a host refusal and must fail, not skip: {msg}"
         );
     }
 
