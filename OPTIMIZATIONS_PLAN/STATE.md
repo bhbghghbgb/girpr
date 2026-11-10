@@ -712,15 +712,15 @@ until the main tasks and rework are done.
 | F609 | TEMP-PUBLISH-08 review | `src/util/path.rs`, `src/util/atomic.rs` | Windows verbatim targets (`\\?\…`) do not strip dot/space, so the lexical rule can refuse a spelling verbatim would accept. | skipped (conditional; no caller produces verbatim publish targets) |
 | F610 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` tests | No end-to-end test drives a real post-redo terminal mismatch through `verify_and_retry`; it would need a zstd origin whose redo still mismatches. | skipped (conditional; the unit test already covers the terminal decision) |
 | F611 | MANIFEST-09 implementer | `src/repair/file/inplace.rs` | The verify success path hashes chunk ranges whose verdicts are unused, which is inherent to deciding the outcome in one pass. | skipped (inherent to the one-pass design; only worth revisiting if a profile shows it) |
-| F612 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The first verify now hashes the chunk ranges as well as the file (roughly twice the MD5 work per repaired file) to save one read on the rare mismatch path; the ignored `md5_throughput`/`scan_throughput` benchmarks could size it. | pending_review |
-| F613 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The "no overlap implies terminal" invariant now lives in the caller asking for no ranges, so a future caller handing the predicate a scan built from an empty range list for an overlapping layout would wrongly get `true`. | pending_review |
+| F612 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The first verify now hashes the chunk ranges as well as the file (roughly twice the MD5 work per repaired file) to save one read on the rare mismatch path; the ignored `md5_throughput`/`scan_throughput` benchmarks could size it. | completed |
+| F613 | MANIFEST-09 review | `src/repair/file/inplace.rs` | The "no overlap implies terminal" invariant now lives in the caller asking for no ranges, so a future caller handing the predicate a scan built from an empty range list for an overlapping layout would wrongly get `true`. | completed |
 | F614 | MANIFEST-09 review | `src/repair/file/inplace.rs` tests | The post-redo tail is still covered only at unit level, never through `verify_and_retry`. | skipped (duplicate of F610; it would need a download mock for the redo) |
 | F615 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The post-redo pass could be narrowed further to the chunks intersecting a rewritten chunk (the `still_bad` list), a strict subset of the contested set; `read_after_redo` does not receive `still_bad` today. | dropped (generic optimization; the contested set is already a strict subset and the reads sit on a failure path) |
 | F616 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | `overlapping_ranges` re-derives the contested offsets from `Layout::overlaps` and allocates a `Vec` per call. | skipped (cost is negligible; once per attempt) |
 | F617 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The narrowing leans on `PlannedFile::layout()` skipping negative-offset chunks, so a hand-built plan with a negative offset would leave that chunk unchecked. | skipped (defence in depth; `validate_chunk_ranges` refuses such a plan twice) |
-| F618 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The terminal predicate reads exactly `expected` verdicts, so a scan returning more verdicts than asked for would go unnoticed. | pending_review |
+| F618 | MANIFEST-10 implementer | `src/repair/file/inplace.rs` | The terminal predicate reads exactly `expected` verdicts, so a scan returning more verdicts than asked for would go unnoticed. | completed |
 | F619 | MANIFEST-10 review | `src/repair/file/inplace.rs` tests | The invariant test pins one fixed layout; a generated sweep over layouts would pin the narrowed-set property far more broadly. | dropped (generic improvement, not a problem that needs attention) |
-| F620 | MANIFEST-10 review | `src/repair/phases/plan.rs` | The narrowing's soundness rests on `Layout::overlaps` naming both sides of every overlap; a unit test in `plan.rs` stating that property would make the dependency explicit. | pending_review |
+| F620 | MANIFEST-10 review | `src/repair/phases/plan.rs` | The narrowing's soundness rests on `Layout::overlaps` naming both sides of every overlap; a unit test in `plan.rs` stating that property would make the dependency explicit. | completed |
 | F621 | MANIFEST-10 review | `src/repair/file/inplace.rs` | `overlapping_ranges` recomputes `file.layout()` although `patch_chunks` already computed it. | skipped (negligible next to the read; not worth the churn) |
 | F622 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `Gate::arrive_and_wait` opens the gate only on the exact transition `arrived == 2`; a third arrival while the gate is closed would never open it. | skipped (unreachable today; arrivals increase by one, so the count passes through 2) |
 | F623 | PURGE-PERF-11 implementer | `src/util/counter.rs` | `wait_for_arrivals` takes a count but has one caller, and `is_open` is derivable from the same lock as `arrival_count`; the helpers could fold into one snapshot accessor. | skipped (conditional; one caller today) |
@@ -927,7 +927,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
 | INI-15 | F592, F593, F594, F595 | done | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1, 430566d |
-| BUILD-20 | F598, F599, F601 | todo | Wave E; MSRV script failure output and the redb pin comment; low |
+| BUILD-20 | F598, F599, F601 | in_progress | Wave E; MSRV script failure output and the redb pin comment; low |
 | BUILD-21 | F600 | skipped | Wave E; the only item was a generic test-harness addition; low |
 | BUILD-22 | F601 | skipped | Wave E; merged into BUILD-20; low |
 | TEMP-WRITER-10 | F603, F604 | skipped | Wave E; the items were generic coverage additions; low |
@@ -950,7 +950,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEMP-PUBLISH-08 | F537, F538 | done | Wave E; alias-shaped directories and copy-path trailing dot/space; low; 5ce79d6, 451a1f4, 4727eb2 |
 | MANIFEST-09 | F539, F540 | done | Wave E; single-pass digest and range scan on failure paths; low; 1481a45, 98b58de |
 | MANIFEST-10 | F541, F542 | done | Wave E; overlap-only rescan and verdict-length guard; low; a5b0d6f, df5b20f, 6b22854 |
-| MANIFEST-15 | F612, F613, F618, F620 | pending_review | Wave F; the verify digests, the terminal rule and the overlap property; low; f4b13f07 |
+| MANIFEST-15 | F612, F613, F618, F620 | done | Wave F; the verify digests, the terminal rule and the overlap property; low; f4b13f07; reviewer: all four completed, no fixes (681 passed, 9 skipped) |
 | MANIFEST-12 | F613, F618 | skipped | Wave E; merged into MANIFEST-15; low |
 | MANIFEST-13 | F615 | skipped | Wave E; merged into MANIFEST-15; low |
 | MANIFEST-14 | F619, F620 | skipped | Wave E; merged into MANIFEST-15; low |
