@@ -796,6 +796,9 @@ until the main tasks and rework are done.
 | F695 | INI-15 implementer | `src/util/path.rs`, `src/util/junction_support.rs` | `path.rs` keeps private copies of `require_junction()` and `skip_junction()`; the junction fixture support could have one home in the shared module. | todo |
 | F696 | INI-15 implementer | `.config/nextest.toml` | The ini symlink case's host skip is still invisible under the plain gate; it is in no `success-output` override even though it can skip on a host without symlink privilege. | todo |
 | F697 | INI-15 implementer | `src/util/ini.rs`, `src/util/path.rs` | The injected-refusal probes print "simulated refusal" to stderr but are covered by no `success-output` override. | skipped (consistent with the path module's equivalents; the output is diagnostic only) |
+| F698 | INI-15 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | Both test modules keep a private `skip_junction` wrapper with identical arguments; the wrapper could live in the shared module once. | todo |
+| F699 | INI-15 review | `src/lib.rs` | `skip_fixture_refusal`'s panic message says "this host cannot create …" even for `FixtureRefusal::Injected`, where no host was consulted; the printed skip line distinguishes the two but the panic does not. | todo |
+| F700 | INI-15 review | `.config/nextest.toml` | The first override (`test(=a_non_utf8_audio_cache_name_moves_*)`) is still unqualified by package/binary. | skipped (duplicate of F648, which PATHHELPERS-12 covers) |
 
 ## Follow-up batches
 
@@ -908,7 +911,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
-| INI-15 | F592, F593, F594, F595 | pending_review | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1 |
+| INI-15 | F592, F593, F594, F595 | done | Wave E; ini junction skip visibility and link-denial doc; low; bbd537a, e2ab3b4, 2a15ed1, 430566d |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
@@ -938,9 +941,10 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | PURGE-PERF-13 | F622, F623, F624, F625 | done | Wave E; gate helper limits and diagnostics; low |
 | PURGE-PERF-14 | F626, F628 | todo | Wave E; pin the gate's blocking contract directly; low |
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
+| TEST-REGRESSION-12 | F699 | todo | Wave E; the injected-refusal panic message; low |
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
 | INI-17 | F683, F684 | todo | Wave E; drive the uninspectable-link branch for both callers; low |
-| INI-18 | F685, F686, F695 | todo | Wave E; one classification shape and a directly driven panic arm; low |
+| INI-18 | F685, F686, F695, F698 | todo | Wave E; one classification shape and a directly driven panic arm; low |
 | INI-19 | F688 | todo | Wave E; note the lossy-render coupling in the percent guard; low |
 | INI-20 | F690, F691 | todo | Wave E; pin cmd's pairing and tidy the percent guard; low |
 | INI-21 | F692, F694 | todo | Wave E; reparse-point check across toolchains; low |
