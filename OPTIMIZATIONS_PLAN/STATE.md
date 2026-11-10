@@ -652,8 +652,8 @@ until the main tasks and rework are done.
 | F551 | TEST-REGRESSION-07 review | `tests/repair_machinery.rs` | `MtimeAge` is local; if another test file needs the same named skip outcome it should live beside the shared clock helpers. | skipped (conditional; only one test file uses it today) |
 | F552 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | The other warn-site arms (`PathEscaped`, `Unreadable`, `Read`, `Absent`) are only indirect; one injected-outcome test could pin all six arms. | completed |
 | F553 | CHECK-08 implementer | `src/repair/phases/check.rs` tests | `remaining_or_zero` could also serve the release wait if its `Some`/`None` branch were refactored. | skipped (would change the release-wait shape) |
-| F554 | CHECK-08 review | `src/repair/phases/check.rs` tests | `check_warnings` slices from `CHECK fail`, stripping the `WARN` level, so a regression from `warn!` to `info!` would still pass. | pending_review |
-| F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | pending_review |
+| F554 | CHECK-08 review | `src/repair/phases/check.rs` tests | `check_warnings` slices from `CHECK fail`, stripping the `WARN` level, so a regression from `warn!` to `info!` would still pass. | completed |
+| F555 | CHECK-08 review | `src/repair/phases/check.rs` tests | `remaining_or_zero`'s doc restates `before`'s and can drift from it. | completed |
 | F556 | PATHHELPERS-08 implementer | `README.md`, `docs/06-artifact-bridge-spec.md` | The default parallel bridge run (69.4 s here) is not faster than the recorded serial 63 s on this 4-core host; a timing claim should say which mode it measured. | skipped (the docs say "roughly a minute", which both measurements support) |
 | F557 | PATHHELPERS-08 implementer | `tests/artifact_bridge.rs` | Parallel safety is stated in prose only; asserting that scratch paths differ would test the tempdir crate rather than the bridge. | skipped (the property belongs to the tempdir crate) |
 | F558 | PATHHELPERS-08 implementer | `.config/nextest.toml` | The bridge override matches six test names without a binary qualifier, so a same-named test elsewhere would inherit `success-output = "immediate"`. | todo |
@@ -744,6 +744,8 @@ until the main tasks and rework are done.
 | F643 | CHECK-11 implementer | `src/repair/phases/check.rs` tests | The phase's other log line (`info!("check-only: total=… bad=…")`) is still asserted by content only, not by level. | todo |
 | F644 | CHECK-11 implementer | `src/repair/phases/check.rs` tests | `tracing::Level`'s `FromStr` also accepts the numeric spellings 1-5 and is case-insensitive, so a prefix token "1" would parse as `ERROR`. | skipped (conditional; the subscriber's prefix has no such token today) |
 | F645 | CHECK-11 implementer | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Two more copies of the async log-capture implementation duplicate `src/repair/test_support.rs`. | skipped (duplicate of F572/HYP-09; consolidating needs a public async test helper) |
+| F646 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor scans the whole prefix for the first level-looking token, and `Level::from_str` also accepts bare numbers ("2" is `WARN`), so the parse relies on the level preceding the target rather than on its position. | todo |
+| F647 | CHECK-11 review | `src/repair/phases/check.rs` tests | The extractor assumes one log record per line; a multi-line message would be split and its continuation dropped, and that assumption is undocumented. | todo |
 
 ## Follow-up batches
 
@@ -891,7 +893,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
 | DOCS-USER-15 | F641 | todo | Wave E; capture spec log shape and path; low |
-| CHECK-14 | F642, F643 | todo | Wave E; fallible level extraction and the info line's level; low |
+| CHECK-14 | F642, F643, F646, F647 | todo | Wave E; fallible level extraction and the info line's level; low |
 | PURGE-PERF-10 | F543, F544 | done | Wave E; gate arity and captured panic text; low |
 | PURGE-PERF-11 | F545, F546 | done | Wave E; release-wakes-a-parked-party test and doc wording; low; 41b80d5, b0c9947 |
 | PURGE-PERF-12 | F547 | done | Wave E; poisoned-mutex robustness; low |
@@ -900,7 +902,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-10 | F551 | done | Wave E; shared skip-outcome type; low |
 | CHECK-09 | F552 | done | Wave E; pin the remaining check warn arms; low; 63bd985 |
 | CHECK-10 | F553 | done | Wave E; release-wait helper reuse; low |
-| CHECK-11 | F554, F555 | pending_review | Wave E; pin the warn level and trim the helper doc; low; 3f7f1e0, e0bf1fe |
+| CHECK-11 | F554, F555 | done | Wave E; pin the warn level and trim the helper doc; low; 3f7f1e0, e0bf1fe |
 | PATHHELPERS-09 | F556, F557 | done | Wave E; timing-mode wording and tempdir prose; low |
 | PATHHELPERS-10 | F558 | todo | Wave E; qualify the bridge override filter; low |
 | PATHHELPERS-11 | F559, F560, F561 | todo | Wave E; module-doc filter, README cross-reference, section citation; low |
