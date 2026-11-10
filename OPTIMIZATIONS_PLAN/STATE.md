@@ -905,7 +905,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
 | INI-13 | F589 | done | Wave E; guard the percent-expansion hazard; low; 7021c14, 51eee2c |
 | INI-14 | F590, F591 | done | Wave E; 1314 wording and reparse-point verification; low; e44667e, 88da409 |
-| INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
+| INI-15 | F592, F593, F594, F595 | in_progress | Wave E; ini junction skip visibility and link-denial doc; low |
 | BUILD-20 | F598, F599 | todo | Wave E; install-failure output and version-scoped absence test; low |
 | BUILD-21 | F600 | todo | Wave E; shim harness for the MSRV script; low |
 | BUILD-22 | F601 | todo | Wave E; exact redb version in the pin comment; low |
