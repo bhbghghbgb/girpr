@@ -684,7 +684,7 @@ until the main tasks and rework are done.
 | F583 | INI-08 implementer | `src/util/ini.rs`, `src/util/path.rs` | `try_junction_dir`, `junction_skip_reason` and the 1314 check now exist twice, in two `#[cfg(test)]` modules; a shared `util`-local test helper would remove the duplication without widening the `lib.rs` test seam. | completed |
 | F584 | INI-08 implementer | `src/util/path.rs` | The path helper's doc omits the `%VAR%` caveat the ini helper documents: `cmd` expands percent pairs even inside quotes. | completed |
 | F585 | INI-08 implementer | `src/util/ini.rs` | `link_creation_denied`'s Unix branch documentation is symlink-specific, though no Unix link variant shares it today. | skipped (conditional; only the symlink classifier compiles on Unix) |
-| F586 | INI-08 review | `src/util/path.rs` | The exit-0-but-link-missing branch has no direct test; only its `ErrorKind::Other` class is covered through the non-zero-exit case, so a seam over `Output`/`ExitStatus` would pin it. | pending_review |
+| F586 | INI-08 review | `src/util/path.rs` | The exit-0-but-link-missing branch has no direct test; only its `ErrorKind::Other` class is covered through the non-zero-exit case, so a seam over `Output`/`ExitStatus` would pin it. | completed |
 | F587 | INI-09 implementer | `src/util/ini.rs`, `src/util/path.rs` | `link_creation_denied` exists only in `ini.rs`; `path.rs` inlines the same 1314 test. | skipped (duplicate of F583, which covers sharing the 1314 check) |
 | F588 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | `junction_inspection_error` collapses the original error to `Error::other`, so its kind and raw code cannot be recovered. | skipped (deliberate; classification is fail-closed by contract) |
 | F589 | INI-09 implementer | `src/util/path.rs`, `src/util/ini.rs` | The `%VAR%` expansion hazard for fixture paths is enforced only by a comment, not by rejecting `%` in the paths passed to `try_junction_dir`. | todo |
@@ -783,6 +783,9 @@ until the main tasks and rework are done.
 | F682 | JOBS-08 review | `tests/cli_contract.rs` | `help_entry_finds_the_help_option_behind_its_short_alias` spawns its own `--help` instead of reusing `real_help()`, so the file can spawn the binary twice per process. | todo |
 | F683 | INI-12 implementer | `src/util/junction_support.rs` | `junction_inspection_error`'s `PermissionDenied` branch ("could not be inspected") still has no direct end-to-end drive; the seam could inject the inspection error. | todo |
 | F684 | INI-12 implementer | `src/util/ini.rs` | `util::ini` uses the same shared helper but not the new seam, so its equivalent branch is still only covered indirectly. | todo |
+| F685 | INI-12 review | `src/util/path.rs`, `src/util/ini.rs`, `src/util/junction_support.rs` | The two callers classify differently: path uses a local `JunctionFixture`/`classify_junction_fixture` while ini still uses an inline `match`, which is the drift the shared module exists to prevent. | todo |
+| F686 | INI-12 review | `src/util/path.rs` | The containment case's panic arm is still only driven indirectly; driving it directly needs the skip/panic decision lifted into a shared helper. | todo |
+| F687 | INI-12 review | `OPTIMIZATIONS_PLAN/GUIDE.md` | The commit-shape convention asks for an `opt(<task-id>):` prefix while another rule forbids a task id in commit messages. | skipped (the no-task-id rule wins; the commit message satisfies it) |
 
 ## Follow-up batches
 
@@ -892,7 +895,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | INI-09 | F514, F515 | done | Wave E; junction metadata error cause and unreachable skip branch; low; cc7ba1f, b2634eb |
 | INI-10 | F583, F584 | done | Wave E; shared junction test helper and `%VAR%` caveat; low; 1a822ca |
 | INI-11 | F585 | done | Wave E; Unix link-denial wording; low |
-| INI-12 | F586 | pending_review | Wave E; pin the link-missing junction branch; low; 8712cf3 |
+| INI-12 | F586 | done | Wave E; pin the link-missing junction branch; low; 8712cf3 |
 | INI-13 | F589 | todo | Wave E; guard the percent-expansion hazard; low |
 | INI-14 | F590, F591 | todo | Wave E; 1314 wording and reparse-point verification; low |
 | INI-15 | F592, F593, F594, F595 | todo | Wave E; ini junction skip visibility and link-denial doc; low |
@@ -927,6 +930,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | TEST-REGRESSION-11 | F629, F630, F635 | todo | Wave E; panic-free clock fixtures; low |
 | INI-16 | F631 | todo | Wave E; use the shared skip helper in the ini fixtures; low |
 | INI-17 | F683, F684 | todo | Wave E; drive the uninspectable-link branch for both callers; low |
+| INI-18 | F685, F686 | todo | Wave E; one classification shape and a directly driven panic arm; low |
 | DOCS-USER-14 | F632, F633, F634 | todo | Wave E; document and surface the skip switches; low |
 | CHECK-12 | F636, F637, F640 | todo | Wave E; exact parallel assertions and cloneable outcomes; low |
 | CHECK-13 | F638 | todo | Wave E; reachable failure shapes from check_one; low |
