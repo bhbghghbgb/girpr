@@ -814,6 +814,12 @@ fn zero_fill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::FixtureRefusal;
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
 
     /// The resolution table, as a table.
     ///
@@ -840,19 +846,32 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         assert_eq!(resolve_mode(RepairMode::Auto, &sub), Mode::Temp);
 
-        // A symlink: the temp path replaces it with a regular file, which is
-        // what a manifest entry means. (Windows needs the privilege, so the
-        // case is skipped where it cannot be made.)
-        #[cfg(unix)]
-        {
-            let link = dir.join("link.dat");
-            std::os::unix::fs::symlink(&file, &link).unwrap();
-            assert_eq!(resolve_mode(RepairMode::Auto, &link), Mode::Temp);
-        }
-
         // `--repair-mode temp` never uses the in-place path.
         assert_eq!(resolve_mode(RepairMode::Temp, &file), Mode::Temp);
         assert_eq!(resolve_mode(RepairMode::Temp, &missing), Mode::Temp);
+    }
+
+    /// A symlink is not a regular file: the temp path replaces it with one,
+    /// which is what a manifest entry means.
+    ///
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the mode, so the case is skipped with the reason rather than
+    /// failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every
+    /// other failure is a broken test environment and fails loudly.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_resolves_to_the_temp_mode() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_resolve", "symlink");
+        let file = dir.join("f.dat");
+        std::fs::write(&file, b"x").unwrap();
+        let link = dir.join("link.dat");
+        if let Err(e) = try_symlink_dir(&file, &link) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
+        assert_eq!(resolve_mode(RepairMode::Auto, &link), Mode::Temp);
     }
 
     /// The mode a file was repaired with is carried on its stats, so the run

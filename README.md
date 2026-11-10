@@ -523,13 +523,13 @@ cargo nextest run --release -p girpr --lib --run-ignored only -E 'test(scan_thro
     `cargo nextest run` alone covers everything the suite covers.
 
 - **The non-UTF-8 audio-cache cases, the Windows junction case and the
-  directory-symlink case can skip.** A host whose filesystem cannot create a
+  directory-symlink cases can skip.** A host whose filesystem cannot create a
   name with an unpaired surrogate (or a non-UTF-8 byte), a Windows host that
   refuses `mklink /J`, and a host that refuses a directory symlink skip those
   cases rather than failing. Set `GIRPR_TEST_REQUIRE_NON_UTF8`,
   `GIRPR_TEST_REQUIRE_JUNCTION` or `GIRPR_TEST_REQUIRE_SYMLINK` to turn the
   corresponding skip into a failure, so a run meant to prove the byte-exact
-  move, the junction escape or the dangling-symlink refusal cannot pass having
+  move, the junction escape or the symlink refusals cannot pass having
   checked nothing. The switches are **presence-based**: any value, including
   `0`, requires the case; unset is the only way to allow a skip.
   Nextest's default profile shows these tests' output even when they pass

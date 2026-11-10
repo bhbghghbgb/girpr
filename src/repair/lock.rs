@@ -404,6 +404,12 @@ fn field<'a>(body: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::FixtureRefusal;
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
 
     /// Removes a lock file when the case ends.
     ///
@@ -551,17 +557,27 @@ mod tests {
         );
     }
 
+    /// A lock path that is already a symlink must not have the user's file
+    /// truncated through it.
+    ///
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the refusal, so the case is skipped with the reason rather
+    /// than failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run.
+    /// Every other failure is a broken test environment and fails loudly.
     #[cfg(unix)]
     #[test]
     fn a_preexisting_symlink_target_is_not_truncated() {
-        use std::os::unix::fs::symlink;
-
         let dir = girpr_tempdir::TempDir::new("girpr_test_lock", "symlink");
         let target = dir.join("user-written.txt");
         std::fs::write(&target, "user data").unwrap();
         let path = lock_path(&dir);
         let _clean = LockFileGuard::new(path.clone());
-        symlink(&target, &path).expect("the symlink is created");
+        if let Err(e) = try_symlink_dir(&target, &path) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
         let lock = Lock::acquire(&dir).expect("the existing target can be locked");
         assert_eq!(lock.path(), path);
         drop(lock);
@@ -637,11 +653,16 @@ mod tests {
         );
     }
 
+    /// A path that is swapped for a regular file after it was opened must not be
+    /// written through the handle that still points at the user's file.
+    ///
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the refusal, so the case is skipped with the reason rather
+    /// than failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run.
+    /// Every other failure is a broken test environment and fails loudly.
     #[cfg(unix)]
     #[test]
     fn a_path_swapped_after_open_is_not_written_through_the_old_handle() {
-        use std::os::unix::fs::symlink;
-
         // `open` follows a symlink to the user's file; the path is then
         // swapped for a regular file before the body check runs. The path-only
         // view looks writable, but the handle still points at the target.
@@ -650,7 +671,12 @@ mod tests {
         std::fs::write(&target, "user data").unwrap();
         let path = lock_path(&dir);
         let _clean = LockFileGuard::new(path.clone());
-        symlink(&target, &path).expect("the symlink is created");
+        if let Err(e) = try_symlink_dir(&target, &path) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)

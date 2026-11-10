@@ -128,6 +128,27 @@ filter = """
 """
 success-output = "immediate"
 
+# The Unix symlink cases report the same host-dependent skip on stderr and then
+# pass, so their skip lines must be visible under the plain gate too. A host
+# that refuses a symlink cannot run them, and a silent pass would read as
+# coverage the run never had.
+#
+# The filter names the binary as well as the cases, for the same reason the
+# filters above do.
+[[profile.default.overrides]]
+filter = """
+    package(=girpr)
+    and binary(=girpr)
+    and (
+        test(=util::path::tests::contained_join_resolves_a_symlink_and_refuses_the_escape)
+        or test(=repair::scope::report::tests::publishing_over_a_symlink_replaces_the_link_not_its_target)
+        or test(=repair::file::tests::a_symlink_resolves_to_the_temp_mode)
+        or test(=repair::lock::tests::a_preexisting_symlink_target_is_not_truncated)
+        or test(=repair::lock::tests::a_path_swapped_after_open_is_not_written_through_the_old_handle)
+    )
+"""
+success-output = "immediate"
+
 # The bridge cases are `#[ignore]`d and run by hand, and `gircap` is an
 # optional sibling binary. When it is not built, `assert_bundle_verifies`
 # prints the same kind of host-dependent skip and the case still passes. Nextest

@@ -482,12 +482,17 @@ fn resolve_existing_prefix(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
+    // Both fixture families report a host refusal the shared way, so the
+    // import is used on every host.
     use crate::test_support::FixtureRefusal;
     #[cfg(windows)]
     use crate::util::junction_support::{
         JunctionDecision, JunctionOutcome, drive_junction_decision, junction_fixture_decision,
         junction_result, require_junction, skip_junction, try_junction_dir,
+    };
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
     };
 
     /// The spellings a hostile/corrupt server can send. Every one of them must
@@ -923,19 +928,30 @@ mod tests {
     }
 
     /// A symlink inside the install that points out of it is an escape even
-    /// though the path is lexically relative. Windows needs a privilege to
-    /// create one, so the case only runs where it can be made.
+    /// though the path is lexically relative. The case needs a symlink, and
+    /// a host that provably refuses one cannot confirm the escape, so the
+    /// case is skipped with the reason rather than failed — unless
+    /// `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every other failure is
+    /// a broken test environment and fails loudly.
     #[cfg(unix)]
     #[test]
     fn contained_join_resolves_a_symlink_and_refuses_the_escape() {
         let outside = girpr_tempdir::TempDir::new("girpr_test_contained", "outside");
         let dir = girpr_tempdir::TempDir::new("girpr_test_contained", "link");
-        std::os::unix::fs::symlink(&outside, dir.join("game")).unwrap();
+        if let Err(e) = try_symlink_dir(&outside, &dir.join("game")) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
         let got = contained_join(&dir, "game/evil.dat");
         assert!(got.is_err(), "a symlink out of the base must be refused");
         // A symlink that stays inside is still fine.
         std::fs::create_dir_all(dir.join("real")).unwrap();
-        std::os::unix::fs::symlink(dir.join("real"), dir.join("alias")).unwrap();
+        let alias = dir.join("alias");
+        // The first link proved this host can make one, so a refusal here is
+        // a broken fixture, not a host skip.
+        try_symlink_dir(&dir.join("real"), &alias).expect("this host already created one symlink");
         assert!(contained_join(&dir, "alias/ok.dat").is_ok());
     }
 

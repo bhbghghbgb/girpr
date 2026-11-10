@@ -393,6 +393,12 @@ mod tests {
     use crate::repair::phases::plan::{FileId, PlannedFile};
     use crate::repair::purge::PurgeCandidate;
     use crate::report::{Summary, summary_record};
+    #[cfg(unix)]
+    use crate::test_support::FixtureRefusal;
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
     use std::sync::Arc;
 
     fn chunk(id: &str, size: i64) -> crate::sophon::SophonChunk {
@@ -909,8 +915,10 @@ mod tests {
 
     /// The documented publish trade, pinned: a symlink at the plan path is
     /// replaced by a regular file and the file it pointed at keeps its bytes.
-    /// Windows needs a privilege to create a symlink, so the case only runs
-    /// where one can be made.
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the trade, so the case is skipped with the reason rather than
+    /// failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every
+    /// other failure is a broken test environment and fails loudly.
     #[cfg(unix)]
     #[test]
     fn publishing_over_a_symlink_replaces_the_link_not_its_target() {
@@ -918,7 +926,12 @@ mod tests {
         let real = dir.join("real.json");
         std::fs::write(&real, b"old\n").unwrap();
         let path = dir.join("plan.json");
-        std::os::unix::fs::symlink(&real, &path).unwrap();
+        if let Err(e) = try_symlink_dir(&real, &path) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
 
         let plan = plan();
         let doc = PlanDocument::new(&plan, None, &[30, 30, 0], &plain_disk(&plan));
