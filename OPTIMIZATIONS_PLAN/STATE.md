@@ -780,7 +780,7 @@ until the main tasks and rework are done.
 | F676 | HYP-10 review | `src/repair/phases/metadata.rs`, `tests/common/mod.rs` | Neither `logs_of` doc states the converse of the new claim: under a current-thread runtime a `tokio::spawn`ed task runs on the same thread and therefore keeps the subscriber. | dropped (generic improvement, not a problem that needs attention) |
 | F677 | JOBS-08 implementer | `tests/cli_contract.rs` | `-h` (short help) renders a different layout, with descriptions beside the flags, and nothing in the suite pins it. | dropped (generic improvement, not a problem that needs attention) |
 | F678 | JOBS-08 implementer | `tests/cli_contract.rs` | The new tests sample one option line and one description line; a sweep over every entry would pin each column. | dropped (generic improvement, not a problem that needs attention) |
-| F679 | JOBS-08 implementer | `tests/cli_contract.rs` | `option_body` requires the short alias to be exactly one char followed by ", ", so a clap change to the separator would silently stop matching rather than fail loudly. | todo |
+| F679 | JOBS-08 implementer | `tests/cli_contract.rs` | `option_body` requires the short alias to be exactly one char followed by ", ", so a clap change to the separator would silently stop matching rather than fail loudly. | pending_review |
 | F680 | JOBS-08 review | `tests/cli_contract.rs` | The `real_help()` doc comment says "they all read the same capture", which is true under `cargo test` but not under nextest's process-per-test. | dropped (generic improvement, not a problem that needs attention) |
 | F681 | JOBS-08 review | `tests/cli_contract.rs` | The description test pins the wording "Game install directory", so rewording `--game-path`'s doc comment would break a layout test. | dropped (generic improvement, not a problem that needs attention) |
 | F682 | JOBS-08 review | `tests/cli_contract.rs` | `help_entry_finds_the_help_option_behind_its_short_alias` spawns its own `--help` instead of reusing `real_help()`, so the file can spawn the binary twice per process. | dropped (generic improvement, not a problem that needs attention) |
@@ -1002,7 +1002,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 | HYP-10 | F573, F574 | done | Wave E; runtime-flavor doc scoping in both log helpers; low; 9f68fd5 |
 | HYP-11 | F575 | done | Wave E; async helper placement; low |
 | JOBS-08 | F576, F577 | done | Wave E; real help output indent pins; low; 43d336b, 2c0f279 |
-| JOBS-09 | F679 | in_progress | Wave E; the help matcher must fail loudly on a clap change; low |
+| JOBS-09 | F679 | pending_review | Wave E; the help matcher must fail loudly on a clap change; low; 47c8567b, 2d498c7e |
 | LOCK-09 | F578, F579, F580 | done | Wave E; argv terminator, lock-scan arity, hyphen values; low |
 | LOCK-10 | F581, F582 | done | Wave E; inline-value validation and conflict shapes; low |
 | INPLACE-03 | F219, F220, F221 | done | Wave E; guard-test coverage and residual-race docs; low; 5452da5, c5ff283, 55e56cc |
