@@ -23,7 +23,8 @@
 //!   bytes when there are any, from a download otherwise;
 //! - **verify** — one read is the gate and the culprit list: the whole-file
 //!   MD5 decides, and the same sweep holds the per-chunk verdicts that name
-//!   what to redo when it does not.
+//!   what to redo when it does not. The sweep hashes the chunk ranges as
+//!   well, so a file that matches pays for those digests.
 //!
 //! Every byte written lands in a region that was **already wrong at the
 //! moment of the write**, and the whole-file MD5 decides whether the file is

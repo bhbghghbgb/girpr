@@ -706,6 +706,10 @@ enum Verified {
 /// the comparison failed would read the file twice on every mismatch. One pass
 /// is therefore the only form that never pays a second read; `read` is that
 /// pass, and both outcomes call it exactly once.
+///
+/// The trade is the per-range digests on a success: the sweep hashes the chunk
+/// ranges as well as the file, so a file that matches pays for verdicts it
+/// does not need.
 fn verify_in_place(
     read: impl FnOnce() -> Result<util::Scan>,
     chunks_len: usize,

@@ -230,10 +230,11 @@ Per file `F`:
    the attempt and retries the whole file (up to 5×).
 4. **Trim** — the file is cut to `F.size`: a shorter file grows, a longer one loses its dead
    tail. A hole in the chunk coverage (a range no chunk claims) is zero-filled.
-5. **Verify** — one whole-file digest: `if md5==F.md5` the file is good, and the structured
-   `repaired` event is logged (`chunks_total`/`chunks_reused`/`chunks_downloaded`/`chunks_kept`,
-   `download_bytes`, `final_md5`). Else a second read scans the chunk ranges, the per-chunk
-   verdicts name the culprit, and only those are redone; if they still do not match, the file is
+5. **Verify** — one read that answers the gate and the culprit list together: the whole-file
+   digest and the per-chunk verdicts come out of the same sweep. `if md5==F.md5` the file is
+   good, and the structured `repaired` event is logged (`chunks_total`/`chunks_reused`/
+   `chunks_downloaded`/`chunks_kept`, `download_bytes`, `final_md5`). Else the per-chunk verdicts
+   name the culprit, and only those are redone; if they still do not match, the file is
    counted as failed and the run continues — after all files, `Ok(summary, 3)` (skips the
    post-phase so `config.ini` is not bumped while damaged) — not `Err(RunFailure::write)`.
 6. A target that cannot be opened for writing is written the temp way, loudly: write
