@@ -66,10 +66,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T06-copy-path-round-trips.md
     batch: C
     report: [L306-L342]
-    status: pending
+    status: in_progress
     commits: []
     review: C
-    note: null
+    note: implementing session starting
   - id: T07
     title: Cache scan consolidation
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T07-cache-scan-consolidation.md
@@ -297,7 +297,7 @@ followups:
 | B | T03 | completed | e3c1416a, 022792ae, 91bccb15 | review B kept |
 | B | T04 | completed | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | review B kept |
 | B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
-| C | T06 | pending | — | — |
+| C | T06 | in_progress | — | implementing session starting |
 | C | T07 | pending | — | — |
 | C | T08 | pending | — | — |
 | D | T09 | pending | — | — |
@@ -317,6 +317,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — batch C started: T06 `pending` → `in_progress`.
 - 2026-11-11 — review B `done`: T03 kept, T04 kept, T05 kept, no fix or revert
   commits; follow-ups F6–F8 appended with status `pending`; T03, T04 and T05
   `pending_review` → `completed`. `phase: review` → `implement`,
