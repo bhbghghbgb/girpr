@@ -10,7 +10,7 @@ use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
 use crate::filter::is_excluded;
 use crate::hash::{DigestSet, HashAlg};
-use crate::scan::{check_mixed_case, walk_live};
+use crate::scan::{LiveEnt, check_mixed_case, walk_live};
 use crate::util::{elapsed_s, path_key};
 
 use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_matches};
@@ -90,25 +90,18 @@ pub fn scan_stat_only(
     // map and the planner could schedule a path *through* it. The directory
     // entry is what carries `is_link`, so keeping it is what makes the guard
     // possible.
-    let dirs: HashSet<&str> = live
+    //
+    // The entry is borrowed beside its key, because the pull-in needs the
+    // directory's `is_link` and one map of borrowed keys answers both questions
+    // without copying a path string.
+    let dirs: HashMap<&str, &LiveEnt> = live
         .iter()
         .filter(|e| e.is_dir)
-        .map(|e| e.rel.as_str())
+        .map(|e| (e.rel.as_str(), e))
         .collect();
-    for e in &live {
-        if is_excluded(&e.rel, includes, excludes, case_sensitive) {
-            continue; // treated as not existing at all
-        }
-        live_set.insert(e.rel.as_str());
-        let mut end = 0;
-        while let Some(i) = e.rel[end..].find('/') {
-            let prefix = &e.rel[..end + i];
-            if dirs.contains(prefix) {
-                live_set.insert(prefix);
-            }
-            end += i + 1;
-        }
-    }
+    // The ancestors an included entry pulled back in, collected during the walk
+    // and inserted after it. The fix-up below says why they wait.
+    let mut pending_ancestors: HashSet<&str> = HashSet::new();
     info!(
         root = %root.display(),
         live = live.len(),
@@ -148,96 +141,141 @@ pub fn scan_stat_only(
     };
     let mut last_prog = std::time::Instant::now();
     for e in &live {
-        // `live_set` was built from this same predicate over this same vec, so
-        // membership here is the exclusion test — and a hash lookup rather than
-        // re-running every glob against the path.
-        if !live_set.contains(e.rel.as_str()) {
-            continue;
+        // The filter is asked once per entry, here. An entry the filter hides
+        // is treated as not existing at all: it is not in the map, and its
+        // cache row is a prune.
+        if is_excluded(&e.rel, includes, excludes, case_sensitive) {
+            continue; // treated as not existing at all
         }
+        live_set.insert(e.rel.as_str());
         if e.is_dir {
             map.insert(e.rel.clone(), SideEntry::dir(e.is_link));
             if let Some(w) = batch.as_mut() {
                 put_dir_row(w, &e.rel)?;
             }
-            continue;
-        }
-        // file
-        // `adopted` = cache entry came from an alternate-cased key, so the
-        // disk-cased key must be (re)written even when no digest is computed.
-        let (cached, adopted): (Option<FileRec>, bool) = match match batch.as_mut() {
-            Some(w) => w.get(&e.rel)?,
-            None => cache.get(&e.rel)?,
-        } {
-            Some(c) => (Some(c), false),
-            // Exact-case miss in insensitive mode: adopt the single stale
-            // alternate-cased entry as the cache candidate (disk name wins).
-            None if !case_sensitive => {
-                match alt_index.get(&path_key(&e.rel)) {
-                    Some(alts) => {
-                        let others: Vec<&String> = alts.iter().filter(|k| *k != &e.rel).collect();
-                        if others.len() == 1 {
-                            let old = others[0];
-                            let rec = match batch.as_mut() {
-                                Some(w) => w.get(old)?,
-                                None => cache.get(old)?,
-                            };
-                            if let Some(w) = batch.as_mut() {
-                                w.remove(old)?; // old casing dropped; new one upserted below
+        } else {
+            // file
+            // `adopted` = cache entry came from an alternate-cased key, so the
+            // disk-cased key must be (re)written even when no digest is computed.
+            let (cached, adopted): (Option<FileRec>, bool) = match match batch.as_mut() {
+                Some(w) => w.get(&e.rel)?,
+                None => cache.get(&e.rel)?,
+            } {
+                Some(c) => (Some(c), false),
+                // Exact-case miss in insensitive mode: adopt the single stale
+                // alternate-cased entry as the cache candidate (disk name wins).
+                None if !case_sensitive => {
+                    match alt_index.get(&path_key(&e.rel)) {
+                        Some(alts) => {
+                            let others: Vec<&String> =
+                                alts.iter().filter(|k| *k != &e.rel).collect();
+                            if others.len() == 1 {
+                                let old = others[0];
+                                let rec = match batch.as_mut() {
+                                    Some(w) => w.get(old)?,
+                                    None => cache.get(old)?,
+                                };
+                                if let Some(w) = batch.as_mut() {
+                                    w.remove(old)?; // old casing dropped; new one upserted below
+                                }
+                                adopted_keys.insert(old.clone());
+                                (rec, true)
+                            } else {
+                                (None, false) // zero (truly new) or several stale: prune handles leftovers
                             }
-                            adopted_keys.insert(old.clone());
-                            (rec, true)
-                        } else {
-                            (None, false) // zero (truly new) or several stale: prune handles leftovers
                         }
+                        None => (None, false),
                     }
-                    None => (None, false),
+                }
+                None => (None, false),
+            };
+            let fresh = stat_matches(cached.as_ref(), e.size, e.mtime_ns);
+            // A stale row's digests are dropped on the floor here. This is the carry
+            // rule, and it is the same rule `merge_row` writes by: a row is valid iff
+            // its stat matches. Carrying them would let a changed file be judged
+            // against its pre-change digest.
+            map.insert(
+                e.rel.clone(),
+                SideEntry {
+                    kind: "file".into(),
+                    size: e.size,
+                    mtime_ns: e.mtime_ns,
+                    cached: match (fresh, cached.as_ref()) {
+                        (true, Some(c)) => c.hashes.clone(),
+                        _ => DigestSet::default(),
+                    },
+                    fresh,
+                    is_link: e.is_link,
+                },
+            );
+            // The two cases where phase A owes a write regardless of any plan: the
+            // stat moved, so the old row is now wrong; or the key was adopted from a
+            // stale casing, so the disk-cased key does not exist yet. The row is built
+            // unconditionally — only the put is gated, so "what would be stored" is
+            // never something that depends on whether the run may write.
+            if !fresh || adopted {
+                let row = merge_row(e.size, e.mtime_ns, DigestSet::default(), cached.as_ref());
+                trace!(rel = %e.rel, fresh, adopted, "stat-only row");
+                if let Some(w) = batch.as_mut() {
+                    w.put(&e.rel, &row)?;
                 }
             }
-            None => (None, false),
-        };
-        let fresh = stat_matches(cached.as_ref(), e.size, e.mtime_ns);
-        // A stale row's digests are dropped on the floor here. This is the carry
-        // rule, and it is the same rule `merge_row` writes by: a row is valid iff
-        // its stat matches. Carrying them would let a changed file be judged
-        // against its pre-change digest.
-        map.insert(
-            e.rel.clone(),
-            SideEntry {
-                kind: "file".into(),
-                size: e.size,
-                mtime_ns: e.mtime_ns,
-                cached: match (fresh, cached.as_ref()) {
-                    (true, Some(c)) => c.hashes.clone(),
-                    _ => DigestSet::default(),
-                },
-                fresh,
-                is_link: e.is_link,
-            },
-        );
-        // The two cases where phase A owes a write regardless of any plan: the
-        // stat moved, so the old row is now wrong; or the key was adopted from a
-        // stale casing, so the disk-cased key does not exist yet. The row is built
-        // unconditionally — only the put is gated, so "what would be stored" is
-        // never something that depends on whether the run may write.
-        if !fresh || adopted {
-            let row = merge_row(e.size, e.mtime_ns, DigestSet::default(), cached.as_ref());
-            trace!(rel = %e.rel, fresh, adopted, "stat-only row");
-            if let Some(w) = batch.as_mut() {
-                w.put(&e.rel, &row)?;
+            n_done += 1;
+            if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
+                info!(
+                    root = %root.display(),
+                    done = n_done,
+                    total = total_live,
+                    hashed = 0,
+                    cache_hit = 0,
+                    elapsed_s = t_eff.elapsed().as_secs_f64(),
+                    "scan progress"
+                );
+                last_prog = std::time::Instant::now();
             }
         }
-        n_done += 1;
-        if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
-            info!(
-                root = %root.display(),
-                done = n_done,
-                total = total_live,
-                hashed = 0,
-                cache_hit = 0,
-                elapsed_s = t_eff.elapsed().as_secs_f64(),
-                "scan progress"
-            );
-            last_prog = std::time::Instant::now();
+        // An included entry pulls its ancestor directories back in: the
+        // directories above it are part of the path the filter kept, and the
+        // directory entry is what carries `is_link`.
+        //
+        // The pull-in is *recorded* rather than done here. The ancestor may be
+        // an entry the walk has already passed — it was hidden by the filter on
+        // its own account — and the walk's order says nothing about which of
+        // the two comes first. The fix-up below inserts it, and inserts it
+        // once.
+        let mut end = 0;
+        while let Some(i) = e.rel[end..].find('/') {
+            let prefix = &e.rel[..end + i];
+            if dirs.contains_key(prefix) && !live_set.contains(prefix) {
+                pending_ancestors.insert(prefix);
+            }
+            end += i + 1;
+        }
+    }
+    // The ancestor fix-up: the directories an included entry pulled back in.
+    //
+    // `--include '*.txt'` matches files and not the directories above them, so
+    // those directories have to be in the map even though the filter hid them:
+    // the directory entry is what carries `is_link`, and without it a planner
+    // looking for a link ancestor sees nothing.
+    //
+    // It runs after the walk rather than inside it, so the map does not depend
+    // on the order the walk produced: an ancestor is pulled in by the
+    // descendant that needs it, whichever of the two the walk reached first.
+    // Every ancestor of an included entry is in the set — the walk collects the
+    // whole prefix chain at once — so one pass over it is enough.
+    for prefix in pending_ancestors.drain() {
+        let Some(ent) = dirs.get(prefix) else {
+            continue;
+        };
+        // Already in the map: the directory was included in its own right, and
+        // its row was written there. A dir row is written once per directory.
+        if !live_set.insert(prefix) {
+            continue;
+        }
+        map.insert(ent.rel.clone(), SideEntry::dir(ent.is_link));
+        if let Some(w) = batch.as_mut() {
+            put_dir_row(w, prefix)?;
         }
     }
     // Prune DB rows for files no longer on disk (or now excluded).
