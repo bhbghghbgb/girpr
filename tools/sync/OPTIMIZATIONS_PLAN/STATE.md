@@ -48,10 +48,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T04-shared-case-index.md
     batch: B
     report: [L216-L244]
-    status: pending
+    status: in_progress
     commits: []
     review: B
-    note: null
+    note: implementing session starting
   - id: T05
     title: Cache meta open fast path
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T05-cache-meta-fast-path.md
@@ -277,7 +277,7 @@ followups:
 | A | T01 | completed | 0e9e49c3, e87f89af | review A kept |
 | A | T02 | completed | df473b05, 43f5620d, 1c6110b5, bfa650ff | review A kept |
 | B | T03 | pending_review | e3c1416a, 022792ae, 91bccb15 | implemented by ses_e37bb64ffffelY0gdWsLLUQ6Fa |
-| B | T04 | pending | — | — |
+| B | T04 | in_progress | — | implementing session starting |
 | B | T05 | pending | — | — |
 | C | T06 | pending | — | — |
 | C | T07 | pending | — | — |
@@ -299,6 +299,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — T04 selected: `pending` → `in_progress`.
 - 2026-11-11 — T03 implemented: `pending` → `in_progress` → `pending_review`,
   commits `e3c1416a`, `022792ae`, `91bccb15`; working tree clean.
 - 2026-11-11 — batch B started: T03 `pending` → `in_progress`.
