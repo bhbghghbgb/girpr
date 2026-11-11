@@ -218,6 +218,48 @@ mod tests {
         assert!(msg.contains("1/1"), "reports coverage: {msg}");
     }
 
+    /// **A known algorithm under an unusual spelling is still that algorithm.**
+    ///
+    /// The counterpart to the case above: there the record's `sha256` sat in
+    /// the foreign arm under its canonical spelling — its length was
+    /// unexpected — and the planner found it by name, so only `md5` was short.
+    /// Here the spelling is unusual too, and the planner must reach the same
+    /// answer. A row that holds the digest is a row that *has* the algorithm;
+    /// refusing it for coverage turns the user away from work they could have
+    /// had, over a difference of case.
+    ///
+    /// Asserted by **comparing the two spellings**, so the case states what it
+    /// is about — the two rows must plan identically — rather than that the run
+    /// happened not to fail. A test that passed whether the planner accepted or
+    /// refused the row would assert nothing.
+    #[test]
+    fn a_record_holding_a_known_algorithm_under_another_spelling_is_accepted() {
+        let canonical = map(vec![("a.txt", cached_entry(&["sha256"]))]);
+        let unusual = map(vec![("a.txt", cached_entry(&["SHA256"]))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+
+        let by_canonical = Shape::record_src(&["sha256"])
+            .run(&canonical, &d, true, StatTrust::default())
+            .expect("the record holds sha256, whatever it spells it");
+        let by_unusual = Shape::record_src(&["sha256"])
+            .run(&unusual, &d, true, StatTrust::default())
+            .expect("the record holds sha256, whatever it spells it");
+
+        assert_eq!(
+            by_unusual, by_canonical,
+            "the unusual spelling is the same algorithm as the canonical one"
+        );
+        assert!(
+            by_unusual.src.pending().is_empty(),
+            "a record has nothing to compute, so it owes nothing"
+        );
+        assert_eq!(
+            by_unusual.dst.pending(),
+            vec!["a.txt"],
+            "and the folder side still reads the file it has no digest for"
+        );
+    }
+
     /// **Scoped to the undecided set.** A record full of stat-differing or
     /// one-sided paths needs no coverage, and failing on it would fail runs that
     /// are perfectly answerable — which is why the check lives in the planner and
