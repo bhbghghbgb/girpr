@@ -343,3 +343,274 @@ pub fn scan_stat_only(
     );
     Ok(SideScan { map, stats })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::TestCacheBackend;
+    use crate::filter::compile_patterns;
+    use crate::planner::{HashMode, StatTrust};
+    use crate::rw::RwLimits;
+
+    /// A fixture's files, with the directories they imply.
+    fn tree(root: &Path, files: &[(&str, &[u8])]) {
+        for (rel, bytes) in files {
+            let p = root.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, bytes).unwrap();
+        }
+    }
+
+    /// Scan options: one algorithm, and whatever filters the case asks for.
+    fn opts(includes: &[&str], excludes: &[&str]) -> CommonOpts {
+        let owned = |pats: &[&str]| -> Vec<String> { pats.iter().map(|s| s.to_string()).collect() };
+        CommonOpts {
+            algos: vec![HashAlg::Md5],
+            stat: StatTrust::default(),
+            hash_mode: HashMode::default(),
+            why: false,
+            show_identical: false,
+            includes: compile_patterns(&owned(includes)).unwrap(),
+            excludes: compile_patterns(&owned(excludes)).unwrap(),
+            case_sensitive: true,
+            max_depth: 10,
+            ignore_cache: false,
+            dry_run: false,
+            rw: RwLimits::default(),
+            test_cache: TestCacheBackend::default(),
+        }
+    }
+
+    /// The map's keys, sorted.
+    ///
+    /// A map is a set of paths, and the order it was built in is not a property
+    /// anything depends on — so what a case asserts is the set.
+    fn keys(scan: &SideScan<SideEntry>) -> Vec<String> {
+        let mut k: Vec<String> = scan.map.keys().cloned().collect();
+        k.sort();
+        k
+    }
+
+    /// The paths the map holds for a given filter, stated as the rule rather
+    /// than as a list: every path the filter keeps, plus every **directory**
+    /// above one of them.
+    ///
+    /// Computed from the walk and the filter alone, so it says what the map is
+    /// instead of saying how it is built.
+    fn expected_keys(root: &Path, common: &CommonOpts) -> Vec<String> {
+        let live = walk_live(root, common.max_depth).unwrap();
+        let kept = |rel: &str| {
+            !is_excluded(
+                rel,
+                &common.includes,
+                &common.excludes,
+                common.case_sensitive,
+            )
+        };
+        let is_dir = |rel: &str| live.iter().any(|e| e.is_dir && e.rel == rel);
+        let mut out: Vec<String> = Vec::new();
+        for e in &live {
+            if !kept(&e.rel) {
+                continue;
+            }
+            out.push(e.rel.clone());
+            // Every directory above a kept path, up to the root.
+            let mut end = 0;
+            while let Some(i) = e.rel[end..].find('/') {
+                let prefix = &e.rel[..end + i];
+                if is_dir(prefix) {
+                    out.push(prefix.to_string());
+                }
+                end += i + 1;
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The map holds the kept paths and the directories above them, for every
+    /// filter — not for the one a case happened to pick.
+    ///
+    /// The rule is stated once, in [`expected_keys`], and the filters below are
+    /// the shapes that make it interesting: a pattern that matches a file and
+    /// not its directory, one that matches a directory and not the directory
+    /// above it, and an exclude that hides a whole subtree.
+    #[test]
+    fn the_map_holds_the_kept_paths_and_the_directories_above_them() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "map_rule");
+        tree(
+            &root,
+            &[
+                ("a/keep/x.txt", b"x"),
+                ("a/keep/deep/y.txt", b"y"),
+                ("a/other/z.txt", b"z"),
+                ("top.txt", b"t"),
+            ],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+        for (includes, excludes) in [
+            (vec![], vec![]),
+            (vec!["*.txt"], vec![]),
+            (vec!["a/keep/*.txt"], vec![]),
+            (vec!["a/keep"], vec![]),
+            (vec![], vec!["a/other"]),
+            (vec![], vec!["a"]),
+        ] {
+            let common = opts(&includes, &excludes);
+            let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+            assert_eq!(
+                keys(&scan),
+                expected_keys(&root, &common),
+                "includes={includes:?} excludes={excludes:?}"
+            );
+        }
+    }
+
+    /// `--include 'sub/*.txt'` matches the file and not the directory above it.
+    /// The directory is in the map anyway: it is the entry that carries
+    /// `is_link`, and a planner looking for a link ancestor sees nothing
+    /// without it.
+    #[test]
+    fn a_narrowed_include_carries_the_directory_above_it() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "narrowed_include");
+        tree(
+            &root,
+            &[("sub/a.txt", b"a"), ("sub/b.bin", b"b"), ("top.txt", b"t")],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+        let scan = scan_stat_only(
+            &root,
+            &db,
+            &opts(&["sub/*.txt"], &[]),
+            ScanMode::new(false, false),
+        )
+        .unwrap();
+
+        assert_eq!(keys(&scan), vec!["sub", "sub/a.txt"]);
+        assert!(
+            !scan.map["sub"].is_file(),
+            "the ancestor is a directory entry, not a file"
+        );
+        assert!(
+            db.get("sub").unwrap().unwrap().is_dir(),
+            "the pulled-in directory has its own row: {:?}",
+            db.get("sub").unwrap()
+        );
+    }
+
+    /// The pull-in is transitive: a file three levels down brings every
+    /// directory above it, not only the one it sits in.
+    #[test]
+    fn a_nested_include_carries_every_ancestor_up_to_the_root() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "nested_include");
+        tree(
+            &root,
+            &[
+                ("a/b/c/d.txt", b"d"),
+                ("a/b/c/e.bin", b"e"),
+                ("a/b/other.txt", b"o"),
+            ],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+        let scan = scan_stat_only(
+            &root,
+            &db,
+            &opts(&["a/b/c/*.txt"], &[]),
+            ScanMode::new(false, false),
+        )
+        .unwrap();
+
+        assert_eq!(keys(&scan), vec!["a", "a/b", "a/b/c", "a/b/c/d.txt"]);
+    }
+
+    /// An excluded directory is a subtree: neither the directory nor anything
+    /// under it is in the map.
+    #[test]
+    fn an_excluded_directory_hides_its_whole_subtree() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "excluded_subtree");
+        tree(
+            &root,
+            &[
+                ("keep/x.txt", b"x"),
+                ("drop/y.txt", b"y"),
+                ("drop/deep/z.txt", b"z"),
+            ],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+        let scan = scan_stat_only(
+            &root,
+            &db,
+            &opts(&[], &["drop"]),
+            ScanMode::new(false, false),
+        )
+        .unwrap();
+
+        assert_eq!(keys(&scan), vec!["keep", "keep/x.txt"]);
+    }
+
+    /// The counters a narrowed include produces, on a tree whose cache was
+    /// filled by a first, unfiltered scan.
+    ///
+    /// The numbers are the point. The map is a set of paths whichever way it
+    /// is built, and `pruned` counts the rows the filter took out of it — the
+    /// directory rows above an included file included.
+    #[test]
+    fn the_counters_of_a_narrowed_include_describe_the_same_tree() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "narrowed_counters");
+        tree(
+            &root,
+            &[
+                ("top.txt", b"t"),
+                ("sub/a.txt", b"a"),
+                ("sub/b.txt", b"b"),
+                ("sub/deep/c.txt", b"c"),
+                ("other/d.txt", b"d"),
+            ],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+
+        // A first, unfiltered scan: every path in the tree gets a row.
+        let full =
+            scan_stat_only(&root, &db, &opts(&[], &[]), ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            (
+                full.stats.live,
+                full.stats.files,
+                full.stats.dirs,
+                full.stats.pruned
+            ),
+            (8, 5, 3, 0)
+        );
+
+        // The narrowed scan: the `sub` tree's text files, with the directories
+        // above them pulled in. `top.txt` and the whole of `other` are out of
+        // the map, so their rows are pruned.
+        let narrow = scan_stat_only(
+            &root,
+            &db,
+            &opts(&["sub/*.txt"], &[]),
+            ScanMode::new(false, false),
+        )
+        .unwrap();
+        assert_eq!(
+            keys(&narrow),
+            vec![
+                "sub",
+                "sub/a.txt",
+                "sub/b.txt",
+                "sub/deep",
+                "sub/deep/c.txt"
+            ]
+        );
+        assert_eq!(
+            (
+                narrow.stats.live,
+                narrow.stats.files,
+                narrow.stats.dirs,
+                narrow.stats.pruned
+            ),
+            (8, 3, 2, 3)
+        );
+    }
+}
