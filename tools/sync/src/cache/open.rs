@@ -175,23 +175,39 @@ pub(super) fn open_read_only(db_path: &Path) -> Result<redb::ReadOnlyDatabase> {
     })
 }
 
-/// The `meta` row, or `None` when the table or the key is absent.
+/// The `meta` row's bytes, or `None` when the table or the key is absent.
 ///
 /// Absence is reported rather than invented: a read-only open cannot create
 /// the row a read/write open would, so the caller has to decide what a
 /// meta-less cache means.
-pub(super) fn read_meta(db: &impl ReadableDatabase) -> Result<Option<Meta>> {
-    let txn = db.begin_read().context("begin read (meta)")?;
+///
+/// The bytes rather than a decoded row, because the two callers word a
+/// corrupt row differently: an observer of a cache can only say it is
+/// corrupt, while a read/write open can also say that `--ignore-cache`
+/// rebuilds it. The decoding is therefore the caller's, and so is the
+/// wording.
+///
+/// The row is read from a transaction the caller already holds, so a caller
+/// that needs more than the row (the read/write open needs to know whether
+/// the cache is whole as well) reads it from the same snapshot as the rest
+/// of what it is checking.
+pub(super) fn read_meta_bytes(txn: &redb::ReadTransaction) -> Result<Option<Vec<u8>>> {
     let tbl = match txn.open_table(META_TBL) {
         Ok(t) => t,
         Err(e) if is_table_missing(&e) => return Ok(None),
         Err(e) => bail!("open meta table: {e:#}"),
     };
     let g = tbl.get(META_KEY).context("read meta")?;
-    match g {
+    Ok(g.map(|g| g.value().to_vec()))
+}
+
+/// The `meta` row, or `None` when the table or the key is absent.
+pub(super) fn read_meta(db: &impl ReadableDatabase) -> Result<Option<Meta>> {
+    let txn = db.begin_read().context("begin read (meta)")?;
+    match read_meta_bytes(&txn)? {
         None => Ok(None),
-        Some(g) => Ok(Some(
-            decode_meta(g.value()).context("parse cache meta (corrupt?)")?,
+        Some(raw) => Ok(Some(
+            decode_meta(&raw).context("parse cache meta (corrupt?)")?,
         )),
     }
 }

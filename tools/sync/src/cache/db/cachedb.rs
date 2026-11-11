@@ -12,10 +12,79 @@ use std::sync::Arc;
 
 use super::{Handle, memory_registry, redb_builder};
 use crate::cache::codec::{decode_meta, decode_rec, encode_meta};
-use crate::cache::open::{is_table_missing, open_read_only, read_meta, require_current_version};
+use crate::cache::open::{
+    is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
+};
 use crate::cache::schema::{CACHE_VERSION, FileRec, Meta};
 use crate::cache::write::{CacheWrite, CommitLimits};
 use crate::cache::{ENTRIES, META_KEY, META_TBL};
+
+/// The `meta` row, decoded, in the read/write path's words.
+///
+/// A corrupt row is one `--ignore-cache` rebuilds, so the reader is told so.
+/// The read-only path words the same failure differently (it cannot offer the
+/// remedy), and keeps its own wording.
+fn decode_meta_for_write(raw: &[u8]) -> Result<Meta> {
+    decode_meta(raw).context("parse cache meta (corrupt? use --ignore-cache)")
+}
+
+/// What the preflight found about the cache, read without the write lock.
+///
+/// Both fields matter, and for different reasons. The row says whether the
+/// open has anything to write; the entries table says whether the cache is
+/// *whole*. The fast path skips the write transaction that would otherwise
+/// create a missing table, so a cache that is missing one is not one the
+/// fast path may leave alone.
+struct Preflight {
+    /// The `meta` row, decoded. `None` means the row is not there — a fresh
+    /// cache, not a corrupt one — and the write path creates the tables and
+    /// the row.
+    meta: Option<Meta>,
+    /// Whether the entries table is there.
+    entries_present: bool,
+}
+
+/// Read the cache's `meta` row and check that it is whole, without taking
+/// the write lock.
+///
+/// One read transaction, so the row and the tables come from the same
+/// snapshot: a cache that changed under the read cannot be half-old and
+/// half-new here.
+///
+/// A missing table is a fresh cache, not a corrupt one — the same rule the
+/// read-only path follows — so the preflight reports absence instead of
+/// failing on it.
+fn preflight(db: &Database) -> Result<Preflight> {
+    let txn = db.begin_read().context("begin read (meta)")?;
+    let entries_present = match txn.open_table(ENTRIES) {
+        Ok(_) => true,
+        Err(e) if is_table_missing(&e) => false,
+        Err(e) => bail!("open entries table: {e:#}"),
+    };
+    let meta = match read_meta_bytes(&txn)? {
+        None => None,
+        Some(raw) => Some(decode_meta_for_write(&raw)?),
+    };
+    Ok(Preflight {
+        meta,
+        entries_present,
+    })
+}
+
+/// Refuse a cache this build cannot interpret, in the read/write path's words.
+///
+/// The read-only path words the same refusal with the file's path in it (see
+/// [`require_current_version`]); this is the read/write open's wording, and it
+/// does not change.
+fn require_current_version_for_write(version: u32) -> Result<()> {
+    if version != CACHE_VERSION {
+        bail!(
+            "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+            version
+        );
+    }
+    Ok(())
+}
 
 /// An open redb cache file, read/write or read-only.
 ///
@@ -45,7 +114,39 @@ impl CacheDb {
         }
     }
 
+    /// Bring the cache's `meta` row in line with the run's case mode.
+    ///
+    /// The row is read **before** the write lock is taken. A cache that is
+    /// already correct — the common case — has nothing to write, and the
+    /// write lock plus redb's page setup is the open's dominant cost on a
+    /// slow disk. So the row is read first, and the write transaction is
+    /// begun only when the row has to change.
+    ///
+    /// The read is an optimisation, not a second source of truth: the write
+    /// path below re-reads the row inside its own transaction, so a row
+    /// that changed in between is still reconciled there.
     pub(in crate::cache) fn init_meta(db: &Database, case_sensitive: bool) -> Result<()> {
+        match preflight(db)? {
+            // No row at all: a fresh cache. The write path below creates
+            // both tables and writes the row.
+            Preflight { meta: None, .. } => {}
+            Preflight {
+                meta: Some(meta),
+                entries_present,
+            } => {
+                require_current_version_for_write(meta.version)?;
+                if entries_present && meta.case_sensitive == case_sensitive {
+                    // The row already says what this run needs it to say, and
+                    // the cache is whole, so there is nothing to write. The
+                    // file is left exactly as it was: no write transaction,
+                    // no commit.
+                    return Ok(());
+                }
+                // The case mode disagrees, or the cache is missing a table:
+                // the write path below fixes both.
+            }
+        }
+
         let mut txn = db.begin_write().context("begin write (meta)")?;
         txn.set_durability(crate::cache::write_durability())
             .context("set cache write durability")?;
@@ -74,14 +175,8 @@ impl CacheDb {
                     changed = true;
                 }
                 Some(raw) => {
-                    let m = decode_meta(&raw)
-                        .context("parse cache meta (corrupt? use --ignore-cache)")?;
-                    if m.version != CACHE_VERSION {
-                        bail!(
-                            "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
-                            m.version
-                        );
-                    }
+                    let m = decode_meta_for_write(&raw)?;
+                    require_current_version_for_write(m.version)?;
                     // NOTE: case_sensitive is informational only (see open_db).
                     if m.case_sensitive != case_sensitive {
                         meta.insert(
