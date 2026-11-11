@@ -190,6 +190,29 @@ pub struct CommonArgs {
     /// Back up and rebuild the cache instead of trusting it.
     #[arg(long, default_value_t = false)]
     pub ignore_cache: bool,
+    /// Do not copy the cache aside: no backup, and no dst snapshot.
+    ///
+    /// A backup is a **recovery aid**, not a correctness mechanism. The live
+    /// cache is authoritative, and a backup or an `old-*` snapshot is never
+    /// read back automatically, so skipping the copies changes what a run
+    /// *leaves behind* — never what it answers.
+    ///
+    /// `--ignore-cache` still removes the caches; only the copies are skipped.
+    /// That combination throws the cache away with no copy of it, so it is the
+    /// one to be deliberate about.
+    #[arg(long, default_value_t = false)]
+    pub no_backup: bool,
+    /// Keep only the newest N backups/snapshots with this prefix.
+    ///
+    /// The default keeps everything, so the copies accumulate until they are
+    /// removed by hand. This bounds that: the newest N siblings of each
+    /// prefix are kept (`girpr-cache-backup-…` beside src's cache,
+    /// `girpr-cache-old-…` beside dst's) and the older ones are removed.
+    ///
+    /// `N` must be at least 1 — keeping none of them is what `--no-backup` is
+    /// for. A value of 0 is refused with exit `3`.
+    #[arg(long, value_name = "N")]
+    pub backup_retain: Option<usize>,
     /// Write nothing at all: no cache created, no cache updated, no backup, and
     /// for a command that moves files, no filesystem change.
     ///

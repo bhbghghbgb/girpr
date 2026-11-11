@@ -118,6 +118,7 @@ pub fn sled_to_redb(sled_dir: &Path, redb_path: &Path, force: bool) -> Result<Co
         crate::cache::CacheOpen::ReadWrite {
             ignore_cache: false,
             backup_first: false,
+            retain: None,
         },
     )?;
     let mut out = Converted::default();

@@ -6,7 +6,7 @@
 //! command runs — and `ScanMode` is the same idea one level down: how a single
 //! folder scan treats the cache and the filesystem.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use glob::Pattern;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -122,6 +122,13 @@ pub struct CommonOpts {
     pub max_depth: usize,
     /// Back up + delete the cache before opening, forcing a rebuild.
     pub ignore_cache: bool,
+    /// What a run copies aside, and how much of it it keeps.
+    ///
+    /// A policy rather than a fixed step, because the copies are a recovery
+    /// aid rather than part of the answer: the live cache is authoritative,
+    /// and nothing reads a backup or an `old-*` snapshot back. See
+    /// [`BackupPolicy`].
+    pub backup: BackupPolicy,
     /// `--dry-run`: write nothing at all.
     ///
     /// Lives here rather than on a command because it applies to all four and
@@ -139,6 +146,40 @@ pub struct CommonOpts {
     /// instead of the real `<root>/girpr-cache` file. `File` (default) opens
     /// the real file, which production and cache-focused tests keep.
     pub test_cache: TestCacheBackend,
+}
+
+/// What a run copies aside, and how much of it it keeps.
+///
+/// A **policy**, not a fixed step, because the copies are a recovery aid and
+/// not part of the answer: the live `<root>/girpr-cache` is authoritative, and
+/// a `girpr-cache-backup-*` copy or a `girpr-cache-old-*` snapshot is never
+/// read back automatically. So this decides what a run *leaves behind*, and
+/// nothing about what it reports.
+///
+/// The default is "back up, keep everything" — the copies are cheap insurance
+/// and nobody has to think about them. `--no-backup` turns the copying off
+/// and `--backup-retain N` bounds what accumulates; both are opt-in, because
+/// a run that quietly stopped keeping a recovery point would be a surprise in
+/// the direction that hurts.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackupPolicy {
+    /// `--no-backup`: copy nothing aside.
+    pub disabled: bool,
+    /// `--backup-retain N`: keep only the newest N siblings of each prefix.
+    ///
+    /// `None` keeps them all, which is the default.
+    pub retain: Option<NonZeroUsize>,
+}
+
+impl BackupPolicy {
+    /// Whether this run copies a cache aside at all.
+    ///
+    /// The one question every backup site asks, so that "no backups" is
+    /// answered in one place rather than at each site that would otherwise
+    /// have to remember the flag.
+    pub fn wants_backup(&self) -> bool {
+        !self.disabled
+    }
 }
 
 impl TryFrom<RwArgs> for RwLimits {
@@ -288,11 +329,34 @@ impl TryFrom<CommonArgs> for CommonOpts {
             case_sensitive: a.case_sensitive,
             max_depth: a.max_depth,
             ignore_cache: a.ignore_cache,
+            backup: backup_policy(a.no_backup, a.backup_retain)?,
             dry_run: a.dry_run,
             rw: RwLimits::try_from(a.rw)?,
             test_cache: TestCacheBackend::default(),
         })
     }
+}
+
+/// Resolve the two backup flags into one policy.
+///
+/// `--backup-retain 0` is refused here rather than by clap, so it exits `3`
+/// with a message naming the flag — the code the README documents for a
+/// runtime usage mistake, as distinct from the `2` a parse error gets.
+/// Keeping *none* of the copies is not a retention request, it is a
+/// contradiction: the user asked for a bound and named a bound of zero, and
+/// `--no-backup` is the flag that says what they meant.
+fn backup_policy(disabled: bool, retain: Option<usize>) -> Result<BackupPolicy> {
+    let retain = match retain {
+        Some(n) => match NonZeroUsize::new(n) {
+            Some(nz) => Some(nz),
+            None => bail!(
+                "--backup-retain must be >= 1 (got {n}); it is how many backups or \
+                 snapshots to keep per prefix, and --no-backup is how you ask for none"
+            ),
+        },
+        None => None,
+    };
+    Ok(BackupPolicy { disabled, retain })
 }
 
 /// How a single folder scan treats the cache and the filesystem.

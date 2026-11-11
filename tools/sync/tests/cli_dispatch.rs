@@ -37,6 +37,8 @@ fn run_cli_dispatch_update_compare_sync() {
         max_depth: 10,
         ignore_cache: false,
         dry_run: false,
+        no_backup: false,
+        backup_retain: None,
         rw: RwArgs::default(),
     };
     let mkcli = |cmd| Cli {

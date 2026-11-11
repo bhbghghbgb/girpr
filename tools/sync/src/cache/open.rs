@@ -8,6 +8,7 @@
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use tracing::{info, trace, warn};
 
@@ -30,10 +31,13 @@ pub enum CacheOpen {
     ///
     /// `ignore_cache` backs up (when `backup_first`) and deletes the file so it
     /// is rebuilt from scratch. `backup_first` copies it aside to
-    /// `girpr-cache-backup-<ts>` before opening.
+    /// `girpr-cache-backup-<ts>` before opening, and `retain` says how many
+    /// siblings of that prefix are kept beside it — `None` keeps them all.
     ReadWrite {
         ignore_cache: bool,
         backup_first: bool,
+        /// How many `girpr-cache-backup-*` siblings to keep beside the cache.
+        retain: Option<NonZeroUsize>,
     },
     /// Open the existing file for reading only: no create-if-missing, no
     /// backup, no `meta` rewrite.
@@ -64,15 +68,16 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
         CacheOpen::ReadWrite {
             ignore_cache,
             backup_first,
+            retain,
         } => {
             if ignore_cache && db_path.exists() {
                 if backup_first {
-                    backup_db(db_path)?;
+                    backup_db(db_path, retain)?;
                 }
                 remove_cache_path(db_path)?;
                 info!(path = %db_path.display(), "ignore-cache removed");
             } else if backup_first && db_path.exists() {
-                backup_db(db_path)?;
+                backup_db(db_path, retain)?;
             }
             let db = CacheDb::open_file(db_path)?;
             CacheDb::init_meta(&db, case_sensitive)?;
@@ -127,22 +132,37 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Copy an existing cache to `<parent>/girpr-cache-backup-<ts>`.
 /// Works for redb files and legacy sled directories alike.
 /// Returns the backup path, or `None` when there was nothing to copy.
+///
+/// `retain` is how many `girpr-cache-backup-*` siblings are kept beside the
+/// cache; `None` keeps them all.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
-pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, "girpr-cache-backup-", "backup")
+pub fn backup_db(db_path: &Path, retain: Option<NonZeroUsize>) -> Result<Option<PathBuf>> {
+    copy_aside(db_path, "girpr-cache-backup-", "backup", retain)
 }
 
 /// Copy an existing cache to `<parent>/girpr-cache-old-<ts>` to record the
 /// pre-sync dst state. Returns the snapshot path, or `None` when absent.
+///
+/// `retain` is how many `girpr-cache-old-*` siblings are kept beside the
+/// cache; `None` keeps them all.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
-pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, "girpr-cache-old-", "snapshot-old")
+pub fn snapshot_old(db_path: &Path, retain: Option<NonZeroUsize>) -> Result<Option<PathBuf>> {
+    copy_aside(db_path, "girpr-cache-old-", "snapshot-old", retain)
 }
 
 /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
 /// cache) is copied recursively; a redb file is copied in one call. The
 /// destination never replaces an existing sibling.
-fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBuf>> {
+///
+/// `retain` bounds what accumulates beside the cache: the newest `retain`
+/// siblings of this prefix are kept and the older ones are removed. `None`
+/// keeps them all.
+fn copy_aside(
+    db_path: &Path,
+    prefix: &str,
+    label: &str,
+    retain: Option<NonZeroUsize>,
+) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
         trace!(path = %db_path.display(), "{label} skip: db missing");
         return Ok(None);
@@ -157,7 +177,45 @@ fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBu
             .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))?;
     }
     info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
+    if let Some(keep) = retain {
+        retain_siblings(parent, prefix, keep)?;
+    }
     Ok(Some(dest))
+}
+
+/// Keep only the newest `keep` siblings of `prefix` in `parent`.
+///
+/// The sibling names carry a timestamp that sorts lexicographically, so
+/// sorting by name is sorting by age, and the newest `keep` are the ones at
+/// the end. Everything older is removed — a directory recursively, a file
+/// outright — because the user asked for a bound and a bound that does not
+/// remove anything is not a bound.
+///
+/// Only siblings carrying **this** prefix are considered: the tool's own
+/// namespace. A file of the user's that happens to sit in the same directory
+/// is never touched, and neither is a sibling of the other prefix — the
+/// `girpr-cache-backup-*` copies and the `girpr-cache-old-*` snapshots are two
+/// separate lists, each with its own bound.
+fn retain_siblings(parent: &Path, prefix: &str, keep: NonZeroUsize) -> Result<()> {
+    let mut siblings: Vec<(std::ffi::OsString, PathBuf)> = std::fs::read_dir(parent)
+        .with_context(|| format!("read dir {}", parent.display()))?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name();
+            name.to_string_lossy()
+                .starts_with(prefix)
+                .then(|| (name, e.path()))
+        })
+        .collect();
+    siblings.sort_by(|a, b| a.0.cmp(&b.0));
+    let keep = keep.get();
+    if siblings.len() <= keep {
+        return Ok(());
+    }
+    for (_, path) in &siblings[..siblings.len() - keep] {
+        remove_cache_path(path)?;
+    }
+    Ok(())
 }
 
 /// Open an existing cache file for reading, without ever opening it for

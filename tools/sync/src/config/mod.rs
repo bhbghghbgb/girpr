@@ -12,7 +12,7 @@
 
 mod common;
 
-pub use common::{CommonOpts, LogCtx, ScanMode};
+pub use common::{BackupPolicy, CommonOpts, LogCtx, ScanMode};
 
 use crate::cli::{TrustArgs, TrustSide};
 

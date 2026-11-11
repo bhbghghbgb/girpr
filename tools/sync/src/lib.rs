@@ -62,7 +62,8 @@ pub use girpr_log;
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
-    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
+    UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
 pub use girpr_log::Level;

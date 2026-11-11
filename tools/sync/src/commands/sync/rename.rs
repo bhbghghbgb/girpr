@@ -1019,6 +1019,7 @@ mod tests {
                 dry_run: false,
                 rw: crate::rw::RwLimits::default(),
                 test_cache: crate::cache::TestCacheBackend::Memory,
+                backup: crate::config::BackupPolicy::default(),
             },
         }
     }

@@ -144,13 +144,18 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     if dry_run {
         info!("dry-run: skipping backups and cache writes");
     } else {
-        if src_db_path.exists() {
-            backup_db(&src_db_path)?;
-        }
-        if dst_db_path.exists() {
-            backup_db(&dst_db_path)?;
-            // old-state snapshot before any dst changes
-            snapshot_old(&dst_db_path)?;
+        // The copies are a policy, not a step: `--no-backup` skips them, and
+        // `--backup-retain N` bounds what they leave behind. Neither changes
+        // what the run answers.
+        if common.backup.wants_backup() {
+            if src_db_path.exists() {
+                backup_db(&src_db_path, common.backup.retain)?;
+            }
+            if dst_db_path.exists() {
+                backup_db(&dst_db_path, common.backup.retain)?;
+                // old-state snapshot before any dst changes
+                snapshot_old(&dst_db_path, common.backup.retain)?;
+            }
         }
         if common.ignore_cache {
             for p in [&src_db_path, &dst_db_path] {

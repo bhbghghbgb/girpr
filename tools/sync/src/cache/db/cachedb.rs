@@ -773,6 +773,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -821,6 +822,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -848,6 +850,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -945,6 +948,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -980,6 +984,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -1010,6 +1015,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         )
         .unwrap();
@@ -1053,6 +1059,7 @@ mod tests {
             CacheOpen::ReadWrite {
                 ignore_cache: false,
                 backup_first: false,
+                retain: None,
             },
         ) {
             Ok(_) => panic!("a future-version cache must be refused"),

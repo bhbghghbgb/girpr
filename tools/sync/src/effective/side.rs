@@ -174,7 +174,13 @@ pub fn open_folder_cache(
             common.case_sensitive,
             CacheOpen::ReadWrite {
                 ignore_cache: common.ignore_cache,
-                backup_first,
+                // The run's backup policy has the last word: a run that was
+                // told not to copy anything aside does not, whatever the
+                // caller asked for. The caller says *when* a backup is due
+                // (dst's pre-sync snapshot has to be taken before the mirror
+                // moves); the policy says whether one is taken at all.
+                backup_first: backup_first && common.backup.wants_backup(),
+                retain: common.backup.retain,
             },
         );
     }

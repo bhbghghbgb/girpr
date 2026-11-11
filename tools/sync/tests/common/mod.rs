@@ -14,7 +14,8 @@ use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
-    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
+    UpdateOpts,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,7 @@ pub fn rw() -> CacheOpen {
     CacheOpen::ReadWrite {
         ignore_cache: false,
         backup_first: false,
+        retain: None,
     }
 }
 
@@ -281,6 +283,8 @@ pub fn opts() -> CommonOpts {
         // The unflagged run, which is `Shared(1)` -- see `RwLimits::default`.
         rw: RwLimits::default(),
         test_cache: TestCacheBackend::default(),
+        // The unflagged run backs up and keeps everything.
+        backup: BackupPolicy::default(),
     }
 }
 
