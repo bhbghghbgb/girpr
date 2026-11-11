@@ -11,20 +11,20 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: blocked-on-spawn
+phase: implement
 active_batch: A
-spawn: null
-last_updated: null
+spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
+last_updated: 2026-11-11T00:26:52Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T01-by-name-digest-lookup.md
     batch: A
     report: [L59-L87, L572-L575]
-    status: pending
+    status: in_progress
     commits: []
     review: A
-    note: null
+    note: implementing session starting
   - id: T02
     title: Plan-time early returns and prefix memoization
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T02-plan-time-early-returns.md
@@ -244,7 +244,7 @@ followups: []
 
 | batch | id | status | commits | note |
 | --- | --- | --- | --- | --- |
-| A | T01 | pending | — | — |
+| A | T01 | in_progress | — | implementing session starting |
 | A | T02 | pending | — | — |
 | B | T03 | pending | — | — |
 | B | T04 | pending | — | — |
@@ -269,6 +269,9 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — spawn mechanism settled (`openchamber session.create`, agent
+  `build`, repo root as working directory, one session at a time).
+  `phase: blocked-on-spawn` → `implement`; T01 `pending` → `in_progress`.
 - 2026-11-11 — plan revision against the post-merge tree (`opt/girpr`, merge
   `a783a9e5`). T03 rescoped to "Document the case-fold rules" (the merge
   landed `util::path_key`), T01 re-grounded on the current `get_algo` /
