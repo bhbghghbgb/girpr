@@ -9,6 +9,8 @@ use redb::{
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::{Handle, memory_registry, redb_builder};
 use crate::cache::codec::{decode_meta, decode_rec, encode_meta};
@@ -111,12 +113,25 @@ fn read_row(
 /// handles do not conflict with each other.
 pub struct CacheDb {
     pub(super) db: Handle,
+    /// Read transactions this handle has opened.
+    ///
+    /// A test seam, and the reason the handle carries it rather than the
+    /// caller: what a test needs to know is whether a read was **batched**,
+    /// and the only honest answer is the number of transactions the read
+    /// cost. A count is a fact about the code; a duration would be a
+    /// measurement of the machine the code ran on.
+    #[cfg(test)]
+    reads: Arc<AtomicU64>,
 }
 
 impl CacheDb {
-    /// Wrap a handle.
+    /// Wrap a handle, with the counters a fresh handle starts at.
     fn with_handle(db: Handle) -> Self {
-        Self { db }
+        Self {
+            db,
+            #[cfg(test)]
+            reads: Arc::new(AtomicU64::new(0)),
+        }
     }
 
     /// Wrap an already-open handle as this crate's participant side. The only
@@ -359,13 +374,26 @@ impl CacheDb {
         self.db.writable().context("cache is open read-only")
     }
 
-    /// Begin a read transaction.
+    /// Begin a read transaction, and count it.
     ///
-    /// Every read of the entries table goes through here, so a read that
-    /// opens several transactions — and a read that opens one — are told
-    /// apart by where the transaction is taken.
+    /// Every read of the entries table goes through here, so the count is
+    /// the number of transactions the reads cost — which is what tells a
+    /// batched read from a per-key one.
     fn begin_read(&self) -> Result<ReadTransaction> {
+        #[cfg(test)]
+        self.reads.fetch_add(1, Ordering::Relaxed);
         self.db.begin_read().context("begin read")
+    }
+
+    /// How many read transactions this handle has opened.
+    ///
+    /// A test seam, for the reason the counter exists at all: a read that
+    /// costs one transaction whatever its length is a different thing from a
+    /// read that costs one per key, and only a count says which one a caller
+    /// got.
+    #[cfg(test)]
+    pub(crate) fn read_transaction_count(&self) -> u64 {
+        self.reads.load(Ordering::Relaxed)
     }
 
     /// Read one entry. Missing tables (fresh temp DBs) read as empty.
@@ -621,6 +649,105 @@ mod tests {
 
         c.remove("a.txt").unwrap();
         assert_eq!(c.entry_count().unwrap(), 2);
+    }
+
+    /// `get_many` answers exactly what a loop of `get` answers: the same row
+    /// for a key that is there, and nothing for a key that is not.
+    ///
+    /// Both kinds of row are in the fixture deliberately — a dir row and a
+    /// file row decode to different shapes — and the absent key is there so
+    /// a batch that skipped the misses would be caught.
+    #[test]
+    fn get_many_answers_exactly_what_a_loop_of_get_would() {
+        let c = CacheDb::open_temp(true).unwrap();
+        c.put("a.txt", &file_rec()).unwrap();
+        c.put("a_dir", &FileRec::dir()).unwrap();
+
+        let keys = ["a.txt", "absent.txt", "a_dir"];
+        let many = c.get_many(keys).unwrap();
+        let one_by_one: Vec<Option<FileRec>> = keys.iter().map(|k| c.get(k).unwrap()).collect();
+
+        assert_eq!(many.len(), keys.len(), "one answer per key asked for");
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(many[i].0, *key, "the answer names the key it was asked for");
+            assert_eq!(
+                many[i].1, one_by_one[i],
+                "the answer is what a single read gives"
+            );
+        }
+        assert!(many[1].1.is_none(), "a key that is not there has no row");
+    }
+
+    /// A batched read costs **one** transaction whatever its length, where a
+    /// read per key costs one per key.
+    ///
+    /// The count is what says so. A duration would be a measurement of the
+    /// machine the read ran on; the number of transactions is a fact about
+    /// the code.
+    #[test]
+    fn get_many_reads_every_key_in_one_transaction() {
+        let c = CacheDb::open_temp(true).unwrap();
+        for key in ["a.txt", "b.txt", "c.txt"] {
+            c.put(key, &file_rec()).unwrap();
+        }
+        let keys = ["a.txt", "b.txt", "c.txt", "absent.txt"];
+
+        let before = c.read_transaction_count();
+        let rows = c.get_many(keys).unwrap();
+        assert_eq!(rows.len(), keys.len());
+        assert_eq!(
+            c.read_transaction_count() - before,
+            1,
+            "one read transaction for every key"
+        );
+
+        let before = c.read_transaction_count();
+        for key in keys {
+            c.get(key).unwrap();
+        }
+        assert_eq!(
+            c.read_transaction_count() - before,
+            keys.len() as u64,
+            "a read per key is a read per key"
+        );
+    }
+
+    /// A cache with no `entries` table is a fresh cache, not a corrupt one:
+    /// the batched read answers "no row" for every key, exactly as a single
+    /// read does.
+    #[test]
+    fn get_many_reads_a_missing_table_as_no_rows() {
+        let db = redb_builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let bare = CacheDb::open_writable(db);
+
+        let many = bare.get_many(["a.txt", "b.txt"]).unwrap();
+        assert_eq!(many.len(), 2);
+        assert!(
+            many.iter().all(|(_, rec)| rec.is_none()),
+            "a missing table is an empty answer, not an error"
+        );
+        for key in ["a.txt", "b.txt"] {
+            assert_eq!(bare.get(key).unwrap(), None, "a single read agrees");
+        }
+    }
+
+    /// Nothing asked, nothing read: a batch of no keys costs no transaction
+    /// and opens no table.
+    #[test]
+    fn get_many_reads_nothing_when_nothing_is_asked() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let before = c.read_transaction_count();
+        assert!(
+            c.get_many(Vec::<&str>::new()).unwrap().is_empty(),
+            "no keys, no answers"
+        );
+        assert_eq!(
+            c.read_transaction_count() - before,
+            0,
+            "an empty batch does not open a transaction"
+        );
     }
 
     // -- read-only opens ---------------------------------------------------
