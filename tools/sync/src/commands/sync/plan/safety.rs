@@ -52,6 +52,10 @@ use super::link::{
 /// Two kept links can resolve to the same storage even when neither's terminal
 /// target is mirrored by src. [`ensure_shared_storage_safe`] judges that set as
 /// a whole after every chain has been walked.
+///
+/// A tree without a kept link is left alone: the pass returns before it asks
+/// the disk anything, because there is no storage it could spare and no
+/// decision the probes would feed.
 pub(crate) fn spare_link_storage(
     sm: &HashMap<String, EffRec>,
     dm: &HashMap<String, EffRec>,
@@ -60,21 +64,12 @@ pub(crate) fn spare_link_storage(
     dst: &Path,
     on_disk: Option<&super::super::rename::DiskSpelling>,
 ) -> Result<()> {
-    let mut storage = LinkStorage::default();
-    // The plan is not mutated until `storage.apply` at the end, so membership
-    // in its copy and fix-dir sets can be read once up front.
-    let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
-    let fix_dirs: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
-    // Nothing to spare when no copy or delete could meet a link target.
-    let mut rels: Vec<&String> = dm.keys().collect();
-    rels.sort();
-    let canonical_dst = std::fs::canonicalize(dst)
-        .with_context(|| format!("resolve dst root {}", dst.display()))?;
-    // Every kept link's terminal storage: (link, grouping key, display name).
-    let mut terminals: Vec<(String, String, String)> = Vec::new();
-    let folded = folded_keys(dm);
-    for rel in rels {
-        let rec = &dm[rel];
+    // The links this plan keeps: a dst file link src mirrors as a file stays,
+    // and its storage is then the plan's business. A tree without one has
+    // nothing to spare, so the probes this pass would make — the dst root and
+    // the folded key map — are work no decision depends on.
+    let mut rels: Vec<&String> = Vec::new();
+    for (rel, rec) in dm {
         if !rec.is_link || rec.kind != "file" {
             continue;
         }
@@ -84,6 +79,23 @@ pub(crate) fn spare_link_storage(
         if sm.get(rel).is_none_or(|s| s.kind != "file") {
             continue;
         }
+        rels.push(rel);
+    }
+    if rels.is_empty() {
+        return Ok(());
+    }
+    rels.sort();
+    let mut storage = LinkStorage::default();
+    // The plan is not mutated until `storage.apply` at the end, so membership
+    // in its copy and fix-dir sets can be read once up front.
+    let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
+    let fix_dirs: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
+    let canonical_dst = std::fs::canonicalize(dst)
+        .with_context(|| format!("resolve dst root {}", dst.display()))?;
+    // Every kept link's terminal storage: (link, grouping key, display name).
+    let mut terminals: Vec<(String, String, String)> = Vec::new();
+    let folded = folded_keys(dm);
+    for rel in rels {
         // Resolve under the canonical root so every prefix can be compared with
         // `canonical_dst`; the alias is carried separately, in plan spelling.
         let mut cur = canonical_dst.join(disk_rel(on_disk, rel).as_ref());
