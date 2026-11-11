@@ -102,11 +102,11 @@ sides **different bytes at the same length** or it tests nothing.
 relative-path index uses — the mixed-case guard, the planner's pairing, the
 diff's pairing, the rename pass, and the plan-time lookups — so the fold is
 stated once and every index agrees on it. ASCII-only is deliberate: a Unicode
-fold maps the Kelvin sign `K` onto `k`, which would merge two spellings the
-filesystem keeps apart, and it would pair `Ärger.txt` with `ärger.txt`, a pair
-the filesystem does not agree is one file. The rule is "fold ASCII case,
-compare every other byte exactly", so a non-ASCII case variant is a distinct
-key.
+fold maps the Kelvin sign `K` onto `k`, and Windows keeps those two spellings
+apart, so the fold would pair two files that are not one. The rule is "fold
+ASCII case, compare every other byte exactly", so a non-ASCII case variant is
+a distinct key — deliberately distinct even where the filesystem would have
+merged the two spellings.
 
 **Path identity is not the path key.** `util::component_eq`, behind
 `util::same_path` and `util::path_within`, keeps a Unicode lowercase
@@ -443,12 +443,11 @@ is closed on a host that can create links, not by weakening or removing the
 cases. The skip reason sits beside each case; there is no separate document to
 keep in step with them.
 
-**The case fold is an approximation of the filesystem's own case table.**
-Windows agrees with the ASCII-only key and with Unicode lowercasing on almost
-every name, but not on the Kelvin sign and `k`, on dotted and dotless `I`, or on
-the case-mapping expansions, so the two rules can disagree with the disk about
-which names are one file; there is no portable exact NTFS fold, so the
-approximation is kept rather than guessed at.
+**Neither fold is the filesystem's own case table.** Windows treats `Ärger`
+and `ärger` as one file and the Kelvin sign and `k` as two, so the ASCII-only
+key keeps apart a pair the disk has merged and the Unicode identity rule
+merges a pair the disk keeps apart; there is no portable exact NTFS fold, so
+the approximation is kept rather than guessed at.
 
 ---
 
