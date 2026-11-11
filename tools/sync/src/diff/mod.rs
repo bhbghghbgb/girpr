@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use crate::effective::EffRec;
 use crate::hash::{AlgoSet, DigestSet};
 use crate::planner::{CasePairing, Required, StatTrust};
-use crate::util::path_key;
+use crate::util::folded_keys;
 
 /// Per-class diff buckets, each sorted by relative path.
 ///
@@ -297,23 +297,15 @@ pub fn diff_maps(
         // Mixed-case collisions within one side are already fatal (phase A), so
         // each lowercase key maps to exactly one path per side and this join is
         // well defined.
-        let mut slow: HashMap<String, &String> = HashMap::new();
-        for k in src.keys() {
-            slow.insert(path_key(k), k);
-        }
-        let mut dlow: HashMap<String, &String> = HashMap::new();
-        for k in dst.keys() {
-            dlow.insert(path_key(k), k);
-        }
+        let slow = folded_keys(src);
+        let dlow = folded_keys(dst);
         let classify = |lk: &str, d: &mut Diff| match (slow.get(lk), dlow.get(lk)) {
-            (Some(srel), None) => d.missing.push((*srel).clone()),
-            (None, Some(trel)) => d.extra.push((*trel).clone()),
-            (Some(srel), Some(trel)) => {
-                if *srel != *trel {
-                    d.case_mismatch.push(((*srel).clone(), (*trel).clone()));
+            (Some(&(srel, _)), None) => d.missing.push(srel.clone()),
+            (None, Some(&(trel, _))) => d.extra.push(trel.clone()),
+            (Some(&(srel, s)), Some(&(trel, t))) => {
+                if srel != trel {
+                    d.case_mismatch.push((srel.clone(), trel.clone()));
                 }
-                let s = &src[*srel];
-                let t = &dst[*trel];
                 classify_pair(d, srel, s, t, stat, required, want_identical);
             }
             (None, None) => {}

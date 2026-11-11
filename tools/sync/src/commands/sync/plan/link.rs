@@ -313,6 +313,10 @@ pub(super) fn spare_link_components(
 /// fatal and the rename pass collapses them), so the mapping is unambiguous.
 /// On POSIX two spellings are two paths and folding would join them, so the
 /// index is empty there.
+///
+/// Not the shared `util::folded_keys` index: this one owns its spellings
+/// instead of borrowing them from `dm`, and it answers only for a
+/// case-insensitive filesystem.
 pub(super) fn folded_keys(dm: &HashMap<String, EffRec>) -> HashMap<String, String> {
     #[cfg(windows)]
     {

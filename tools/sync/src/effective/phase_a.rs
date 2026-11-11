@@ -129,6 +129,9 @@ pub fn scan_stat_only(
     } else {
         cache.load_keys()?
     };
+    // A folded key here can hold *several* stale spellings, and the lookup asks
+    // how many there are, so this index is not the key-shaped `util::folded_keys`
+    // one.
     let mut alt_index: HashMap<String, Vec<String>> = HashMap::new();
     for key in alt_keys {
         alt_index.entry(path_key(&key)).or_default().push(key);

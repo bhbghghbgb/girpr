@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::report::{Record, Report};
-use crate::util::path_key;
+use crate::util::folded_keys;
 
 /// The point of a case-fix step a test hook asks to fail at.
 ///
@@ -70,20 +70,15 @@ fn case_renames<'a>(
     dm: &'a HashMap<String, crate::effective::EffRec>,
 ) -> Vec<(&'a String, &'a String)> {
     // lower -> rel, per side.
-    let mut slow: HashMap<String, &String> = HashMap::new();
-    for k in src.keys() {
-        slow.insert(path_key(k), k);
-    }
-    let mut dlow: HashMap<String, &String> = HashMap::new();
-    for k in dm.keys() {
-        dlow.insert(path_key(k), k);
-    }
-    let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
+    let slow = folded_keys(src);
+    let dlow = folded_keys(dm);
+    let mut by_lower: Vec<(String, &String)> =
+        slow.into_iter().map(|(lk, (srel, _))| (lk, srel)).collect();
     by_lower.sort();
     let mut out: Vec<(&String, &String)> = Vec::new();
     for (lk, srel) in &by_lower {
         // The same path on both sides is not a rename: it is already correct.
-        if let Some(drel) = dlow.get(lk).copied().filter(|d| *d != *srel) {
+        if let Some(drel) = dlow.get(lk).map(|&(drel, _)| drel).filter(|d| *d != *srel) {
             out.push((drel, srel));
         }
     }

@@ -526,7 +526,8 @@ pub(crate) fn ensure_mkdir_targets_free(
     case_sensitive: bool,
 ) -> Result<()> {
     // The dst view the plan will see after the rename: exact keys in sensitive
-    // mode, lowercase pairs otherwise.
+    // mode, lowercase pairs otherwise. This index folds to a *value* rather than
+    // to a key, so it does not share the key-shaped `util::folded_keys` index.
     let dst_lower: HashMap<String, &EffRec> = if case_sensitive {
         HashMap::new()
     } else {
