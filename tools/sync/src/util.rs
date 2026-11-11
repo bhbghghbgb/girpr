@@ -359,6 +359,32 @@ mod tests {
         check_mixed_case_keys(["\u{212A}", "k"], "", "src").expect("the Kelvin sign is not `k`");
     }
 
+    /// The path key and the identity rule answer different questions, and for a
+    /// non-ASCII name they deliberately disagree: the key keeps `Ärger` and
+    /// `ärger` apart, because a Unicode fold would merge spellings the
+    /// filesystem keeps apart, while the filesystem on Windows treats the two
+    /// as one file and so does `same_path`. Unifying the two rules would
+    /// change one of them without anything saying so, so the boundary is
+    /// pinned here.
+    #[test]
+    fn the_path_key_and_the_identity_rule_disagree_deliberately() {
+        assert_ne!(
+            path_key("Ärger"),
+            path_key("ärger"),
+            "the key folds ASCII case only, so a non-ASCII variant is a distinct key"
+        );
+        #[cfg(windows)]
+        assert!(
+            same_path(Path::new("C:/Ärger"), Path::new("C:/ärger")),
+            "Windows opens either spelling as the same file"
+        );
+        #[cfg(not(windows))]
+        assert!(
+            !same_path(Path::new("/Ärger"), Path::new("/ärger")),
+            "POSIX keeps the two spellings apart, so the rules agree there"
+        );
+    }
+
     /// A name that is not valid UTF-8 has no `to_str` answer, so the comparison
     /// must fall through to the lossy Unicode fold. The unpaired surrogate is
     /// valid UTF-16 storage but not valid UTF-8, which is the only way an
