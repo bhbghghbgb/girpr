@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: A
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -30,10 +30,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T02-plan-time-early-returns.md
     batch: A
     report: [L191-L206, L344-L368, L584-L586]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [df473b05, 43f5620d, 1c6110b5, bfa650ff]
     review: A
-    note: implementing session starting
+    note: implemented by ses_e37d03ebcffeUsykYK5wdzNmd2; fmt/nextest/clippy clean
   - id: T03
     title: Document the case-fold rules
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
@@ -189,10 +189,10 @@ tasks:
     note: null
 reviews:
   - batch: A
-    status: pending
+    status: in_progress
     tasks: [T01, T02]
-    base: null
-    head: null
+    base: 8b40214f
+    head: bfa650ff
     result: null
     followups: []
   - batch: B
@@ -245,7 +245,7 @@ followups: []
 | batch | id | status | commits | note |
 | --- | --- | --- | --- | --- |
 | A | T01 | pending_review | 0e9e49c3, e87f89af | implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I |
-| A | T02 | in_progress | — | implementing session starting |
+| A | T02 | pending_review | df473b05, 43f5620d, 1c6110b5, bfa650ff | implemented by ses_e37d03ebcffeUsykYK5wdzNmd2 |
 | B | T03 | pending | — | — |
 | B | T04 | pending | — | — |
 | B | T05 | pending | — | — |
@@ -269,6 +269,10 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — batch A review checkpoint opened: `phase: implement` →
+  `review`, review A `pending` → `in_progress`, base `8b40214f`, head
+  `bfa650ff`. T02 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `df473b05`, `43f5620d`, `1c6110b5`, `bfa650ff`; working tree clean.
 - 2026-11-11 — T02 selected: `pending` → `in_progress`.
 - 2026-11-11 — T01 implemented: `pending` → `in_progress` → `pending_review`,
   commits `0e9e49c3`, `e87f89af`; working tree clean.
