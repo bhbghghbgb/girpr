@@ -463,6 +463,7 @@ mod tests {
     use crate::cache::schema::CACHE_PREFIX;
     use crate::cache::write::CommitLimits;
     use crate::cache::{CACHE_VERSION, ENTRIES, FileRec, META_KEY, META_TBL, Meta};
+    use redb::TableHandle;
     use std::path::PathBuf;
 
     fn file_rec() -> FileRec {
@@ -718,5 +719,216 @@ mod tests {
             txn.commit().unwrap();
         }
         assert!(ro(&future).is_err(), "a future version is refused");
+    }
+
+    // -- the meta fast path ------------------------------------------------
+    //
+    // A read/write open reads the `meta` row before it takes the write lock,
+    // and skips the write entirely when the row already says what the run
+    // needs it to say. What has to survive that is pinned here: the row, the
+    // tables, and the wording of the refusals.
+
+    /// The tables a cache actually has, sorted.
+    ///
+    /// The names, not the rows: what matters about a table here is that it
+    /// is there.
+    fn table_names(db: &impl ReadableDatabase) -> Vec<String> {
+        let txn = db.begin_read().unwrap();
+        let mut names: Vec<String> = txn
+            .list_tables()
+            .unwrap()
+            .map(|t| t.name().to_string())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A second read/write open in the same case mode succeeds, and leaves the
+    /// cache exactly as it was: the same row, the same tables, the same
+    /// `meta`.
+    ///
+    /// This is the open the fast path exists for, so the row is the point:
+    /// nothing about it may change, because nothing is written.
+    #[test]
+    fn a_second_read_write_open_keeps_the_row_and_the_tables() {
+        let (_dir, p) = seeded("fastpath", true);
+        let c = open_db(
+            &p,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            c.get("a.txt").unwrap(),
+            Some(file_rec()),
+            "the row survives the reopen"
+        );
+        assert_eq!(
+            table_names(&c.db),
+            vec!["entries".to_string(), "meta".to_string()],
+            "both tables are still there"
+        );
+        let meta = read_meta(&c.db).unwrap().unwrap();
+        assert_eq!(meta.version, CACHE_VERSION);
+        assert!(
+            meta.case_sensitive,
+            "the recorded case mode is left as it was"
+        );
+    }
+
+    /// A read/write open in the opposite case mode rewrites the row. The
+    /// read-only half of this is
+    /// [`read_only_open_tolerates_a_case_mode_mismatch`]; a read/write open
+    /// is the half that has to do the rewriting.
+    #[test]
+    fn a_read_write_open_rewrites_meta_when_the_case_mode_differs() {
+        let (_dir, p) = seeded("fastpath", true);
+        // Written above as case-sensitive; read it back in insensitive mode.
+        let c = open_db(
+            &p,
+            false,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        let meta = read_meta(&c.db).unwrap().unwrap();
+        assert_eq!(meta.version, CACHE_VERSION, "the version is unchanged");
+        assert!(
+            !meta.case_sensitive,
+            "the row was rewritten to the run's case mode"
+        );
+        assert_eq!(
+            c.get("a.txt").unwrap(),
+            Some(file_rec()),
+            "rewriting the row leaves the rows alone"
+        );
+    }
+
+    /// A fresh cache gets both tables and a `meta` row this build can read.
+    ///
+    /// The fast path must not change that: there is no row to match, so the
+    /// open falls through to the write path that creates them.
+    #[test]
+    fn a_fresh_cache_gets_both_tables_and_a_current_meta_row() {
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", "fresh");
+        let p = dir.join(CACHE_PREFIX);
+        let c = open_db(
+            &p,
+            false,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            table_names(&c.db),
+            vec!["entries".to_string(), "meta".to_string()],
+            "a fresh cache has both tables"
+        );
+        let meta = read_meta(&c.db).unwrap().expect("a fresh cache gets a row");
+        assert_eq!(meta.version, CACHE_VERSION);
+        assert!(!meta.case_sensitive, "the row records the run's case mode");
+    }
+
+    /// A cache stamped with a version this build cannot read is refused, and
+    /// the refusal says what it always said: the version, what was wanted,
+    /// and both remedies.
+    #[test]
+    fn a_future_version_cache_is_refused_with_the_same_message() {
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", "future");
+        let p = dir.join(CACHE_PREFIX);
+        {
+            let db = redb_builder().create(&p).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut m = txn.open_table(META_TBL).unwrap();
+                m.insert(
+                    META_KEY,
+                    encode_meta(&Meta {
+                        version: CACHE_VERSION + 1,
+                        case_sensitive: true,
+                    })
+                    .as_slice(),
+                )
+                .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        let err = match open_db(
+            &p,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+            },
+        ) {
+            Ok(_) => panic!("a future-version cache must be refused"),
+            Err(e) => e,
+        };
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "unsupported cache version {} (want {CACHE_VERSION}; use --ignore-cache to rebuild or sled2redb to convert)",
+                CACHE_VERSION + 1
+            ),
+            "the refusal says what it always said, remedy included"
+        );
+    }
+
+    /// The fast path's whole point: an open whose `meta` row already matches
+    /// must not take the write lock.
+    ///
+    /// redb's write lock is observable from the outside — a second write
+    /// transaction on the same database waits for the first to finish — so
+    /// the lock is held here, on purpose, and the open still completes. It
+    /// can only do that if it never began a write transaction.
+    ///
+    /// The timeout is a deadlock guard, not a performance measurement: an
+    /// open that needed the lock would wait for the one this test holds, and
+    /// a hung test is a worse failure than a failed one. What is asserted is
+    /// that the open returns at all.
+    #[test]
+    fn a_matching_open_does_not_need_the_write_lock() {
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", "lock");
+        let p = dir.join(CACHE_PREFIX);
+        let db = redb_builder().create(&p).unwrap();
+        {
+            let txn = db.begin_write().unwrap();
+            {
+                let _ = txn.open_table(ENTRIES).unwrap();
+            }
+            {
+                let mut m = txn.open_table(META_TBL).unwrap();
+                m.insert(
+                    META_KEY,
+                    encode_meta(&Meta {
+                        version: CACHE_VERSION,
+                        case_sensitive: true,
+                    })
+                    .as_slice(),
+                )
+                .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        // Hold the write lock for as long as the open takes.
+        let held = db.begin_write().unwrap();
+        let db = Arc::new(db);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let opened = Arc::clone(&db);
+        std::thread::spawn(move || {
+            let _ = tx.send(CacheDb::init_meta(&opened, true).is_ok());
+        });
+        let ok = rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("the open waited for a write lock it did not need");
+        drop(held);
+        assert!(ok, "the open failed");
     }
 }
