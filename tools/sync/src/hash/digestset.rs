@@ -76,36 +76,55 @@ impl DigestSet {
     /// not optional — a known name whose digest length was unexpected is in
     /// `foreign`, and [`Self::get`] cannot see it.
     ///
-    /// The `foreign` match is by **canonical name**, `a.as_str()`, whereas
-    /// [`Self::get_named`] parses its argument case-insensitively and then matches
-    /// the exact spelling. `get_named("MD5")` can therefore find a foreign entry
-    /// spelled `MD5` that this lookup, asked for [`HashAlg::Md5`], will not: a caller
-    /// that must also match a mixed-case spelling has to go through `get_named`.
+    /// The `foreign` match is by **name**, not by spelling: a known algorithm is
+    /// found under any ASCII-case spelling of its name, which is the same rule
+    /// the algorithm's own parser applies to the command line.
     pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
-        self.get(a).or_else(|| {
-            self.foreign
-                .iter()
-                .find(|(name, _)| &**name == a.as_str())
-                .map(|(_, digest)| digest.as_slice())
-        })
+        self.get(a).or_else(|| self.foreign_known(a))
     }
 
     /// The digest under *any* name, known or not.
     ///
     /// This is what availability tests and a name-keyed comparison need: a row written
     /// by a newer build holds `blake3`, and asking for it by name has to find it.
+    ///
+    /// A **known** name is answered the way [`Self::get_algo`] answers it, so the
+    /// two lookups cannot disagree about a row that holds `MD5` where the request
+    /// says `md5`. An **unknown** name is matched **exactly**: it is not an
+    /// algorithm, so nothing this build knows how to ask for could mean it.
     pub fn get_named(&self, name: &str) -> Option<&[u8]> {
-        if let Ok(a) = name.parse::<HashAlg>()
-            && let Some(d) = self.get(a)
-        {
-            return Some(d);
+        if let Ok(a) = name.parse::<HashAlg>() {
+            // Not `else`: a known name with an unexpected length is in `foreign`, and
+            // `get` cannot see it.
+            return self.get_algo(a);
         }
-        // Not `else`: a known name with an unexpected length is in `foreign`, and
-        // `get` cannot see it.
+        // An unknown name is exact, and only ever the spelling it was given.
         self.foreign
             .iter()
             .find(|(n, _)| &**n == name)
             .map(|(_, d)| d.as_slice())
+    }
+
+    /// The digest a known algorithm's **foreign** entry carries, if any.
+    ///
+    /// The arm is scanned for the first entry whose **stored name parses to `a`**,
+    /// and that entry's digest is returned. Parsing is the algorithm's own
+    /// parser, so the match is ASCII-case-insensitive and the fold is ASCII case
+    /// only — the same rule the command line and the path key follow. A name
+    /// that does not parse to an algorithm never matches: there is nothing to
+    /// match it against, so an unknown name cannot be pulled into a known
+    /// algorithm's answer.
+    ///
+    /// **First match wins.** More than one entry can resolve to the same
+    /// algorithm — `MD5` and `md5`, both with an unexpected length — and the arm
+    /// is a slice, so the answer is a property of the row rather than of an
+    /// iteration order. Both lookups go through here, so they cannot disagree
+    /// about which entry that is.
+    fn foreign_known(&self, a: HashAlg) -> Option<&[u8]> {
+        self.foreign
+            .iter()
+            .find(|(name, _)| name.parse::<HashAlg>().ok() == Some(a))
+            .map(|(_, digest)| digest.as_slice())
     }
 
     /// Known algorithms in canonical order. Foreign ones are not included;

@@ -295,6 +295,131 @@ fn a_known_name_with_the_wrong_length_routes_to_foreign() {
     );
 }
 
+/// **A known name is found whatever its ASCII case.** A row may spell the
+/// algorithm `MD5` rather than `md5` — a hand-written row, a converted cache, a
+/// newer build — and it is the same algorithm: the name *parses* to
+/// [`HashAlg::Md5`], so both the typed lookup and the named one find it.
+///
+/// Without this, the two lookups disagree about one row: the typed lookup
+/// matches the canonical spelling only, and the named lookup matches the
+/// spelling it was given. A row found by one and not the other is a row some
+/// caller will misread — the planner sees a row it believes holds nothing.
+#[test]
+fn a_known_name_in_the_foreign_arm_is_found_under_any_ascii_case() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", b"\x01\x02\x03\x04\x05\x06\x07\x08");
+
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: this is not this algorithm's digest"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "the typed lookup finds it by name"
+    );
+    assert_eq!(
+        d.get_named("md5"),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "and the named lookup agrees with it"
+    );
+    assert_eq!(
+        d.get_named("MD5"),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "the spelling it was stored under, too"
+    );
+}
+
+/// **An unknown name stays exact.** A name this build has never heard of is not
+/// an algorithm, so no known-algorithm lookup may match it, and the name is
+/// matched by the spelling it was given and no other.
+#[test]
+fn an_unknown_name_is_matched_exactly_and_by_no_algorithm() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+
+    assert_eq!(
+        d.get_named("blake3"),
+        Some(&[7u8; 32][..]),
+        "the exact spelling finds it"
+    );
+    assert_eq!(
+        d.get_named("BLAKE3"),
+        None,
+        "and no other spelling does: an unknown name is not folded"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        None,
+        "a known algorithm's lookup does not match it either"
+    );
+    assert_eq!(d.get_algo(HashAlg::Sha256), None);
+}
+
+/// **The routing rule is unchanged by the widening.** A known name with the
+/// length its algorithm expects goes to its slot, whatever its case — `MD5`
+/// with sixteen bytes is the md5 slot, not a second copy of it somewhere else.
+#[test]
+fn a_known_name_with_the_right_length_still_goes_to_its_slot() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", &[1u8; 16]);
+
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        Some(&[1u8; 16][..]),
+        "the slot holds it"
+    );
+    assert_eq!(d.foreign_iter().count(), 0, "and the foreign arm is empty");
+    assert_eq!(d.get_algo(HashAlg::Md5), Some(&[1u8; 16][..]));
+    assert_eq!(d.get_named("md5"), Some(&[1u8; 16][..]));
+}
+
+/// **The fold is ASCII case only**, the same rule the parser and the path key
+/// follow. A Unicode fold would map the Kelvin sign `\u{212A}` onto `k`, so
+/// `blake3` and `bla\u{212A}e3` would be one name — two spellings the
+/// filesystem keeps apart.
+///
+/// The witness is `blake3`, spelled with the Kelvin sign: it is the likely first
+/// supported name containing a `k`, and if it is added this same case becomes an
+/// accepted-name lookalike, which this test still pins. No supported name
+/// contains a `k` today, so this cannot reach an accepted spelling yet — which
+/// is why both directions are stated.
+#[test]
+fn a_non_ascii_lookalike_name_is_never_matched() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+    assert_eq!(
+        "bla\u{212A}e3".to_lowercase(),
+        "blake3",
+        "the witness: a Unicode fold would merge these two spellings"
+    );
+    assert_eq!(
+        d.get_named("bla\u{212A}e3"),
+        None,
+        "and the lookup keeps them apart"
+    );
+
+    let mut d = DigestSet::default();
+    d.insert_named("bla\u{212A}e3", &[7u8; 32]);
+    assert_eq!(
+        d.get_named("blake3"),
+        None,
+        "in either direction: the stored spelling is not the one it resembles"
+    );
+    assert_eq!(
+        d.get_named("bla\u{212A}e3"),
+        Some(&[7u8; 32][..]),
+        "and it is still found under the spelling it was stored with"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        None,
+        "no known algorithm's lookup reaches it"
+    );
+    assert_eq!(d.get_algo(HashAlg::Sha256), None);
+}
+
 /// The typed lookup keeps the by-name fallback: a known algorithm whose digest
 /// was carried in `foreign` because its length was unexpected is still the digest
 /// the row holds under that name, and still compares byte-wise.
