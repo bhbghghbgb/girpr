@@ -84,10 +84,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T08-phase-a-one-pass.md
     batch: C
     report: [L246-L278]
-    status: pending
+    status: in_progress
     commits: []
     review: C
-    note: null
+    note: implementing session starting
   - id: T09
     title: Backup policy and the failure story
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T09-backup-policy.md
@@ -299,7 +299,7 @@ followups:
 | B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
 | C | T06 | pending_review | c648ae6d, 71f72513, 1f86077f | implemented by ses_e34d04059ffe9JFJSKWLsbXy48 |
 | C | T07 | pending_review | 9bb075e6, ed6c2745 | implemented by ses_e346c48c9ffeqd376JFuF6RZ6g |
-| C | T08 | pending | — | — |
+| C | T08 | in_progress | — | implementing session starting |
 | D | T09 | pending | — | — |
 | D | T10 | pending | — | — |
 | D | T11 | pending | — | — |
@@ -317,6 +317,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T08 selected: `pending` → `in_progress`.
 - 2026-11-12 — T07 implemented: `pending` → `in_progress` → `pending_review`,
   commits `9bb075e6`, `ed6c2745`; working tree clean.
 - 2026-11-12 — T07 selected: `pending` → `in_progress`.
