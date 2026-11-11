@@ -93,10 +93,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T09-backup-policy.md
     batch: D
     report: [L118-L143, L542-L548, L557-L563]
-    status: pending
+    status: in_progress
     commits: []
     review: D
-    note: null
+    note: implementing session starting
   - id: T10
     title: Cache memory knob and one test-cache decision
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T10-cache-memory-and-test-cache.md
@@ -336,7 +336,7 @@ followups:
 | C | T06 | completed | c648ae6d, 71f72513, 1f86077f | review C kept |
 | C | T07 | completed | 9bb075e6, ed6c2745 | review C kept |
 | C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
-| D | T09 | pending | — | — |
+| D | T09 | in_progress | — | implementing session starting |
 | D | T10 | pending | — | — |
 | D | T11 | pending | — | — |
 | E | T12 | pending | — | — |
@@ -353,6 +353,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch D started: T09 `pending` → `in_progress`.
 - 2026-11-12 — review C `done`: T06 kept, T07 kept, T08 kept, no fix or revert
   commits; follow-ups F9–F14 appended with status `pending`; T06, T07 and T08
   `pending_review` → `completed`. `phase: review` → `implement`,
