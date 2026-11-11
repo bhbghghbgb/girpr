@@ -39,10 +39,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
     batch: B
     report: [L88-L116, L576-L579]
-    status: pending
+    status: in_progress
     commits: []
     review: B
-    note: null
+    note: implementing session starting
   - id: T04
     title: Shared one-side case index
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T04-shared-case-index.md
@@ -276,7 +276,7 @@ followups:
 | --- | --- | --- | --- | --- |
 | A | T01 | completed | 0e9e49c3, e87f89af | review A kept |
 | A | T02 | completed | df473b05, 43f5620d, 1c6110b5, bfa650ff | review A kept |
-| B | T03 | pending | — | — |
+| B | T03 | in_progress | — | implementing session starting |
 | B | T04 | pending | — | — |
 | B | T05 | pending | — | — |
 | C | T06 | pending | — | — |
@@ -299,6 +299,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — batch B started: T03 `pending` → `in_progress`.
 - 2026-11-11 — review A `done`: T01 kept, T02 kept, no fix or revert commits;
   follow-ups F1–F5 appended with status `pending`; T01 and T02
   `pending_review` → `completed`. `phase: review` → `implement`,
