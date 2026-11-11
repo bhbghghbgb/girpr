@@ -198,9 +198,7 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// ([`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase)) and the
 /// diff pairs them after the rename pass has re-keyed dst
 /// ([`CasePairing::Exact`](crate::planner::CasePairing::Exact)).
-pub(crate) fn folded_keys<'a, V>(
-    map: &'a HashMap<String, V>,
-) -> HashMap<String, (&'a String, &'a V)> {
+pub(crate) fn folded_keys<V>(map: &HashMap<String, V>) -> HashMap<String, (&String, &V)> {
     map.iter().map(|(k, v)| (path_key(k), (k, v))).collect()
 }
 
