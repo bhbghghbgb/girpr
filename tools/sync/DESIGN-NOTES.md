@@ -96,6 +96,52 @@ either way. The one that does not is
 and its row in `tests/sync_plan/`. If you add a case-only fixture, give the two
 sides **different bytes at the same length** or it tests nothing.
 
+### The path key, the identity rule, and the disk spelling answer three questions
+
+**The path key folds ASCII case only.** `util::path_key` is the key every
+relative-path index uses — the mixed-case guard, the planner's pairing, the
+diff's pairing, the rename pass, and the plan-time lookups — so the fold is
+stated once and every index agrees on it. ASCII-only is deliberate: a Unicode
+fold maps the Kelvin sign `K` onto `k`, which would merge two spellings the
+filesystem keeps apart, and it would pair `Ärger.txt` with `ärger.txt`, a pair
+the filesystem does not agree is one file. The rule is "fold ASCII case,
+compare every other byte exactly", so a non-ASCII case variant is a distinct
+key.
+
+**Path identity is not the path key.** `util::component_eq`, behind
+`util::same_path` and `util::path_within`, keeps a Unicode lowercase
+fallback, because on Windows the filesystem really does treat `Ärger` and
+`ärger` as one file. The two answer different questions: the key asks which
+bucket of a run's map a path belongs to, and identity asks whether two names
+open the same place on disk. They are allowed to disagree, and that is the
+point — on Windows `Ärger` and `ärger` are two keys and one file. Unifying them
+would change what a run does: a Unicode key merges spellings the disk keeps
+apart, and an ASCII identity rule stops the overlap and containment checks
+from seeing a case difference Windows really has.
+
+**The on-disk spelling lookup is neither.** `on_disk_name` in
+`commands/sync/plan/link.rs` asks which directory entry the OS would open, so
+it compares Unicode-lowercased names. It is a question about the filesystem,
+not about how a run keys its map, and it follows neither rule above. The same
+file holds both — the on-disk lookup and the key, side by side, answering two
+different questions.
+
+**Enforced by:** `util::tests::path_key_folds_ascii_case_only` and
+`util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key;
+`util::tests::component_equality_folds_ascii_and_non_ascii_case` and
+`util::tests::path_identity_ignores_case_on_windows` for identity;
+`util::tests::the_path_key_and_the_identity_rule_disagree_deliberately` for
+the boundary between them;
+`planner::pairs::tests::insensitive_mode_does_not_fold_non_ascii_case` and
+`planner::pairs::tests::insensitive_mode_keeps_a_non_ascii_lookalike_distinct`
+for the planner's use of the key; and the `plan::tests` cases
+`a_case_differing_final_component_names_the_walk_entry`,
+`a_case_differing_link_component_is_spared_under_the_walk_spelling`,
+`a_case_differing_mirrored_target_is_refused`,
+`a_case_differing_terminal_is_spared_by_the_full_pass` and
+`a_case_differing_alias_is_spared_under_the_walk_key` for the on-disk lookup
+and the key side by side.
+
 ### The cache's algorithm vocabulary is open; the request's is not
 
 `HashAlg` is a closed two-variant enum and the parser refuses everything else, so
@@ -396,6 +442,13 @@ bodies do not. A green local run is therefore not full link coverage — that ga
 is closed on a host that can create links, not by weakening or removing the
 cases. The skip reason sits beside each case; there is no separate document to
 keep in step with them.
+
+**The case fold is an approximation of the filesystem's own case table.**
+Windows agrees with the ASCII-only key and with Unicode lowercasing on almost
+every name, but not on the Kelvin sign and `k`, on dotted and dotless `I`, or on
+the case-mapping expansions, so the two rules can disagree with the disk about
+which names are one file; there is no portable exact NTFS fold, so the
+approximation is kept rather than guessed at.
 
 ---
 
