@@ -16,8 +16,14 @@ pub fn ts_now() -> String {
     chrono::Utc::now().format("%Y%m%dT%H%M%S%.6fZ").to_string()
 }
 
-/// First free `<parent>/<prefix>` (then `<prefix>_2`, ...). Backups are keep-all,
-/// so a colliding timestamp must not clobber an existing directory.
+/// First free `<parent>/<prefix>` (then `<prefix>_2`, ...).
+///
+/// **Check-then-use**: the name is probed, not claimed, so two runs racing
+/// for the same name can both pick it. The cache backups do not use it — they
+/// claim the name with `create_new` or `create_dir`, which is what makes two
+/// concurrent runs unable to choose the same sibling (see `cache::open`).
+/// Use this for a name that only has to be free *now*, in a namespace nobody
+/// else is writing to.
 pub fn unique_sibling(parent: &Path, prefix: String) -> PathBuf {
     let mut p = parent.join(&prefix);
     let mut n = 1;

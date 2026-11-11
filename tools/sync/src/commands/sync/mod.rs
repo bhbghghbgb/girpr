@@ -7,7 +7,7 @@
 //! - [`apply`] — execute that work list, in an order that is load-bearing
 //!
 //! Phase order overall:
-//! 1. validate inputs, back up both caches, snapshot dst's pre-sync state,
+//! 1. validate inputs, back up src's cache, snapshot dst's pre-sync state,
 //! 2. open both caches and run phase A on each side,
 //! 3. plan across both sides at once, so a file is read only if the pair needs it,
 //! 4. phase C, then rename dst paths to src's casing,
@@ -147,12 +147,17 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         // The copies are a policy, not a step: `--no-backup` skips them, and
         // `--backup-retain N` bounds what they leave behind. Neither changes
         // what the run answers.
+        //
+        // src gets a `backup-*` copy of its cache; dst gets an `old-*`
+        // snapshot of its pre-sync state and nothing else. The snapshot *is*
+        // the record of what dst held before the mirror moved, so a second
+        // copy of the same bytes under another name would be a third copy of
+        // one file.
         if common.backup.wants_backup() {
             if src_db_path.exists() {
                 backup_db(&src_db_path, common.backup.retain)?;
             }
             if dst_db_path.exists() {
-                backup_db(&dst_db_path, common.backup.retain)?;
                 // old-state snapshot before any dst changes
                 snapshot_old(&dst_db_path, common.backup.retain)?;
             }
@@ -170,10 +175,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // 2. Open both caches, then phase A on each side.
     //
     // `backup_first: false` for both: this command has already taken its own
-    // backups and dst's old-state snapshot above, and doing it again here would
-    // produce a second timestamped pair mid-run. `open_folder_cache` is also the
-    // only thing that decides how a dry run opens a cache, so this stays a plain
-    // call rather than a second policy.
+    // backup of src and dst's old-state snapshot above, and doing it again
+    // here would produce a second timestamped pair mid-run. `open_folder_cache`
+    // is also the only thing that decides how a dry run opens a cache, so this
+    // stays a plain call rather than a second policy.
     let scan_mode = |no_trust_cached_hashes| ScanMode::new(no_trust_cached_hashes, dry_run);
     let src_mode = scan_mode(trust.no_trust_src);
     let dst_mode = scan_mode(trust.no_trust_dst);

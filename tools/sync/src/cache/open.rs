@@ -12,7 +12,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use tracing::{info, trace, warn};
 
-use crate::util::{copy_dir_all, ts_now, unique_sibling};
+use crate::util::{copy_dir_all, ts_now};
 
 use super::codec::decode_meta;
 use super::db::{CacheDb, redb_builder};
@@ -168,19 +168,98 @@ fn copy_aside(
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let dest = unique_sibling(parent, format!("{prefix}{}", ts_now()));
+    let is_dir = db_path.is_dir();
+    let dest = claim_sibling(parent, prefix, &ts_now(), is_dir)?;
     info!(src = %db_path.display(), dst = %dest.display(), "{label} start");
-    if db_path.is_dir() {
-        copy_dir_all(db_path, &dest)?;
+    let copied: Result<()> = if is_dir {
+        copy_dir_all(db_path, &dest)
     } else {
         std::fs::copy(db_path, &dest)
-            .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))?;
+            .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))
+            .map(|_| ())
+    };
+    if let Err(e) = copied {
+        // The claim is ours and the copy did not land. A half-written sibling
+        // is not a backup, and leaving it would be a file a later run reads
+        // as one — so it goes, and the failure is reported either way.
+        let _ = remove_cache_path(&dest);
+        return Err(e);
     }
     info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
     if let Some(keep) = retain {
         retain_siblings(parent, prefix, keep)?;
     }
     Ok(Some(dest))
+}
+
+/// How many candidate names a claim tries before it gives up.
+///
+/// The `_2`, `_3` … spellings mean a candidate is only ever taken by a run
+/// that collided on the same microsecond, so the bound is generous on
+/// purpose: it is there so a pathological directory cannot spin the loop
+/// forever, not because the number is expected to be reached.
+const MAX_CLAIM_ATTEMPTS: u32 = 1000;
+
+/// Claim a free `<parent>/<prefix><ts>` sibling and return it.
+///
+/// The name is **claimed**, not chosen: `create_new` for a file and
+/// `create_dir` for a legacy sled directory are what take it, so two runs
+/// against one root cannot pick the same sibling. Probing for a free name
+/// and then creating it has a window between the two, and that window is
+/// exactly where two concurrent runs would collide.
+///
+/// The fallback names are the `_2`, `_3` … spellings the tool has always
+/// used, so a run that collides on the timestamp still leaves a
+/// recognisable sibling.
+fn claim_sibling(parent: &Path, prefix: &str, stamp: &str, is_dir: bool) -> Result<PathBuf> {
+    for n in 1..=MAX_CLAIM_ATTEMPTS {
+        let cand = parent.join(candidate_name(prefix, stamp, n));
+        // Ask first whether the name is taken: `create_new` on an existing
+        // *directory* reports `Access is denied` rather than `AlreadyExists`,
+        // so the error kind alone cannot distinguish "occupied" from "cannot
+        // write here".
+        match std::fs::symlink_metadata(&cand) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("stat {}", cand.display())),
+        }
+        let claimed = if is_dir {
+            std::fs::create_dir(&cand).map(drop)
+        } else {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&cand)
+                .map(drop)
+        };
+        match claimed {
+            Ok(()) => return Ok(cand),
+            Err(e) => {
+                // A racing creator, or a candidate that appeared between the
+                // stat and the claim: the name is ours only if we created it.
+                match std::fs::symlink_metadata(&cand) {
+                    Ok(_) => continue,
+                    Err(_) => {
+                        return Err(e).with_context(|| format!("claim {}", cand.display()));
+                    }
+                }
+            }
+        }
+    }
+    bail!(
+        "no free backup name in {} after {MAX_CLAIM_ATTEMPTS} tries",
+        parent.display()
+    )
+}
+
+/// The `n`th candidate name for a prefix and a timestamp: the plain one, then
+/// `_2`, `_3`, and so on.
+fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
+    if n == 1 {
+        format!("{prefix}{stamp}")
+    } else {
+        format!("{prefix}{stamp}_{n}")
+    }
 }
 
 /// Keep only the newest `keep` siblings of `prefix` in `parent`.
