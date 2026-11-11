@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: B
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -57,10 +57,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T05-cache-meta-fast-path.md
     batch: B
     report: [L145-L164]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [4333d9e1, 477f1e61]
     review: B
-    note: retry session starting after ses_e37a0ed8affeNu57TQG5mQAgMa froze
+    note: implemented by ses_e36ee5a50ffeVagc7BmkKG5ink; preflight also requires the entries table, and one extra test pins the no-write-lock case
   - id: T06
     title: Copy-path round trips
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T06-copy-path-round-trips.md
@@ -196,10 +196,10 @@ reviews:
     result: T01 kept (0e9e49c3, e87f89af); T02 kept (df473b05, 43f5620d, 1c6110b5, bfa650ff); no fix or revert commits; 465 passed, 1 skipped; the two new T01 tests verified failing on the pre-fix code
     followups: [F1, F2, F3, F4, F5]
   - batch: B
-    status: pending
+    status: in_progress
     tasks: [T03, T04, T05]
-    base: null
-    head: null
+    base: e3f3e9e3
+    head: 477f1e61
     result: null
     followups: []
   - batch: C
@@ -278,7 +278,7 @@ followups:
 | A | T02 | completed | df473b05, 43f5620d, 1c6110b5, bfa650ff | review A kept |
 | B | T03 | pending_review | e3c1416a, 022792ae, 91bccb15 | implemented by ses_e37bb64ffffelY0gdWsLLUQ6Fa |
 | B | T04 | pending_review | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | implemented by ses_e37b1d4a9ffeHweJSEMYKroDmD |
-| B | T05 | in_progress | — | retry session starting |
+| B | T05 | pending_review | 4333d9e1, 477f1e61 | implemented by ses_e36ee5a50ffeVagc7BmkKG5ink |
 | C | T06 | pending | — | — |
 | C | T07 | pending | — | — |
 | C | T08 | pending | — | — |
@@ -299,6 +299,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — batch B review checkpoint opened: `phase: implement` →
+  `review`, review B `pending` → `in_progress`, base `e3f3e9e3`, head
+  `477f1e61`. T05 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `4333d9e1`, `477f1e61`; working tree clean.
 - 2026-11-11 — T05 retry: `pending` → `in_progress`.
 - 2026-11-11 — T05 session ses_e37a0ed8affeNu57TQG5mQAgMa froze on a network
   error: no commits, clean tree, so T05 `in_progress` → `pending` for a retry.
