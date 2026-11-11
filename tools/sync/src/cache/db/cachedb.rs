@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result, bail};
 use redb::{
-    Database, DatabaseError, ReadableDatabase, ReadableTable, ReadableTableMetadata,
-    backends::InMemoryBackend,
+    Database, DatabaseError, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
+    ReadableTableMetadata, backends::InMemoryBackend,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -86,6 +86,22 @@ fn require_current_version_for_write(version: u32) -> Result<()> {
     Ok(())
 }
 
+/// One row, decoded, from an open `entries` table.
+///
+/// The same decoding for a single row and for a batch of them, so a caller
+/// cannot get a different answer from [`CacheDb::get`] and
+/// [`CacheDb::get_many`] by accident: the batch is not a second reading of
+/// the row, it is the same reading of several rows.
+fn read_row(
+    tbl: &ReadOnlyTable<&'static str, &'static [u8]>,
+    rel: &str,
+) -> Result<Option<FileRec>> {
+    match tbl.get(rel).context("cache get")? {
+        None => Ok(None),
+        Some(g) => decode_rec(g.value()).map(Some),
+    }
+}
+
 /// An open redb cache file, read/write or read-only.
 ///
 /// Note: redb takes a file lock per *writable* database, so two read/write
@@ -98,20 +114,21 @@ pub struct CacheDb {
 }
 
 impl CacheDb {
+    /// Wrap a handle.
+    fn with_handle(db: Handle) -> Self {
+        Self { db }
+    }
+
     /// Wrap an already-open handle as this crate's participant side. The only
     /// place a [`Handle::Writable`] is built, so "who may create one" has one
     /// answer rather than one per caller.
     pub(in crate::cache) fn open_writable(db: Database) -> Self {
-        Self {
-            db: Handle::Writable(Arc::new(db)),
-        }
+        Self::with_handle(Handle::Writable(Arc::new(db)))
     }
 
     /// Wrap an already-open handle as this crate's observer side.
     pub(in crate::cache) fn open_read_only(db: redb::ReadOnlyDatabase) -> Self {
-        Self {
-            db: Handle::ReadOnly(db),
-        }
+        Self::with_handle(Handle::ReadOnly(db))
     }
 
     /// Bring the cache's `meta` row in line with the run's case mode.
@@ -239,9 +256,7 @@ impl CacheDb {
             .create_with_backend(InMemoryBackend::new())
             .context("open temp cache")?;
         Self::init_meta(&db, case_sensitive)?;
-        Ok(Self {
-            db: Handle::Writable(Arc::new(db)),
-        })
+        Ok(Self::with_handle(Handle::Writable(Arc::new(db))))
     }
 
     /// The test-only in-memory cache for `db_path`, created on first use and
@@ -273,9 +288,7 @@ impl CacheDb {
                 }
             }
         };
-        Ok(Self {
-            db: Handle::Writable(db),
-        })
+        Ok(Self::with_handle(Handle::Writable(db)))
     }
 
     /// The shared in-memory cache at `db_path`, if a run in this process opened
@@ -283,9 +296,9 @@ impl CacheDb {
     /// caller falls back to the file cache.
     pub fn memory_cache_at(db_path: &Path) -> Option<Self> {
         let caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
-        caches.get(db_path).map(|db| Self {
-            db: Handle::Writable(db.clone()),
-        })
+        caches
+            .get(db_path)
+            .map(|db| Self::with_handle(Handle::Writable(db.clone())))
     }
 
     /// Forget the shared in-memory cache at `db_path`, so the next open is cold.
@@ -330,9 +343,7 @@ impl CacheDb {
                 anyhow::anyhow!("record {} has no meta (corrupt?)", db_path.display())
             })?;
         require_current_version(meta.version, db_path, "record")?;
-        Ok(Self {
-            db: Handle::ReadOnly(db),
-        })
+        Ok(Self::with_handle(Handle::ReadOnly(db)))
     }
 
     /// True when this handle cannot write, i.e. it was opened
@@ -348,18 +359,67 @@ impl CacheDb {
         self.db.writable().context("cache is open read-only")
     }
 
+    /// Begin a read transaction.
+    ///
+    /// Every read of the entries table goes through here, so a read that
+    /// opens several transactions — and a read that opens one — are told
+    /// apart by where the transaction is taken.
+    fn begin_read(&self) -> Result<ReadTransaction> {
+        self.db.begin_read().context("begin read")
+    }
+
     /// Read one entry. Missing tables (fresh temp DBs) read as empty.
     pub fn get(&self, rel: &str) -> Result<Option<FileRec>> {
-        let txn = self.db.begin_read().context("begin read")?;
+        let txn = self.begin_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(None),
             Err(e) => bail!("open entries table: {e:#}"),
         };
-        match tbl.get(rel).context("cache get")? {
-            None => Ok(None),
-            Some(g) => decode_rec(g.value()).map(Some),
+        read_row(&tbl, rel)
+    }
+
+    /// Read several entries in **one** read transaction.
+    ///
+    /// For a caller that needs the *values* of several rows. The table is
+    /// opened once and every key is read from the same snapshot, so the read
+    /// costs one transaction whatever the number of keys — where a loop of
+    /// [`get`](Self::get) calls costs one transaction per key.
+    ///
+    /// The answer is one `(key, row)` per key asked for, in the order they
+    /// were asked for. A key that is not there answers `None`, exactly as
+    /// [`get`](Self::get) would, and a missing table — a fresh cache, not a
+    /// corrupt one — answers `None` for every key rather than failing.
+    ///
+    /// **A key-only caller wants [`load_keys`](Self::load_keys) instead.**
+    /// The two answer different questions: this one decodes every row it is
+    /// handed, and that one decodes nothing and answers only "which rows
+    /// exist?". Asking this for the key set would decode the whole table to
+    /// throw the values away.
+    pub fn get_many<'a>(
+        &self,
+        rels: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Vec<(String, Option<FileRec>)>> {
+        let keys: Vec<&str> = rels.into_iter().collect();
+        if keys.is_empty() {
+            // Nothing was asked, so there is nothing to read: no transaction
+            // and no table.
+            return Ok(Vec::new());
         }
+        let txn = self.begin_read()?;
+        let tbl = match txn.open_table(ENTRIES) {
+            Ok(t) => t,
+            Err(e) if is_table_missing(&e) => {
+                return Ok(keys.into_iter().map(|k| (k.to_string(), None)).collect());
+            }
+            Err(e) => bail!("open entries table: {e:#}"),
+        };
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            let rec = read_row(&tbl, key)?;
+            out.push((key.to_string(), rec));
+        }
+        Ok(out)
     }
 
     /// Every cached path, decoding nothing.
@@ -376,7 +436,7 @@ impl CacheDb {
     /// caller that needs the value wants `load_all`, and one that does not
     /// should not be able to ask for half of it by accident.
     pub fn load_keys(&self) -> Result<Vec<String>> {
-        let txn = self.db.begin_read().context("begin read")?;
+        let txn = self.begin_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(Vec::new()),
@@ -397,7 +457,7 @@ impl CacheDb {
     /// [`load_keys`](Self::load_keys). A missing table is still an empty
     /// answer rather than an error.
     pub fn entry_count(&self) -> Result<u64> {
-        let txn = self.db.begin_read().context("begin read")?;
+        let txn = self.begin_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(0),
@@ -408,7 +468,7 @@ impl CacheDb {
 
     /// Every cached path, with its record.
     pub fn load_all(&self) -> Result<HashMap<String, FileRec>> {
-        let txn = self.db.begin_read().context("begin read")?;
+        let txn = self.begin_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(HashMap::new()),

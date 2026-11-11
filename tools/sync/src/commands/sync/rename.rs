@@ -472,23 +472,40 @@ pub(super) fn rename_to_src_casing(
         // Move the cache rows with the files. A row under a renamed directory
         // moves even when that path is dst-only, or `compare-self` would report
         // the path it just moved as missing.
-        let keys = dst_db.load_keys()?;
-        let mut moves = Vec::new();
-        for key in keys {
-            let to = final_moves.apply(&key);
-            if to != key
-                && let Some(rec) = dst_db.get(&key)?
-            {
-                moves.push((key, to, rec));
+        //
+        // Nothing moves when nothing was renamed: no path changed its
+        // spelling, so no row changes its key either. The pass is therefore
+        // skipped whole, and a run with no rename does not read the cache at
+        // all.
+        if !renames.is_empty() {
+            // The rows to move, as pairs, before any of them is read: the
+            // read is one transaction for the whole set, not one per key.
+            let keys = dst_db.load_keys()?;
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for key in keys {
+                let to = final_moves.apply(&key);
+                if to != key {
+                    pairs.push((key, to));
+                }
             }
-        }
-        if !moves.is_empty() {
-            let mut w = dst_db.begin_write()?;
-            for (from, to, rec) in &moves {
-                w.remove(from)?;
-                w.put(to, rec)?;
+            // One read transaction for every moved row, where the loop this
+            // replaces opened one per row. The write below still begins after
+            // every read, so it sees the state the reads saw.
+            let rows = dst_db.get_many(pairs.iter().map(|(from, _)| from.as_str()))?;
+            let mut moves = Vec::new();
+            for ((from, to), (_, rec)) in pairs.iter().zip(rows) {
+                if let Some(rec) = rec {
+                    moves.push((from.clone(), to.clone(), rec));
+                }
             }
-            w.commit()?;
+            if !moves.is_empty() {
+                let mut w = dst_db.begin_write()?;
+                for (from, to, rec) in &moves {
+                    w.remove(from)?;
+                    w.put(to, rec)?;
+                }
+                w.commit()?;
+            }
         }
     }
     let on_disk = dry_run.then(|| DiskSpelling::new(&renames, &dir_moves));
