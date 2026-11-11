@@ -1066,6 +1066,80 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     );
 }
 
+/// **A copy carries src's timestamp to dst.**
+///
+/// The stamp is what makes a copied file *identical* to its source rather than
+/// merely equal in content: `compare` treats size+mtime+hash as identity, so
+/// a dst whose mtime drifted would read as changed on the next run and be
+/// copied again, forever.
+///
+/// Asserted on the file on disk, not through a `compare` afterwards. A compare
+/// answers "do the two sides agree", which several things can make true; the
+/// property here is narrower — dst's mtime is src's mtime — and it is the one
+/// a copy can lose on its own, since the bytes are written at a different
+/// moment than the source's timestamp.
+///
+/// The source's timestamp is pinned to a fixed past instant first, so "dst
+/// kept src's stamp" cannot be confused with "dst got stamped with the time
+/// of the copy", which would be a different (and wrong) value.
+///
+/// **Both flush shapes**, because the stamp is ordered against the flush: the
+/// flush puts the bytes on the disk, and the stamp has to land after it and
+/// before the handle closes. A shape that stamped before the flush would let
+/// the flush's own write-back move it again. `GIRSYNC_TEST_NO_FSYNC` picks
+/// which shape runs, so both are asked for explicitly rather than inheriting
+/// the workspace's choice.
+#[test]
+fn a_copied_file_carries_the_sources_timestamp() {
+    let t = temp_root("copy_mtime");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"payload");
+
+    // A fixed instant well in the past, so the copy's own write time cannot
+    // be mistaken for it.
+    let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(src.join("a.txt"))
+        .unwrap()
+        .set_modified(stamp)
+        .unwrap();
+
+    for no_fsync in ["0", "1"] {
+        let out = run_binary_raw(
+            &src,
+            &dst,
+            &[],
+            &[
+                ("GIRSYNC_TEST_CACHE", "memory"),
+                ("GIRSYNC_TEST_NO_FSYNC", no_fsync),
+            ],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "the copy must succeed with GIRSYNC_TEST_NO_FSYNC={no_fsync}; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"payload",
+            "the bytes were copied (GIRSYNC_TEST_NO_FSYNC={no_fsync})"
+        );
+        assert_eq!(
+            std::fs::metadata(dst.join("a.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            stamp,
+            "the copy carries src's timestamp, not the time of the copy \
+             (GIRSYNC_TEST_NO_FSYNC={no_fsync})"
+        );
+    }
+}
+
 /// **A copy into a directory this same run created must leave a cache row.**
 ///
 /// `prune_dst_cache` drops dst cache rows for paths that are no longer on disk,
