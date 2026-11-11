@@ -10,6 +10,7 @@ use tracing::{debug, info, trace};
 use super::super::plan::{DirPrefixes, Plan};
 use super::Applier;
 use super::copy::copy_one;
+use crate::hash::AlgoSet;
 use crate::report::Record;
 use crate::util::path_within;
 
@@ -151,6 +152,11 @@ impl<'a> Applier<'a> {
         // inside `put` only makes another worker's `put` wait; that worker holds no
         // permit and needs none.
         let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
+        // The algorithm set the digester wants, built once for the whole phase
+        // rather than once per copied file. The request slice stays beside it:
+        // `verify_digests` walks the *request*, in the order the user asked for
+        // it, and only the requested digests are judged.
+        let algos = AlgoSet::from_iter(self.common.algos.iter().copied());
         let pool = self.rw.pool()?;
         let results = pool.install(|| {
             use rayon::prelude::*;
@@ -169,6 +175,7 @@ impl<'a> Applier<'a> {
                             self.src_canonical,
                             self.dst,
                             &item.rel,
+                            algos,
                             &self.common.algos,
                             buf,
                         )

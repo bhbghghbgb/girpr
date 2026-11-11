@@ -182,13 +182,21 @@ fn test_no_fsync() -> bool {
 /// dst is a faithful copy of a src that no longer exists, and the pair looks
 /// clean. That is a race the tool cannot win anyway — phase A's stat sees the new
 /// mtime on the next run and re-copies.
+///
+/// **Two algorithm arguments, and they answer different questions.** `algos` is
+/// the *set* — which digests to compute — and it is the same for every copy in
+/// a phase, so the caller builds it once and passes it down. `requested` is the
+/// run's request as the user typed it, and it is what `verify_digests` walks:
+/// only the requested digests are judged, and a set would report them in
+/// canonical order rather than the order the user asked in.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 pub(super) fn copy_one(
     src_root: &Path,
     src_canonical: &Path,
     dst_root: &Path,
     rel: &str,
-    algos: &[HashAlg],
+    algos: AlgoSet,
+    requested: &[HashAlg],
     buf: &mut Vec<u8>,
 ) -> Result<FileRec> {
     trace!("copy_one start");
@@ -287,12 +295,12 @@ pub(super) fn copy_one(
     let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
     // File::create truncates existing, and `copy_and_digest` writes in place.
     let mut fout = fout;
-    // The request is a slice; what the digester wants is a set. One conversion per
-    // copy, from a list of at most two, and it borrows nothing — the slice stays the
-    // thing `verify_digests` walks below, because only the *requested* digests are
-    // judged.
-    let set = AlgoSet::from_iter(algos.iter().copied());
-    let sh = copy_and_digest(&mut fin, &mut fout, &set, buf)
+    // The request is a slice; what the digester wants is a set. The set is
+    // built once per phase and handed down, so this conversion is not repeated
+    // per file. The slice stays the thing `verify_digests` walks below, because
+    // only the *requested* digests are judged, and in the order they were asked
+    // for.
+    let sh = copy_and_digest(&mut fin, &mut fout, &algos, buf)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     if !test_no_fsync() {
         flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
@@ -335,8 +343,8 @@ pub(super) fn copy_one(
             hashes: DigestSet::default(),
         });
     }
-    let dh = hash_file(&d, &set).with_context(|| format!("hash {}", d.display()))?;
-    verify_digests(&d, algos, &sh, &dh)?;
+    let dh = hash_file(&d, &algos).with_context(|| format!("hash {}", d.display()))?;
+    verify_digests(&d, requested, &sh, &dh)?;
     tracing::Span::current().record("bytes", ssize);
     trace!(bytes = ssize, "copy_one done");
     Ok(FileRec {
