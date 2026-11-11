@@ -21,10 +21,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T01-by-name-digest-lookup.md
     batch: A
     report: [L59-L87, L572-L575]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [0e9e49c3, e87f89af]
     review: A
-    note: implementing session starting
+    note: implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I; fmt/nextest/clippy/doc clean
   - id: T02
     title: Plan-time early returns and prefix memoization
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T02-plan-time-early-returns.md
@@ -244,7 +244,7 @@ followups: []
 
 | batch | id | status | commits | note |
 | --- | --- | --- | --- | --- |
-| A | T01 | in_progress | — | implementing session starting |
+| A | T01 | pending_review | 0e9e49c3, e87f89af | implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I |
 | A | T02 | pending | — | — |
 | B | T03 | pending | — | — |
 | B | T04 | pending | — | — |
@@ -269,6 +269,8 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — T01 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `0e9e49c3`, `e87f89af`; working tree clean.
 - 2026-11-11 — spawn mechanism settled (`openchamber session.create`, agent
   `build`, repo root as working directory, one session at a time).
   `phase: blocked-on-spawn` → `implement`; T01 `pending` → `in_progress`.

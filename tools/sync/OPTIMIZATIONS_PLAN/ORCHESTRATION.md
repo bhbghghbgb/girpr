@@ -77,7 +77,9 @@ Repeat until the queue has no `pending` task:
    that no partial work must be preserved) or ask the user. If it left
    commits, treat it as `pending_review` and record the hashes.
 2. **Spawn one implementing session** with the prompt in §3. Pass the task
-   file path and its report line ranges, not the text of either.
+   file path and its report line ranges, not the text of either. Give the
+   session a short title that names the task, e.g. `Implement T01`, so the
+   queue is readable in the session list.
 3. **Verify the hand-off.** The session must return commit hashes and a clean
    `git status`. If it returned `none` or left uncommitted work, do not mark
    it reviewed: ask the session to commit or report the blocker.
@@ -123,7 +125,8 @@ A checkpoint covers exactly the batch's tasks that are `pending_review`.
 
 1. Record `phase: review`, `active_batch: <batch>`, review `in_progress`, and
    the base commit (the first commit's parent) and head commit.
-2. Spawn **one review-and-fix session** with the prompt in §5.
+2. Spawn **one review-and-fix session** with the prompt in §5. Give it a short
+   title that names the batch, e.g. `Review A`.
 3. The reviewer returns a structured result:
    - per task: `kept`, `fixed`, `reverted`, or `blocked`;
    - fix/revert commit hashes;
@@ -197,9 +200,10 @@ After every task is `completed` or `reverted`:
 3. The orchestrator records the grouping in `followups[].batch` and commits
    the state.
 4. For each follow-up batch: set `phase: followups-implement`, spawn one
-   implementing session with the batch's follow-ups and the same rules as §3.
-   Mark its items `pending_review`, then `phase: followups-review` and run one
-   review session as in §4–§5. Follow-up fixes that generate new follow-ups
+   implementing session with the batch's follow-ups and the same rules as §3,
+   titled e.g. `Follow-ups F1`. Mark its items `pending_review`, then
+   `phase: followups-review` and run one review session as in §4–§5, titled
+   e.g. `Review F1`. Follow-up fixes that generate new follow-ups
    are appended again; do not loop forever — if a follow-up produces another
    follow-up of the same kind, record it as `skipped` with the reason.
 5. Repeat until no follow-up is `pending` or `pending_review`.
