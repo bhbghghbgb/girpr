@@ -299,6 +299,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — batch B review session ses_e36131fa8ffekFiiNAc8v61wo2 failed
+  twice (ECONNRESET, then a generic failure); it stayed frozen with no
+  commits and a clean tree, so it was abandoned and a new review session was
+  spawned with the same prompt. Base and head are unchanged.
 - 2026-11-11 — batch B review checkpoint opened: `phase: implement` →
   `review`, review B `pending` → `in_progress`, base `e3f3e9e3`, head
   `477f1e61`. T05 implemented: `pending` → `in_progress` → `pending_review`,
