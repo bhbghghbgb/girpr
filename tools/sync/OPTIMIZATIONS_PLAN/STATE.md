@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: C
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -84,10 +84,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T08-phase-a-one-pass.md
     batch: C
     report: [L246-L278]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [a545f9cd, 7b31a903]
     review: C
-    note: implementing session starting
+    note: implemented by ses_e341ef583ffebKfqVkbXCDm7DR; the fix-up pulls in ancestors of every included entry, not included files only, to keep the map, counters and prune set identical
   - id: T09
     title: Backup policy and the failure story
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T09-backup-policy.md
@@ -203,10 +203,10 @@ reviews:
     result: T03 kept (e3c1416a, 022792ae, 91bccb15); T04 kept (2078adde, 6b27a8ca, 778d99d2, b95e9fd4); T05 kept (4333d9e1, 477f1e61); no fix or revert commits; 473 passed, 1 skipped; the T03 and T04 deviations judged justified
     followups: [F6, F7, F8]
   - batch: C
-    status: pending
+    status: in_progress
     tasks: [T06, T07, T08]
-    base: null
-    head: null
+    base: 52af2907
+    head: 7b31a903
     result: null
     followups: []
   - batch: D
@@ -299,7 +299,7 @@ followups:
 | B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
 | C | T06 | pending_review | c648ae6d, 71f72513, 1f86077f | implemented by ses_e34d04059ffe9JFJSKWLsbXy48 |
 | C | T07 | pending_review | 9bb075e6, ed6c2745 | implemented by ses_e346c48c9ffeqd376JFuF6RZ6g |
-| C | T08 | in_progress | — | implementing session starting |
+| C | T08 | pending_review | a545f9cd, 7b31a903 | implemented by ses_e341ef583ffebKfqVkbXCDm7DR |
 | D | T09 | pending | — | — |
 | D | T10 | pending | — | — |
 | D | T11 | pending | — | — |
@@ -317,6 +317,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch C review checkpoint opened: `phase: implement` →
+  `review`, review C `pending` → `in_progress`, base `52af2907`, head
+  `7b31a903`. T08 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `a545f9cd`, `7b31a903`; working tree clean.
 - 2026-11-12 — T08 selected: `pending` → `in_progress`.
 - 2026-11-12 — T07 implemented: `pending` → `in_progress` → `pending_review`,
   commits `9bb075e6`, `ed6c2745`; working tree clean.
