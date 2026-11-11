@@ -75,10 +75,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T07-cache-scan-consolidation.md
     batch: C
     report: [L280-L304, L580-L583]
-    status: pending
+    status: in_progress
     commits: []
     review: C
-    note: null
+    note: implementing session starting
   - id: T08
     title: Phase A one tree pass
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T08-phase-a-one-pass.md
@@ -298,7 +298,7 @@ followups:
 | B | T04 | completed | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | review B kept |
 | B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
 | C | T06 | pending_review | c648ae6d, 71f72513, 1f86077f | implemented by ses_e34d04059ffe9JFJSKWLsbXy48 |
-| C | T07 | pending | — | — |
+| C | T07 | in_progress | — | implementing session starting |
 | C | T08 | pending | — | — |
 | D | T09 | pending | — | — |
 | D | T10 | pending | — | — |
@@ -317,6 +317,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T07 selected: `pending` → `in_progress`.
 - 2026-11-12 — T06 implemented: `pending` → `in_progress` → `pending_review`,
   commits `c648ae6d`, `71f72513`, `1f86077f`; working tree clean.
 - 2026-11-11 — batch C started: T06 `pending` → `in_progress`.
