@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
-active_batch: C
+phase: implement
+active_batch: D
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -66,28 +66,28 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T06-copy-path-round-trips.md
     batch: C
     report: [L306-L342]
-    status: pending_review
+    status: completed
     commits: [c648ae6d, 71f72513, 1f86077f]
     review: C
-    note: implemented by ses_e34d04059ffe9JFJSKWLsbXy48; the conditional third commit was used for a new end-to-end mtime test
+    note: review C kept; the conditional third commit accepted as the end-to-end mtime test the task asks for
   - id: T07
     title: Cache scan consolidation
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T07-cache-scan-consolidation.md
     batch: C
     report: [L280-L304, L580-L583]
-    status: pending_review
+    status: completed
     commits: [9bb075e6, ed6c2745]
     review: C
-    note: implemented by ses_e346c48c9ffeqd376JFuF6RZ6g; the no-op case is observed with read-transaction counters, and the no-op test lives in the crate because the counter is crate-private
+    note: review C kept; the counter-based observation and the in-crate no-op test accepted as forced by the crate-private counter
   - id: T08
     title: Phase A one tree pass
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T08-phase-a-one-pass.md
     batch: C
     report: [L246-L278]
-    status: pending_review
+    status: completed
     commits: [a545f9cd, 7b31a903]
     review: C
-    note: implemented by ses_e341ef583ffebKfqVkbXCDm7DR; the fix-up pulls in ancestors of every included entry, not included files only, to keep the map, counters and prune set identical
+    note: review C kept; the wider ancestor pull-in judged correct and necessary, the task sketch's files-only shape proven to change the map
   - id: T09
     title: Backup policy and the failure story
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T09-backup-policy.md
@@ -203,12 +203,12 @@ reviews:
     result: T03 kept (e3c1416a, 022792ae, 91bccb15); T04 kept (2078adde, 6b27a8ca, 778d99d2, b95e9fd4); T05 kept (4333d9e1, 477f1e61); no fix or revert commits; 473 passed, 1 skipped; the T03 and T04 deviations judged justified
     followups: [F6, F7, F8]
   - batch: C
-    status: in_progress
+    status: done
     tasks: [T06, T07, T08]
     base: 52af2907
     head: 7b31a903
-    result: null
-    followups: []
+    result: T06 kept (c648ae6d, 71f72513, 1f86077f); T07 kept (9bb075e6, ed6c2745); T08 kept (a545f9cd, 7b31a903); no fix or revert commits; 485 passed, 1 skipped; the T08 deviation proven required by patching the new code to the task sketch
+    followups: [F9, F10, F11, F12, F13, F14]
   - batch: D
     status: pending
     tasks: [T09, T10, T11]
@@ -286,6 +286,42 @@ followups:
     status: pending
     batch: null
     commits: []
+  - id: F9
+    source: T08
+    description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
+    status: pending
+    batch: null
+    commits: []
+  - id: F10
+    source: T08
+    description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
+    status: pending
+    batch: null
+    commits: []
+  - id: F11
+    source: T07
+    description: The no-op test observes only the re-key pass's read-transaction count, not the run's total cache scans, so the broader claim that a no-op run does not scan the cache more than once is still unpinned.
+    status: pending
+    batch: null
+    commits: []
+  - id: F12
+    source: T07
+    description: CacheDb::read_transaction_count counts every read transaction on the handle rather than only entries-table reads, so a future read on another table would silently move the number the new tests pin.
+    status: pending
+    batch: null
+    commits: []
+  - id: F13
+    source: T07
+    description: get_many allocates a String per key; a borrow-shaped variant would avoid the copies for a caller that only needs the rows.
+    status: pending
+    batch: null
+    commits: []
+  - id: F14
+    source: T06
+    description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
@@ -297,9 +333,9 @@ followups:
 | B | T03 | completed | e3c1416a, 022792ae, 91bccb15 | review B kept |
 | B | T04 | completed | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | review B kept |
 | B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
-| C | T06 | pending_review | c648ae6d, 71f72513, 1f86077f | implemented by ses_e34d04059ffe9JFJSKWLsbXy48 |
-| C | T07 | pending_review | 9bb075e6, ed6c2745 | implemented by ses_e346c48c9ffeqd376JFuF6RZ6g |
-| C | T08 | pending_review | a545f9cd, 7b31a903 | implemented by ses_e341ef583ffebKfqVkbXCDm7DR |
+| C | T06 | completed | c648ae6d, 71f72513, 1f86077f | review C kept |
+| C | T07 | completed | 9bb075e6, ed6c2745 | review C kept |
+| C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
 | D | T09 | pending | — | — |
 | D | T10 | pending | — | — |
 | D | T11 | pending | — | — |
@@ -317,6 +353,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review C `done`: T06 kept, T07 kept, T08 kept, no fix or revert
+  commits; follow-ups F9–F14 appended with status `pending`; T06, T07 and T08
+  `pending_review` → `completed`. `phase: review` → `implement`,
+  `active_batch: C` → `D`.
 - 2026-11-12 — batch C review checkpoint opened: `phase: implement` →
   `review`, review C `pending` → `in_progress`, base `52af2907`, head
   `7b31a903`. T08 implemented: `pending` → `in_progress` → `pending_review`,
