@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
-active_batch: B
+phase: implement
+active_batch: C
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -39,28 +39,28 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
     batch: B
     report: [L88-L116, L576-L579]
-    status: pending_review
+    status: completed
     commits: [e3c1416a, 022792ae, 91bccb15]
     review: B
-    note: implemented by ses_e37bb64ffffelY0gdWsLLUQ6Fa; three commits vs the planned two, and e3c1416a was amended once immediately after creation
+    note: review B kept; the extra commit and the one-time amend judged a process deviation only, content sound
   - id: T04
     title: Shared one-side case index
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T04-shared-case-index.md
     batch: B
     report: [L216-L244]
-    status: pending_review
+    status: completed
     commits: [2078adde, 6b27a8ca, 778d99d2, b95e9fd4]
     review: B
-    note: implemented by ses_e37b1d4a9ffeHweJSEMYKroDmD; shared_pairs converted in commit 1 instead of 2 (dead-code warning), plus a fourth clippy lifetimes commit
+    note: review B kept; commit reorder and the clippy commit judged justified
   - id: T05
     title: Cache meta open fast path
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T05-cache-meta-fast-path.md
     batch: B
     report: [L145-L164]
-    status: pending_review
+    status: completed
     commits: [4333d9e1, 477f1e61]
     review: B
-    note: implemented by ses_e36ee5a50ffeVagc7BmkKG5ink; preflight also requires the entries table, and one extra test pins the no-write-lock case
+    note: review B kept; the entries-table check judged a strengthening, not a scope break
   - id: T06
     title: Copy-path round trips
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T06-copy-path-round-trips.md
@@ -196,12 +196,12 @@ reviews:
     result: T01 kept (0e9e49c3, e87f89af); T02 kept (df473b05, 43f5620d, 1c6110b5, bfa650ff); no fix or revert commits; 465 passed, 1 skipped; the two new T01 tests verified failing on the pre-fix code
     followups: [F1, F2, F3, F4, F5]
   - batch: B
-    status: in_progress
+    status: done
     tasks: [T03, T04, T05]
     base: e3f3e9e3
     head: 477f1e61
-    result: null
-    followups: []
+    result: T03 kept (e3c1416a, 022792ae, 91bccb15); T04 kept (2078adde, 6b27a8ca, 778d99d2, b95e9fd4); T05 kept (4333d9e1, 477f1e61); no fix or revert commits; 473 passed, 1 skipped; the T03 and T04 deviations judged justified
+    followups: [F6, F7, F8]
   - batch: C
     status: pending
     tasks: [T06, T07, T08]
@@ -268,6 +268,24 @@ followups:
     status: pending
     batch: null
     commits: []
+  - id: F6
+    source: T03
+    description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
+    status: pending
+    batch: null
+    commits: []
+  - id: F7
+    source: T05
+    description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
+    status: pending
+    batch: null
+    commits: []
+  - id: F8
+    source: T05
+    description: Plan bookkeeping only, not a code change: the T05 task file's design_notes pointer resolves to README.md, not to DESIGN-NOTES.md, which never mentions the cache's meta row.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
@@ -276,9 +294,9 @@ followups:
 | --- | --- | --- | --- | --- |
 | A | T01 | completed | 0e9e49c3, e87f89af | review A kept |
 | A | T02 | completed | df473b05, 43f5620d, 1c6110b5, bfa650ff | review A kept |
-| B | T03 | pending_review | e3c1416a, 022792ae, 91bccb15 | implemented by ses_e37bb64ffffelY0gdWsLLUQ6Fa |
-| B | T04 | pending_review | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | implemented by ses_e37b1d4a9ffeHweJSEMYKroDmD |
-| B | T05 | pending_review | 4333d9e1, 477f1e61 | implemented by ses_e36ee5a50ffeVagc7BmkKG5ink |
+| B | T03 | completed | e3c1416a, 022792ae, 91bccb15 | review B kept |
+| B | T04 | completed | 2078adde, 6b27a8ca, 778d99d2, b95e9fd4 | review B kept |
+| B | T05 | completed | 4333d9e1, 477f1e61 | review B kept |
 | C | T06 | pending | — | — |
 | C | T07 | pending | — | — |
 | C | T08 | pending | — | — |
@@ -299,6 +317,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — review B `done`: T03 kept, T04 kept, T05 kept, no fix or revert
+  commits; follow-ups F6–F8 appended with status `pending`; T03, T04 and T05
+  `pending_review` → `completed`. `phase: review` → `implement`,
+  `active_batch: B` → `C`.
 - 2026-11-11 — batch B review session ses_e36131fa8ffekFiiNAc8v61wo2 failed
   twice (ECONNRESET, then a generic failure); it stayed frozen with no
   commits and a clean tree, so it was abandoned and a new review session was
