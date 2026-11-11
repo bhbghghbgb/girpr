@@ -305,7 +305,6 @@ pub(super) fn copy_one(
     if !test_no_fsync() {
         flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
     }
-    drop(fout);
     // preserve mtime
     //
     // **This is load-bearing, and its failure aborts the copy.** The bytes are
@@ -315,11 +314,18 @@ pub(super) fn copy_one(
     // mismatch, but "aborts an otherwise-good copy" is the documented shape
     // (README, `copy` step) - a test needs a platform-specific read-only/ACL
     // setup, so none injects this failure.
+    //
+    // **Stamped on the handle that is already open.** `set_modified` takes
+    // `&self`, so the destination handle that wrote the bytes can carry the
+    // stamp: no second open of the file, and no window in which the file is
+    // closed but unstamped. The order is unchanged — after the flush, before
+    // the handle is dropped — because the stamp has to follow the write and
+    // precede the close.
     if let Some(st) = smtime_sys {
-        let f = std::fs::OpenOptions::new().write(true).open(&d)?;
-        f.set_modified(st)
+        fout.set_modified(st)
             .with_context(|| format!("set mtime {}", d.display()))?;
     }
+    drop(fout);
     // verify: size + mtime + hash
     let dmeta = std::fs::metadata(&d).with_context(|| format!("stat {}", d.display()))?;
     if dmeta.len() != ssize {
