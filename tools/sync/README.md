@@ -297,9 +297,10 @@ called *rw* and not *io*:
 `stat` is excluded deliberately: it is orders of magnitude cheaper than a read, and
 including it would let the counter be spent entirely on `stat` calls over a tree of
 many small files. The cache is excluded because it is not tree I/O the limiter is
-about; the two `fs::copy` snapshots of the cache file (`girpr-cache-backup-*`,
-`girpr-cache-old-*`) *are* whole-file copies on the same physical disk, but they run
-once, serially, before any parallel phase exists, so gating them would be a no-op.
+about; the cache copies (`girpr-cache-backup-*` beside src's cache,
+`girpr-cache-old-*` beside dst's) *are* whole-file copies on the same physical
+disk, but they run once, serially, before any parallel phase exists, so gating
+them would be a no-op.
 
 ### What a copy costs
 
@@ -386,7 +387,9 @@ does **not** mean every stored digest is replaced:
 
 So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
-from a bad prune; it is a recovery aid, not a correctness mechanism.
+from a bad prune; it is a recovery aid, not a correctness mechanism, and
+`--no-backup` skips writing it — see
+[Backups and failures](#backups-and-failures).
 
 The prune keeps rows for what the run *created* — new directories, copied files,
 directories that replaced a file — as well as what it found, and drops rows for
@@ -731,8 +734,13 @@ Mirrors `src` → `dst`:
    contains it (each checked after its side's walk and before any mirror change; a
    link pointing anywhere else is ordinary content), or on any IO error (dangling
    symlink, walk loop, locked file — first error aborts the run).
-2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
-   `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
+2. Backup `src`'s DB to `girpr-cache-backup-<ts>`, and snapshot dst's pre-sync
+   state to `girpr-cache-old-<ts>` — before any write. `current` is
+   authoritative; `old-*`/`backup-*` are never auto-read. dst gets the
+   snapshot only: it is a copy of the same bytes taken at the same moment, so
+   a second name for it would be a third copy of one file. `--no-backup`
+   skips both copies and `--backup-retain N` bounds how many are kept — see
+   [Backups and failures](#backups-and-failures).
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
@@ -815,6 +823,50 @@ nothing.
 nothing (no backups, no cache updates, no FS changes). Its records are the same
 ones a real run reports, with `dry_run=true` on the `SUMMARY`; see the
 `--dry-run` section below.
+
+### Backups and failures
+
+A backup is a **recovery aid, not a correctness mechanism**. The live
+`<root>/girpr-cache` is authoritative, and a `girpr-cache-backup-*` copy or a
+`girpr-cache-old-*` snapshot is never read back automatically: no run's answer
+depends on one, and no run restores from one for you.
+
+What a run leaves behind is therefore a **policy**, not a fixed step:
+
+| | what a run copies aside |
+| --- | --- |
+| default | src: `girpr-cache-backup-<ts>`; dst: `girpr-cache-old-<ts>` (dst's pre-sync state) |
+| `--no-backup` | nothing — no copy, no snapshot |
+| `--backup-retain N` | the same, but only the newest N siblings of each prefix are kept |
+
+`--backup-retain N` counts **per prefix and per directory**: the
+`girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
+snapshots beside dst's cache are two separate lists, each keeping its own
+newest N. `N` must be at least 1 — `--backup-retain 0` is refused with exit
+`3`, and `--no-backup` is how you ask for no copies at all. Without the flag
+the copies accumulate and are cleaned by hand.
+
+**What a failure leaves behind.** The copies are made *before* the caches are
+removed, so a run that fails while removing them leaves **both** a copy and a
+live cache:
+
+- src: `girpr-cache-backup-<ts>` *and* the live `girpr-cache`;
+- dst: `girpr-cache-old-<ts>` *and* the live `girpr-cache`.
+
+That is not a bug — the copy is what the removal was for — but it is the state
+a failed `--ignore-cache` leaves, and it is worth knowing before you go
+looking for "the missing cache". The next run with `--ignore-cache` removes it
+again; the copies are there to look at, and the tool will not look at them for
+you.
+
+With `--no-backup` there is no copy at all, so `--no-backup --ignore-cache`
+removes the cache and keeps nothing: the cache is rebuilt from disk on the next
+run. That is the one combination where the removal has no safety net.
+
+A copy that fails is not left behind — the half-written sibling is removed
+rather than sitting there looking like a backup — and a sibling's name is
+*claimed* (`create_new`, or `create_dir` for a legacy sled directory), so two
+runs against one root cannot end up writing the same file.
 
 ### `--dry-run`
 
@@ -1163,6 +1215,7 @@ by what the planner asked for.
 | a stat-differing, one-sided, or conflicting path | nothing — already decided |
 | a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
+| a backup copy | one whole-file copy of the cache — src's `backup-*`, dst's `old-*`; `--no-backup` skips both |
 
 Two places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
@@ -1180,9 +1233,9 @@ them; `--dry-run` costs the same again.
 
 - Deletes extras **by default**; in-place truncate means a killed run leaves
   truncated files (entries were pre-dropped, so rerun re-copies — verify with `compare`).
-- Backups/olds accumulate (`keep-all`, suffixed `_2…` on timestamp collision);
-  clean them manually. They are `girpr-cache*` (case-insensitively on Windows)
-  so never sync.
+- Backups/olds accumulate by default (`keep-all`, suffixed `_2…` on timestamp
+  collision); `--backup-retain N` bounds it, or clean them manually. They are
+  `girpr-cache*` (case-insensitively on Windows) so never sync.
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a

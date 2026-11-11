@@ -2,7 +2,8 @@
 //!
 //! Layout: `<folder>/girpr-cache` is a redb file.
 //! Backups: `<folder>/girpr-cache-backup-<ts>` and `<folder>/girpr-cache-old-<ts>`
-//! (file copies, keep-all). Record-only inputs: any path whose final component
+//! (file copies; kept all by default, bounded by `--backup-retain N`).
+//! Record-only inputs: any path whose final component
 //! starts with `girpr-cache`.
 //!
 //! Module map:
