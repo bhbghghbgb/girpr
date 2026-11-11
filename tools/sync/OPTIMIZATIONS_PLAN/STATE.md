@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
-active_batch: A
+phase: implement
+active_batch: B
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -21,19 +21,19 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T01-by-name-digest-lookup.md
     batch: A
     report: [L59-L87, L572-L575]
-    status: pending_review
+    status: completed
     commits: [0e9e49c3, e87f89af]
     review: A
-    note: implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I; fmt/nextest/clippy/doc clean
+    note: review A kept; no fix or revert commits
   - id: T02
     title: Plan-time early returns and prefix memoization
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T02-plan-time-early-returns.md
     batch: A
     report: [L191-L206, L344-L368, L584-L586]
-    status: pending_review
+    status: completed
     commits: [df473b05, 43f5620d, 1c6110b5, bfa650ff]
     review: A
-    note: implemented by ses_e37d03ebcffeUsykYK5wdzNmd2; fmt/nextest/clippy clean
+    note: review A kept; no fix or revert commits
   - id: T03
     title: Document the case-fold rules
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
@@ -189,12 +189,12 @@ tasks:
     note: null
 reviews:
   - batch: A
-    status: in_progress
+    status: done
     tasks: [T01, T02]
     base: 8b40214f
     head: bfa650ff
-    result: null
-    followups: []
+    result: T01 kept (0e9e49c3, e87f89af); T02 kept (df473b05, 43f5620d, 1c6110b5, bfa650ff); no fix or revert commits; 465 passed, 1 skipped; the two new T01 tests verified failing on the pre-fix code
+    followups: [F1, F2, F3, F4, F5]
   - batch: B
     status: pending
     tasks: [T03, T04, T05]
@@ -237,15 +237,45 @@ reviews:
     head: null
     result: null
     followups: []
-followups: []
+followups:
+  - id: F1
+    source: T01
+    description: foreign_known resolves names through HashAlg::from_str, whose error path allocates an UnknownHash string for every non-matching foreign name; an ASCII-case comparison against the canonical spelling would be allocation-free.
+    status: pending
+    batch: null
+    commits: []
+  - id: F2
+    source: T01
+    description: DESIGN-NOTES "A digest is looked up by name, not by slot" still says "two lookups" and does not mention get_algo or the ASCII-case widening; T16 may already cover this reconciliation.
+    status: pending
+    batch: null
+    commits: []
+  - id: F3
+    source: T02
+    description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
+    status: pending
+    batch: null
+    commits: []
+  - id: F4
+    source: T02
+    description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
+    status: pending
+    batch: null
+    commits: []
+  - id: F5
+    source: T02
+    description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
 
 | batch | id | status | commits | note |
 | --- | --- | --- | --- | --- |
-| A | T01 | pending_review | 0e9e49c3, e87f89af | implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I |
-| A | T02 | pending_review | df473b05, 43f5620d, 1c6110b5, bfa650ff | implemented by ses_e37d03ebcffeUsykYK5wdzNmd2 |
+| A | T01 | completed | 0e9e49c3, e87f89af | review A kept |
+| A | T02 | completed | df473b05, 43f5620d, 1c6110b5, bfa650ff | review A kept |
 | B | T03 | pending | — | — |
 | B | T04 | pending | — | — |
 | B | T05 | pending | — | — |
@@ -269,6 +299,10 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — review A `done`: T01 kept, T02 kept, no fix or revert commits;
+  follow-ups F1–F5 appended with status `pending`; T01 and T02
+  `pending_review` → `completed`. `phase: review` → `implement`,
+  `active_batch: A` → `B`.
 - 2026-11-11 — batch A review checkpoint opened: `phase: implement` →
   `review`, review A `pending` → `in_progress`, base `8b40214f`, head
   `bfa650ff`. T02 implemented: `pending` → `in_progress` → `pending_review`,
