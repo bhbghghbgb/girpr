@@ -30,10 +30,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T02-plan-time-early-returns.md
     batch: A
     report: [L191-L206, L344-L368, L584-L586]
-    status: pending
+    status: in_progress
     commits: []
     review: A
-    note: null
+    note: implementing session starting
   - id: T03
     title: Document the case-fold rules
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T03-one-case-fold.md
@@ -245,7 +245,7 @@ followups: []
 | batch | id | status | commits | note |
 | --- | --- | --- | --- | --- |
 | A | T01 | pending_review | 0e9e49c3, e87f89af | implemented by ses_e37ff2247ffeHyQU2AsdGlgD6I |
-| A | T02 | pending | — | — |
+| A | T02 | in_progress | — | implementing session starting |
 | B | T03 | pending | — | — |
 | B | T04 | pending | — | — |
 | B | T05 | pending | — | — |
@@ -269,6 +269,7 @@ followups: []
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-11 — T02 selected: `pending` → `in_progress`.
 - 2026-11-11 — T01 implemented: `pending` → `in_progress` → `pending_review`,
   commits `0e9e49c3`, `e87f89af`; working tree clean.
 - 2026-11-11 — spawn mechanism settled (`openchamber session.create`, agent
