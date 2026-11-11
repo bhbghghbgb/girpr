@@ -422,12 +422,24 @@ pub(crate) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 ///
 /// Conservative where it cannot tell: a stat error other than `NotFound` is
 /// returned, and `NotFound` means there is no inode to truncate.
+///
+/// A run with no copy has nothing to protect: it cannot truncate an inode, so
+/// the preflight answers without reading a single link count. The removals it
+/// would credit are this guard's own accounting, not a separate concern — they
+/// only matter to a copy that is going to happen.
 pub(crate) fn ensure_hard_linked_targets_safe(
     plan: &Plan,
     dm: &HashMap<String, EffRec>,
     dst: &Path,
     on_disk: Option<&super::super::rename::DiskSpelling>,
 ) -> Result<()> {
+    // A copy-free run cannot truncate an inode, so the preflight has nothing
+    // to protect. This is not "the plan is empty": deletes and fix-dirs are
+    // accounted for below, and they are only read to credit a name the copy
+    // phase removes.
+    if plan.copy.is_empty() {
+        return Ok(());
+    }
     // Ordinary-file names this run removes before copying, by the inode they
     // name. A link is skipped: its removal leaves the target's count unchanged.
     let mut removed: HashMap<Identity, u64> = HashMap::new();
