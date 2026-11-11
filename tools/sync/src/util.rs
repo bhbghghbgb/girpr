@@ -183,7 +183,8 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// One shape for the sites that look a path up by its case-folded spelling, so
 /// that they cannot drift on how such an index is built. The fold itself is
 /// [`path_key`]'s; this owns only the *index* over it. The entries borrow the
-/// map's keys and values, so the index keeps no second copy of the tree alive.
+/// map's own keys and values, so the index holds one folded spelling per key
+/// and no second copy of the tree's entries.
 ///
 /// **The index is unambiguous.** A mixed-case collision within one side is
 /// already fatal before any caller reaches here — [`check_mixed_case_keys`]
@@ -365,6 +366,80 @@ mod tests {
         assert_eq!(path_key("Game/Readme.TXT"), "game/readme.txt");
         assert_eq!(path_key("Ärger"), "Ärger");
         assert_ne!(path_key("\u{212A}"), path_key("k"));
+    }
+
+    /// The folded-key index holds every key under its folded spelling, and each
+    /// entry carries the key it was built from together with the value the map
+    /// holds under it — the two things a caller needs to go on to pair, sort or
+    /// report, and the reason the index is not a map of folded keys to values
+    /// alone.
+    #[test]
+    fn the_folded_key_index_holds_every_key_under_its_folded_spelling() {
+        let map: HashMap<String, u32> = [
+            ("Readme.TXT".to_string(), 1),
+            ("sub/Dir/File.bin".to_string(), 2),
+            ("plain.txt".to_string(), 3),
+        ]
+        .into_iter()
+        .collect();
+        let index = folded_keys(&map);
+        assert_eq!(index.len(), map.len(), "one entry per key");
+        for (key, value) in &map {
+            let (folded_key, entry) = index
+                .get_key_value(&path_key(key))
+                .expect("every key is indexed under its folded spelling");
+            assert_eq!(
+                folded_key,
+                &path_key(key),
+                "the index key is the folded one"
+            );
+            let (entry_key, entry_value) = *entry;
+            assert_eq!(entry_key, key, "the entry keeps the key it came from");
+            assert_eq!(
+                entry_value, value,
+                "the entry keeps the value the map holds"
+            );
+        }
+    }
+
+    /// Two spellings the path key folds together are one entry, and two it
+    /// keeps apart are two. A map still holding two spellings of one path is a
+    /// map the mixed-case guard has already refused, so which spelling survives
+    /// the fold is not this index's business — it pairs nothing — and the count
+    /// is what is pinned here.
+    #[test]
+    fn the_folded_key_index_merges_exactly_what_the_path_key_merges() {
+        let map: HashMap<String, u32> = [
+            ("a.txt".to_string(), 1),
+            ("A.txt".to_string(), 2),
+            ("Ärger.txt".to_string(), 3),
+            ("ärger.txt".to_string(), 4),
+        ]
+        .into_iter()
+        .collect();
+        let index = folded_keys(&map);
+        assert_eq!(
+            index.len(),
+            3,
+            "the ASCII pair is one path and the non-ASCII pair is two"
+        );
+        assert!(
+            index.contains_key(&path_key("a.txt")),
+            "the merged pair is indexed under its folded spelling"
+        );
+        assert!(
+            index.contains_key(&path_key("Ärger.txt")),
+            "a non-ASCII spelling is indexed under its own key"
+        );
+        assert!(
+            index.contains_key(&path_key("ärger.txt")),
+            "and so is the other one, because the key folds ASCII case only"
+        );
+        assert_ne!(
+            path_key("Ärger.txt"),
+            path_key("ärger.txt"),
+            "the key keeps the two spellings apart"
+        );
     }
 
     /// The mixed-case guard groups by the same key, so its verdict for a
