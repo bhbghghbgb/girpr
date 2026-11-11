@@ -514,6 +514,11 @@ pub(crate) fn ensure_hard_linked_targets_safe(
 /// blocker is normally its own candidate. A prefix that is not (a file in `dm`
 /// while the disk agrees) is a planned type conflict for the same reason, and the
 /// map-based [`ensure_dirs_applicable`] remains the later assertion for it.
+///
+/// Each candidate asks the disk about itself and about every strict prefix, and
+/// the prefixes are shared: a deep tree would ask about the same ancestor once
+/// per descendant. [`PrefixStats`] keeps one answer per prefix, so the disk is
+/// asked once — without changing which prefix the refusal names.
 pub(crate) fn ensure_mkdir_targets_free(
     sm: &HashMap<String, EffRec>,
     dm: &HashMap<String, EffRec>,
@@ -535,6 +540,9 @@ pub(crate) fn ensure_mkdir_targets_free(
         .filter(|(rel, rec)| rec.kind == "dir" && paired(rel).is_some_and(|dst| dst.kind == "file"))
         .map(|(rel, _)| rel.as_str())
         .collect();
+    // The disk's answer about a path, remembered for the rest of the call: a
+    // deep tree asks about the same ancestor once per descendant otherwise.
+    let mut stats = PrefixStats::default();
     for (rel, rec) in sm {
         if rec.kind != "dir" || paired(rel).is_some() {
             continue;
@@ -547,7 +555,7 @@ pub(crate) fn ensure_mkdir_targets_free(
                 Some(i) => (&rel[..end + i], Some(end + i + 1)),
                 None => (rel.as_str(), None),
             };
-            match disk_is_dir(&dst.join(prefix))? {
+            match stats.get(prefix, || disk_is_dir(&dst.join(prefix)))? {
                 // Existing directory (including a link to one): create_dir_all
                 // accepts it.
                 Some(true) => {}
@@ -567,6 +575,35 @@ pub(crate) fn ensure_mkdir_targets_free(
         }
     }
     Ok(())
+}
+
+/// The disk's answer about a path, remembered for the rest of one call.
+///
+/// The mkdir preflight asks about every strict prefix of every candidate, and
+/// the prefixes are shared: without a memo the same ancestor is stat'd once per
+/// descendant. One answer per prefix keeps the disk to one question.
+#[derive(Default)]
+pub(super) struct PrefixStats {
+    answers: HashMap<String, Option<bool>>,
+}
+
+impl PrefixStats {
+    /// The answer for `prefix`, asking the disk the first time only.
+    ///
+    /// The probe is a closure so the memo can be asked about a path without
+    /// this type knowing how a path is stat'd.
+    pub(super) fn get(
+        &mut self,
+        prefix: &str,
+        probe: impl FnOnce() -> Result<Option<bool>>,
+    ) -> Result<Option<bool>> {
+        if let Some(answer) = self.answers.get(prefix) {
+            return Ok(*answer);
+        }
+        let answer = probe()?;
+        self.answers.insert(prefix.to_string(), answer);
+        Ok(answer)
+    }
 }
 
 /// The dst entry a src path will pair with after the rename pass.
