@@ -178,6 +178,31 @@ pub(crate) fn path_key(rel: &str) -> String {
     rel.to_ascii_lowercase()
 }
 
+/// The folded-key index over one side's map: `path_key(key) → (key, value)`.
+///
+/// One shape for the sites that look a path up by its case-folded spelling, so
+/// that they cannot drift on how such an index is built. The fold itself is
+/// [`path_key`]'s; this owns only the *index* over it. The entries borrow the
+/// map's keys and values, so the index keeps no second copy of the tree alive.
+///
+/// **The index is unambiguous.** A mixed-case collision within one side is
+/// already fatal before any caller reaches here — [`check_mixed_case_keys`]
+/// rejects two spellings of one path — so a folded key names exactly one path
+/// per side.
+///
+/// **It pairs nothing.** Which side a lookup resolves to, which direction a
+/// rename moves, and which spelling a record is written under all stay with
+/// the caller, as does the pairing rule itself: the planner pairs the two sides
+/// as they are on disk
+/// ([`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase)) and the
+/// diff pairs them after the rename pass has re-keyed dst
+/// ([`CasePairing::Exact`](crate::planner::CasePairing::Exact)).
+pub(crate) fn folded_keys<'a, V>(
+    map: &'a HashMap<String, V>,
+) -> HashMap<String, (&'a String, &'a V)> {
+    map.iter().map(|(k, v)| (path_key(k), (k, v))).collect()
+}
+
 /// Group `keys` by case-folded spelling and abort when a group has more than one
 /// spelling.
 ///

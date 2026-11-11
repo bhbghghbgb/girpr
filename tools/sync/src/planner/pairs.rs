@@ -12,7 +12,7 @@ use anyhow::Result;
 
 use crate::effective::{SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
-use crate::util::path_key;
+use crate::util::{folded_keys, path_key};
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -127,12 +127,11 @@ fn shared_pairs<'a>(
             }
         }
         CasePairing::Lowercase => {
-            let mut slow: HashMap<String, &String> = HashMap::new();
-            for k in src.keys() {
-                slow.insert(path_key(k), k);
-            }
+            // The src side is the index and dst is what is looked up, so dst's
+            // own folded key is computed per path rather than indexed.
+            let slow = folded_keys(src);
             for (lkey, drel) in dst.keys().map(|k| (path_key(k), k)) {
-                if let Some(srel) = slow.get(&lkey) {
+                if let Some(&(srel, _)) = slow.get(&lkey) {
                     out.push((srel, drel));
                 }
             }
