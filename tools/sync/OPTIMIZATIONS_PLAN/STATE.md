@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
-active_batch: F
+phase: implement
+active_batch: G
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -138,28 +138,28 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T14-sled2redb-cli.md
     batch: F
     report: [L478-L493]
-    status: pending_review
+    status: completed
     commits: [2df937bf, fb913a2a, a2df3d11]
     review: F
-    note: implemented by ses_e323038fbffedCTPykVAhY4s4l; no --version flag was added, so an unknown flag exits 3 as before
+    note: review F kept; the missing --version judged acceptable since it keeps the previous exit-3 behaviour
   - id: T15
     title: Named sync phases decision
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T15-named-sync-phases.md
     batch: F
     report: [L458-L476]
-    status: pending_review
+    status: completed
     commits: [af640af6]
     review: F
-    note: implemented by ses_e3226296bffeAnLUMqf31diRVn; the decision is not to extract cmd_sync into phase functions, so the change is one docs commit naming the phases and their ordering invariants
+    note: review F kept; a diff of cmd_sync with comments filtered out is identical, so no call moved and nothing was extracted
   - id: T16
     title: Reconcile documentation with the code
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T16-docs-reconcile.md
     batch: F
     report: [L513-L531]
-    status: pending_review
-    commits: [efb71184, 5b9a405a, 49830066, de233c05, 371a7413]
+    status: completed
+    commits: [efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3]
     review: F
-    note: implemented by ses_e31520650ffeEVhWp5pjExYoIr; five commits, all docs to README.md and DESIGN-NOTES.md, and the fifth corrects a case-fold sentence that was true on POSIX but false on Windows
+    note: review F fixed (930efdf3 corrects a README paragraph that contradicted the mixed-case collision refusal); the reviewer's fix message was amended once for text only
   - id: T17
     title: Converter atomicity and failure tests
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T17-converter-atomicity.md
@@ -224,12 +224,12 @@ reviews:
     result: T12 kept (6b50b4d0, 1e0075c5, d576a382); T13 kept (ce3f0f94, f37e231f, b5cea4e0); no fix or revert commits; 516 passed, 1 skipped; both refactors verified behaviour-neutral by differential against a base binary
     followups: [F21, F22, F23, F24]
   - batch: F
-    status: in_progress
+    status: done
     tasks: [T14, T15, T16]
     base: 7b05768e
-    head: 371a7413
-    result: null
-    followups: []
+    head: 930efdf3
+    result: T14 kept (2df937bf, fb913a2a, a2df3d11); T15 kept (af640af6); T16 fixed (930efdf3 corrects a README paragraph that contradicted the mixed-case collision refusal); 520 passed, 1 skipped; every remaining README and DESIGN-NOTES claim checked against the tree
+    followups: [F25, F26, F27, F28, F29]
   - batch: G
     status: pending
     tasks: [T17, T18, T19]
@@ -382,6 +382,36 @@ followups:
     status: pending
     batch: null
     commits: []
+  - id: F25
+    source: T14
+    description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
+    status: pending
+    batch: null
+    commits: []
+  - id: F26
+    source: T14
+    description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
+    status: pending
+    batch: null
+    commits: []
+  - id: F27
+    source: T15
+    description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
+    status: pending
+    batch: null
+    commits: []
+  - id: F28
+    source: T16
+    description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
+    status: pending
+    batch: null
+    commits: []
+  - id: F29
+    source: T16
+    description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
@@ -401,9 +431,9 @@ followups:
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
 | E | T12 | completed | 6b50b4d0, 1e0075c5, d576a382 | review E kept |
 | E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
-| F | T14 | pending_review | 2df937bf, fb913a2a, a2df3d11 | implemented by ses_e323038fbffedCTPykVAhY4s4l |
-| F | T15 | pending_review | af640af6 | implemented by ses_e3226296bffeAnLUMqf31diRVn |
-| F | T16 | pending_review | efb71184, 5b9a405a, 49830066, de233c05, 371a7413 | implemented by ses_e31520650ffeEVhWp5pjExYoIr |
+| F | T14 | completed | 2df937bf, fb913a2a, a2df3d11 | review F kept |
+| F | T15 | completed | af640af6 | review F kept |
+| F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
 | G | T17 | pending | — | — |
 | G | T18 | pending | — | — |
 | G | T19 | pending | — | — |
@@ -413,6 +443,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review F `done`: T14 kept, T15 kept, T16 fixed (930efdf3);
+  follow-ups F25–F29 appended with status `pending`; T14, T15 and T16
+  `pending_review` → `completed`. `phase: review` → `implement`,
+  `active_batch: F` → `G`.
 - 2026-11-12 — batch F review checkpoint opened: `phase: implement` →
   `review`, review F `pending` → `in_progress`, base `7b05768e`, head
   `371a7413`. T16 implemented: `pending` → `in_progress` → `pending_review`,
