@@ -7,6 +7,7 @@ mod common;
 
 use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
+use girsync::convert::CONVERT_TEMP_PREFIX;
 use md5::Md5;
 use sha2::Digest;
 use std::collections::HashMap;
@@ -167,6 +168,23 @@ fn entry_names(dir: &std::path::Path) -> Vec<String> {
         .collect();
     names.sort();
     names
+}
+
+/// The temporary is written into the folder the destination cache lives in,
+/// so its name has to be inside the tool's own namespace.
+///
+/// A name outside it would leave the tool's residue looking like ordinary
+/// content: the next run over that folder would copy the temporary out of a
+/// source folder, or delete it as an extra in a destination one. The scan
+/// reserves every `girpr-cache*` component, so a leftover the tool could not
+/// remove is tool state rather than something the next run mirrors.
+#[test]
+fn the_conversion_temporary_is_named_inside_the_tools_namespace() {
+    let name = format!("{CONVERT_TEMP_PREFIX}1234-20240101T000000.000000Z.redb");
+    assert!(
+        girsync::util::is_cache_rel(&name),
+        "`{name}` is the tool's own state, not content"
+    );
 }
 
 #[test]

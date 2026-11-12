@@ -2025,6 +2025,45 @@ fn run_sync_backup_retain_keeps_the_newest_of_each_prefix() {
     );
 }
 
+/// A conversion that was killed before it could clean up after itself leaves a
+/// file in the folder — and it is the tool's own residue, not the user's
+/// content.
+///
+/// The conversion's temporary is named inside the tool's namespace, so the
+/// scan does not see it: it is neither copied out of a source folder nor
+/// deleted as an extra in a destination one.
+#[test]
+fn run_sync_leaves_a_leftover_conversion_temporary_alone() {
+    let t = temp_root("convtmp");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // A leftover in each folder, as a killed conversion in either would leave.
+    wfile(
+        &src,
+        "girpr-cache-convert-1234-20240101T000000.000000Z.redb",
+        b"half a database",
+    );
+    wfile(
+        &dst,
+        "girpr-cache-convert-5678-20240101T000000.000000Z.redb",
+        b"half a database",
+    );
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    assert!(
+        !dst.join("girpr-cache-convert-1234-20240101T000000.000000Z.redb")
+            .exists(),
+        "the tool's own residue is not mirrored as content"
+    );
+    assert!(
+        dst.join("girpr-cache-convert-5678-20240101T000000.000000Z.redb")
+            .exists(),
+        "and an extra in the destination is left alone: it is tool state"
+    );
+}
+
 /// `--backup-retain N` bounds the copies beside a folder, whether or not this
 /// run copied one.
 ///
