@@ -325,13 +325,13 @@ followups:
   - id: F1
     source: T01
     description: foreign_known resolves names through HashAlg::from_str, whose error path allocates an UnknownHash string for every non-matching foreign name; an ASCII-case comparison against the canonical spelling would be allocation-free.
-    status: pending
+    status: in_progress
     batch: B1
     commits: []
   - id: F2
     source: T01
     description: DESIGN-NOTES "A digest is looked up by name, not by slot" still says "two lookups" and does not mention get_algo or the ASCII-case widening; T16 may already cover this reconciliation.
-    status: pending
+    status: in_progress
     batch: B1
     commits: []
   - id: F3
@@ -546,6 +546,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B1 started: F1 and F2 `pending` →
+  `in_progress`.
 - 2026-11-12 — follow-up grouping recorded: 31 pending follow-ups split into
   batches B1–B12, and a `reviews[]` row added for each. Execution order is
   B1, B2, B3, B4, B5, B6, B7, B12, B8, B9, B10, B11: B12 (F17) runs directly
