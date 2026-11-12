@@ -107,3 +107,76 @@ pub enum TestCacheBackend {
     File,
     Memory,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An unset variable names no size: there is nothing to use and nothing
+    /// to complain about.
+    #[test]
+    fn an_unset_size_names_no_size() {
+        assert_eq!(parse_cache_size_mib(None), None);
+    }
+
+    /// A whole number of MiB is taken as it stands.
+    #[test]
+    fn a_whole_number_of_mib_is_the_size() {
+        assert_eq!(parse_cache_size_mib(Some("8")), Some(8));
+        assert_eq!(parse_cache_size_mib(Some(" 128 ")), Some(128));
+        assert_eq!(parse_cache_size_mib(Some("1")), Some(1));
+    }
+
+    /// Zero is a number, and it is not a cache size: a page cache with no
+    /// room holds nothing.
+    #[test]
+    fn zero_names_no_size() {
+        assert_eq!(parse_cache_size_mib(Some("0")), None);
+        assert_eq!(parse_cache_size_mib(Some(" 0 ")), None);
+    }
+
+    /// Anything that is not a count of MiB names no size, rather than
+    /// panicking on the way to a number.
+    #[test]
+    fn a_value_that_is_not_a_number_names_no_size() {
+        assert_eq!(parse_cache_size_mib(Some("")), None);
+        assert_eq!(parse_cache_size_mib(Some("   ")), None);
+        assert_eq!(parse_cache_size_mib(Some("eight")), None);
+        assert_eq!(parse_cache_size_mib(Some("8MiB")), None);
+        assert_eq!(parse_cache_size_mib(Some("-1")), None);
+        assert_eq!(parse_cache_size_mib(Some("8.5")), None);
+    }
+
+    /// A count too large for the platform is saturated, not refused: the byte
+    /// count the builder computes is the thing that must not overflow.
+    #[test]
+    fn a_huge_size_is_saturated_to_what_the_platform_can_address() {
+        // The largest count of MiB whose bytes still fit a `usize`.
+        let max_mib = usize::MAX / (1024 * 1024);
+        for huge in [u128::from(u64::MAX), u128::MAX, u128::MAX / 3] {
+            let saturated = parse_cache_size_mib(Some(&huge.to_string()));
+            assert_eq!(saturated, Some(max_mib), "{huge} MiB");
+            // The multiplication the builder does is the thing that would
+            // overflow, so it is the thing that is checked.
+            assert!(saturated.unwrap().checked_mul(1024 * 1024).is_some());
+        }
+    }
+
+    /// A count past what a `u128` holds is not a number this crate can read,
+    /// so it names no size — the same answer as a typo, and the same
+    /// fallback.
+    #[test]
+    fn a_count_past_u128_names_no_size() {
+        let too_big = "340282366920938463463374607431768211456";
+        assert_eq!(parse_cache_size_mib(Some(too_big)), None);
+    }
+
+    /// The default is the size a process uses when nothing else is asked for,
+    /// and it is the one the nextest workload needs: one process per test, so
+    /// each parallel test gets its own.
+    #[test]
+    fn the_default_is_the_size_without_a_variable() {
+        assert_eq!(DEFAULT_CACHE_SIZE_MIB, 64);
+        assert_eq!(cache_size_mib(), DEFAULT_CACHE_SIZE_MIB);
+    }
+}
