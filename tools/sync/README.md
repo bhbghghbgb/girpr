@@ -885,6 +885,13 @@ newest N. `N` must be at least 1 — `--backup-retain 0` is refused with exit
 `3`, and `--no-backup` is how you ask for no copies at all. Without the flag
 the copies accumulate and are cleaned by hand.
 
+The bound is about the **folder**, not about the run: it is applied whether or
+not this run copied anything aside. A folder whose cache is absent, and a
+`--no-backup` run, are bounded just the same — the copies already sitting
+beside a folder are the ones the bound is about, and a bound that only took
+effect when a new copy was made would leave them there forever. A dry run
+still writes nothing at all, so it bounds nothing.
+
 **What a failure leaves behind.** The copies are made *before* the caches are
 removed, so a run that fails while removing them never loses the copy:
 
