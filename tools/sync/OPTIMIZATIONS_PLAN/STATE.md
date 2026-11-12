@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B6
+active_batch: B7
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -460,7 +460,7 @@ followups:
   - id: F16
     source: T09
     description: --backup-retain prunes only after a successful copy, so a folder whose cache is absent, or a --no-backup run, never prunes the copies already sitting beside it.
-    status: pending
+    status: in_progress
     batch: B7
     commits: []
   - id: F17
@@ -544,7 +544,7 @@ followups:
   - id: F30
     source: T17
     description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
-    status: pending
+    status: in_progress
     batch: B7
     commits: []
   - id: F31
@@ -688,6 +688,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B7 started: F16 and F30 `pending` →
+  `in_progress`; `active_batch: B6` → `B7`.
 - 2026-11-13 — review B6 `done`: F15 and F23 kept, no fix or revert commits;
   follow-ups F47–F48 appended with batch `B18`; F15 and F23 `pending_review` →
   `completed`.
