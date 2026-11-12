@@ -416,13 +416,15 @@ The `hashed` counter in the run's log line is the answer to "how much would this
 read?", which is the question `--dry-run` exists to ask.
 
 The scan asks the cache two different questions, and they are worth telling
-apart because only one of them needs the records. `alt_recs` loads the whole
-`entries` table *with* its values, to adopt a stale alternate-cased row — it has
-to see them. The prune that follows asks only "which rows exist?", and gets
-`load_keys`, which walks the table without decoding a single `FileRec`. In the
-default insensitive mode that is the second full pass over the table in one
-phase, so the distinction is the difference between rebuilding a hash map per
-file and not.
+apart because only one of them needs the records. The alternate-case index
+reads the whole `entries` table's *keys*, to find a stale alternate-cased row
+for a path — the names are all it needs, and the row itself is read only when
+one is actually adopted, which is normally never. The prune that follows asks
+the same question of the keys — "which rows exist?" — and gets `load_keys`,
+which walks the table without decoding a single `FileRec`. In the default
+insensitive mode that is the second full pass over the table's keys in one
+phase, so the distinction is the difference between rebuilding a hash map of
+rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
 rather than copied out of it. It exists so the prune can ask "is this row still
@@ -747,12 +749,12 @@ internal order.
    link pointing anywhere else is ordinary content), or on any IO error (dangling
    symlink, walk loop, locked file — first error aborts the run).
 2. Backup `src`'s DB to `girpr-cache-backup-<ts>`, and snapshot dst's pre-sync
-   state to `girpr-cache-old-<ts>` — before any write. `current` is
-   authoritative; `old-*`/`backup-*` are never auto-read. dst gets the
-   snapshot only: it is a copy of the same bytes taken at the same moment, so
-   a second name for it would be a third copy of one file. `--no-backup`
-   skips both copies and `--backup-retain N` bounds how many are kept — see
-   [Backups and failures](#backups-and-failures).
+   state to `girpr-cache-old-<ts>` — before any write. The live
+   `<root>/girpr-cache` is authoritative; `old-*`/`backup-*` are never
+   auto-read. dst gets the snapshot only: it is a copy of the same bytes taken
+   at the same moment, so a second name for it would be a third copy of one
+   file. `--no-backup` skips both copies and `--backup-retain N` bounds how
+   many are kept — see [Backups and failures](#backups-and-failures).
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
@@ -1016,7 +1018,7 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   gets that budget twice. It is read once per process, so every handle in a run
   gets the same size. A value that is not a positive whole number of MiB is
   ignored and the default is used, with a warning; a value too large for the
-  machine is capped at the largest that fits.
+  platform to address is capped at the largest count whose bytes still fit.
 - **Read-only vs read/write opens.** `open_db` takes a `CacheOpen`:
   `ReadWrite` may create the file, back it up, and reconcile `meta`;
   `ReadOnly` requires an existing, current-version cache and never opens it for
