@@ -905,16 +905,29 @@ The bound is applied when a folder's cache is **opened for writing**, so it
 runs under that cache's own lock. While one run holds it, no other run is in
 its run phase for that folder's cache.
 
+A cache that does **not** open is bounded as well, because the bound is about
+the folder and not about the open: a corrupt cache, or a legacy sled
+directory the open refuses, would otherwise leave the copies beside it to
+accumulate until `--ignore-cache` rebuilt the cache. The bound runs under the
+cache's own lock there too, taken for the bound; a lock another run holds
+means that run is in its run phase for the folder and bounds it itself, so
+that run's copies are left alone.
+
 **A copy appears whole, or not at all.** It is written under a working name
-(`girpr-cache-partial-<ts>`) and renamed onto `girpr-cache-backup-<ts>` (or
+(`girpr-cache-partial-<ts>`) and published under `girpr-cache-backup-<ts>` (or
 `girpr-cache-old-<ts>`) once it is complete, so a name in a copy list never
-holds half a backup. That also means a copy that is still being written is not
-one of the copies the bound ranges over: a run that merely opens a folder
-cannot remove the copy another run is making there, however often the bound is
-applied. The bound never removes the copy the run itself made either — the run
-that reports a backup is the run that has to keep it — and the folder still
-ends within its bound, because the count is made up from the next-oldest copy
-instead.
+holds half a backup. A file copy is published by linking it into place, so the
+name is created with the copy's bytes in it — there is no moment at which the
+name is there and empty — and the link fails if the name is taken, so two runs
+cannot publish onto one name. A filesystem that cannot link a file has no such
+publish: the copy is renamed onto a name it claims first, and the name is
+briefly empty until the rename lands. That also means a copy that is still
+being written is not one of the copies the bound ranges over: a run that
+merely opens a folder cannot remove the copy another run is making there,
+however often the bound is applied. The bound never removes the copy the run
+itself made either — the run that reports a backup is the run that has to keep
+it — and the folder still ends within its bound, because the count is made up
+from the next-oldest copy instead.
 
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
@@ -927,9 +940,12 @@ published it holds a lock on that record until it opens the cache. A bound
 that finds the record locked leaves the copy alone; a bound that finds it
 unlocked takes the copy like any other, because the lock is released when the
 run ends and when the run is killed, and a record that nothing holds says
-nothing. The name a copy is published under still says when that copy became
-whole, so the newest copies are the ones a bound keeps — a copy that took a
-while to make is not treated as an old one the moment it lands.
+nothing. A record that cannot be read, or whose lock the filesystem cannot
+test, says nothing either: nobody can be holding a lock on a file that cannot
+be locked, so it does not spare the copy for good. The name a copy is
+published under still says when that copy became whole, so the newest copies
+are the ones a bound keeps — a copy that took a while to make is not treated
+as an old one the moment it lands.
 
 A record is tool state: it is never mirrored as content, it is not one of the
 copies the bound counts, and one left behind by a killed run is reclaimed by
@@ -963,14 +979,14 @@ run. That is the one combination where the removal has no safety net.
 
 A copy that fails is not left behind — the working file is removed rather than
 sitting there looking like a backup — and the run fails rather than report a
-backup it does not have. A sibling's name is *claimed* (`create_new`, or
-`create_dir` for a legacy sled directory), so two runs against one root cannot
-end up writing the same file.
+backup it does not have. A sibling's name is *claimed* — the link that
+publishes a file copy, and `create_dir` for a legacy sled directory — so two
+runs against one root cannot end up writing the same file.
 
 A run that is killed mid-copy can leave the working file behind —
-`girpr-cache-partial-<ts>` — because the process died before the rename. It is
-tool state and is never mirrored as content, but nothing reclaims it: remove it
-by hand.
+`girpr-cache-partial-<ts>` — because the process died before the copy was
+published. It is tool state and is never mirrored as content, but nothing
+reclaims it: remove it by hand.
 
 A run killed between publishing a copy and opening the folder's cache can also
 leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or

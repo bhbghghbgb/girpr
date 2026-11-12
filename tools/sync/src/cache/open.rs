@@ -9,11 +9,11 @@
 //! ## A copy is published, not written in place
 //!
 //! A copy is written under a **working name** and is **published** under a
-//! name of the bounded lists only once it is complete. The publish is a
-//! rename, so a name of a list never holds half a copy, and a copy that is
-//! still being made is not a member of any list — which is what makes the
-//! bound safe to apply at any moment: it can only ever select a copy that is
-//! whole.
+//! name of the bounded lists only once it is complete. The publish puts the
+//! whole copy under its name — a file copy is linked into place — so a name
+//! of a list never holds half a copy, and a copy that is still being made is
+//! not a member of any list — which is what makes the bound safe to apply at
+//! any moment: it can only ever select a copy that is whole.
 //!
 //! "Finished" and "in flight" are told apart by the name, and the name is
 //! the only thing the bound reads to make that distinction.
@@ -293,9 +293,9 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Works for redb files and legacy sled directories alike.
 /// Returns the backup path, or `None` when there was nothing to copy.
 ///
-/// The copy is **published**: it is written under a working name and renamed
-/// onto its published name once it is complete, so the name never holds half
-/// a copy and no bound can select a copy that is still being made.
+/// The copy is **published**: it is written under a working name and
+/// published under its own name once it is complete, so the name never holds
+/// half a copy and no bound can select a copy that is still being made.
 ///
 /// How many copies are kept beside the cache is [`retain_copies`]'s business:
 /// the bound is about the folder, so it is applied by the caller whether or
@@ -454,15 +454,15 @@ fn read_folder(parent: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf)>> {
 /// destination never replaces an existing sibling.
 ///
 /// **The copy is published, not written in place.** It is written under a
-/// working name ([`WORK_PREFIX`]) and renamed onto its published name once
-/// it is complete, so:
+/// working name ([`WORK_PREFIX`]) and published under its own name once it
+/// is complete, so:
 ///
 /// - a name of a bounded list never holds half a copy, and
 /// - a copy that is still being made is not a member of any list, so no
 ///   bound — however often it is applied — can select it.
 ///
-/// The published name is claimed before the rename, so two runs cannot
-/// publish over each other.
+/// The publish is what claims the published name, so two runs cannot publish
+/// over each other.
 ///
 /// **The copy is stamped twice, and the two stamps say different things.** The
 /// working name says when the copy *started*; it is scratch, and nothing but

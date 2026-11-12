@@ -395,24 +395,39 @@ in the foreign arm, and which asserts the comparison still finds it.
 
 The copies the tool keeps beside a cache are written under a **working name**
 (`girpr-cache-partial-<ts>`) and are **published** under a name of a copy list
-(`girpr-cache-backup-<ts>`, `girpr-cache-old-<ts>`) by a rename, once the copy
-is complete.
+(`girpr-cache-backup-<ts>`, `girpr-cache-old-<ts>`) once the copy is complete.
 
 Two things follow, and both are load-bearing.
 
 **The bound can only ever select a whole copy.** The bound ranges over the
-published names, and a published name holds the whole copy or none of it: the
-copy is renamed into place, so a name in a list never carries part of a
-backup. A published name is empty for the moment between the claim and the
-rename, and that costs nothing: the name holds no copy, and the copy lands
-on it either way. A copy that is still being written is not a member of any
-list, so no bound — however often it is applied — can take it away. That is
-the whole reason the copy is published rather than written in place: writing
-it straight into `girpr-cache-backup-<ts>` puts a half-written file under a
-name the bound reads, and a run that merely opens the folder can then remove
-the copy another run is making there, leaving that run reporting a backup that
-is not on disk. It also means the bound's count is a count of whole copies:
-it never keeps a half-written one in place of a good one.
+published names, and a published name holds the whole copy or none of it: a
+file copy is **linked** into place, so the name is created with the copy's
+bytes in it, and a name in a list never carries part of a backup. A copy that
+is still being written is not a member of any list, so no bound — however
+often it is applied — can take it away. That is the whole reason the copy is
+published rather than written in place: writing it straight into
+`girpr-cache-backup-<ts>` puts a half-written file under a name the bound
+reads, and a run that merely opens the folder can then remove the copy
+another run is making there, leaving that run reporting a backup that is not
+on disk. It also means the bound's count is a count of whole copies: it never
+keeps a half-written one in place of a good one.
+
+**The publish is the claim.** A link fails when the name is taken, so the link
+that publishes a file copy is also what keeps two runs off one name — there is
+no separate claim that a rename could undo. A rename cannot do that job: it
+has to be preceded by a claim, and the claim leaves the name empty for as
+long as the rename takes, so the name would be a published name with no bytes
+in it. A filesystem that cannot link a file has no such publish, and the copy
+is renamed onto a name it claims first there — the name is briefly empty, and
+the copy lands on it either way.
+
+A directory copy cannot be linked, so its name is claimed with an exclusive
+create and the copy is renamed onto that claim. The claim is what decides:
+a POSIX rename onto an existing **empty** directory succeeds, so a rename on
+its own would let a second run publish onto a name the first run has and
+replace the copy that is there. The name is briefly an empty directory
+instead, which is the price of an exclusive claim on a filesystem whose
+rename replaces a directory.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
@@ -435,6 +450,16 @@ run phase for a folder's cache at a time. The bound also enumerates the folder
 once, at its start, so a copy published after that is not a candidate at all:
 a run that publishes while another run is bounding the folder is spared by
 the enumeration, not by a rule about ages.
+
+A cache that does **not** open is bounded as well, because the bound is about
+the folder and not about the open. The bound runs under the cache's own lock
+there too — taken for the bound, since the open did not take it — and a lock
+another run holds says that run is in its run phase for the folder and bounds
+it itself, so that run's copies are not touched. Without this, a corrupt
+cache or a legacy sled directory the open refuses would leave the copies
+beside it to accumulate until `--ignore-cache` rebuilt the cache. A cache
+that is a directory has no lock to take and nothing opens one, so the bound
+runs without one there.
 
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
@@ -462,6 +487,15 @@ exclusive lock, that lock is the protection — no other run is in its run phase
 for the folder — and the record is released, because it has nothing left to
 say.
 
+A record that cannot be **read**, or whose lock cannot be **tested**, says
+nothing either, and says it without sparing the copy: nobody can be holding a
+lock on a file the filesystem cannot lock, and a record that cannot be read
+cannot be the record of a live run. Such a record is left where it is — a
+bound that cannot judge a record cannot claim it either — but the copy it
+spoke for is an ordinary copy again. Otherwise a record left behind by an
+older build would defeat the bound for that copy for good, on a filesystem
+that cannot lock a file.
+
 The record is **per copy**, not per run, so two runs on one folder never
 share one: a run that finds the record for a name already held is looking at a
 name another run is publishing under, and it moves on to the next name rather
@@ -478,14 +512,23 @@ loudly, rather than leaving a run reporting a backup that is not there.
 
 **Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
 and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
+`a_published_name_appears_with_the_copy_it_carries` and
+`a_copy_is_published_on_a_filesystem_that_cannot_link` for the publish
+itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
+`a_directory_copy_is_published_whole` for the directory case,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
 bound against the run's own copy,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
-same thing seen through a whole run, and
+same thing seen through a whole run,
+`the_folder_of_a_legacy_sled_cache_is_bounded`,
+`the_folder_of_a_corrupt_cache_is_bounded` and
+`the_folder_of_a_cache_another_run_holds_is_left_to_it` for the bound on a
+cache that did not open, and
 `a_published_copy_carries_a_record_of_its_own`,
 `a_copy_a_live_run_is_using_is_not_the_bounds_to_take`,
 `a_record_whose_run_is_gone_does_not_stop_the_bound`,
+`a_record_that_cannot_be_locked_does_not_spare_its_copy`,
 `a_record_of_a_copy_that_is_gone_is_reclaimed`,
 `a_record_is_not_one_of_the_copies_the_bound_counts`,
 `concurrent_publishes_get_copies_and_records_of_their_own` and
