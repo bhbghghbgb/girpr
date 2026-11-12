@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 use redb::{
     Database, DatabaseError, ReadOnlyTable, ReadTransaction, ReadableDatabase, ReadableTable,
-    ReadableTableMetadata, backends::InMemoryBackend,
+    ReadableTableMetadata, TableHandle, backends::InMemoryBackend,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -186,7 +186,16 @@ impl CacheDb {
         let mut txn = db.begin_write().context("begin write (meta)")?;
         txn.set_durability(crate::cache::write_durability())
             .context("set cache write durability")?;
-        let mut changed = false;
+        // A cache with a `meta` row but no entries table is not whole, and
+        // the write path below is what repairs it. Opening the table creates
+        // it — and a table created in a transaction that is dropped is a
+        // table that was never there — so the commit decision has to know
+        // the table was missing.
+        let entries_missing = !txn
+            .list_tables()
+            .context("list tables")?
+            .any(|t| t.name() == ENTRIES.name());
+        let mut changed = entries_missing;
         {
             // Touch the entries table so a fresh file has both tables.
             let _ = txn.open_table(ENTRIES).context("open entries table")?;
@@ -229,10 +238,12 @@ impl CacheDb {
                 }
             }
         }
-        // Skip the commit when the row already matches: a write-free commit
-        // buys nothing, and on this HDD the flush alone costs 10-100 ms per
-        // open. Behaviour for real runs is unchanged — meta still commits
-        // whenever the row is inserted or rewritten.
+        // Skip the commit when nothing changed: a write-free commit buys
+        // nothing, and on this HDD the flush alone costs 10-100 ms per open.
+        // Behaviour for real runs is unchanged — meta still commits whenever
+        // the row is inserted or rewritten, and so does a table that had to
+        // be created, because a table created in a dropped transaction is a
+        // table that was never there.
         if changed {
             txn.commit().context("commit meta")?;
         } else {
@@ -1097,6 +1108,64 @@ mod tests {
             Some(file_rec()),
             "rewriting the row leaves the rows alone"
         );
+    }
+
+    /// A cache with a `meta` row but no entries table is not whole, and a
+    /// read/write open repairs it: the table is created, and it is there
+    /// after the open.
+    ///
+    /// The row is the **matching** one, so the open has nothing to write in
+    /// the row itself — only the missing table stands between this cache and
+    /// a scan that finds anything. A table created inside a transaction that
+    /// is then dropped is a table that was never there, so the open has to
+    /// commit what it created.
+    #[test]
+    fn a_cache_with_a_row_but_no_entries_table_gets_one() {
+        let dir = girpr_tempdir::TempDir::new("girsync_ro", "noentries");
+        let p = dir.join(CACHE_PREFIX);
+        {
+            let db = redb_builder().create(&p).unwrap();
+            let txn = db.begin_write().unwrap();
+            {
+                let mut m = txn.open_table(META_TBL).unwrap();
+                m.insert(
+                    META_KEY,
+                    encode_meta(&Meta {
+                        version: CACHE_VERSION,
+                        case_sensitive: true,
+                    })
+                    .as_slice(),
+                )
+                .unwrap();
+            }
+            txn.commit().unwrap();
+        }
+        assert_eq!(
+            table_names(&redb_builder().create(&p).unwrap()),
+            vec!["meta".to_string()],
+            "the cache starts with a row and no entries table"
+        );
+
+        // The same case mode the row records, so the row itself needs no
+        // write: the missing table is the whole of the repair.
+        let c = open_db(
+            &p,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            table_names(&c.db),
+            vec!["entries".to_string(), "meta".to_string()],
+            "the missing table was created, and it outlived the open"
+        );
+        let meta = read_meta(&c.db).unwrap().expect("the row is still there");
+        assert_eq!(meta.version, CACHE_VERSION);
+        assert!(meta.case_sensitive, "the repair left the row as it was");
     }
 
     /// A fresh cache gets both tables and a `meta` row this build can read.
