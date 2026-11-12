@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B20
+active_batch: B21
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -725,7 +725,7 @@ followups:
   - id: F52
     source: F17
     description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
-    status: pending
+    status: in_progress
     batch: B21
     commits: []
   - id: F53
@@ -737,13 +737,13 @@ followups:
   - id: F54
     source: F49
     description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
-    status: pending
+    status: in_progress
     batch: B21
     commits: []
   - id: F55
     source: F17
     description: The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create.
-    status: pending
+    status: in_progress
     batch: B21
     commits: []
   - id: F56
@@ -755,7 +755,7 @@ followups:
   - id: F57
     source: F53
     description: A record that cannot be read or locked spares its copy for good, so on a filesystem that cannot lock a file a record left by an older build defeats the bound for that copy forever.
-    status: pending
+    status: in_progress
     batch: B21
     commits: []
   - id: F58
@@ -814,6 +814,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B21 started: F52, F54, F55 and F57 `pending` →
+  `in_progress`; `active_batch: B20` → `B21`.
 - 2026-11-13 — review B20 `done`: F53 fixed (8505c72a, fc06393f, 420485dd,
   4a42cf81); follow-ups F57, F58, F60 and F61 appended, F59 recorded as
   `skipped` because it is the same defect as F56, which is already scheduled.
