@@ -93,6 +93,9 @@ trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
 `sled2redb` takes `--force` and the same `--output`.
 
+`--no-backup` and `--backup-retain N` are on every subcommand too — see
+[Backups and failures](#backups-and-failures).
+
 ### Logging
 
 The log policy is the workspace's and lives in `crates/log/`, shared with the
@@ -833,11 +836,16 @@ depends on one, and no run restores from one for you.
 
 What a run leaves behind is therefore a **policy**, not a fixed step:
 
-| | what a run copies aside |
+| | a `sync` copies aside |
 | --- | --- |
 | default | src: `girpr-cache-backup-<ts>`; dst: `girpr-cache-old-<ts>` (dst's pre-sync state) |
 | `--no-backup` | nothing — no copy, no snapshot |
 | `--backup-retain N` | the same, but only the newest N siblings of each prefix are kept |
+
+`update` and `compare` copy the cache they open — `girpr-cache-backup-<ts>`
+beside that folder's cache — and `sync` adds dst's `old-*` snapshot on top.
+`--no-backup` skips every one of them, and a record side is never copied at
+all: it is opened read-only.
 
 `--backup-retain N` counts **per prefix and per directory**: the
 `girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
