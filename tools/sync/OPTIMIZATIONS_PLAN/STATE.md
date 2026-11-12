@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B4
+active_batch: B5
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -434,7 +434,7 @@ followups:
   - id: F14
     source: T06
     description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
-    status: pending
+    status: in_progress
     batch: B5
     commits: []
   - id: F15
@@ -494,7 +494,7 @@ followups:
   - id: F24
     source: T13
     description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
-    status: pending
+    status: in_progress
     batch: B5
     commits: []
   - id: F25
@@ -644,6 +644,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B5 started: F14 and F24 `pending` →
+  `in_progress`; `active_batch: B4` → `B5`.
 - 2026-11-13 — review B4 `done`: F9 kept, F10 fixed (6f88f283); follow-up F41
   appended with batch `B16`; F42 and F43 recorded as `skipped` with reasons
   (no caller behind the public type's lifetime limit; the memo's per-directory
