@@ -315,12 +315,12 @@ reviews:
     result: null
     followups: []
   - batch: B12
-    status: in_progress
+    status: done
     tasks: [F17, F49]
     base: 186d22a2
-    head: 63ff19bf
-    result: null
-    followups: []
+    head: 4f3b7e10
+    result: F17 fixed (5b89a4fb stamps the published name with the time the copy became whole rather than when it started, so a slow copy is not ordered as old and taken away; 4f3b7e10 updates the notes and README); F49 kept; 533 passed, 1 skipped; the copy-ordering defect was verified by collapsing the two stamps back into one
+    followups: [F52, F53, F54, F55, F56]
   - batch: B13
     status: pending
     tasks: [F33, F34, F35]
@@ -366,6 +366,20 @@ reviews:
   - batch: B19
     status: pending
     tasks: [F51]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B20
+    status: pending
+    tasks: [F53]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B21
+    status: pending
+    tasks: [F52, F54, F55, F56]
     base: null
     head: null
     result: null
@@ -485,10 +499,10 @@ followups:
   - id: F17
     source: T09
     description: Retention can unlink a sibling a concurrent run is still copying into, so that run's backup can vanish while the run reports success.
-    status: pending_review
+    status: completed
     batch: B12
-    commits: [55d0b59a, dd816c83, 63ff19bf]
-    note: implemented by ses_e2f044c17ffe74H79CzfSsDiwb; an atomic publish design: a copy is written under a reserved working name and published by an atomic rename onto a claimed published name, so a published name only ever exists complete and the bound cannot select a half-written file
+    commits: [55d0b59a, dd816c83, 63ff19bf, 5b89a4fb, 4f3b7e10]
+    note: review B12 fixed (5b89a4fb stamps the published name with the time the copy became whole rather than when it started, so a slow copy is not ordered as old and taken away; 4f3b7e10 updates the notes and README)
   - id: F18
     source: T10
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
@@ -684,10 +698,10 @@ followups:
   - id: F49
     source: F16
     description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
-    status: pending_review
+    status: completed
     batch: B12
     commits: [55d0b59a, dd816c83, 63ff19bf]
-    note: same change as F17; the bound now runs after the cache is opened, under the database lock, and enumerates the folder once at its start
+    note: review B12 kept; moving the bound after the open puts it under redb exclusive lock, so at most one run bounds a folder at a time
   - id: F50
     source: F16
     description: The bound covers the other prefix in a folder too, so a folder that is both source and destination loses snapshots it never wrote; consistent with the folder-scoped rule, but worth stating in the flag's own help.
@@ -700,6 +714,36 @@ followups:
     description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
     status: pending
     batch: B19
+    commits: []
+  - id: F52
+    source: F17
+    description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
+    status: pending
+    batch: B21
+    commits: []
+  - id: F53
+    source: F17
+    description: A copy another run has already published is still the bound's to take, so two concurrent runs can still have one lose its published copy; telling a published copy from one still in use needs a marker of its own.
+    status: pending
+    batch: B20
+    commits: []
+  - id: F54
+    source: F49
+    description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
+    status: pending
+    batch: B21
+    commits: []
+  - id: F55
+    source: F17
+    description: The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create.
+    status: pending
+    batch: B21
+    commits: []
+  - id: F56
+    source: F49
+    description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
+    status: pending
+    batch: B21
     commits: []
 ```
 
@@ -732,6 +776,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B12 `done`: F17 fixed (5b89a4fb, 4f3b7e10), F49 kept;
+  follow-ups F52–F56 appended. F53 is the same kind of follow-up as F17 and
+  gets its own batch `B20` with a design up front, scheduled before the
+  smaller `B21` items that touch the same mechanism. If B20 produces yet
+  another follow-up of the same kind, it is recorded as `skipped` with the
+  reason, per the no-endless-loop rule; F17 and F49 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B12 review checkpoint opened: F17 and F49
   `in_progress` → `pending_review`, commits `55d0b59a`, `dd816c83`,
   `63ff19bf`; review B12 `pending` → `in_progress`, base `186d22a2`, head
