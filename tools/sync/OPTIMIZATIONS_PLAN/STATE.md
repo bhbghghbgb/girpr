@@ -280,12 +280,12 @@ reviews:
     result: F15 kept (e031b0e4); F23 kept (b0342361); no fix or revert commits; 523 passed without the feature and 535 with it, 1 skipped; the deletion confirmed to have no caller anywhere in the workspace
     followups: [F47, F48]
   - batch: B7
-    status: in_progress
+    status: done
     tasks: [F16, F30]
     base: 7dd8436d
-    head: fc5956b6
-    result: null
-    followups: []
+    head: be9aed2e
+    result: F16 kept with a fix (be9aed2e updates the --backup-retain help to say the bound covers every folder the run touches); F30 kept (f612e0d4, 4d1a8820, fc5956b6); 527 passed without the feature and 540 with it, 1 skipped; both behaviour changes confirmed empirically
+    followups: [F49, F50, F51]
   - batch: B8
     status: pending
     tasks: [F25, F26, F31]
@@ -316,7 +316,7 @@ reviews:
     followups: []
   - batch: B12
     status: pending
-    tasks: [F17]
+    tasks: [F17, F49]
     base: null
     head: null
     result: null
@@ -363,6 +363,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: B19
+    status: pending
+    tasks: [F51]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -383,19 +390,22 @@ followups:
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
     status: completed
     batch: B2
-    commits: []
+    commits: [3c30627d]
+    note: review B2 kept (3c30627d); the root is resolved before the early return, restoring the original message and call site
   - id: F4
     source: T02
     description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
     status: completed
     batch: B2
-    commits: []
+    commits: [00f56668, 4aa601b6]
+    note: review B2 kept (00f56668, 4aa601b6); the removals are probed whether or not the plan copies, only the credit stays copy-only
   - id: F5
     source: T02
     description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
     status: completed
     batch: B2
-    commits: []
+    commits: [79f64048]
+    note: review B2 kept (79f64048); the guard now asks the disk 4 times for 4 distinct prefixes instead of 9
   - id: F6
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
@@ -407,7 +417,8 @@ followups:
     description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
     status: completed
     batch: B3
-    commits: []
+    commits: [f1b638e1]
+    note: review B3 kept (f1b638e1); the repair commits the table it created instead of dropping the transaction, and adds an empty table only
   - id: F8
     source: T05
     description: Plan bookkeeping only, not a code change: the T05 task file's design_notes pointer resolves to README.md, not to DESIGN-NOTES.md, which never mentions the cache's meta row.
@@ -420,49 +431,57 @@ followups:
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
     status: completed
     batch: B4
-    commits: []
+    commits: [a29c139a]
+    note: review B4 kept (a29c139a); the comment is accurate, and the pull-in is still recorded so it cannot depend on walk order
   - id: F10
     source: T08
     description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
     status: completed
     batch: B4
-    commits: []
+    commits: [a7b24113, 6f88f283]
+    note: review B4 fixed (6f88f283 makes the three new Filter primitives private and states the whole rule in the public doc); the memo work in a7b24113 kept
   - id: F11
     source: T07
     description: The no-op test observes only the re-key pass's read-transaction count, not the run's total cache scans, so the broader claim that a no-op run does not scan the cache more than once is still unpinned.
     status: completed
     batch: B3
-    commits: []
+    commits: [d4548755]
+    note: review B3 kept (d4548755); the shared test backend hands every open of one path the same counter, so the case pins one entries-table read per side
   - id: F12
     source: T07
     description: CacheDb::read_transaction_count counts every read transaction on the handle rather than only entries-table reads, so a future read on another table would silently move the number the new tests pin.
     status: completed
     batch: B3
-    commits: []
+    commits: [cb4456f4]
+    note: review B3 kept (cb4456f4); the only increment site is begin_entries_read and every entries-table read on the read handle goes through it
   - id: F13
     source: T07
     description: get_many allocates a String per key; a borrow-shaped variant would avoid the copies for a caller that only needs the rows.
     status: completed
     batch: B3
-    commits: []
+    commits: [0b3afb32]
+    note: review B3 kept (0b3afb32); the borrowing read answers the same rows in the same order from the same snapshot in one transaction, and the public get_many is unchanged
   - id: F14
     source: T06
     description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
     status: completed
     batch: B5
-    commits: []
+    commits: [3f2d992e]
+    note: review B5 kept (3f2d992e); the --hash-any-of flag-order tie-break is intact, the copy still digests every requested algorithm, and the set is still built once per phase
   - id: F15
     source: T09
     description: util::unique_sibling now has no callers left in the crate and should be deleted or given one.
     status: completed
     batch: B6
-    commits: []
+    commits: [e031b0e4]
+    note: review B6 kept (e031b0e4); git grep found only the definition and no caller at that revision, and the three atomic claim helpers are still the ones in use
   - id: F16
     source: T09
     description: --backup-retain prunes only after a successful copy, so a folder whose cache is absent, or a --no-backup run, never prunes the copies already sitting beside it.
-    status: pending_review
+    status: completed
     batch: B7
-    commits: []
+    commits: [0a66e0cf, 58613c52, e8335f4d, 34015725, be9aed2e]
+    note: review B7 kept with a fix; be9aed2e updates the --backup-retain help to say the bound covers every folder the run touches; the prune still keeps exactly the newest N per prefix per directory
   - id: F17
     source: T09
     description: Retention can unlink a sibling a concurrent run is still copying into, so that run's backup can vanish while the run reports success.
@@ -474,7 +493,8 @@ followups:
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
     status: completed
     batch: B3
-    commits: []
+    commits: [84af494b]
+    note: review B3 kept (84af494b); the case now says what it asserts
   - id: F19
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
@@ -504,13 +524,15 @@ followups:
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
     status: completed
     batch: B6
-    commits: []
+    commits: [b0342361]
+    note: review B6 kept (b0342361); it is a re-export only, src/filter.rs is untouched and the old module path still resolves
   - id: F24
     source: T13
     description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
     status: completed
     batch: B5
-    commits: []
+    commits: [3f2d992e]
+    note: same change as F14 (3f2d992e)
   - id: F25
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
@@ -544,9 +566,10 @@ followups:
   - id: F30
     source: T17
     description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
-    status: pending_review
+    status: completed
     batch: B7
-    commits: []
+    commits: [f612e0d4, 4d1a8820, fc5956b6]
+    note: review B7 kept; the reserved prefix matches is_cache_rel, so a leftover is in neither side map, and it collides with neither the live cache nor the two bounded lists
   - id: F31
     source: T18
     description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
@@ -657,6 +680,25 @@ followups:
     status: pending
     batch: B18
     commits: []
+  - id: F49
+    source: F16
+    description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
+    status: pending
+    batch: B12
+    commits: []
+  - id: F50
+    source: F16
+    description: The bound covers the other prefix in a folder too, so a folder that is both source and destination loses snapshots it never wrote; consistent with the folder-scoped rule, but worth stating in the flag's own help.
+    status: completed
+    batch: B7
+    commits: [be9aed2e]
+    note: addressed by the review's own fix commit be9aed2e, which states the folder-scoped bound in the flag help
+  - id: F51
+    source: F30
+    description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
+    status: pending
+    batch: B19
+    commits: []
 ```
 
 ## Human checklist
@@ -688,6 +730,15 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B7 `done`: F16 kept with a fix (be9aed2e), F30 kept;
+  follow-ups F49–F51 appended, with F49 joining B12 because it widens the
+  retention race that F17 exists to close, F50 recorded as completed by the
+  review's own fix commit, and F51 given batch `B19`; F16 and F30
+  `pending_review` → `completed`.
+- 2026-11-13 — state repair: the commits and note fields for follow-ups F3
+  through F30 had been left empty by a scripting bug that cleared the current
+  id too early. They are now filled in from the recorded review results; the
+  statuses, batches and review rows were unaffected.
 - 2026-11-13 — follow-up batch B7 review checkpoint opened: F16 and F30
   `in_progress` → `pending_review`, commits `0a66e0cf`, `58613c52`,
   `e8335f4d`, `34015725`, `f612e0d4`, `4d1a8820`, `fc5956b6`; review B7
