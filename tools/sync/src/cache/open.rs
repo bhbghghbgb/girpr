@@ -5,12 +5,26 @@
 //! copies of it are kept beside it — rather than about any one row. That is
 //! why [`CacheOpen`] is its own enum here rather than a parameter threaded
 //! through [`CacheDb`]'s methods.
+//!
+//! ## A copy is published, not written in place
+//!
+//! A copy is written under a **working name** and is **published** under a
+//! name of the bounded lists only once it is complete. The publish is a
+//! rename, so a name of a list never holds half a copy, and a copy that is
+//! still being made is not a member of any list — which is what makes the
+//! bound safe to apply at any moment: it can only ever select a copy that is
+//! whole.
+//!
+//! There is no age, no lease and no marker to interpret anywhere in that
+//! story. "Finished" and "in flight" are told apart by the name, and the
+//! name is the only thing the bound reads.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::{info, trace, warn};
 
 use crate::util::{copy_dir_all, ts_now};
@@ -29,6 +43,17 @@ const BACKUP_PREFIX: &str = "girpr-cache-backup-";
 /// The prefix of the pre-sync snapshots the tool keeps beside a cache.
 const OLD_PREFIX: &str = "girpr-cache-old-";
 
+/// The prefix of a copy that is still being made.
+///
+/// A copy is written under this prefix and published under one of the two
+/// above only once it is complete, so the bound — which ranges over the
+/// published copies — cannot see a copy that is still being written, let
+/// alone select it.
+///
+/// The name is in the tool's own namespace (`girpr-cache*`), so a working
+/// copy is tool state and is never mirrored as content.
+const WORK_PREFIX: &str = "girpr-cache-partial-";
+
 /// How a cache file should be opened.
 ///
 /// A read/write open is a *participant* in the run: it may create the file,
@@ -46,7 +71,8 @@ pub enum CacheOpen {
     ///
     /// The bound is about the **folder**, not about this open: it is applied
     /// whether or not a copy was made, so a folder with no cache and an open
-    /// that copies nothing aside are bounded just the same.
+    /// that copies nothing aside are bounded just the same. It is applied
+    /// once the cache is open, so it runs under the cache's own lock.
     ReadWrite {
         ignore_cache: bool,
         backup_first: bool,
@@ -77,6 +103,14 @@ pub enum CacheOpen {
 /// that copies nothing aside — the copies already sitting beside a folder are
 /// the ones the bound is about.
 ///
+/// The bound runs **after** the cache is open, and the open holds the cache
+/// file's exclusive lock until the run is done with it. That is what makes
+/// the bound safe against another run: while one run holds that lock, no
+/// other run is in its run phase for the folder, so the copies another run
+/// made and is still using are not the ones the bound can take away. The
+/// bound is applied under a lock the tool already holds, rather than under a
+/// lock of its own that a filesystem might not support.
+///
 /// [`CacheOpen::ReadOnly`] inverts every side effect: the file must exist, is
 /// never opened for writing, and is left byte-identical. It still validates the
 /// schema version, because a cache this build cannot decode is useless
@@ -100,14 +134,20 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
             } else if backup_first && db_path.exists() {
                 backup_db(db_path)?;
             }
+            let db = CacheDb::open_file(db_path)?;
+            CacheDb::init_meta(&db, case_sensitive)?;
             // The bound, applied whether or not a copy was made: it is a
-            // statement about the folder, not about this open. After the copy,
-            // so the copy just made is one of the newest the folder keeps.
+            // statement about the folder, not about this open.
+            //
+            // It runs here, after the open, and that is the point: the open
+            // holds the cache file's exclusive lock, so no other run is in
+            // its run phase for this folder while the bound runs. A copy
+            // another run is still using is therefore not one the bound can
+            // take away, and a copy this run made is spared by name (see
+            // [`retain_copies`]).
             if let Some(keep) = retain {
                 retain_copies(db_path, keep)?;
             }
-            let db = CacheDb::open_file(db_path)?;
-            CacheDb::init_meta(&db, case_sensitive)?;
             // NOTE: case_sensitive is informational only. The cache stays usable
             // across modes: in insensitive mode a disk/cached casing difference is
             // fixed to the on-disk name (disk always governs), so the same record
@@ -146,12 +186,23 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
 
 /// Remove a cache path regardless of whether it is a redb file or a legacy
 /// sled directory.
+///
+/// A path that is already gone is not a failure: two runs bounding one
+/// folder can pick the same sibling, and the second one to reach it finds
+/// nothing there.
 pub fn remove_cache_path(db_path: &Path) -> Result<()> {
     if db_path.is_dir() {
-        std::fs::remove_dir_all(db_path)
-            .with_context(|| format!("remove {}", db_path.display()))?;
+        match std::fs::remove_dir_all(db_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("remove {}", db_path.display())),
+        }
     } else if db_path.is_file() {
-        std::fs::remove_file(db_path).with_context(|| format!("remove {}", db_path.display()))?;
+        match std::fs::remove_file(db_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("remove {}", db_path.display())),
+        }
     }
     Ok(())
 }
@@ -159,6 +210,10 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Copy an existing cache to `<parent>/girpr-cache-backup-<ts>`.
 /// Works for redb files and legacy sled directories alike.
 /// Returns the backup path, or `None` when there was nothing to copy.
+///
+/// The copy is **published**: it is written under a working name and renamed
+/// onto its published name once it is complete, so the name never holds half
+/// a copy and no bound can select a copy that is still being made.
 ///
 /// How many copies are kept beside the cache is [`retain_copies`]'s business:
 /// the bound is about the folder, so it is applied by the caller whether or
@@ -170,6 +225,8 @@ pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
 
 /// Copy an existing cache to `<parent>/girpr-cache-old-<ts>` to record the
 /// pre-sync dst state. Returns the snapshot path, or `None` when absent.
+///
+/// The snapshot is published like a backup is: whole, or not at all.
 ///
 /// The bound is [`retain_copies`]'s business here too, for the same reason.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
@@ -190,15 +247,33 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// different things, and a bound on one is not a bound on the other. Only
 /// siblings carrying a prefix are considered, so a file of the user's that
 /// happens to sit in the same directory is never touched.
+///
+/// **The copies this process published are not the bound's to remove.** The
+/// run that made a copy is the run that reports it, and a bound that took it
+/// back would leave that run reporting a backup that is not on disk. The
+/// bound still holds the folder to its bound: the count is made up from the
+/// next-oldest copy instead.
 pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    retain_siblings(parent, BACKUP_PREFIX, keep)?;
-    retain_siblings(parent, OLD_PREFIX, keep)
+    let spared = take_published_under(parent);
+    retain_siblings(parent, BACKUP_PREFIX, keep, &spared)?;
+    retain_siblings(parent, OLD_PREFIX, keep, &spared)
 }
 
 /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
 /// cache) is copied recursively; a redb file is copied in one call. The
 /// destination never replaces an existing sibling.
+///
+/// **The copy is published, not written in place.** It is written under a
+/// working name ([`WORK_PREFIX`]) and renamed onto its published name once
+/// it is complete, so:
+///
+/// - a name of a bounded list never holds half a copy, and
+/// - a copy that is still being made is not a member of any list, so no
+///   bound — however often it is applied — can select it.
+///
+/// The published name is claimed before the rename, so two runs cannot
+/// publish over each other.
 fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
         trace!(path = %db_path.display(), "{label} skip: db missing");
@@ -206,24 +281,184 @@ fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBu
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let is_dir = db_path.is_dir();
-    let dest = claim_sibling(parent, prefix, &ts_now(), is_dir)?;
-    info!(src = %db_path.display(), dst = %dest.display(), "{label} start");
+    let stamp = ts_now();
+    let work = claim_sibling(parent, WORK_PREFIX, &stamp, is_dir)?;
+    info!(src = %db_path.display(), dst = %work.display(), "{label} start");
     let copied: Result<()> = if is_dir {
-        copy_dir_all(db_path, &dest)
+        copy_dir_all(db_path, &work)
     } else {
-        std::fs::copy(db_path, &dest)
-            .with_context(|| format!("copy {} -> {}", db_path.display(), dest.display()))
+        std::fs::copy(db_path, &work)
+            .with_context(|| format!("copy {} -> {}", db_path.display(), work.display()))
             .map(|_| ())
     };
     if let Err(e) = copied {
-        // The claim is ours and the copy did not land. A half-written sibling
-        // is not a backup, and leaving it would be a file a later run reads
-        // as one — so it goes, and the failure is reported either way.
-        let _ = remove_cache_path(&dest);
+        // The working copy is ours and the copy did not land. A half-written
+        // file is not a backup, and leaving it would be a file a later run
+        // reads as one — so it goes, and the failure is reported either way.
+        let _ = remove_cache_path(&work);
         return Err(e);
     }
-    info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
-    Ok(Some(dest))
+    // The published name is only ever a whole copy, so the bytes behind it
+    // have to be on disk before the name appears: a rename can reach the disk
+    // before the data it renames does.
+    if let Err(e) = flush_copy(&work, is_dir) {
+        let _ = remove_cache_path(&work);
+        return Err(e);
+    }
+    match publish_copy(&work, parent, prefix, &stamp, is_dir) {
+        Ok(dest) => {
+            remember_published(&dest);
+            info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
+            Ok(Some(dest))
+        }
+        Err(e) => {
+            // Nothing was published, so there is no backup to report: the
+            // run fails rather than say it made one.
+            let _ = remove_cache_path(&work);
+            Err(e)
+        }
+    }
+}
+
+/// Flush a finished copy before its name is published.
+///
+/// The publish is a rename, and a rename can be durable before the data it
+/// renames is, so the bytes are flushed first. A legacy sled directory is
+/// copied file by file and is left as it is: the live cache is a file, and
+/// the directory case is a migration path rather than the one that runs.
+fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
+    if is_dir {
+        return Ok(());
+    }
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .open(work)
+        .with_context(|| format!("open {}", work.display()))?;
+    file.sync_all()
+        .with_context(|| format!("flush {}", work.display()))
+}
+
+/// Publish a finished copy under a name of the bounded lists.
+///
+/// The name is **claimed** first — `create_new` for a file — so two runs
+/// cannot publish onto one name, and the finished copy is then renamed onto
+/// the claim. The rename is the publish: the name appears whole or not at
+/// all.
+///
+/// A directory takes its name by being renamed onto it, because a directory
+/// cannot be renamed over an existing name on every platform; the rename
+/// itself then says whether the name was taken.
+fn publish_copy(
+    work: &Path,
+    parent: &Path,
+    prefix: &str,
+    stamp: &str,
+    is_dir: bool,
+) -> Result<PathBuf> {
+    for n in 1..=MAX_CLAIM_ATTEMPTS {
+        let cand = parent.join(candidate_name(prefix, stamp, n));
+        // Ask first whether the name is taken: `create_new` on an existing
+        // *directory* reports `Access is denied` rather than `AlreadyExists`,
+        // so the error kind alone cannot distinguish "occupied" from "cannot
+        // write here".
+        match std::fs::symlink_metadata(&cand) {
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("stat {}", cand.display())),
+        }
+        if is_dir {
+            match std::fs::rename(work, &cand) {
+                Ok(()) => return Ok(cand),
+                Err(e) if name_is_taken(&e) => continue,
+                Err(e) => {
+                    return Err(e).with_context(|| format!("publish {}", cand.display()));
+                }
+            }
+        }
+        match claim_name(&cand) {
+            Ok(()) => {}
+            Err(e) if name_is_taken(&e) => continue,
+            Err(e) => {
+                return Err(e).with_context(|| format!("claim {}", cand.display()));
+            }
+        }
+        match std::fs::rename(work, &cand) {
+            Ok(()) => return Ok(cand),
+            Err(e) => {
+                // The claim is ours and the copy did not land on it.
+                let _ = std::fs::remove_file(&cand);
+                return Err(e).with_context(|| format!("publish {}", cand.display()));
+            }
+        }
+    }
+    bail!(
+        "no free backup name in {} after {MAX_CLAIM_ATTEMPTS} tries",
+        parent.display()
+    )
+}
+
+/// Take a name for a published copy, so that no two runs publish onto one.
+fn claim_name(path: &Path) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map(drop)
+}
+
+/// Whether an error says the name was taken rather than that the copy failed.
+fn name_is_taken(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::AlreadyExists
+            | std::io::ErrorKind::DirectoryNotEmpty
+            | std::io::ErrorKind::NotADirectory
+    )
+}
+
+/// The copies this process published and has not bounded yet.
+///
+/// The bound must not take back a copy the run applying it made: that run is
+/// the one reporting the copy, and a bound that removed it would leave the
+/// run reporting a backup that is not on disk.
+///
+/// The record is process-wide because the copies are made in more than one
+/// place — the command layer copies a cache aside before it opens one, and an
+/// open can copy one aside itself — and the bound has to know about both. An
+/// entry is forgotten once the bound for its folder has run, so a long-lived
+/// process does not go on sparing copies that are long finished with.
+fn published_registry() -> &'static Mutex<Vec<PathBuf>> {
+    static PUBLISHED: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+    PUBLISHED.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Record a published copy, so that this process's own bound spares it.
+fn remember_published(path: &Path) {
+    let mut published = published_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    published.retain(|p| p != path);
+    published.push(path.to_path_buf());
+}
+
+/// The copies this process published under `parent`, taken out of the record.
+///
+/// Taking them is deliberate: the bound that spares them has run, and a later
+/// bound must not go on sparing a copy its run has finished with.
+fn take_published_under(parent: &Path) -> Vec<PathBuf> {
+    let mut published = published_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let mut taken = Vec::new();
+    published.retain(|p| {
+        if p.parent() == Some(parent) {
+            taken.push(p.clone());
+            false
+        } else {
+            true
+        }
+    });
+    taken
 }
 
 /// How many candidate names a claim tries before it gives up.
@@ -245,6 +480,9 @@ const MAX_CLAIM_ATTEMPTS: u32 = 1000;
 /// The fallback names are the `_2`, `_3` … spellings the tool has always
 /// used, so a run that collides on the timestamp still leaves a
 /// recognisable sibling.
+///
+/// This claims the **working** name of a copy. The published name is claimed
+/// separately, by [`publish_copy`], and only once the copy is complete.
 fn claim_sibling(parent: &Path, prefix: &str, stamp: &str, is_dir: bool) -> Result<PathBuf> {
     for n in 1..=MAX_CLAIM_ATTEMPTS {
         let cand = parent.join(candidate_name(prefix, stamp, n));
@@ -309,7 +547,21 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
 /// is never touched, and neither is a sibling of the other prefix — the
 /// `girpr-cache-backup-*` copies and the `girpr-cache-old-*` snapshots are two
 /// separate lists, each with its own bound.
-fn retain_siblings(parent: &Path, prefix: &str, keep: NonZeroUsize) -> Result<()> {
+///
+/// Every sibling of the prefix is a **published** copy — a copy that is
+/// still being written carries a working name and is not in this list at all
+/// — so the bound can only ever take a whole copy away.
+///
+/// The copies in `spared` are the ones this process published, and the bound
+/// does not take them: the run that made one is the run that reports it. The
+/// count is made up from the next-oldest copy instead, so the folder still
+/// holds `keep` copies.
+fn retain_siblings(
+    parent: &Path,
+    prefix: &str,
+    keep: NonZeroUsize,
+    spared: &[PathBuf],
+) -> Result<()> {
     let mut siblings: Vec<(std::ffi::OsString, PathBuf)> = std::fs::read_dir(parent)
         .with_context(|| format!("read dir {}", parent.display()))?
         .filter_map(|e| e.ok())
@@ -325,8 +577,16 @@ fn retain_siblings(parent: &Path, prefix: &str, keep: NonZeroUsize) -> Result<()
     if siblings.len() <= keep {
         return Ok(());
     }
-    for (_, path) in &siblings[..siblings.len() - keep] {
+    let mut to_remove = siblings.len() - keep;
+    for (_, path) in &siblings {
+        if to_remove == 0 {
+            break;
+        }
+        if spared.iter().any(|p| p == path) {
+            continue;
+        }
         remove_cache_path(path)?;
+        to_remove -= 1;
     }
     Ok(())
 }
@@ -499,5 +759,109 @@ mod tests {
             names.len(),
             "every claim got a name of its own"
         );
+    }
+
+    /// A copy that is still being written is not a member of a bounded list,
+    /// so the bound cannot select it.
+    ///
+    /// The bound ranges over the published copies only, and a copy in flight
+    /// carries a working name — so a run that merely opens a folder cannot
+    /// take away the copy another run is making there, however often the
+    /// bound is applied.
+    #[test]
+    fn a_copy_that_is_still_being_written_is_not_the_bounds_business() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "working");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        // The copy another run is making: the working name carries neither
+        // of the two published prefixes.
+        let working = dir.join(format!("{WORK_PREFIX}{STAMP}"));
+        std::fs::write(&working, b"half a copy").unwrap();
+        // Two published copies, so the bound has something to remove.
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            working.exists(),
+            "the copy that is being written is left alone"
+        );
+        assert!(!older.exists(), "the oldest published copy is gone");
+        assert!(
+            newer.exists(),
+            "the newest published copy is kept: a working copy is not one of the N"
+        );
+    }
+
+    /// A published name holds a whole copy: the working name is gone and the
+    /// published one has the bytes.
+    #[test]
+    fn a_published_copy_is_the_whole_cache() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"the cache bytes",
+            "the published copy holds the cache"
+        );
+        let working: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(WORK_PREFIX))
+            .collect();
+        assert!(
+            working.is_empty(),
+            "the working name is gone once the copy is published"
+        );
+    }
+
+    /// The bound does not take back the copy the run applying it published.
+    ///
+    /// That run is the one reporting the copy, so a bound that removed it
+    /// would leave the run reporting a backup that is not on disk. The
+    /// folder still ends within its bound: the count is made up from the
+    /// next-oldest copy instead.
+    #[test]
+    fn the_bound_keeps_the_copy_the_run_published() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "spared");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        // Another run published a newer copy after this one.
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            published.exists(),
+            "the copy this process published is not the bound's to remove"
+        );
+        assert!(
+            !newer.exists(),
+            "and the folder still holds exactly the bound"
+        );
+    }
+
+    /// A sibling another run removed a moment ago is not a failure.
+    #[test]
+    fn a_sibling_another_run_removed_is_not_a_failure() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "gone");
+        let dir = t.subdir("w");
+        let missing = dir.join(format!("{BACKUP_PREFIX}{STAMP}"));
+
+        remove_cache_path(&missing).expect("a copy that is already gone is not a failure");
     }
 }
