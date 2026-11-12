@@ -601,8 +601,9 @@ struct Hold {
 impl Drop for Hold {
     fn drop(&mut self) {
         // The OS handle is the exclusion; releasing it lets the next run in.
-        // The file is deliberately left behind: a record with no holder says
-        // nothing about the copy it spoke for, and the next bound reclaims it.
+        // The file is not removed here: a caller that gives the record up
+        // removes it while the lock is still held, and a record that outlives
+        // its holder says nothing and is reclaimed by the next bound.
         let _ = self.file.unlock();
     }
 }
