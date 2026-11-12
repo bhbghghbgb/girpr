@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: E
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -129,10 +129,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T13-copy-one-decomposition.md
     batch: E
     report: [L437-L456]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [ce3f0f94, f37e231f, b5cea4e0]
     review: E
-    note: implementing session starting
+    note: implemented by ses_e325ff52affe4vS0xAXltA75CE; clear_blocking_dir drops the sketched rel parameter, copy_and_stamp returns a VerifyInputs value instead of three stat locals, and the verify stays inline in copy_one
   - id: T14
     title: sled2redb uses clap
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T14-sled2redb-cli.md
@@ -217,10 +217,10 @@ reviews:
     result: T09 fixed (ce40c153 corrects the failure story about what a failed --ignore-cache removal leaves behind); T10 kept (627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a); T11 kept (ef0d1bea, a8ede30e, 92b119ab, 65fa3190); 505 passed, 1 skipped; the never-auto-read and current-is-authoritative claims verified in code and end to end
     followups: [F15, F16, F17, F18, F19, F20]
   - batch: E
-    status: pending
+    status: in_progress
     tasks: [T12, T13]
-    base: null
-    head: null
+    base: 99cacd99
+    head: b5cea4e0
     result: null
     followups: []
   - batch: F
@@ -376,7 +376,7 @@ followups:
 | D | T10 | completed | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | review D kept |
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
 | E | T12 | pending_review | 6b50b4d0, 1e0075c5, d576a382 | implemented by ses_e32799938ffeC0Wz4zp5PvHpP2 |
-| E | T13 | in_progress | — | implementing session starting |
+| E | T13 | pending_review | ce3f0f94, f37e231f, b5cea4e0 | implemented by ses_e325ff52affe4vS0xAXltA75CE |
 | F | T14 | pending | — | — |
 | F | T15 | pending | — | — |
 | F | T16 | pending | — | — |
@@ -389,6 +389,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch E review checkpoint opened: `phase: implement` →
+  `review`, review E `pending` → `in_progress`, base `99cacd99`, head
+  `b5cea4e0`. T13 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `ce3f0f94`, `f37e231f`, `b5cea4e0`; working tree clean.
 - 2026-11-12 — T13 selected: `pending` → `in_progress`.
 - 2026-11-12 — T12 implemented: `pending` → `in_progress` → `pending_review`,
   commits `6b50b4d0`, `1e0075c5`, `d576a382`; working tree clean.
