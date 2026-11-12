@@ -238,10 +238,10 @@ reviews:
     result: T17 kept (71fe4368, 4cc52111, efdacd32); T18 kept (cce4fed3, efe471f8, 2a244f26); T19 kept (eac1d900, 96e48eb9, 9c0b1c49); no fix or revert commits; 512 passed without the feature and 524 with it, 1 skipped; the converter atomicity test was verified to be the only failure on the pre-T17 code
     followups: [F30, F31, F32]
   - batch: B1
-    status: pending
+    status: in_progress
     tasks: [F1, F2]
-    base: null
-    head: null
+    base: 107d8751
+    head: a74b92e2
     result: null
     followups: []
   - batch: B2
@@ -325,15 +325,17 @@ followups:
   - id: F1
     source: T01
     description: foreign_known resolves names through HashAlg::from_str, whose error path allocates an UnknownHash string for every non-matching foreign name; an ASCII-case comparison against the canonical spelling would be allocation-free.
-    status: in_progress
+    status: pending_review
     batch: B1
-    commits: []
+    commits: [b55cc628]
+    note: implemented by ses_e2ffcede1ffe6VQilw41qQmxww; a new HashAlg::from_name resolver is used at all three name-resolution sites
   - id: F2
     source: T01
     description: DESIGN-NOTES "A digest is looked up by name, not by slot" still says "two lookups" and does not mention get_algo or the ASCII-case widening; T16 may already cover this reconciliation.
-    status: in_progress
+    status: pending_review
     batch: B1
-    commits: []
+    commits: [a74b92e2]
+    note: implemented by ses_e2ffcede1ffe6VQilw41qQmxww; the "two lookups" and get_algo parts were already accurate in the tree, so only the ASCII-case-widening sentence needed changing
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
@@ -546,6 +548,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B1 review checkpoint opened: F1 and F2
+  `in_progress` → `pending_review`, commits `b55cc628`, `a74b92e2`; review B1
+  `pending` → `in_progress`, base `107d8751`, head `a74b92e2`.
 - 2026-11-12 — follow-up batch B1 started: F1 and F2 `pending` →
   `in_progress`.
 - 2026-11-12 — follow-up grouping recorded: 31 pending follow-ups split into
