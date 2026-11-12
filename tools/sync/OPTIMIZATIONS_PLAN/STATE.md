@@ -280,10 +280,10 @@ reviews:
     result: F15 kept (e031b0e4); F23 kept (b0342361); no fix or revert commits; 523 passed without the feature and 535 with it, 1 skipped; the deletion confirmed to have no caller anywhere in the workspace
     followups: [F47, F48]
   - batch: B7
-    status: pending
+    status: in_progress
     tasks: [F16, F30]
-    base: null
-    head: null
+    base: 7dd8436d
+    head: fc5956b6
     result: null
     followups: []
   - batch: B8
@@ -460,7 +460,7 @@ followups:
   - id: F16
     source: T09
     description: --backup-retain prunes only after a successful copy, so a folder whose cache is absent, or a --no-backup run, never prunes the copies already sitting beside it.
-    status: in_progress
+    status: pending_review
     batch: B7
     commits: []
   - id: F17
@@ -544,7 +544,7 @@ followups:
   - id: F30
     source: T17
     description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
-    status: in_progress
+    status: pending_review
     batch: B7
     commits: []
   - id: F31
@@ -688,6 +688,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B7 review checkpoint opened: F16 and F30
+  `in_progress` → `pending_review`, commits `0a66e0cf`, `58613c52`,
+  `e8335f4d`, `34015725`, `f612e0d4`, `4d1a8820`, `fc5956b6`; review B7
+  `pending` → `in_progress`, base `7dd8436d`, head `fc5956b6`.
 - 2026-11-13 — follow-up batch B7 started: F16 and F30 `pending` →
   `in_progress`; `active_batch: B6` → `B7`.
 - 2026-11-13 — review B6 `done`: F15 and F23 kept, no fix or revert commits;
