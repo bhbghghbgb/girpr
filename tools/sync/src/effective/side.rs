@@ -153,14 +153,12 @@ pub fn open_folder_cache(
     // asserting girpr-cache* on disk) keep TestCacheBackend::File and the real
     // file.
     //
-    // The backend is decided per-call from `common.test_cache` (lib-driven
-    // tests) or, for subprocess tests that spawn `girsync.exe`, from the
-    // `GIRSYNC_TEST_CACHE=memory` environment variable the test sets on the
-    // `Command`. Reading it here keeps lib-driven and subprocess tests under one
-    // switch.
-    let want_memory = common.test_cache == TestCacheBackend::Memory
-        || std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory");
-    if want_memory {
+    // The backend was decided once, at command start, and travels on
+    // `common`: `CommonOpts::try_from` reads `GIRSYNC_TEST_CACHE` there, so
+    // the subprocess suites - which set it on the child process - still get
+    // the memory backend, and a caller that builds its options by hand gets
+    // exactly what it asked for.
+    if common.test_cache == TestCacheBackend::Memory {
         info!(path = %db_path.display(), "test: using an in-memory cache");
         // Path-keyed and shared: a suite that runs two commands against one
         // folder must see the rows the first one wrote, exactly as it would with

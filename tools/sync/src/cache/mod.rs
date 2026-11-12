@@ -56,7 +56,7 @@ const META_KEY: &str = "meta";
 /// `GIRSYNC_TEST_DURABILITY=none` on the process (the test runner does it in
 /// `.config/nextest.toml`; a developer does not) to skip the per-commit fsync.
 /// It is the sibling of the `GIRSYNC_TEST_CACHE` switch in
-/// [`effective::side`](crate::effective::side), and like it the default is off:
+/// [`crate::config`], and like it the default is off:
 /// an unset variable — or any value other than exactly `none` — keeps durable
 /// commits, so a real run is unaffected unless someone deliberately opts in.
 ///

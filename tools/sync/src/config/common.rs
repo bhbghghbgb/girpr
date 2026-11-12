@@ -145,6 +145,11 @@ pub struct CommonOpts {
     /// Test-only: `Memory` opens folder caches in redb's in-memory backend
     /// instead of the real `<root>/girpr-cache` file. `File` (default) opens
     /// the real file, which production and cache-focused tests keep.
+    ///
+    /// **The field is the answer.** `GIRSYNC_TEST_CACHE=memory` is read once,
+    /// at command start, by [`CommonOpts::try_from`] — the CLI path — and
+    /// nowhere else; a caller that builds these options by hand gets exactly
+    /// what it put here, whatever the environment holds.
     pub test_cache: TestCacheBackend,
 }
 
@@ -318,6 +323,22 @@ impl TryFrom<CommonArgs> for CommonOpts {
                 named.join(" and "),
             );
         }
+        // The test-only cache backend, resolved once, here, at command start.
+        //
+        // This is the only place the environment is read for it: every later
+        // reader asks the field, so a run cannot change its mind halfway
+        // through, and two cache opens in one run cannot disagree. The
+        // subprocess suites set `GIRSYNC_TEST_CACHE=memory` on the *child*,
+        // and the child runs the CLI — which comes through here — so they
+        // still get the in-memory backend.
+        //
+        // Anything other than exactly `memory` means the real file, which is
+        // what production uses and what the cache-focused suites need.
+        let test_cache = if std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory") {
+            TestCacheBackend::Memory
+        } else {
+            TestCacheBackend::File
+        };
         Ok(Self {
             algos,
             hash_mode,
@@ -332,7 +353,7 @@ impl TryFrom<CommonArgs> for CommonOpts {
             backup: backup_policy(a.no_backup, a.backup_retain)?,
             dry_run: a.dry_run,
             rw: RwLimits::try_from(a.rw)?,
-            test_cache: TestCacheBackend::default(),
+            test_cache,
         })
     }
 }
