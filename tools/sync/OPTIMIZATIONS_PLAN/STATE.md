@@ -174,10 +174,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T18-feature-gate-sled.md
     batch: G
     report: [L597-L610]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [cce4fed3, efe471f8, 2a244f26]
     review: G
-    note: implementing session starting
+    note: implemented by ses_e3062be0affekJg6Y62KsyWlcA; chose the required-features shape with no sled dev-dependency, and the windows-sys feature list was left byte-identical
   - id: T19
     title: Benchmark harness over three tree shapes
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T19-benchmark-harness.md
@@ -435,7 +435,7 @@ followups:
 | F | T15 | completed | af640af6 | review F kept |
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
 | G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
-| G | T18 | in_progress | — | implementing session starting |
+| G | T18 | pending_review | cce4fed3, efe471f8, 2a244f26 | implemented by ses_e3062be0affekJg6Y62KsyWlcA |
 | G | T19 | pending | — | — |
 
 ## Transition log
@@ -443,6 +443,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T18 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `cce4fed3`, `efe471f8`, `2a244f26`; working tree clean.
 - 2026-11-12 — T18 selected: `pending` → `in_progress`.
 - 2026-11-12 — T17 implemented: `pending` → `in_progress` → `pending_review`,
   commits `71fe4368`, `4cc52111`, `efdacd32`; working tree clean.
