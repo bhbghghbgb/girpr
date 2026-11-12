@@ -283,9 +283,10 @@ followups:
   - id: F8
     source: T05
     description: Plan bookkeeping only, not a code change: the T05 task file's design_notes pointer resolves to README.md, not to DESIGN-NOTES.md, which never mentions the cache's meta row.
-    status: pending
+    status: skipped
     batch: null
     commits: []
+    note: skipped: the only file it names is a task file in this plan directory, which is deleted at the end of the plan
   - id: F9
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
@@ -461,6 +462,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — F8 `pending` → `skipped`: it names only a task file in this plan
+  directory, which is deleted when the plan ends, so there is no code work to
+  do. 31 follow-ups remain `pending`.
 - 2026-11-12 — review G `done`: T17 kept, T18 kept, T19 kept, no fix or revert
   commits; follow-ups F30–F32 appended with status `pending`; T17, T18 and T19
   `pending_review` → `completed`. All 19 tasks are now `completed`.
