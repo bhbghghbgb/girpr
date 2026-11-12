@@ -461,7 +461,10 @@ runs without one there.
 
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
-because the count is made up from the next-oldest copy instead.
+because the count is made up from the next-oldest copy instead. A run that
+bounds the same folder twice spares the copy both times: what the run
+published is spared for as long as the process lives, not only by the first
+bound.
 
 **A copy is published before the lock that would protect it is taken.** That
 gap is the one place where a live run's copy can be lost: the run that
@@ -516,7 +519,9 @@ itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 `a_directory_copy_is_published_whole` for the directory case,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
-bound against the run's own copy,
+bound against the run's own copy and
+`a_second_bound_still_spares_the_copy_the_process_published` for a later bound
+in the same run,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
 same thing seen through a whole run,
 `the_folder_of_a_legacy_sled_cache_is_bounded`,

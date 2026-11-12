@@ -341,10 +341,13 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// **The copies this process published are spared as well**, and for the same
 /// reason, whether or not the copy could be given a record at all: a folder
 /// whose filesystem cannot lock a file still must not lose the copy the run
-/// is about to report.
+/// is about to report. Every bound this process makes for the folder spares
+/// them, and not only the first one: the copy a run published is the copy
+/// that run reports, so a bound that took it would leave a later bound free
+/// to take the copy the run is still about to report.
 pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
-    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
-    let spared = take_published_under(parent);
+    let parent = folder_of(db_path);
+    let spared = published_under(parent);
     // One reading of the folder: the bound is a statement about what the
     // folder holds now, and a copy published after this is not one of them.
     let folder = read_folder(parent)?;
@@ -792,20 +795,26 @@ fn name_is_taken(e: &std::io::Error) -> bool {
     )
 }
 
-/// The copies this process published and has not bounded yet.
+/// The copies this process published, by the folder they sit in.
 ///
-/// The bound must not take back a copy the run applying it made: that run is
-/// the one reporting the copy, and a bound that removed it would leave the
-/// run reporting a backup that is not on disk.
+/// The bound must not take back a copy the run made: that run is the one
+/// reporting the copy, and a bound that removed it would leave the run
+/// reporting a backup that is not on disk.
 ///
-/// The record is process-wide because the copies are made in more than one
-/// place — the command layer copies a cache aside before it opens one, and an
-/// open can copy one aside itself — and the bound has to know about both. An
-/// entry is forgotten once the bound for its folder has run, so a long-lived
-/// process does not go on sparing copies that are long finished with.
-fn published_registry() -> &'static Mutex<Vec<PathBuf>> {
-    static PUBLISHED: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
-    PUBLISHED.get_or_init(|| Mutex::new(Vec::new()))
+/// The registry is keyed by the folder, because the copies are made in more
+/// than one place — the command layer copies a cache aside before it opens
+/// one, and an open can copy one aside itself — and a bound for one folder
+/// has to know about both of them without disturbing another folder's.
+///
+/// **A bound does not consume an entry.** The copy a run published is the copy
+/// that run reports, so every bound this process makes for that folder spares
+/// it, and not only the first one: a bound that took the entry would leave
+/// the next bound free to take the copy the run is still about to report. An
+/// entry is forgotten when the copy is gone, because there is nothing left to
+/// spare.
+fn published_registry() -> &'static Mutex<HashMap<PathBuf, Vec<PathBuf>>> {
+    static PUBLISHED: OnceLock<Mutex<HashMap<PathBuf, Vec<PathBuf>>>> = OnceLock::new();
+    PUBLISHED.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Record a published copy, so that this process's own bound spares it.
@@ -813,28 +822,37 @@ fn remember_published(path: &Path) {
     let mut published = published_registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    published.retain(|p| p != path);
-    published.push(path.to_path_buf());
+    let copies = published.entry(folder_of(path).to_path_buf()).or_default();
+    copies.retain(|p| p != path);
+    copies.push(path.to_path_buf());
 }
 
-/// The copies this process published under `parent`, taken out of the record.
+/// The copies this process published in `folder`.
 ///
-/// Taking them is deliberate: the bound that spares them has run, and a later
-/// bound must not go on sparing a copy its run has finished with.
-fn take_published_under(parent: &Path) -> Vec<PathBuf> {
+/// The entries are read and not taken: a bound spares the copies the run
+/// published, and a later bound for the same folder spares them too. An entry
+/// whose copy is gone is forgotten — there is nothing left to spare.
+fn published_under(folder: &Path) -> Vec<PathBuf> {
     let mut published = published_registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let mut taken = Vec::new();
-    published.retain(|p| {
-        if p.parent() == Some(parent) {
-            taken.push(p.clone());
-            false
-        } else {
-            true
-        }
-    });
-    taken
+    let Some(copies) = published.get_mut(folder) else {
+        return Vec::new();
+    };
+    copies.retain(|p| p.exists());
+    let spared = copies.clone();
+    if spared.is_empty() {
+        published.remove(folder);
+    }
+    spared
+}
+
+/// The folder a path of the tool's own state sits in.
+///
+/// A path with no directory part sits in the current directory, and that is
+/// the folder the copies beside it are counted in.
+fn folder_of(path: &Path) -> &Path {
+    path.parent().unwrap_or(Path::new("."))
 }
 
 /// The record that says a published copy is in use, and the lock that says the
@@ -1910,6 +1928,82 @@ mod tests {
         );
         assert!(
             !newer.exists(),
+            "and the folder still holds exactly the bound"
+        );
+    }
+
+    /// A second bound for a folder still spares the copy the run published.
+    ///
+    /// The copy a run published is the copy that run reports, so every bound
+    /// the process makes for that folder spares it, and not only the first
+    /// one. A bound that took the copy's entry would leave the next bound
+    /// free to take the copy the run is still about to report.
+    ///
+    /// The copy has no record beside it here: the run opened the cache, so
+    /// the record was released, and what is left to speak for the copy is the
+    /// bound's own knowledge of what this process published.
+    #[test]
+    fn a_second_bound_still_spares_the_copy_the_process_published() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "spared_twice");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        {
+            // A first open, so that the cache is a cache and not a copy of
+            // one.
+            let _first = open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: None,
+                },
+            )
+            .expect("the cache opens");
+        }
+
+        // The run publishes a copy of the cache: it carries a record.
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        // A copy another run published after this one, so that the bound has
+        // something to remove.
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        // The run opens the cache: the record is released, and the cache's
+        // own lock is what speaks for the copy from here on.
+        let _cache = open_db(
+            &db,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: None,
+            },
+        )
+        .expect("the cache opens again");
+
+        // The first bound.
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+        assert!(
+            published.exists(),
+            "the first bound spares the copy this process published"
+        );
+        assert!(
+            !newer.exists(),
+            "and the folder still holds exactly the bound"
+        );
+
+        // Another copy lands, and a second bound runs.
+        let newest = dir.join(format!("{BACKUP_PREFIX}29991232T235959.999999Z"));
+        std::fs::write(&newest, b"newest").unwrap();
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            published.exists(),
+            "the second bound spares the copy this process published too"
+        );
+        assert!(
+            !newest.exists(),
             "and the folder still holds exactly the bound"
         );
     }
