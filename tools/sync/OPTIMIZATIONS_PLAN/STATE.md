@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B21
+active_batch: B22
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -756,7 +756,7 @@ followups:
   - id: F56
     source: F49
     description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
-    status: pending
+    status: in_progress
     batch: B22
     commits: []
   - id: F57
@@ -768,7 +768,7 @@ followups:
   - id: F58
     source: F53
     description: retain_copies is pub, but its safety rests entirely on the caller already holding the folder's cache exclusive lock, and nothing in the signature or doc says so.
-    status: pending
+    status: in_progress
     batch: B22
     commits: []
   - id: F59
@@ -781,13 +781,13 @@ followups:
   - id: F60
     source: F53
     description: The record's body (pid=, started=) is written but never read, so nothing reports or checks which run holds a record.
-    status: pending
+    status: in_progress
     batch: B22
     commits: []
   - id: F61
     source: F53
     description: The copy's protection after the record is released rests on redb's exclusive file lock, which is redb's property rather than something the suite pins.
-    status: pending
+    status: in_progress
     batch: B22
     commits: []
   - id: F64
@@ -859,6 +859,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B22 started: F56, F58, F60 and F61 `pending` →
+  `in_progress`; `active_batch: B21` → `B22`.
 - 2026-11-13 — review B21 `done`: F52, F54, F55 and F57 kept, plus two
   comment-only fixes (086c4d2f, 6a7e78a5); follow-ups F65, F66 and F68
   appended with batch `B23`, F64 added to B19, and F67 and F69 recorded as
