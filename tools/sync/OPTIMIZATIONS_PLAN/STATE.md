@@ -129,10 +129,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T13-copy-one-decomposition.md
     batch: E
     report: [L437-L456]
-    status: pending
+    status: in_progress
     commits: []
     review: E
-    note: null
+    note: implementing session starting
   - id: T14
     title: sled2redb uses clap
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T14-sled2redb-cli.md
@@ -376,7 +376,7 @@ followups:
 | D | T10 | completed | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | review D kept |
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
 | E | T12 | pending_review | 6b50b4d0, 1e0075c5, d576a382 | implemented by ses_e32799938ffeC0Wz4zp5PvHpP2 |
-| E | T13 | pending | — | — |
+| E | T13 | in_progress | — | implementing session starting |
 | F | T14 | pending | — | — |
 | F | T15 | pending | — | — |
 | F | T16 | pending | — | — |
@@ -389,6 +389,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T13 selected: `pending` → `in_progress`.
 - 2026-11-12 — T12 implemented: `pending` → `in_progress` → `pending_review`,
   commits `6b50b4d0`, `1e0075c5`, `d576a382`; working tree clean.
 - 2026-11-12 — batch E started: T12 `pending` → `in_progress`.
