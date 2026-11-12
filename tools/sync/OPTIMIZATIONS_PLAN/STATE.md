@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
+phase: followups-evaluate
 active_batch: G
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -165,28 +165,28 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T17-converter-atomicity.md
     batch: G
     report: [L166-L189, L587-L589]
-    status: pending_review
+    status: completed
     commits: [71fe4368, 4cc52111, efdacd32]
     review: G
-    note: implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN; the conversion now writes a temp sibling and renames, the temp is claimed before the source is read, and the --force preservation case was verified to fail on the pre-fix code
+    note: review G kept; the --force preservation test was verified to be the only failure on the pre-T17 code
   - id: T18
     title: Feature-gate sled
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T18-feature-gate-sled.md
     batch: G
     report: [L597-L610]
-    status: pending_review
+    status: completed
     commits: [cce4fed3, efe471f8, 2a244f26]
     review: G
-    note: implemented by ses_e3062be0affekJg6Y62KsyWlcA; chose the required-features shape with no sled dev-dependency, and the windows-sys feature list was left byte-identical
+    note: review G kept; the default build carries no sled and the converter tests run only under the convert feature
   - id: T19
     title: Benchmark harness over three tree shapes
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T19-benchmark-harness.md
     batch: G
     report: [L590-L593]
-    status: pending_review
+    status: completed
     commits: [eac1d900, 96e48eb9, 9c0b1c49]
     review: G
-    note: implemented by ses_e30229219ffewvbNHZ6ZoqgrRH; many-tiny is 2000 files at scale 1 instead of 10000, three commits instead of two, and the deep shape is walked only to the task's 64-level cap
+    note: review G kept; harness = false, no criterion, no assert in the bench, and the suite does not build or run it
 reviews:
   - batch: A
     status: done
@@ -231,12 +231,12 @@ reviews:
     result: T14 kept (2df937bf, fb913a2a, a2df3d11); T15 kept (af640af6); T16 fixed (930efdf3 corrects a README paragraph that contradicted the mixed-case collision refusal); 520 passed, 1 skipped; every remaining README and DESIGN-NOTES claim checked against the tree
     followups: [F25, F26, F27, F28, F29]
   - batch: G
-    status: in_progress
+    status: done
     tasks: [T17, T18, T19]
     base: 2c23bd11
     head: 9c0b1c49
-    result: null
-    followups: []
+    result: T17 kept (71fe4368, 4cc52111, efdacd32); T18 kept (cce4fed3, efe471f8, 2a244f26); T19 kept (eac1d900, 96e48eb9, 9c0b1c49); no fix or revert commits; 512 passed without the feature and 524 with it, 1 skipped; the converter atomicity test was verified to be the only failure on the pre-T17 code
+    followups: [F30, F31, F32]
 followups:
   - id: F1
     source: T01
@@ -412,6 +412,24 @@ followups:
     status: pending
     batch: null
     commits: []
+  - id: F30
+    source: T17
+    description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
+    status: pending
+    batch: null
+    commits: []
+  - id: F31
+    source: T18
+    description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today.
+    status: pending
+    batch: null
+    commits: []
+  - id: F32
+    source: T18
+    description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
@@ -434,15 +452,19 @@ followups:
 | F | T14 | completed | 2df937bf, fb913a2a, a2df3d11 | review F kept |
 | F | T15 | completed | af640af6 | review F kept |
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
-| G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
-| G | T18 | pending_review | cce4fed3, efe471f8, 2a244f26 | implemented by ses_e3062be0affekJg6Y62KsyWlcA |
-| G | T19 | pending_review | eac1d900, 96e48eb9, 9c0b1c49 | implemented by ses_e30229219ffewvbNHZ6ZoqgrRH |
+| G | T17 | completed | 71fe4368, 4cc52111, efdacd32 | review G kept |
+| G | T18 | completed | cce4fed3, efe471f8, 2a244f26 | review G kept |
+| G | T19 | completed | eac1d900, 96e48eb9, 9c0b1c49 | review G kept |
 
 ## Transition log
 
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review G `done`: T17 kept, T18 kept, T19 kept, no fix or revert
+  commits; follow-ups F30–F32 appended with status `pending`; T17, T18 and T19
+  `pending_review` → `completed`. All 19 tasks are now `completed`.
+  `phase: review` → `followups-evaluate`.
 - 2026-11-12 — batch G review checkpoint opened: `phase: implement` →
   `review`, review G `pending` → `in_progress`, base `2c23bd11`, head
   `9c0b1c49`. T19 implemented: `pending` → `in_progress` → `pending_review`,
