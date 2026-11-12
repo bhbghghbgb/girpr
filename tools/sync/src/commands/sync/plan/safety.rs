@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::diff::Diff;
 use crate::effective::EffRec;
-use crate::hardlink::{Identity, info};
+use crate::hardlink::{Identity, LinkInfo, info};
 use crate::link::link_ancestor_above;
 use crate::util::path_key;
 
@@ -37,6 +37,9 @@ use super::link::{
 pub(crate) trait Probes {
     /// The canonical form of `path`, with every link resolved.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+
+    /// The link count and identity of the file at `path`, following links.
+    fn link_info(&self, path: &Path) -> io::Result<LinkInfo>;
 }
 
 /// The real disk.
@@ -45,6 +48,10 @@ pub(crate) struct SystemProbes;
 impl Probes for SystemProbes {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         std::fs::canonicalize(path)
+    }
+
+    fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
+        info(path)
     }
 }
 
@@ -459,22 +466,23 @@ pub(crate) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// returned, and `NotFound` means there is no inode to truncate.
 ///
 /// A run with no copy has nothing to protect: it cannot truncate an inode, so
-/// the preflight answers without reading a single link count. The removals it
-/// would credit are this guard's own accounting, not a separate concern — they
-/// only matter to a copy that is going to happen.
+/// the preflight has no decision to make. The removals it would credit are
+/// this guard's own accounting, not a separate concern — they only matter to
+/// a copy that is going to happen. They are still read, because a removal the
+/// disk cannot answer is a plan-time failure, and the delete phase would only
+/// find it after the rename had changed dst.
 pub(crate) fn ensure_hard_linked_targets_safe(
     plan: &Plan,
     dm: &HashMap<String, EffRec>,
     dst: &Path,
     on_disk: Option<&super::super::rename::DiskSpelling>,
+    probes: &dyn Probes,
 ) -> Result<()> {
     // A copy-free run cannot truncate an inode, so the preflight has nothing
     // to protect. This is not "the plan is empty": deletes and fix-dirs are
     // accounted for below, and they are only read to credit a name the copy
     // phase removes.
-    if plan.copy.is_empty() {
-        return Ok(());
-    }
+    let copy_free = plan.copy.is_empty();
     // Ordinary-file names this run removes before copying, by the inode they
     // name. A link is skipped: its removal leaves the target's count unchanged.
     let mut removed: HashMap<Identity, u64> = HashMap::new();
@@ -486,8 +494,15 @@ pub(crate) fn ensure_hard_linked_targets_safe(
             continue;
         }
         let p = dst.join(disk_rel(on_disk, rel).as_ref());
-        match info(&p) {
-            Ok(info) => *removed.entry(info.id).or_default() += 1,
+        match probes.link_info(&p) {
+            Ok(info) => {
+                // The credit is only read by a copy, so a copy-free run does
+                // not build the map — but it still asks the disk, because the
+                // answer it would not use can still be an error.
+                if !copy_free {
+                    *removed.entry(info.id).or_default() += 1;
+                }
+            }
             // Gone already, so this plan entry removes no name at copy time.
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => {
@@ -495,9 +510,12 @@ pub(crate) fn ensure_hard_linked_targets_safe(
             }
         }
     }
+    if copy_free {
+        return Ok(());
+    }
     for item in &plan.copy {
         let d = dst.join(disk_rel(on_disk, &item.rel).as_ref());
-        let info = match info(&d) {
+        let info = match probes.link_info(&d) {
             Ok(info) => info,
             Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
             Err(e) => {

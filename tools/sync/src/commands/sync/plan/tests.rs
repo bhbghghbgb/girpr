@@ -9,6 +9,7 @@ use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_saf
 use super::*;
 use crate::diff::Diff;
 use crate::effective::EffRec;
+use crate::hardlink::{LinkInfo, info};
 use crate::hash::DigestSet;
 use girpr_tempdir::TempDir;
 use std::cell::RefCell;
@@ -98,6 +99,11 @@ impl Probes for TestProbes {
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
         self.record(path)?;
         std::fs::canonicalize(path)
+    }
+
+    fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
+        self.record(path)?;
+        info(path)
     }
 }
 
@@ -284,7 +290,7 @@ fn a_directory_copy_destination_is_not_a_hard_link_hazard() {
     dm.insert("node".to_string(), dir());
     let p = plan(&[], &["node"], &[]);
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("a directory at the copy destination is removed, not truncated");
 }
 
@@ -302,7 +308,7 @@ fn a_hard_linked_copy_target_with_no_planned_removal_is_refused() {
     dm.insert("shared.txt".to_string(), file());
     let p = plan(&[], &["a.txt"], &[]);
 
-    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("a name the run keeps makes the truncation unsafe");
     let msg = err.to_string();
     assert!(msg.contains("hard links"), "names the hazard: {msg}");
@@ -324,7 +330,7 @@ fn deleting_the_other_name_makes_the_hard_linked_copy_safe() {
     let mut p = plan(&[], &["a.txt"], &[]);
     p.delete_files.push("shared.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("the delete phase runs before the copy and removes the other name");
 }
 
@@ -344,7 +350,7 @@ fn deleting_an_unrelated_file_does_not_make_the_copy_safe() {
     let mut p = plan(&[], &["a.txt"], &[]);
     p.delete_files.push("other.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("deleting a different file leaves both names of this inode");
 }
 
@@ -361,7 +367,7 @@ fn a_file_replaced_by_fix_dirs_makes_the_hard_linked_copy_safe() {
     dm.insert("repl".to_string(), file());
     let p = plan(&[], &["a.txt"], &["repl"]);
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("fix-dirs removes the second name before the copy");
 }
 
@@ -382,11 +388,11 @@ fn removing_both_other_names_makes_a_three_way_share_safe() {
     p.delete_files.push("b.txt".to_string());
     p.delete_files.push("c.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("both other names are removed before the copy");
 
     p.delete_files.pop();
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("one surviving name still shares the inode");
 }
 
@@ -405,13 +411,35 @@ fn a_copy_free_plan_with_hard_linked_extras_is_accepted() {
     dm.insert("shared.txt".to_string(), file());
 
     let copying = plan(&[], &["a.txt"], &[]);
-    ensure_hard_linked_targets_safe(&copying, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&copying, &dm, &dst, None, &SystemProbes)
         .expect_err("a copy would truncate the inode the second name shares");
 
     let mut copy_free = plan(&[], &[], &[]);
     copy_free.delete_files.push("shared.txt".to_string());
-    ensure_hard_linked_targets_safe(&copy_free, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&copy_free, &dm, &dst, None, &SystemProbes)
         .expect("a copy-free run cannot truncate an inode");
+}
+
+/// A copy-free run cannot truncate an inode, but it still removes names, and
+/// a removal the disk cannot answer is a failure the run used to surface at
+/// plan time. The delete phase would only find it later — after the rename
+/// had already changed dst, and after other removals had already landed.
+#[test]
+fn an_unreadable_planned_removal_is_refused_at_plan_time() {
+    let t = TempDir::new("girsync_plan", "unreadable_removal");
+    let dst = t.subdir("dst");
+    std::fs::write(dst.join("gone.txt"), b"x").unwrap();
+    let mut dm = HashMap::new();
+    dm.insert("gone.txt".to_string(), file());
+    let mut p = plan(&[], &[], &[]);
+    p.delete_files.push("gone.txt".to_string());
+    let probes = TestProbes::failing(&dst.join("gone.txt"));
+
+    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &probes)
+        .expect_err("a removal the disk cannot answer is refused at plan time");
+    let msg = err.to_string();
+    assert!(msg.contains("hard-link count"), "names the probe: {msg}");
+    assert!(msg.contains("gone.txt"), "names the removal: {msg}");
 }
 
 /// A strict link ancestor that is itself a planned `fix_dirs`

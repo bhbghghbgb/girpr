@@ -433,7 +433,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // a tree the real run refuses would answer a different question. A planned
     // delete of the other name (the default run) is credited; one left in place
     // (`--keep-extra`, or outside `dst`) is refused here.
-    ensure_hard_linked_targets_safe(&plan, &dm, &dst, on_disk.as_ref())?;
+    ensure_hard_linked_targets_safe(&plan, &dm, &dst, on_disk.as_ref(), &SystemProbes)?;
     info!(
         renamed,
         mkdir = plan.mkdir.len(),
