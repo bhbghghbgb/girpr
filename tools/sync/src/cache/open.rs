@@ -1903,6 +1903,67 @@ mod tests {
         assert!(newer.exists(), "and nothing in it is touched");
     }
 
+    /// A copy whose record has been released is safe while the cache is open.
+    ///
+    /// The record speaks for a copy while its run is between publishing it
+    /// and opening the folder's cache. Once the cache is open the record is
+    /// released — it goes with the run's hold on it — and the cache's own
+    /// exclusive lock is what speaks for the copy: a run that cannot open the
+    /// cache is not in its run phase for the folder, so it does not bound the
+    /// folder at all.
+    ///
+    /// The copy here is an ordinary file with no record beside it, because
+    /// that is what a released record leaves behind, and nothing in this
+    /// process published it: the bound that would take it is the only thing
+    /// that can save it.
+    #[test]
+    fn a_copy_whose_record_is_released_is_kept_while_the_cache_is_open() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "released");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        // The copy whose record was released, and a newer one: a bound that
+        // ran would take the older of the two.
+        let copy = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        std::fs::write(&copy, b"a copy").unwrap();
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        // The cache is open, so its own exclusive lock is held.
+        let _cache = open_db(
+            &db,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: None,
+            },
+        )
+        .expect("the cache opens");
+
+        // A run that comes along cannot open the cache, so it is not in its
+        // run phase for the folder and it does not bound the folder.
+        assert!(
+            open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: NonZeroUsize::new(1),
+                },
+            )
+            .is_err(),
+            "the cache is open, so it cannot be opened again"
+        );
+
+        assert!(
+            copy.exists(),
+            "the copy whose record was released is not taken while the cache is open"
+        );
+        assert!(newer.exists(), "and the folder is left alone");
+    }
+
     /// The bound does not take back the copy the run applying it published.
     ///
     /// That run is the one reporting the copy, so a bound that removed it

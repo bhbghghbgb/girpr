@@ -529,6 +529,8 @@ same thing seen through a whole run,
 `the_folder_of_a_corrupt_cache_is_bounded` and
 `the_folder_of_a_cache_another_run_holds_is_left_to_it` for the bound on a
 cache that did not open, and
+`a_copy_whose_record_is_released_is_kept_while_the_cache_is_open` for the
+protection the cache's own lock gives once the record is released,
 `a_published_copy_carries_a_record_of_its_own`,
 `a_copy_a_live_run_is_using_is_not_the_bounds_to_take`,
 `a_record_whose_run_is_gone_does_not_stop_the_bound`,
