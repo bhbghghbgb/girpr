@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B2
+active_batch: B3
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -377,7 +377,7 @@ followups:
   - id: F7
     source: T05
     description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
-    status: pending
+    status: in_progress
     batch: B3
     commits: []
   - id: F8
@@ -402,19 +402,19 @@ followups:
   - id: F11
     source: T07
     description: The no-op test observes only the re-key pass's read-transaction count, not the run's total cache scans, so the broader claim that a no-op run does not scan the cache more than once is still unpinned.
-    status: pending
+    status: in_progress
     batch: B3
     commits: []
   - id: F12
     source: T07
     description: CacheDb::read_transaction_count counts every read transaction on the handle rather than only entries-table reads, so a future read on another table would silently move the number the new tests pin.
-    status: pending
+    status: in_progress
     batch: B3
     commits: []
   - id: F13
     source: T07
     description: get_many allocates a String per key; a borrow-shaped variant would avoid the copies for a caller that only needs the rows.
-    status: pending
+    status: in_progress
     batch: B3
     commits: []
   - id: F14
@@ -444,7 +444,7 @@ followups:
   - id: F18
     source: T10
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
-    status: pending
+    status: in_progress
     batch: B3
     commits: []
   - id: F19
@@ -598,6 +598,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B3 started: F7, F11, F12, F13 and F18 `pending`
+  → `in_progress`; `active_batch: B2` → `B3`.
 - 2026-11-12 — review B2 `done`: F3 kept, F4 kept, F5 kept, no fix or revert
   commits; follow-ups F36–F38 appended with status `pending` and batch `B14`
   (the Probes doc wording and the design-notes test list, all documentation);
