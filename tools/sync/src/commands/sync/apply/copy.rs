@@ -224,6 +224,108 @@ fn create_parent(d: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Refuse a destination that is a second name for another file.
+///
+/// A hard link is a second name for this file, not a link this crate can
+/// classify: `try_is_link` is false and the walk reports it as ordinary
+/// content. `File::create` truncates the shared inode, so writing here would
+/// change the other name too, which may be outside `dst` and in the reported
+/// shape is a source file the run is reading. Refuse conservatively rather
+/// than silently break the mirror's "never touch src" promise; the user can
+/// remove the extra link and rerun.
+///
+/// The count is the complete check: comparing the destination's identity with
+/// this copy's source misses a dst hard link to a *different* src file, which
+/// is exactly the reported shape (`dst/a.txt` linked to `src/b.txt` while
+/// copying `src/a.txt`).
+///
+/// A missing destination has nothing to truncate and is allowed through; any
+/// other error is reported rather than read as a count.
+fn refuse_hard_linked_dst(d: &Path, rel: &str) -> Result<()> {
+    match crate::hardlink::count(d) {
+        Ok(1) => Ok(()),
+        Ok(links) => bail!(
+            "refusing to copy `{rel}`: dst `{}` has {links} hard links, so truncating \
+             it would change another path that shares the file (possibly one inside \
+             src); remove the extra link or replace the file, then rerun",
+            d.display()
+        ),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("hard-link count {}", d.display())),
+    }
+}
+
+/// What the verify judges the destination against.
+///
+/// The size and the mtime are the source's own, taken before the copy, and
+/// `src_digests` is the digest of the bytes the copy streamed out of the
+/// source. The verify holds all three against what it reads back from the
+/// destination.
+struct VerifyInputs {
+    size: u64,
+    mtime_ns: i64,
+    src_digests: DigestSet,
+}
+
+/// Copy the source over the destination, flush it, and stamp it with the
+/// source's mtime.
+///
+/// The three steps are in that order, and each is load-bearing:
+///
+/// - **copy**: the source is stat'ed first and opened second, so the size and
+///   the mtime the verify uses are the ones the copy actually read;
+/// - **flush**: the bytes are written through, so the verify's re-read hashes
+///   what reached the disk rather than the page cache. A failed flush is a
+///   failed copy: `sync_all` is propagated, not ignored, or the verify could
+///   re-read the same cache the flush never wrote through, cache the digest,
+///   and let the run exit 0 claiming durability it did not obtain;
+/// - **stamp**: the mtime follows the write and precedes the close, and it is
+///   applied to the handle that wrote the bytes, so there is no window in
+///   which the file is closed but unstamped. Its failure aborts the copy: the
+///   bytes are already durable, so the run exits 3 and a rerun sees the mtime
+///   difference and copies the file again.
+///
+/// The digest of the source comes from the copy's own read, which is why it
+/// is free; it is *not* the verify, which re-reads the destination
+/// separately.
+fn copy_and_stamp(
+    s: &Path,
+    d: &Path,
+    rel: &str,
+    algos: &AlgoSet,
+    buf: &mut Vec<u8>,
+) -> Result<VerifyInputs> {
+    let smeta = std::fs::metadata(s).with_context(|| format!("stat {}", s.display()))?;
+    let ssize = smeta.len();
+    let smtime_sys = smeta.modified().ok();
+    let smtime_ns = mtime_ns_of(&smeta);
+    // stream copy (truncate + write in place), digesting src as it goes
+    let mut fin = std::fs::File::open(s).with_context(|| format!("open {}", s.display()))?;
+    // A dst symlink to a *file* is followed and written through here, by design
+    // (the README documents write-through). Only a directory link is unlinked
+    // above, because `File::create` cannot truncate one.
+    let mut fout = std::fs::File::create(d).with_context(|| format!("create {}", d.display()))?;
+    // The request is a slice; what the digester wants is a set. The set is
+    // built once per phase and handed down, so this conversion is not repeated
+    // per file. The slice stays the thing `verify_digests` walks, because only
+    // the *requested* digests are judged, and in the order they were asked for.
+    let src_digests = copy_and_digest(&mut fin, &mut fout, algos, buf)
+        .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
+    if !test_no_fsync() {
+        flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
+    }
+    if let Some(st) = smtime_sys {
+        fout.set_modified(st)
+            .with_context(|| format!("set mtime {}", d.display()))?;
+    }
+    drop(fout);
+    Ok(VerifyInputs {
+        size: ssize,
+        mtime_ns: smtime_ns,
+        src_digests,
+    })
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
@@ -241,8 +343,12 @@ fn create_parent(d: &Path) -> Result<()> {
 /// 3. [`clear_blocking_dir`] — a directory in the way of a file copy goes
 ///    first, and a link to a directory is unlinked rather than recursed into;
 /// 4. [`create_parent`] — the destination's parents are made;
-/// 5. the hard-link refusal, the copy, the flush, the stamp and the verify,
-///    below.
+/// 5. [`refuse_hard_linked_dst`] — a destination with more than one hard link
+///    is refused before `File::create` truncates the shared inode;
+/// 6. [`copy_and_stamp`] — the source is stat'ed, streamed over the
+///    destination and digested as it goes, flushed, and stamped with the
+///    source's mtime;
+/// 7. the verify, below, which re-reads the destination from disk.
 ///
 /// **Verify is two independent reads, and both are load-bearing.** src is
 /// digested as the copy streams it; dst is then re-read from disk and digested
@@ -274,7 +380,8 @@ fn create_parent(d: &Path) -> Result<()> {
 /// misses a dst hard link to a *different* src file, which is exactly the
 /// reported shape (`dst/a.txt` linked to `src/b.txt` while copying `src/a.txt`).
 /// Refusing every count above one is conservative — a shared inode is outside a
-/// mirror's write contract wherever it lives.
+/// mirror's write contract wherever it lives. The check is
+/// [`refuse_hard_linked_dst`].
 ///
 /// **What the src-side digest is not.** It describes the bytes src held *during*
 /// the copy, not after it. So a src file rewritten mid-copy is not caught here:
@@ -308,98 +415,39 @@ pub(super) fn copy_one(
     refuse_final_link_into_src(&d, rel, src_canonical)?;
     clear_blocking_dir(&d)?;
     create_parent(&d)?;
-    // A hard link is a second name for this file, not a link this crate can
-    // classify: `try_is_link` is false and the walk reports it as ordinary
-    // content. `File::create` below truncates the shared inode, so writing here
-    // would change the other name too — which may be outside `dst`, and in the
-    // reported shape is a source file the run is reading. Refuse conservatively
-    // rather than silently break the mirror's "never touch src" promise; the
-    // user can remove the extra link and rerun.
-    match crate::hardlink::count(&d) {
-        Ok(1) => {}
-        Ok(links) => bail!(
-            "refusing to copy `{rel}`: dst `{}` has {links} hard links, so truncating \
-             it would change another path that shares the file (possibly one inside \
-             src); remove the extra link or replace the file, then rerun",
-            d.display()
-        ),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e).with_context(|| format!("hard-link count {}", d.display())),
-    }
-    let smeta = std::fs::metadata(&s).with_context(|| format!("stat {}", s.display()))?;
-    let ssize = smeta.len();
-    let smtime_sys = smeta.modified().ok();
-    let smtime_ns = mtime_ns_of(&smeta);
-    // stream copy (truncate + write in place), digesting src as it goes
-    let mut fin = std::fs::File::open(&s).with_context(|| format!("open {}", s.display()))?;
-    // A dst symlink to a *file* is followed and written through here, by design
-    // (the README documents write-through). Only a directory link is unlinked
-    // above, because `File::create` cannot truncate one.
-    let fout = std::fs::File::create(&d).with_context(|| format!("create {}", d.display()))?;
-    // File::create truncates existing, and `copy_and_digest` writes in place.
-    let mut fout = fout;
-    // The request is a slice; what the digester wants is a set. The set is
-    // built once per phase and handed down, so this conversion is not repeated
-    // per file. The slice stays the thing `verify_digests` walks below, because
-    // only the *requested* digests are judged, and in the order they were asked
-    // for.
-    let sh = copy_and_digest(&mut fin, &mut fout, &algos, buf)
-        .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
-    if !test_no_fsync() {
-        flush_file(&fout, rel).with_context(|| format!("flush {}", d.display()))?;
-    }
-    // preserve mtime
-    //
-    // **This is load-bearing, and its failure aborts the copy.** The bytes are
-    // already durable at this point, so a `set_modified` failure leaves a correct
-    // file with the wrong stamp: the run exits 3, and a rerun sees the mtime
-    // difference and copies the file again. Fail-fast rather than a silent
-    // mismatch, but "aborts an otherwise-good copy" is the documented shape
-    // (README, `copy` step) - a test needs a platform-specific read-only/ACL
-    // setup, so none injects this failure.
-    //
-    // **Stamped on the handle that is already open.** `set_modified` takes
-    // `&self`, so the destination handle that wrote the bytes can carry the
-    // stamp: no second open of the file, and no window in which the file is
-    // closed but unstamped. The order is unchanged — after the flush, before
-    // the handle is dropped — because the stamp has to follow the write and
-    // precede the close.
-    if let Some(st) = smtime_sys {
-        fout.set_modified(st)
-            .with_context(|| format!("set mtime {}", d.display()))?;
-    }
-    drop(fout);
+    refuse_hard_linked_dst(&d, rel)?;
+    let inputs = copy_and_stamp(&s, &d, rel, &algos, buf)?;
     // verify: size + mtime + hash
     let dmeta = std::fs::metadata(&d).with_context(|| format!("stat {}", d.display()))?;
-    if dmeta.len() != ssize {
+    if dmeta.len() != inputs.size {
         bail!(
             "verify size {} (want {} got {})",
             d.display(),
-            ssize,
+            inputs.size,
             dmeta.len()
         );
     }
     if algos.is_empty() {
         // size+mtime only
         let dmtime = mtime_ns_of(&dmeta);
-        if dmtime != smtime_ns {
+        if dmtime != inputs.mtime_ns {
             bail!("verify mtime {}", d.display());
         }
         return Ok(FileRec {
             kind: "file".into(),
-            size: ssize,
-            mtime_ns: smtime_ns,
+            size: inputs.size,
+            mtime_ns: inputs.mtime_ns,
             hashes: DigestSet::default(),
         });
     }
     let dh = hash_file(&d, &algos).with_context(|| format!("hash {}", d.display()))?;
-    verify_digests(&d, requested, &sh, &dh)?;
-    tracing::Span::current().record("bytes", ssize);
-    trace!(bytes = ssize, "copy_one done");
+    verify_digests(&d, requested, &inputs.src_digests, &dh)?;
+    tracing::Span::current().record("bytes", inputs.size);
+    trace!(bytes = inputs.size, "copy_one done");
     Ok(FileRec {
         kind: "file".into(),
-        size: ssize,
-        mtime_ns: smtime_ns,
+        size: inputs.size,
+        mtime_ns: inputs.mtime_ns,
         hashes: dh,
     })
 }
