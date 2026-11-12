@@ -259,12 +259,12 @@ reviews:
     result: F7 kept (f1b638e1); F11 kept (d4548755); F12 kept (cb4456f4); F13 kept (0b3afb32); F18 kept (84af494b); no fix or revert commits; 520 passed, 1 skipped; the repair was verified to commit the table it creates
     followups: [F39, F40]
   - batch: B4
-    status: in_progress
+    status: done
     tasks: [F9, F10]
     base: 1dbf85a5
-    head: a29c139a
-    result: null
-    followups: []
+    head: 6f88f283
+    result: F9 kept (a29c139a); F10 fixed (6f88f283 makes the three new Filter primitives private and states the whole rule in the public doc; the memo work in a7b24113 kept); 522 passed, 1 skipped; the memo's answer verified equal to Filter::is_excluded over 400 random trees, 7 visit orders and 2 case modes, and the phase-A map byte-identical over 15 filter shapes
+    followups: [F41]
   - batch: B5
     status: pending
     tasks: [F14, F24]
@@ -342,6 +342,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: B16
+    status: pending
+    tasks: [F41]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -397,13 +404,13 @@ followups:
   - id: F9
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
-    status: pending_review
+    status: completed
     batch: B4
     commits: []
   - id: F10
     source: T08
     description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
-    status: pending_review
+    status: completed
     batch: B4
     commits: []
   - id: F11
@@ -586,6 +593,26 @@ followups:
     status: pending
     batch: B15
     commits: []
+  - id: F41
+    source: F10
+    description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
+    status: pending
+    batch: B16
+    commits: []
+  - id: F42
+    source: F10
+    description: ExcludeMemo::is_excluded takes &'a str tied to the filter's lifetime, so a caller whose paths are not borrowed for that lifetime has to work around the public type.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the public type has no caller outside the crate, so no user is behind the ergonomic limit
+  - id: F43
+    source: F10
+    description: The memo keeps one decision per visited directory, a hash insert per directory, so a run over a directory-heavy tree pays that on top of the directory index phase A already builds.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: this is the accepted trade-off of the memo, already measured as 1.4-3.4x faster than the plain rule with exclude patterns
 ```
 
 ## Human checklist
@@ -617,6 +644,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B4 `done`: F9 kept, F10 fixed (6f88f283); follow-up F41
+  appended with batch `B16`; F42 and F43 recorded as `skipped` with reasons
+  (no caller behind the public type's lifetime limit; the memo's per-directory
+  insert is the accepted, measured trade-off); F9 and F10 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B4 review checkpoint opened: F9 and F10
   `in_progress` → `pending_review`, commits `a7b24113`, `a29c139a`; review B4
   `pending` → `in_progress`, base `1dbf85a5`, head `a29c139a`.
