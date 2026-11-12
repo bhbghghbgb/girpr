@@ -93,10 +93,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T09-backup-policy.md
     batch: D
     report: [L118-L143, L542-L548, L557-L563]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09]
     review: D
-    note: implementing session starting
+    note: implemented by ses_e32ffb47dffejsI4DcQhl6A8v4; five commits vs the planned four; CacheOpen::ReadWrite and backup_db/snapshot_old gained a retain parameter (public API shape the task did not pin); util::unique_sibling kept but now has no callers
   - id: T10
     title: Cache memory knob and one test-cache decision
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T10-cache-memory-and-test-cache.md
@@ -336,7 +336,7 @@ followups:
 | C | T06 | completed | c648ae6d, 71f72513, 1f86077f | review C kept |
 | C | T07 | completed | 9bb075e6, ed6c2745 | review C kept |
 | C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
-| D | T09 | in_progress | — | implementing session starting |
+| D | T09 | pending_review | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09 | implemented by ses_e32ffb47dffejsI4DcQhl6A8v4 |
 | D | T10 | pending | — | — |
 | D | T11 | pending | — | — |
 | E | T12 | pending | — | — |
@@ -353,6 +353,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T09 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `42995b17`, `86d2a027`, `4692f4d9`, `54b726d6`, `5cdecf09`; working
+  tree clean.
 - 2026-11-12 — batch D started: T09 `pending` → `in_progress`.
 - 2026-11-12 — review C `done`: T06 kept, T07 kept, T08 kept, no fix or revert
   commits; follow-ups F9–F14 appended with status `pending`; T06, T07 and T08
