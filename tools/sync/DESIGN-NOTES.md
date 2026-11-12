@@ -478,7 +478,8 @@ holds an exclusive OS lock on that record, and the record is taken **before**
 the copy's name is claimed, so a published name never appears without one —
 except on a filesystem that cannot lock a file, which has no record to take.
 
-The record is a lock and nothing else. There is no age and no lease in it: the
+The record is a lock and nothing else: it is an empty file, and the lock on it
+is the whole of what it says. There is no age and no lease in it: the
 OS releases the lock when the process ends, and it releases it when the
 process is killed, so a record left behind by a dead run is **stale** rather
 than a claim that never expires. A bound that meets a record a live run holds
@@ -534,6 +535,7 @@ cache that did not open, and
 `a_record_that_cannot_be_locked_does_not_spare_its_copy`,
 `a_record_of_a_copy_that_is_gone_is_reclaimed`,
 `a_record_is_not_one_of_the_copies_the_bound_counts`,
+`a_record_carries_nothing_but_its_lock`,
 `concurrent_publishes_get_copies_and_records_of_their_own` and
 `the_record_is_released_once_the_cache_is_open` for the record itself.
 

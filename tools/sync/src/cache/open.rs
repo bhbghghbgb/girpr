@@ -32,7 +32,9 @@
 //! still in the gap, and the OS releases it when the process ends and when
 //! the process is *killed*, so a record left behind by a dead run is stale
 //! rather than a claim that never expires. There is no age and no lease in
-//! it: either a run holds the record or it does not.
+//! it: either a run holds the record or it does not. The record is an empty
+//! file, because the lock on it is the whole of what it says — there is
+//! nothing in it to read, and nothing in it that could go stale.
 //!
 //! Once the run holds the cache's own lock, that lock is the protection: no
 //! other run is in its run phase for the folder, so no other run's bound can
@@ -92,6 +94,11 @@ const TOOL_PREFIX: &str = "girpr-cache-";
 /// the OS releases it when the process ends and when the process is killed,
 /// so a record left behind by a dead run is stale rather than a claim that
 /// never expires.
+///
+/// The record is empty. There is no body to it — no pid, no clock — because
+/// the lock is what a bound reads, and a body would say nothing that could
+/// be acted on: a run that holds the record is alive whatever it wrote down,
+/// and a run that is gone cannot be asked about it.
 ///
 /// The name is in the tool's own namespace, so a record is tool state and is
 /// never mirrored as content.
@@ -1017,7 +1024,8 @@ enum Claim {
 /// holding process ends — and it releases it when the process is killed, so a
 /// record left behind by a dead run is stale rather than a claim that never
 /// expires. There is no age and no lease in it: either a run holds the
-/// record or it does not.
+/// record or it does not. The record is an empty file, because the lock is
+/// what a bound reads and there is nothing else for it to say.
 ///
 /// A filesystem that cannot lock a file has no records to speak: the copy is
 /// published without one, which is what it was published as before a record
@@ -1050,12 +1058,6 @@ fn take_hold(parent: &Path, copy_name: &str) -> Result<Claim> {
                 return Err(e).with_context(|| format!("create record {}", path.display()));
             }
         };
-        // The body is for a human: which run holds the record, and since when.
-        // A record we did not create is left exactly as it is — it may be
-        // another run's, and its body is that run's to write.
-        if created {
-            write_hold_body(&file);
-        }
         // The lock is the record: it is taken for as long as the copy is in
         // use, and the OS takes it back when the holder is gone. It is taken
         // once, here, on the handle that will keep it.
@@ -1124,17 +1126,6 @@ fn lock_record(file: &File) -> std::result::Result<(), TryLockError> {
 #[cfg(test)]
 std::thread_local! {
     static LOCKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Write the record's body: the pid holding it, and since when.
-///
-/// A body that cannot be written is not a failure: the lock, not the body,
-/// is what the record means.
-fn write_hold_body(file: &File) {
-    use std::io::Write;
-    let body = format!("pid={}\nstarted={}\n", std::process::id(), ts_now());
-    let _ = file.set_len(0);
-    let _ = (&*file).write_all(body.as_bytes());
 }
 
 /// What a published copy's record says about it.
@@ -2051,6 +2042,32 @@ mod tests {
         );
     }
 
+    /// A record is a lock and nothing else.
+    ///
+    /// The record carries no body: the lock on it is the whole of what it
+    /// says, and a pid or a clock would say nothing a bound could act on. A
+    /// run that holds the record is alive whatever it wrote down, and a run
+    /// that is gone cannot be asked about it.
+    #[test]
+    fn a_record_carries_nothing_but_its_lock() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "record_body");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+
+        let record = dir.join(
+            hold_name(published.file_name().unwrap().to_str().unwrap())
+                .expect("the record is named after the copy"),
+        );
+        assert_eq!(
+            std::fs::metadata(&record).unwrap().len(),
+            0,
+            "the record says nothing but its lock"
+        );
+    }
+
     /// A copy a live run is using is not the bound's to take.
     ///
     /// The run that published the copy is the run that reports it, so a bound
@@ -2110,7 +2127,7 @@ mod tests {
         std::fs::write(&copy, b"a copy").unwrap();
         // A record nobody holds: the run that made it is gone.
         let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
-        std::fs::write(&record, b"pid=1\n").unwrap();
+        std::fs::write(&record, b"").unwrap();
 
         let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
         std::fs::write(&newer, b"newer").unwrap();
@@ -2144,7 +2161,7 @@ mod tests {
         // A record nobody holds, on a filesystem that cannot lock a file:
         // the lock cannot be tested, so the record says nothing.
         let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
-        std::fs::write(&record, b"pid=1\n").unwrap();
+        std::fs::write(&record, b"").unwrap();
 
         let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
         std::fs::write(&newer, b"newer").unwrap();
@@ -2171,7 +2188,7 @@ mod tests {
         let db = dir.join("girpr-cache");
 
         let record = dir.join(format!("{HOLD_PREFIX}backup-{STAMP}"));
-        std::fs::write(&record, b"pid=1\n").unwrap();
+        std::fs::write(&record, b"").unwrap();
 
         retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
 
