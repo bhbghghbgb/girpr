@@ -419,15 +419,13 @@ has to be preceded by a claim, and the claim leaves the name empty for as
 long as the rename takes, so the name would be a published name with no bytes
 in it. A filesystem that cannot link a file has no such publish, and the copy
 is renamed onto a name it claims first there — the name is briefly empty, and
-the copy lands on it either way.
-
-A directory copy cannot be linked, so its name is claimed with an exclusive
-create and the copy is renamed onto that claim. The claim is what decides:
-a POSIX rename onto an existing **empty** directory succeeds, so a rename on
-its own would let a second run publish onto a name the first run has and
-replace the copy that is there. The name is briefly an empty directory
-instead, which is the price of an exclusive claim on a filesystem whose
-rename replaces a directory.
+the copy lands on it either way. A directory copy cannot be linked at all, so
+its name is claimed with an exclusive create and the copy is renamed onto
+that claim: a POSIX rename onto an existing **empty** directory succeeds, so
+a rename on its own would let a second run publish onto a name the first run
+has and replace the copy that is there. The name is briefly an empty
+directory instead, which is the price of an exclusive claim on a filesystem
+whose rename replaces a directory.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
