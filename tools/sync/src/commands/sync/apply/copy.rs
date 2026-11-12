@@ -1,6 +1,6 @@
 //! The copy/verify machinery: `copy_one` (stream copy + digest + verify) and
-//! its helpers `copy_and_digest`, `verify_digests`, and the test-only
-//! `test_no_fsync` hook, plus their unit tests.
+//! its helpers — the destination guards, `copy_and_digest`, `verify_digests`,
+//! and the test-only `test_no_fsync` hook — plus their unit tests.
 
 use anyhow::{Context, Result, bail};
 use std::io::{self, Read, Write};
@@ -140,10 +140,109 @@ fn test_no_fsync() -> bool {
     })
 }
 
+/// Refuse a copy whose destination is reached **through** a link.
+///
+/// A link *above* the destination is not ours to write through: the OS would
+/// resolve it as an intermediate component, so `File::create` would truncate a
+/// file in the target - possibly outside `dst`. The final component is handled
+/// by [`refuse_final_link_into_src`], because a link *at* the path is the type
+/// conflict this copy resolves.
+fn refuse_link_ancestor(dst_root: &Path, rel: &str) -> Result<()> {
+    if let Some(link) = crate::link::link_ancestor_above(dst_root, rel)
+        .with_context(|| format!("check link ancestors for {rel}"))?
+    {
+        bail!(
+            "refusing to copy `{rel}` through dst link `{link}`: \
+             remove the link, or exclude it with --exclude"
+        );
+    }
+    Ok(())
+}
+
+/// Refuse a copy whose destination is a link that resolves into `src`.
+///
+/// Belt and braces for the final component, symmetric with the ancestor check
+/// above and with `validate_dst_links` at plan time. A link *at* this path is
+/// normally replaceable (a directory link) or written through (a file link),
+/// but not when it resolves into src: a file link there would make
+/// `File::create` truncate a source file. Ask the disk again, because the
+/// plan was computed before this run changed anything. A missing path is not
+/// a link, and a dangling one fails to resolve rather than being written
+/// through.
+fn refuse_final_link_into_src(d: &Path, rel: &str, src_canonical: &Path) -> Result<()> {
+    if crate::link::try_is_link(d).with_context(|| format!("check link {}", d.display()))? {
+        let target =
+            std::fs::canonicalize(d).with_context(|| format!("resolve dst link `{rel}`"))?;
+        if path_within(&target, src_canonical) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which is inside src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+        if path_within(src_canonical, &target) {
+            bail!(
+                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
+                 which contains src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                target.display(),
+                src_canonical.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Remove a directory that is in the way of a file copy.
+///
+/// A link to a directory is *not* a directory to recurse into. Unlinking the
+/// link is what resolves the type conflict toward src's kind (a file); the
+/// target is somebody else's tree and is left alone. `is_dir` follows the
+/// link, so it is true for a Unix directory symlink and for a Windows
+/// junction, and `is_link` covers both plus a directory symlink.
+fn clear_blocking_dir(d: &Path) -> Result<()> {
+    if d.is_dir() {
+        if crate::link::try_is_link(d).with_context(|| format!("check link {}", d.display()))? {
+            crate::link::remove(d).with_context(|| format!("unlink {}", d.display()))?;
+        } else {
+            std::fs::remove_dir_all(d).with_context(|| format!("rmdir {}", d.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Make the destination's parent directories.
+///
+/// The copy's own path is never a directory, so the parents are all it needs;
+/// `create_dir_all` is happy with the ones that are already there.
+fn create_parent(d: &Path) -> Result<()> {
+    if let Some(parent) = d.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+    }
+    Ok(())
+}
+
 /// Copy one file src -> dst, preserving mtime, then verify before returning the
 /// record to cache. `File::create` truncates in place, so a killed run can
 /// leave a truncated file; the caller drops the cache entry first so a rerun
 /// re-copies rather than trusting it.
+///
+/// **The body is an ordered pipeline — guard, prepare, copy, flush, stamp,
+/// verify — and the order is load-bearing.** Every guard is a named helper, so
+/// the shape is visible without reconstructing it from interleaved control
+/// flow:
+///
+/// 1. [`refuse_link_ancestor`] — a link *above* the destination is not ours to
+///    write through;
+/// 2. [`refuse_final_link_into_src`] — a link *at* the destination that
+///    resolves into `src` would be written through by `File::create`;
+/// 3. [`clear_blocking_dir`] — a directory in the way of a file copy goes
+///    first, and a link to a directory is unlinked rather than recursed into;
+/// 4. [`create_parent`] — the destination's parents are made;
+/// 5. the hard-link refusal, the copy, the flush, the stamp and the verify,
+///    below.
 ///
 /// **Verify is two independent reads, and both are load-bearing.** src is
 /// digested as the copy streams it; dst is then re-read from disk and digested
@@ -165,8 +264,8 @@ fn test_no_fsync() -> bool {
 /// component that resolves inside it (or contains it) would otherwise be written
 /// through by `File::create`, truncating a source file while the verify read the
 /// same file back through the link. `validate_dst_links` refuses that shape at
-/// plan time; this is the per-copy re-check, so a plan and a disk that disagree
-/// still cannot reach the source.
+/// plan time; [`refuse_final_link_into_src`] is the per-copy re-check, so a plan
+/// and a disk that disagree still cannot reach the source.
 ///
 /// **A destination with more than one hard link is refused for the same reason.**
 /// The other name is the same file, so `File::create` would truncate it too, and
@@ -203,68 +302,12 @@ pub(super) fn copy_one(
     if test_fail_copy(rel) {
         bail!("test: injected copy failure for {rel}");
     }
-    // A link *above* the destination is not ours to write through: the OS would
-    // resolve it as an intermediate component, so `File::create` would truncate
-    // a file in the target - possibly outside `dst`. The final component is
-    // handled below, because a link *at* the path is the type conflict this copy
-    // resolves.
-    if let Some(link) = crate::link::link_ancestor_above(dst_root, rel)
-        .with_context(|| format!("check link ancestors for {rel}"))?
-    {
-        bail!(
-            "refusing to copy `{rel}` through dst link `{link}`: \
-             remove the link, or exclude it with --exclude"
-        );
-    }
+    refuse_link_ancestor(dst_root, rel)?;
     let s = src_root.join(rel);
     let d = dst_root.join(rel);
-    // Belt and braces for the final component, symmetric with the ancestor check
-    // above and with `validate_dst_links` at plan time. A link *at* this path is
-    // normally replaceable (a directory link) or written through (a file link),
-    // but not when it resolves into src: a file link there would make
-    // `File::create` truncate a source file. Ask the disk again, because the
-    // plan was computed before this run changed anything. A missing path is not
-    // a link, and a dangling one fails to resolve rather than being written
-    // through.
-    if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
-        let target =
-            std::fs::canonicalize(&d).with_context(|| format!("resolve dst link `{rel}`"))?;
-        if path_within(&target, src_canonical) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which is inside src `{}`; refusing to copy through it (remove the \
-                 link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
-        }
-        if path_within(src_canonical, &target) {
-            bail!(
-                "src and dst must be disjoint: dst link `{rel}` resolves to `{}`, \
-                 which contains src `{}`; refusing to copy through it (remove the \
-                 link, or exclude it with --exclude)",
-                target.display(),
-                src_canonical.display()
-            );
-        }
-    }
-    // dst dir that is in the way of a file copy: remove first.
-    //
-    // A link to a directory is *not* a directory to recurse into. Unlinking the
-    // link is what resolves the type conflict toward src's kind (a file); the
-    // target is somebody else's tree and is left alone. `is_dir` follows the
-    // link, so it is true for a Unix directory symlink and for a Windows
-    // junction, and `is_link` covers both plus a directory symlink.
-    if d.is_dir() {
-        if crate::link::try_is_link(&d).with_context(|| format!("check link {}", d.display()))? {
-            crate::link::remove(&d).with_context(|| format!("unlink {}", d.display()))?;
-        } else {
-            std::fs::remove_dir_all(&d).with_context(|| format!("rmdir {}", d.display()))?;
-        }
-    }
-    if let Some(parent) = d.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
-    }
+    refuse_final_link_into_src(&d, rel, src_canonical)?;
+    clear_blocking_dir(&d)?;
+    create_parent(&d)?;
     // A hard link is a second name for this file, not a link this crate can
     // classify: `try_is_link` is false and the walk reports it as ordinary
     // content. `File::create` below truncates the shared inode, so writing here
