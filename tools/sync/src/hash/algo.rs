@@ -44,6 +44,30 @@ impl HashAlg {
         }
     }
 
+    /// The algorithm this name means, if it names one.
+    ///
+    /// The allocation-free half of [`std::str::FromStr`]. `from_str` has to
+    /// build an [`UnknownHash`] around a copy of the offending spelling,
+    /// because a refusal has to name it — but a **match** has nothing to
+    /// refuse and nothing to keep, so a caller that only asks "which
+    /// algorithm does this name mean, if any?" must not pay for the error
+    /// path.
+    ///
+    /// ASCII case only, which is all an algorithm name can be and the rule
+    /// [`std::str::FromStr::from_str`] applies too. A Unicode fold would map
+    /// the Kelvin sign `\u{212A}` onto `k` and rewrite a name this build does
+    /// not know into one it does.
+    ///
+    /// Visible to the whole `hash` module tree (`pub(super)` relative to
+    /// `algo`) because [`super::DigestSet`]'s lookups resolve stored names
+    /// through it, and because it is the one spelling of "which algorithm is
+    /// this name" the crate has.
+    pub(super) fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|a| a.as_str().eq_ignore_ascii_case(name))
+    }
+
     /// Raw digest bytes — never hex. See `FileRec::hashes`.
     ///
     /// Also the length a decoded row of this algorithm must have: a name with a
@@ -128,12 +152,14 @@ impl std::str::FromStr for HashAlg {
     /// contract depends on someone else having normalised the input first is a
     /// parser every new caller gets wrong. ASCII case only, which is all an
     /// algorithm name can be.
+    ///
+    /// The match is [`HashAlg::from_name`]'s, so this parser and the lookups
+    /// that resolve a *stored* name cannot drift apart. Only the refusal is
+    /// this function's own: only a refusal has to name the spelling, and only
+    /// a refusal may allocate to keep it.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        HashAlg::ALL
-            .into_iter()
-            .find(|a| a.as_str().eq_ignore_ascii_case(s))
-            .ok_or_else(|| UnknownHash {
-                name: s.to_string(),
-            })
+        HashAlg::from_name(s).ok_or_else(|| UnknownHash {
+            name: s.to_string(),
+        })
     }
 }

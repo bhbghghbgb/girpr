@@ -43,6 +43,39 @@ fn from_str_is_case_insensitive_without_help() {
     assert_eq!("Sha256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
 }
 
+/// **The resolver and the parser must not drift.** The resolver answers "which
+/// algorithm does this name mean?" and the parser adds the refusal on top of
+/// it, so the two have to agree about every name — including the ones neither
+/// knows. A resolver that folded more than the parser would let a stored name
+/// into an algorithm the command line would refuse.
+#[test]
+fn the_name_resolver_agrees_with_the_parser() {
+    for a in HashAlg::ALL {
+        assert_eq!(
+            HashAlg::from_name(a.as_str()),
+            Some(a),
+            "the canonical name"
+        );
+        assert_eq!(
+            HashAlg::from_name(&a.as_str().to_ascii_uppercase()),
+            Some(a),
+            "ASCII case does not matter"
+        );
+        assert_eq!(
+            a.as_str().parse::<HashAlg>().ok(),
+            HashAlg::from_name(a.as_str()),
+            "the parser and the resolver answer one question"
+        );
+    }
+    assert_eq!(HashAlg::from_name("blake3"), None, "a name nobody knows");
+    assert_eq!(HashAlg::from_name(""), None, "and an empty one");
+    assert_eq!(
+        HashAlg::from_name("bla\u{212A}e3"),
+        None,
+        "the Kelvin sign is not a `k`: the fold is ASCII case only"
+    );
+}
+
 /// Folding is ASCII-only, the same rule the path key and `HashAlg`'s parser
 /// follow. Accepted spellings keep working, but a name containing a non-ASCII
 /// character is refused as typed: `\u{212A}` is the Kelvin sign, which
