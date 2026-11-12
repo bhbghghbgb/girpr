@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: F
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -156,10 +156,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T16-docs-reconcile.md
     batch: F
     report: [L513-L531]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [efb71184, 5b9a405a, 49830066, de233c05, 371a7413]
     review: F
-    note: implementing session starting
+    note: implemented by ses_e31520650ffeEVhWp5pjExYoIr; five commits, all docs to README.md and DESIGN-NOTES.md, and the fifth corrects a case-fold sentence that was true on POSIX but false on Windows
   - id: T17
     title: Converter atomicity and failure tests
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T17-converter-atomicity.md
@@ -224,10 +224,10 @@ reviews:
     result: T12 kept (6b50b4d0, 1e0075c5, d576a382); T13 kept (ce3f0f94, f37e231f, b5cea4e0); no fix or revert commits; 516 passed, 1 skipped; both refactors verified behaviour-neutral by differential against a base binary
     followups: [F21, F22, F23, F24]
   - batch: F
-    status: pending
+    status: in_progress
     tasks: [T14, T15, T16]
-    base: null
-    head: null
+    base: 7b05768e
+    head: 371a7413
     result: null
     followups: []
   - batch: G
@@ -403,7 +403,7 @@ followups:
 | E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
 | F | T14 | pending_review | 2df937bf, fb913a2a, a2df3d11 | implemented by ses_e323038fbffedCTPykVAhY4s4l |
 | F | T15 | pending_review | af640af6 | implemented by ses_e3226296bffeAnLUMqf31diRVn |
-| F | T16 | in_progress | — | implementing session starting |
+| F | T16 | pending_review | efb71184, 5b9a405a, 49830066, de233c05, 371a7413 | implemented by ses_e31520650ffeEVhWp5pjExYoIr |
 | G | T17 | pending | — | — |
 | G | T18 | pending | — | — |
 | G | T19 | pending | — | — |
@@ -413,6 +413,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch F review checkpoint opened: `phase: implement` →
+  `review`, review F `pending` → `in_progress`, base `7b05768e`, head
+  `371a7413`. T16 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `efb71184`, `5b9a405a`, `49830066`, `de233c05`, `371a7413`; working
+  tree clean.
 - 2026-11-12 — T16 selected: `pending` → `in_progress`.
 - 2026-11-12 — T15 implemented: `pending` → `in_progress` → `pending_review`,
   commit `af640af6`; working tree clean.
