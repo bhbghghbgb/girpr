@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: review
-active_batch: E
+phase: implement
+active_batch: F
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -120,19 +120,19 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T12-filter-bundle-and-labels.md
     batch: E
     report: [L419-L435, L495-L511]
-    status: pending_review
+    status: completed
     commits: [6b50b4d0, 1e0075c5, d576a382]
     review: E
-    note: implemented by ses_e32799938ffeC0Wz4zp5PvHpP2; added CommonOpts::set_case_sensitive so the filter and the public case_sensitive field cannot disagree, and removed the public filter::is_excluded free function
+    note: review E kept; behaviour verified against a base binary over 14 filter and command combinations with 0 differences
   - id: T13
     title: Decompose copy_one around its guards
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T13-copy-one-decomposition.md
     batch: E
     report: [L437-L456]
-    status: pending_review
+    status: completed
     commits: [ce3f0f94, f37e231f, b5cea4e0]
     review: E
-    note: implemented by ses_e325ff52affe4vS0xAXltA75CE; clear_blocking_dir drops the sketched rel parameter, copy_and_stamp returns a VerifyInputs value instead of three stat locals, and the verify stays inline in copy_one
+    note: review E kept; every bail! and with_context string byte-identical to the pre-refactor file, and the copy path verified by differential against a base binary
   - id: T14
     title: sled2redb uses clap
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T14-sled2redb-cli.md
@@ -217,12 +217,12 @@ reviews:
     result: T09 fixed (ce40c153 corrects the failure story about what a failed --ignore-cache removal leaves behind); T10 kept (627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a); T11 kept (ef0d1bea, a8ede30e, 92b119ab, 65fa3190); 505 passed, 1 skipped; the never-auto-read and current-is-authoritative claims verified in code and end to end
     followups: [F15, F16, F17, F18, F19, F20]
   - batch: E
-    status: in_progress
+    status: done
     tasks: [T12, T13]
     base: 99cacd99
     head: b5cea4e0
-    result: null
-    followups: []
+    result: T12 kept (6b50b4d0, 1e0075c5, d576a382); T13 kept (ce3f0f94, f37e231f, b5cea4e0); no fix or revert commits; 516 passed, 1 skipped; both refactors verified behaviour-neutral by differential against a base binary
+    followups: [F21, F22, F23, F24]
   - batch: F
     status: pending
     tasks: [T14, T15, T16]
@@ -358,6 +358,30 @@ followups:
     status: pending
     batch: null
     commits: []
+  - id: F21
+    source: T12
+    description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
+    status: pending
+    batch: null
+    commits: []
+  - id: F22
+    source: T12
+    description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
+    status: pending
+    batch: null
+    commits: []
+  - id: F23
+    source: T12
+    description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
+    status: pending
+    batch: null
+    commits: []
+  - id: F24
+    source: T13
+    description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
+    status: pending
+    batch: null
+    commits: []
 ```
 
 ## Human checklist
@@ -375,8 +399,8 @@ followups:
 | D | T09 | completed | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09, ce40c153 | review D fixed (ce40c153) |
 | D | T10 | completed | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | review D kept |
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
-| E | T12 | pending_review | 6b50b4d0, 1e0075c5, d576a382 | implemented by ses_e32799938ffeC0Wz4zp5PvHpP2 |
-| E | T13 | pending_review | ce3f0f94, f37e231f, b5cea4e0 | implemented by ses_e325ff52affe4vS0xAXltA75CE |
+| E | T12 | completed | 6b50b4d0, 1e0075c5, d576a382 | review E kept |
+| E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
 | F | T14 | pending | — | — |
 | F | T15 | pending | — | — |
 | F | T16 | pending | — | — |
@@ -389,6 +413,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review E `done`: T12 kept, T13 kept, no fix or revert commits;
+  follow-ups F21–F24 appended with status `pending`; T12 and T13
+  `pending_review` → `completed`. `phase: review` → `implement`,
+  `active_batch: E` → `F`. A stale detached worktree left by an earlier
+  session was removed.
 - 2026-11-12 — batch E review checkpoint opened: `phase: implement` →
   `review`, review E `pending` → `in_progress`, base `99cacd99`, head
   `b5cea4e0`. T13 implemented: `pending` → `in_progress` → `pending_review`,
