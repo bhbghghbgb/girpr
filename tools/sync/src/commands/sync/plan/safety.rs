@@ -488,9 +488,9 @@ pub(crate) fn ensure_hard_linked_targets_safe(
     probes: &dyn Probes,
 ) -> Result<()> {
     // A copy-free run cannot truncate an inode, so the preflight has nothing
-    // to protect. This is not "the plan is empty": deletes and fix-dirs are
-    // accounted for below, and they are only read to credit a name the copy
-    // phase removes.
+    // to protect. This is not "the plan is empty": the removals below are
+    // read either way, because a removal the disk cannot answer is a
+    // plan-time failure — but only a copy credits them.
     let copy_free = plan.copy.is_empty();
     // Ordinary-file names this run removes before copying, by the inode they
     // name. A link is skipped: its removal leaves the target's count unchanged.
