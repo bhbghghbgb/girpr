@@ -111,10 +111,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T11-small-performance-notes.md
     batch: D
     report: [L390-L409]
-    status: pending
+    status: in_progress
     commits: []
     review: D
-    note: null
+    note: implementing session starting
   - id: T12
     title: Filter bundle and pre-built side labels
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T12-filter-bundle-and-labels.md
@@ -338,7 +338,7 @@ followups:
 | C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
 | D | T09 | pending_review | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09 | implemented by ses_e32ffb47dffejsI4DcQhl6A8v4 |
 | D | T10 | pending_review | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | implemented by ses_e32e4727effeKk03OJb66KVAfE |
-| D | T11 | pending | — | — |
+| D | T11 | in_progress | — | implementing session starting |
 | E | T12 | pending | — | — |
 | E | T13 | pending | — | — |
 | F | T14 | pending | — | — |
@@ -353,6 +353,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T11 selected: `pending` → `in_progress`.
 - 2026-11-12 — T10 implemented: `pending` → `in_progress` → `pending_review`,
   commits `627407c3`, `9a8c920e`, `6c517a71`, `5f5d7388`, `df31d02a`; working
   tree clean.
