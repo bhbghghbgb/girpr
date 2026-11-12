@@ -120,10 +120,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T12-filter-bundle-and-labels.md
     batch: E
     report: [L419-L435, L495-L511]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [6b50b4d0, 1e0075c5, d576a382]
     review: E
-    note: implementing session starting
+    note: implemented by ses_e32799938ffeC0Wz4zp5PvHpP2; added CommonOpts::set_case_sensitive so the filter and the public case_sensitive field cannot disagree, and removed the public filter::is_excluded free function
   - id: T13
     title: Decompose copy_one around its guards
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T13-copy-one-decomposition.md
@@ -375,7 +375,7 @@ followups:
 | D | T09 | completed | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09, ce40c153 | review D fixed (ce40c153) |
 | D | T10 | completed | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | review D kept |
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
-| E | T12 | in_progress | — | implementing session starting |
+| E | T12 | pending_review | 6b50b4d0, 1e0075c5, d576a382 | implemented by ses_e32799938ffeC0Wz4zp5PvHpP2 |
 | E | T13 | pending | — | — |
 | F | T14 | pending | — | — |
 | F | T15 | pending | — | — |
@@ -389,6 +389,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T12 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `6b50b4d0`, `1e0075c5`, `d576a382`; working tree clean.
 - 2026-11-12 — batch E started: T12 `pending` → `in_progress`.
 - 2026-11-12 — review D `done`: T09 fixed (ce40c153), T10 kept, T11 kept;
   follow-ups F15–F20 appended with status `pending`; T09, T10 and T11
