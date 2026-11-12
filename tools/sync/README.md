@@ -888,9 +888,11 @@ all: it is opened read-only.
 `--backup-retain N` counts **per prefix and per directory**: the
 `girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
 snapshots beside dst's cache are two separate lists, each keeping its own
-newest N. `N` must be at least 1 — `--backup-retain 0` is refused with exit
-`3`, and `--no-backup` is how you ask for no copies at all. Without the flag
-the copies accumulate and are cleaned by hand.
+newest N. The bound covers both lists in every folder the run touches, so a
+folder used as a source and as a destination is bounded on its copies and on
+its snapshots alike. `N` must be at least 1 — `--backup-retain 0` is refused
+with exit `3`, and `--no-backup` is how you ask for no copies at all. Without
+the flag the copies accumulate and are cleaned by hand.
 
 The bound is about the **folder**, not about the run: it is applied whether or
 not this run copied anything aside. A folder whose cache is absent, and a
