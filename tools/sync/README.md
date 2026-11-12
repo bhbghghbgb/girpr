@@ -1125,10 +1125,12 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
 
   **The fold is ASCII case only.** Two spellings are one path when they differ
   only in ASCII case: `Readme.TXT` and `readme.txt` are one path in the default
-  mode. `Ärger` and `ärger` are **two**, because a Unicode fold would merge
-  spellings the filesystem keeps apart — so a case-only difference that is not
-  ASCII is not a `CASE-MISMATCH` at all, but two unrelated paths: one
-  `MISSING` and one `EXTRA`.
+  mode. `Ärger` and `ärger` are **two** — the run keys paths by ASCII case and
+  by nothing else, because a Unicode fold would merge spellings that some
+  filesystems keep apart and there is no portable case table to consult
+  instead. So a case-only difference that is not ASCII is not a
+  `CASE-MISMATCH` at all, but two different paths: one `MISSING` and one
+  `EXTRA`.
 
   **The fatal conflict is what makes the rename pass an index rather than a scan.**
   Both sides are keyed by that fold and every src key is a hash lookup, which is
