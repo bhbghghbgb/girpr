@@ -206,8 +206,13 @@ pub struct CommonArgs {
     ///
     /// The default keeps everything, so the copies accumulate until they are
     /// removed by hand. This bounds that: the newest N siblings of each
-    /// prefix are kept (`girpr-cache-backup-…` beside src's cache,
-    /// `girpr-cache-old-…` beside dst's) and the older ones are removed.
+    /// prefix are kept and the older ones are removed.
+    ///
+    /// The bound is about the **folder**, not about the run: it is applied
+    /// whether or not this run copied anything aside, and it covers both
+    /// prefixes in every folder the run touches — the `girpr-cache-backup-…`
+    /// copies and the `girpr-cache-old-…` snapshots beside that folder's
+    /// cache alike.
     ///
     /// `N` must be at least 1 — keeping none of them is what `--no-backup` is
     /// for. A value of 0 is refused with exit `3`.
