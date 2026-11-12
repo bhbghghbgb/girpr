@@ -266,12 +266,12 @@ reviews:
     result: F9 kept (a29c139a); F10 fixed (6f88f283 makes the three new Filter primitives private and states the whole rule in the public doc; the memo work in a7b24113 kept); 522 passed, 1 skipped; the memo's answer verified equal to Filter::is_excluded over 400 random trees, 7 visit orders and 2 case modes, and the phase-A map byte-identical over 15 filter shapes
     followups: [F41]
   - batch: B5
-    status: in_progress
+    status: done
     tasks: [F14, F24]
     base: c410f784
     head: 3f2d992e
-    result: null
-    followups: []
+    result: F14 kept and F24 kept (one commit 3f2d992e closes both); no fix or revert commits; 523 passed, 1 skipped; the --hash-any-of flag-order tie-break verified intact and the copy still digests every requested algorithm
+    followups: [F44, F45, F46]
   - batch: B6
     status: pending
     tasks: [F15, F23]
@@ -345,6 +345,13 @@ reviews:
   - batch: B16
     status: pending
     tasks: [F41]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B17
+    status: pending
+    tasks: [F44, F45, F46]
     base: null
     head: null
     result: null
@@ -434,7 +441,7 @@ followups:
   - id: F14
     source: T06
     description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
-    status: pending_review
+    status: completed
     batch: B5
     commits: []
   - id: F15
@@ -494,7 +501,7 @@ followups:
   - id: F24
     source: T13
     description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
-    status: pending_review
+    status: completed
     batch: B5
     commits: []
   - id: F25
@@ -613,6 +620,24 @@ followups:
     batch: null
     commits: []
     note: skipped: this is the accepted trade-off of the memo, already measured as 1.4-3.4x faster than the plain rule with exclude patterns
+  - id: F44
+    source: F14
+    description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
+    status: pending
+    batch: B17
+    commits: []
+  - id: F45
+    source: F14
+    description: README.md documents the fixed order of the digest-differs tag but not of the copy verify's failure message, so the algorithm a failed copy names is discoverable only from the design notes.
+    status: pending
+    batch: B17
+    commits: []
+  - id: F46
+    source: F14
+    description: tools/sync/DESIGN-NOTES.md still ends without a trailing newline; pre-existing, but the file was appended to by this batch.
+    status: pending
+    batch: B17
+    commits: []
 ```
 
 ## Human checklist
@@ -644,6 +669,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B5 `done`: F14 and F24 kept, no fix or revert commits;
+  follow-ups F44–F46 appended with batch `B17` (the copy verify's naming order:
+  a test, a README line, a trailing newline); F14 and F24 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B5 review checkpoint opened: F14 and F24
   `in_progress` → `pending_review`, commit `3f2d992e`; review B5 `pending` →
   `in_progress`, base `c410f784`, head `3f2d992e`.
