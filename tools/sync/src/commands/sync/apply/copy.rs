@@ -455,6 +455,7 @@ pub(super) fn copy_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn algos(names: &[&str]) -> Vec<HashAlg> {
         names.iter().map(|s| s.parse().unwrap()).collect()
@@ -464,6 +465,56 @@ mod tests {
     /// taking the list: it walks the *request*, not the digests.
     fn aset(names: &[&str]) -> AlgoSet {
         AlgoSet::from_iter(algos(names))
+    }
+
+    /// Create a link to a directory: a symlink where the platform allows one,
+    /// and a junction on Windows, which needs no elevation.
+    ///
+    /// `cmd /c mklink /J` creates a directory reparse point that the crate
+    /// treats as a link either way. A platform that refuses both is reported
+    /// rather than swallowed, so a case can skip itself and say why instead
+    /// of passing as if it had covered the shape.
+    fn dir_link(target: &Path, link: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(windows)]
+        {
+            let first = match std::os::windows::fs::symlink_dir(target, link) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+            // `mklink` is a `cmd` builtin and reads a forward slash as a switch:
+            // a target like `dst/sub` would fail with "Invalid switch". std
+            // accepts either separator on Windows, so hand it native ones.
+            let native = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
+            let created = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(native(link))
+                .arg(native(target))
+                .output();
+            match created {
+                Ok(out) if out.status.success() => Ok(()),
+                Ok(out) => Err(io::Error::other(format!(
+                    "{first}; junction fallback failed: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ))),
+                Err(e) => Err(io::Error::other(format!(
+                    "{first}; junction fallback failed: {e}"
+                ))),
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (target, link);
+            Err(io::Error::other("no link API"))
+        }
+    }
+
+    /// The canonical form of a root, which is what the guards are handed.
+    fn canonical(root: &Path) -> PathBuf {
+        std::fs::canonicalize(root).unwrap()
     }
 
     /// The digest `copy_and_digest` returns has to be **the file's**, not the
@@ -682,6 +733,221 @@ mod tests {
         assert!(
             verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst).is_ok(),
             "sha256 was not requested, so its disagreement is not this copy's problem"
+        );
+    }
+
+    /// A link at the destination that resolves **into** src is refused, and
+    /// refused with the text an operator matches on.
+    ///
+    /// The shape is the dangerous one: `File::create` follows such a link, so a
+    /// copy through it would truncate a source file while the verify read the
+    /// same file back through the link and agreed with itself. The refusal
+    /// names the overlap, so the text is asserted rather than left to
+    /// inspection.
+    #[test]
+    fn a_final_component_link_into_src_is_refused() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "link_into_src");
+        let src = dir.subdir("src");
+        let dst = dir.subdir("dst");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/keep.txt"), b"source").unwrap();
+        let link = dst.join("a.txt");
+        if let Err(e) = dir_link(&src.join("sub"), &link) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let src_canonical = canonical(&src);
+
+        let err = refuse_final_link_into_src(&link, "a.txt", &src_canonical)
+            .expect_err("a link that resolves into src must be refused");
+        let resolved = canonical(&src.join("sub"));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "src and dst must be disjoint: dst link `a.txt` resolves to `{}`, \
+                 which is inside src `{}`; refusing to copy through it (remove the \
+                 link, or exclude it with --exclude)",
+                resolved.display(),
+                src_canonical.display()
+            ),
+            "the refusal names the overlap, and its text is what an operator matches on"
+        );
+        assert_eq!(
+            std::fs::read(src.join("sub/keep.txt")).unwrap(),
+            b"source",
+            "the refusal came before anything was written"
+        );
+    }
+
+    /// A link that resolves **outside** src is not refused. It is the
+    /// documented write-through, and the guard is not "refuse every link": a
+    /// guard that refused these would refuse ordinary mirrored content.
+    #[test]
+    fn a_link_outside_src_is_not_refused() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "link_outside");
+        let src = dir.subdir("src");
+        let dst = dir.subdir("dst");
+        let other = dir.subdir("other");
+        std::fs::write(other.join("keep.txt"), b"theirs").unwrap();
+        let link = dst.join("a.txt");
+        if let Err(e) = dir_link(&other, &link) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let src_canonical = canonical(&src);
+
+        refuse_final_link_into_src(&link, "a.txt", &src_canonical)
+            .expect("a link to anywhere else is ordinary content");
+    }
+
+    /// A directory in the way of a file copy is removed, and what it held goes
+    /// with it: the copy's destination is a file, so the directory is the type
+    /// conflict this step resolves.
+    #[test]
+    fn a_directory_at_the_destination_is_removed() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "blocking_dir");
+        let dst = dir.subdir("dst");
+        let d = dst.join("a.txt");
+        std::fs::create_dir_all(d.join("inside")).unwrap();
+        std::fs::write(d.join("inside/keep.txt"), b"x").unwrap();
+
+        clear_blocking_dir(&d).expect("a directory in the way is removed");
+        assert!(!d.exists(), "the directory is gone");
+        assert!(
+            !d.join("inside/keep.txt").exists(),
+            "and the tree under it went with it"
+        );
+    }
+
+    /// A link to a directory is **unlinked**, not recursed into. The target is
+    /// somebody else's tree: unlinking the link is what resolves the type
+    /// conflict toward src's kind, and the target is left alone.
+    #[test]
+    fn a_link_to_a_directory_is_unlinked_rather_than_recursed() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "dir_link");
+        let dst = dir.subdir("dst");
+        let target = dir.subdir("target");
+        std::fs::write(target.join("keep.txt"), b"theirs").unwrap();
+        let d = dst.join("a.txt");
+        if let Err(e) = dir_link(&target, &d) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+
+        clear_blocking_dir(&d).expect("the link in the way is unlinked");
+        assert!(
+            std::fs::symlink_metadata(&d).is_err(),
+            "the link itself is gone, not what it pointed at"
+        );
+        assert_eq!(
+            std::fs::read(target.join("keep.txt")).unwrap(),
+            b"theirs",
+            "the target's own tree is left alone"
+        );
+    }
+
+    /// A destination with more than one name is refused, and refused before
+    /// anything truncates the shared inode.
+    ///
+    /// The count is the whole check, so the refusal is the conservative one:
+    /// any count above one, whatever the second name is and wherever it lives.
+    #[test]
+    fn a_hard_linked_destination_is_refused_before_it_is_truncated() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "hardlink");
+        let src = dir.subdir("src");
+        let dst = dir.subdir("dst");
+        std::fs::write(src.join("a.txt"), b"NEW").unwrap();
+        let d = dst.join("a.txt");
+        std::fs::write(&d, b"ORIGINAL").unwrap();
+        std::fs::hard_link(&d, dst.join("shared.txt")).unwrap();
+        let src_canonical = canonical(&src);
+        let mut buf = Vec::new();
+
+        let err = copy_one(
+            &src,
+            &src_canonical,
+            &dst,
+            "a.txt",
+            aset(&["md5"]),
+            &algos(&["md5"]),
+            &mut buf,
+        )
+        .expect_err("a destination with two names must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("hard links"), "names the hazard: {msg}");
+        assert!(msg.contains("a.txt"), "names the copy: {msg}");
+        assert_eq!(
+            std::fs::read(&d).unwrap(),
+            b"ORIGINAL",
+            "the refusal came before any truncation, so the shared inode is intact"
+        );
+        assert_eq!(
+            std::fs::read(dst.join("shared.txt")).unwrap(),
+            b"ORIGINAL",
+            "and so is the other name for it"
+        );
+    }
+
+    /// The count of one is the ordinary case, and a destination that is not
+    /// there has nothing to truncate. Both have to be let through, or every
+    /// copy would be refused.
+    #[test]
+    fn a_destination_with_one_name_or_none_at_all_is_allowed() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "one_link");
+        let dst = dir.subdir("dst");
+        let single = dst.join("a.txt");
+        std::fs::write(&single, b"x").unwrap();
+
+        refuse_hard_linked_dst(&single, "a.txt").expect("one name is not a shared inode");
+        refuse_hard_linked_dst(&dst.join("gone.txt"), "gone.txt")
+            .expect("a missing destination has nothing to truncate");
+    }
+
+    /// The order of the guards is load-bearing, and this is where it shows: a
+    /// destination that is a link into src is refused **before** the type
+    /// cleanup would have unlinked it.
+    ///
+    /// The cleanup and the check are about the same path, and the cleanup
+    /// resolves the conflict in the copy's favour by removing the link. The
+    /// refusal comes first, so the link is still there after it — and the copy
+    /// stops, rather than carrying on with the source it was about to reach.
+    #[test]
+    fn the_link_into_src_is_refused_before_the_type_cleanup_runs() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "order");
+        let src = dir.subdir("src");
+        let dst = dir.subdir("dst");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/keep.txt"), b"source").unwrap();
+        let d = dst.join("a.txt");
+        if let Err(e) = dir_link(&src.join("sub"), &d) {
+            eprintln!("skip: this platform refused a directory link: {e}");
+            return;
+        }
+        let src_canonical = canonical(&src);
+        let mut buf = Vec::new();
+
+        let err = copy_one(
+            &src,
+            &src_canonical,
+            &dst,
+            "a.txt",
+            aset(&["md5"]),
+            &algos(&["md5"]),
+            &mut buf,
+        )
+        .expect_err("the copy must refuse a link into src");
+        assert!(
+            err.to_string().contains("which is inside src"),
+            "names the overlap: {err}"
+        );
+        assert!(
+            crate::link::try_is_link(&d).unwrap(),
+            "the type cleanup did not run before the refusal"
+        );
+        assert_eq!(
+            std::fs::read(src.join("sub/keep.txt")).unwrap(),
+            b"source",
+            "the source is untouched"
         );
     }
 }
