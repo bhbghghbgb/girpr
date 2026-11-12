@@ -40,6 +40,11 @@ pub(crate) trait Probes {
 
     /// The link count and identity of the file at `path`, following links.
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo>;
+
+    /// `Some(true)` when `path` names an existing directory — a link to one
+    /// counts — `Some(false)` when it names anything else, and `None` when
+    /// there is no entry at all: the answer `create_dir_all` acts on.
+    fn is_dir(&self, path: &Path) -> io::Result<Option<bool>>;
 }
 
 /// The real disk.
@@ -52,6 +57,10 @@ impl Probes for SystemProbes {
 
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
         info(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> io::Result<Option<bool>> {
+        disk_is_dir(path)
     }
 }
 
@@ -577,6 +586,7 @@ pub(crate) fn ensure_mkdir_targets_free(
     dm: &HashMap<String, EffRec>,
     dst: &Path,
     case_sensitive: bool,
+    probes: &dyn Probes,
 ) -> Result<()> {
     // The dst view the plan will see after the rename: exact keys in sensitive
     // mode, lowercase pairs otherwise. This index folds to a *value* rather than
@@ -609,7 +619,12 @@ pub(crate) fn ensure_mkdir_targets_free(
                 Some(i) => (&rel[..end + i], Some(end + i + 1)),
                 None => (rel.as_str(), None),
             };
-            match stats.get(prefix, || disk_is_dir(&dst.join(prefix)))? {
+            match stats.get(prefix, || {
+                let path = dst.join(prefix);
+                probes
+                    .is_dir(&path)
+                    .with_context(|| format!("stat {}", path.display()))
+            })? {
                 // Existing directory (including a link to one): create_dir_all
                 // accepts it.
                 Some(true) => {}
@@ -679,14 +694,15 @@ fn dst_after_rename<'a>(
 /// A link is followed: a link to a directory is an existing directory, while a
 /// dangling link (or one to a file) is not. `None` means there is no entry, which
 /// is also fine. Every other error is returned rather than read as "not there".
-fn disk_is_dir(path: &Path) -> Result<Option<bool>> {
+pub(super) fn disk_is_dir(path: &Path) -> io::Result<Option<bool>> {
     match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
-        Ok(_) => match std::fs::metadata(path) {
-            Ok(md) => Ok(Some(md.is_dir())),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Some(false)),
-            Err(e) => Err(e).with_context(|| format!("stat {}", path.display())),
-        },
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    }
+    match std::fs::metadata(path) {
+        Ok(md) => Ok(Some(md.is_dir())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Some(false)),
+        Err(e) => Err(e),
     }
 }

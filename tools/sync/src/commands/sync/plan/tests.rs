@@ -5,7 +5,7 @@ use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
-use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
+use super::safety::{PrefixStats, Probes, SystemProbes, disk_is_dir, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
 use crate::effective::EffRec;
@@ -78,12 +78,25 @@ struct TestProbes {
 }
 
 impl TestProbes {
+    /// A probe that answers like the real disk.
+    fn new() -> Self {
+        Self {
+            asked: RefCell::new(Vec::new()),
+            fail: None,
+        }
+    }
+
     /// A probe that fails for `path`, and answers like the real disk otherwise.
     fn failing(path: &Path) -> Self {
         Self {
             asked: RefCell::new(Vec::new()),
             fail: Some(path.to_path_buf()),
         }
+    }
+
+    /// The paths the guard asked about, in the order it asked.
+    fn asked(&self) -> Vec<PathBuf> {
+        self.asked.borrow().clone()
     }
 
     fn record(&self, path: &Path) -> io::Result<()> {
@@ -104,6 +117,11 @@ impl Probes for TestProbes {
     fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
         self.record(path)?;
         info(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> io::Result<Option<bool>> {
+        self.record(path)?;
+        disk_is_dir(path)
     }
 }
 
@@ -147,7 +165,7 @@ fn a_filtered_file_at_a_mkdir_path_is_refused_from_disk() {
     sm.insert("foo/bar.txt".to_string(), file());
     let dm = HashMap::new();
 
-    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect_err("a filtered dst file blocks the mkdir and the copy under it");
     let msg = err.to_string();
     assert!(msg.contains("`foo`"), "names the blocker: {msg}");
@@ -168,7 +186,7 @@ fn an_existing_filtered_directory_is_not_a_blocker() {
     sm.insert("foo".to_string(), dir());
     sm.insert("foo/bar.txt".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false)
+    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false, &SystemProbes)
         .expect("create_dir_all is a no-op on an existing directory");
 }
 
@@ -185,7 +203,7 @@ fn a_case_paired_file_is_a_planned_fix_not_a_mkdir() {
     let mut dm = HashMap::new();
     dm.insert("foo".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect("rename then fix-dirs resolves the pair");
 }
 
@@ -203,7 +221,7 @@ fn a_file_at_a_strict_prefix_is_refused_from_disk() {
     let mut dm = HashMap::new();
     dm.insert("a".to_string(), dir());
 
-    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect_err("the prefix is a file on disk and is not a planned fix");
     let msg = err.to_string();
     assert!(msg.contains("`a`"), "names the blocking prefix: {msg}");
@@ -223,7 +241,7 @@ fn a_planned_fix_at_a_strict_prefix_is_applicable() {
     let mut dm = HashMap::new();
     dm.insert("a".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect("fix-dirs replaces `a` before the nested mkdir");
 }
 
@@ -245,7 +263,7 @@ fn a_deep_mkdir_path_names_the_blocking_prefix() {
         dm.insert(rel.to_string(), dir());
     }
 
-    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect_err("the blocked prefix refuses the nested mkdir");
     let msg = err.to_string();
     assert!(
@@ -259,10 +277,9 @@ fn a_deep_mkdir_path_names_the_blocking_prefix() {
     assert!(msg.contains("`a/b/c/d`"), "names the mkdir: {msg}");
 }
 
-/// The preflight asks the disk about a prefix once per descendant otherwise.
-/// The memo keeps one answer per prefix, so the disk is asked once.
+/// The memo itself: one answer per prefix, so the disk is asked once.
 #[test]
-fn a_prefix_is_asked_about_once_per_call() {
+fn the_prefix_memo_answers_a_prefix_once() {
     let mut stats = PrefixStats::default();
     let mut probes = 0;
     for _ in 0..3 {
@@ -275,6 +292,40 @@ fn a_prefix_is_asked_about_once_per_call() {
         assert_eq!(answer, Some(true));
     }
     assert_eq!(probes, 1, "the disk is asked once per prefix");
+}
+
+/// The preflight asks the disk about every strict prefix of every candidate,
+/// and the prefixes are shared between the candidates below them: without the
+/// memo the same ancestor is stat'd once per descendant. The guard asks
+/// through a probe, so this counts the questions the **guard** made rather
+/// than the memo's own bookkeeping.
+#[test]
+fn a_prefix_is_asked_about_once_per_call() {
+    let t = TempDir::new("girsync_plan", "prefix_probe");
+    let dst = t.subdir("dst");
+    let mut sm = HashMap::new();
+    for rel in ["p", "p/q", "p/q/r", "p/q/s"] {
+        sm.insert(rel.to_string(), dir());
+    }
+    let probes = TestProbes::new();
+
+    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false, &probes)
+        .expect("every prefix of every candidate is free");
+
+    let asked = probes.asked();
+    assert_eq!(
+        asked.len(),
+        4,
+        "one question per distinct prefix, not one per descendant: {asked:?}"
+    );
+    for rel in ["p", "p/q", "p/q/r", "p/q/s"] {
+        let path = dst.join(rel);
+        assert_eq!(
+            asked.iter().filter(|asked| *asked == &path).count(),
+            1,
+            "`{rel}` is asked about once: {asked:?}"
+        );
+    }
 }
 
 /// A directory at a copy destination is a planned type conflict: the copy

@@ -357,7 +357,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // blocking dst entry from `dm`, so this asks the disk about every mkdir
     // candidate's path and strict prefixes; the map-based
     // `ensure_dirs_applicable` below cannot see them.
-    ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive)?;
+    ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive, &SystemProbes)?;
 
     // 6. Rename dst paths to src casing, before the diff, so the diff can be
     // case-sensitive.
