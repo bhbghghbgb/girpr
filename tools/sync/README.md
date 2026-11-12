@@ -31,12 +31,12 @@ tests travel with the code they exercise).
 | `commands/compare_self.rs` | diff a folder against its own cache, folder side scanned with no cache |
 | `commands/sync/mod.rs` | the mirror run; its phases are named in the module doc, which says what each one's order protects |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
-| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
-| `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
+| `commands/sync/plan/` | `mod.rs` (the facade), `build.rs` (`Plan` + `build_plan`, pure), `link.rs` (link storage and the on-disk spellings), `safety.rs` (the plan-time guards), `records.rs` (the summary and the dry-run records); `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
+| `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
 | `cache/mod.rs` | redb schema (`Meta`, `FileRec`), open/rebuild, backup/snapshot helpers — the facade and the table definitions |
 | `cache/schema.rs` | `Meta` + `FileRec`: what a row *is*, with no encoding |
 | `cache/codec.rs` | the binary entry/meta codec and its roundtrip/rejection tests |
-| `cache/db.rs` | `CacheDb`: the read/write-or-read-only handle (`CacheOpen`) and its tests |
+| `cache/db/` | `mod.rs` (the facade), `cachedb.rs` (`CacheDb`: the read/write-or-read-only handle), `handle.rs` (`Handle`: the type that says whether a handle can write), `backend.rs` (the page-cache size, the redb builder and the in-memory registry) |
 | `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
 | `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
@@ -57,7 +57,9 @@ tests travel with the code they exercise).
 | `rw/mod.rs` | `RwRuntime`: the limits, the counters and the worker pool, as one run's resource |
 | `rw/limits.rs` | `RwLimits`/`RwSide`: the *shape* the `--rw-threads*` flags resolve to |
 | `rw/gate.rs` | `RwLimiter`/`RwPermit` and the counting gate: the counters, and the src-then-dst lock ordering |
-| `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
+| `filter.rs` | the include/exclude globs, compiled once per run and matched with the run's case mode |
+| `hash/` | `algo.rs` (`HashAlg`), `set.rs` (`AlgoSet` and the flag parsers), `digestset.rs` (`DigestSet`: the digests one row carries), `stream.rs` (`Digests`, `hash_file`) |
+| `util.rs`, `logging.rs` | path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 `CommonArgs` in `config/common.rs`'s `TryFrom`, then use
@@ -70,8 +72,9 @@ rendered by `--output` (see "Output" below). **stderr** is the narration:
 a JSON log file. `logging.rs` owns stderr and `report/` owns stdout; neither
 writes to the other's, which is what lets `--output json` hand a caller a clean
 stream of JSON records with no log chatter mixed in. The only `println!` in the
-crate is `Report::emit`, and the only raw stderr writes are the two `FATAL`
-lines that happen *before* a subscriber exists.
+crate is `Report::emit`; the raw stderr writes are the few that are not
+diagnostics at all — the `WARN` lines the log policy raises before a subscriber
+exists, and the log file's path when the caller named one.
 
 `build_plan` reads only the two effective maps, which is what makes `--dry-run`
 exact. The apply phases are ordered inside `Applier::apply` because the order is
@@ -733,11 +736,11 @@ own summary is dropped: two differently-shaped summaries in one stream would mak
 
 Mirrors `src` → `dst`. The internal phases, in the order they run, are named in
 `commands/sync/mod.rs`, which also says what each one's order protects:
-**validate the roots, then back up and snapshot**; **open the caches, then phase
-A on each side**; **pair plan**; **resolve both sides**; **mkdir preflight**;
-**rename dst paths to src casing**; **diff, plan and the guards**; **the dry-run
-records, or the apply**. The steps below are what a run reports, not that
-internal order.
+**validate the roots, then back up and snapshot**; **open both caches, then
+phase A on each side**; **pair plan**; **resolve both sides**; **mkdir
+preflight**; **rename dst paths to src casing**; **diff, plan and the guards**;
+**the dry-run records, or the apply**. The steps below are what a run reports,
+not that internal order.
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
    path, if one root contains the other (a mirror may not contain its own source;
@@ -1224,8 +1227,13 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 430 test functions, one of them #[ignore]d (429 run by default)
+cargo nextest run -p girsync
 ```
+
+The number of cases is not written down here, because it moves every time one
+is added. `cargo nextest list -p girsync` prints them all, one per line, and
+`cargo nextest list -p girsync --run-ignored only` prints the `#[ignore]`d ones
+on their own.
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real rather than incidental: nothing one test does — a global, a temp
