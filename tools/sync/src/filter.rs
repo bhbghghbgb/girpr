@@ -14,6 +14,13 @@
 //! answer is the answer for everything under it, so a walk can ask a per
 //! directory memo instead of testing every pattern against every ancestor
 //! prefix. See [`ExcludeMemo`].
+//!
+//! The rule is asked two ways — one path at a time ([`Filter::is_excluded`])
+//! or a walk at a time ([`ExcludeMemo`]) — and the halves it is built from stay
+//! inside the module. One of them answers a weaker question than the rule (a
+//! pattern that matches the path itself, without the ancestors that make a
+//! directory a subtree), and a caller that reached for it would drop the
+//! subtree rule without being told.
 
 use anyhow::{Context, Result};
 use glob::{MatchOptions, Pattern};
@@ -69,6 +76,10 @@ impl Filter {
     /// effective map so a link above an included path stays visible to the
     /// planner; see `effective::phase_a`.
     ///
+    /// An exclude pattern is a filter on the path *and* on the directories
+    /// above it: a pattern that covers a directory covers everything under
+    /// it, so an excluded directory is a whole subtree.
+    ///
     /// This is the whole rule, asked about one path. A walk that asks about
     /// many paths wants [`ExcludeMemo`], which answers the same question
     /// with the same answers and less work.
@@ -80,7 +91,7 @@ impl Filter {
     ///
     /// An include pattern is a filter on the path itself, so this is a
     /// question about `rel` alone: nothing above it is consulted.
-    pub fn hidden_by_include(&self, rel: &str) -> bool {
+    fn hidden_by_include(&self, rel: &str) -> bool {
         !self.includes.is_empty() && !self.includes.iter().any(|p| p.matches_with(rel, self.opts))
     }
 
@@ -89,7 +100,7 @@ impl Filter {
     /// The directories above `rel` are not consulted: a pattern that matches
     /// a directory covers the whole subtree below it, and that is the other
     /// half of the rule — see [`Filter::excluded_by_pattern_or_ancestor`].
-    pub fn excluded_by_pattern(&self, rel: &str) -> bool {
+    fn excluded_by_pattern(&self, rel: &str) -> bool {
         self.excludes.iter().any(|p| p.matches_with(rel, self.opts))
     }
 
@@ -98,7 +109,7 @@ impl Filter {
     ///
     /// The ancestor test is what makes an excluded directory cover its
     /// subtree.
-    pub fn excluded_by_pattern_or_ancestor(&self, rel: &str) -> bool {
+    fn excluded_by_pattern_or_ancestor(&self, rel: &str) -> bool {
         self.excludes
             .iter()
             .any(|p| matches_or_ancestor(p, rel, self.opts))
