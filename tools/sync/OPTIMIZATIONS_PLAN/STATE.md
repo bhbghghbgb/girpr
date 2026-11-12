@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B1
+active_batch: B2
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -346,19 +346,19 @@ followups:
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
-    status: pending
+    status: in_progress
     batch: B2
     commits: []
   - id: F4
     source: T02
     description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
-    status: pending
+    status: in_progress
     batch: B2
     commits: []
   - id: F5
     source: T02
     description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
-    status: pending
+    status: in_progress
     batch: B2
     commits: []
   - id: F6
@@ -573,6 +573,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B2 started: F3, F4 and F5 `pending` →
+  `in_progress`; `active_batch: B1` → `B2`.
 - 2026-11-12 — review B1 `done`: F1 fixed (b7e332c2), F2 kept (a74b92e2);
   follow-ups F33–F35 appended with status `pending` and batch `B13`; F1 and F2
   `pending_review` → `completed`. B13 is a single test-only batch that pins
