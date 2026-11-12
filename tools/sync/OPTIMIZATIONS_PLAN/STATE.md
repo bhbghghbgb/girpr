@@ -245,10 +245,10 @@ reviews:
     result: F1 fixed (b7e332c2 removes a rustdoc link from a public doc to the module-private resolver, the crate's only rustdoc warning); F2 kept (a74b92e2); 513 passed, 1 skipped; the matching rule verified byte-for-byte identical to the old one
     followups: [F33, F34, F35]
   - batch: B2
-    status: pending
+    status: in_progress
     tasks: [F3, F4, F5]
-    base: null
-    head: null
+    base: ac4cdf20
+    head: 4aa601b6
     result: null
     followups: []
   - batch: B3
@@ -346,19 +346,19 @@ followups:
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
-    status: in_progress
+    status: pending_review
     batch: B2
     commits: []
   - id: F4
     source: T02
     description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
-    status: in_progress
+    status: pending_review
     batch: B2
     commits: []
   - id: F5
     source: T02
     description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
-    status: in_progress
+    status: pending_review
     batch: B2
     commits: []
   - id: F6
@@ -573,6 +573,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B2 review checkpoint opened: F3, F4 and F5
+  `in_progress` → `pending_review`, commits `3c30627d`, `00f56668`,
+  `79f64048`, `4aa601b6`; review B2 `pending` → `in_progress`, base
+  `ac4cdf20`, head `4aa601b6`.
 - 2026-11-12 — follow-up batch B2 started: F3, F4 and F5 `pending` →
   `in_progress`; `active_batch: B1` → `B2`.
 - 2026-11-12 — review B1 `done`: F1 fixed (b7e332c2), F2 kept (a74b92e2);
