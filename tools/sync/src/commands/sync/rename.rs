@@ -516,7 +516,10 @@ pub(super) fn rename_to_src_casing(
             // One read transaction for every moved row, where the loop this
             // replaces opened one per row. The write below still begins after
             // every read, so it sees the state the reads saw.
-            let rows = dst_db.get_many(pairs.iter().map(|(from, _)| from.as_str()))?;
+            //
+            // The borrowing read: the keys are already here, so copying them
+            // back out of the cache would buy nothing.
+            let rows = dst_db.get_many_borrowed(pairs.iter().map(|(from, _)| from.as_str()))?;
             #[cfg(test)]
             note_cache_reads(dst_db.entries_read_count() - reads_before);
             let mut moves = Vec::new();

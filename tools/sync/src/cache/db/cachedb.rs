@@ -428,6 +428,10 @@ impl CacheDb {
     /// [`get`](Self::get) would, and a missing table — a fresh cache, not a
     /// corrupt one — answers `None` for every key rather than failing.
     ///
+    /// **The keys are copied.** A caller that only needs the rows wants
+    /// [`get_many_borrowed`](Self::get_many_borrowed): it answers the same
+    /// thing and borrows the keys instead of copying them.
+    ///
     /// **A key-only caller wants [`load_keys`](Self::load_keys) instead.**
     /// The two answer different questions: this one decodes every row it is
     /// handed, and that one decodes nothing and answers only "which rows
@@ -437,6 +441,29 @@ impl CacheDb {
         &self,
         rels: impl IntoIterator<Item = &'a str>,
     ) -> Result<Vec<(String, Option<FileRec>)>> {
+        Ok(self
+            .get_many_borrowed(rels)?
+            .into_iter()
+            .map(|(key, rec)| (key.to_string(), rec))
+            .collect())
+    }
+
+    /// Read several entries in **one** read transaction, borrowing the keys.
+    ///
+    /// The borrowing counterpart of [`get_many`](Self::get_many): the same
+    /// rows, from the same snapshot, in the same one transaction — and no
+    /// `String` per key. A caller that already holds the key it asked for
+    /// pays no copy for the answer.
+    ///
+    /// The answer is one `(key, row)` per key asked for, in the order they
+    /// were asked for, with the key **borrowed** from the caller rather than
+    /// copied. A key that is not there answers `None`, exactly as
+    /// [`get`](Self::get) would, and a missing table — a fresh cache, not a
+    /// corrupt one — answers `None` for every key rather than failing.
+    pub fn get_many_borrowed<'a>(
+        &self,
+        rels: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Vec<(&'a str, Option<FileRec>)>> {
         let keys: Vec<&str> = rels.into_iter().collect();
         if keys.is_empty() {
             // Nothing was asked, so there is nothing to read: no transaction
@@ -447,14 +474,14 @@ impl CacheDb {
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => {
-                return Ok(keys.into_iter().map(|k| (k.to_string(), None)).collect());
+                return Ok(keys.into_iter().map(|k| (k, None)).collect());
             }
             Err(e) => bail!("open entries table: {e:#}"),
         };
         let mut out = Vec::with_capacity(keys.len());
         for key in keys {
             let rec = read_row(&tbl, key)?;
-            out.push((key.to_string(), rec));
+            out.push((key, rec));
         }
         Ok(out)
     }
@@ -718,6 +745,41 @@ mod tests {
             c.entries_read_count() - before,
             keys.len() as u64,
             "a read per key is a read per key"
+        );
+    }
+
+    /// The borrowing read answers exactly what the copying one answers, and
+    /// costs the same single transaction.
+    ///
+    /// The rows are the point; the keys are borrowed rather than copied, so
+    /// a caller that already holds a key pays nothing for the answer.
+    #[test]
+    fn get_many_borrowed_answers_what_get_many_answers() {
+        let c = CacheDb::open_temp(true).unwrap();
+        c.put("a.txt", &file_rec()).unwrap();
+        c.put("a_dir", &FileRec::dir()).unwrap();
+
+        let keys = ["a.txt", "absent.txt", "a_dir"];
+        let borrowed = c.get_many_borrowed(keys).unwrap();
+        let copied = c.get_many(keys).unwrap();
+        assert_eq!(borrowed.len(), keys.len(), "one answer per key asked for");
+        for (i, key) in keys.iter().enumerate() {
+            assert_eq!(
+                borrowed[i].0, *key,
+                "the answer names the key it was asked for"
+            );
+            assert_eq!(
+                borrowed[i].1, copied[i].1,
+                "the answer is the row the copying read gives"
+            );
+        }
+
+        let before = c.entries_read_count();
+        c.get_many_borrowed(keys).unwrap();
+        assert_eq!(
+            c.entries_read_count() - before,
+            1,
+            "one read transaction for every key"
         );
     }
 
