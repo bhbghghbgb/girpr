@@ -220,7 +220,7 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// not this call made a copy.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, BACKUP_PREFIX, "backup")
+    copy_aside(db_path, BACKUP_PREFIX, "backup", ts_now)
 }
 
 /// Copy an existing cache to `<parent>/girpr-cache-old-<ts>` to record the
@@ -231,7 +231,7 @@ pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
 /// The bound is [`retain_copies`]'s business here too, for the same reason.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, OLD_PREFIX, "snapshot-old")
+    copy_aside(db_path, OLD_PREFIX, "snapshot-old", ts_now)
 }
 
 /// Keep only the newest `keep` copies the tool keeps beside a cache.
@@ -274,15 +274,28 @@ pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
 ///
 /// The published name is claimed before the rename, so two runs cannot
 /// publish over each other.
-fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBuf>> {
+///
+/// **The copy is stamped twice, and the two stamps say different things.** The
+/// working name says when the copy *started*; it is scratch, and nothing but
+/// the run making it ever reads it. The published name says when the copy
+/// became *whole*, because that is the moment it joins a bounded list, and
+/// the bound orders the copies by that name. A published name that said when
+/// the copy started would make the copy of a slow run look old the moment it
+/// landed, and the bound would take it away from the run that had just made
+/// it.
+fn copy_aside(
+    db_path: &Path,
+    prefix: &str,
+    label: &str,
+    mut stamp: impl FnMut() -> String,
+) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
         trace!(path = %db_path.display(), "{label} skip: db missing");
         return Ok(None);
     }
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let is_dir = db_path.is_dir();
-    let stamp = ts_now();
-    let work = claim_sibling(parent, WORK_PREFIX, &stamp, is_dir)?;
+    let work = claim_sibling(parent, WORK_PREFIX, &stamp(), is_dir)?;
     info!(src = %db_path.display(), dst = %work.display(), "{label} start");
     let copied: Result<()> = if is_dir {
         copy_dir_all(db_path, &work)
@@ -305,7 +318,7 @@ fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBu
         let _ = remove_cache_path(&work);
         return Err(e);
     }
-    match publish_copy(&work, parent, prefix, &stamp, is_dir) {
+    match publish_copy(&work, parent, prefix, &stamp(), is_dir) {
         Ok(dest) => {
             remember_published(&dest);
             info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
@@ -852,6 +865,38 @@ mod tests {
         assert!(
             !newer.exists(),
             "and the folder still holds exactly the bound"
+        );
+    }
+
+    /// A published copy is named after the time it became whole.
+    ///
+    /// The bound orders the copies by that name, so a name that said when the
+    /// copy *started* would make the copy of a slow run look old the moment
+    /// it landed — and the bound would take it away from the run that had
+    /// just made it. The two stamps are therefore read at two different
+    /// moments, and the published one is the later.
+    #[test]
+    fn a_published_copy_is_named_after_it_became_whole() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "stamp");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        // The clock answers once per name: the working copy first, the
+        // published copy once it is whole.
+        let mut stamps = ["20240101T000000.000000Z", "20240102T000000.000000Z"]
+            .into_iter()
+            .map(String::from);
+        let mut clock = move || stamps.next().expect("one stamp per name");
+
+        let published = copy_aside(&db, BACKUP_PREFIX, "backup", &mut clock)
+            .unwrap()
+            .expect("the cache was copied aside");
+
+        assert_eq!(
+            published.file_name().unwrap().to_string_lossy(),
+            format!("{BACKUP_PREFIX}20240102T000000.000000Z"),
+            "the published name says when the copy became whole"
         );
     }
 
