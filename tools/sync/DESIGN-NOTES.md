@@ -391,6 +391,59 @@ for the routing rule; and `tests/why/disagreement.rs`, whose fixtures give
 `sha256` a digest of the wrong length so the row really does carry a known name
 in the foreign arm, and which asserts the comparison still finds it.
 
+### A copy is published, and the bound runs under the cache's lock
+
+The copies the tool keeps beside a cache are written under a **working name**
+(`girpr-cache-partial-<ts>`) and are **published** under a name of a copy list
+(`girpr-cache-backup-<ts>`, `girpr-cache-old-<ts>`) by a rename, once the copy
+is complete.
+
+Two things follow, and both are load-bearing.
+
+**The bound can only ever select a whole copy.** The bound ranges over the
+published names, and a published name only comes into existence complete. A
+copy that is still being written is not a member of any list, so no bound —
+however often it is applied — can take it away. That is the whole reason the
+copy is published rather than written in place: writing it straight into
+`girpr-cache-backup-<ts>` puts a half-written file under a name the bound
+reads, and a run that merely opens the folder can then remove the copy another
+run is making there, leaving that run reporting a backup that is not on disk.
+It also means the bound's count is a count of whole copies: it never keeps a
+half-written one in place of a good one.
+
+**There is no age, no lease and no marker to interpret.** "Finished" and "in
+flight" are told apart by the name, and the name is the only thing the bound
+reads. A rule that spared the young copies instead — "only remove a copy older
+than an hour" — would be a weaker guarantee wearing the same clothes: the copy
+of a slow run would still be taken, and the hour would be a number nobody
+could check.
+
+The bound is applied **after** the cache is opened, and the open holds the
+cache file's exclusive lock until the run is done with the cache. redb takes
+that lock exclusively and does not wait for it, so at most one run is in its
+run phase for a folder's cache at a time — which is what lets the bound spare
+the copies a running run is still using. The bound also enumerates the folder
+once, at its start, so a copy published after that is not a candidate at all:
+a run that publishes while another run is bounding the folder is spared by
+the enumeration, not by a rule about ages.
+
+The bound also never removes the copy the run applying it published: that run
+is the one reporting the copy, and the folder still ends within its bound,
+because the count is made up from the next-oldest copy instead.
+
+The tool takes **no lock of its own**. A folder on a filesystem that cannot
+lock has nothing to degrade, because the only thing the mechanism needs is
+that a rename inside one directory is atomic; and a publish that fails fails
+the run loudly, rather than leaving a run reporting a backup that is not
+there.
+
+**Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
+and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
+`the_bound_keeps_the_copy_the_run_published` for the bound against the run's
+own copy, and
+`a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
+same thing seen through a whole run.
+
 ---
 
 ## Not on the table

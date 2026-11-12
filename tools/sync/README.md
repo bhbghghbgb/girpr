@@ -901,6 +901,22 @@ beside a folder are the ones the bound is about, and a bound that only took
 effect when a new copy was made would leave them there forever. A dry run
 still writes nothing at all, so it bounds nothing.
 
+The bound is applied when a folder's cache is **opened for writing**, so it
+runs under that cache's own lock. While one run holds it, no other run is
+working on that folder's cache, so the bound never takes away a copy another
+run is still using.
+
+**A copy appears whole, or not at all.** It is written under a working name
+(`girpr-cache-partial-<ts>`) and renamed onto `girpr-cache-backup-<ts>` (or
+`girpr-cache-old-<ts>`) once it is complete, so a name in a copy list never
+holds half a backup. That also means a copy that is still being written is not
+one of the copies the bound ranges over: a run that merely opens a folder
+cannot remove the copy another run is making there, however often the bound is
+applied. The bound never removes the copy the run itself made either — the run
+that reports a backup is the run that has to keep it — and the folder still
+ends within its bound, because the count is made up from the next-oldest copy
+instead.
+
 **What a failure leaves behind.** The copies are made *before* the caches are
 removed, so a run that fails while removing them never loses the copy:
 
@@ -922,10 +938,16 @@ With `--no-backup` there is no copy at all, so `--no-backup --ignore-cache`
 removes the cache and keeps nothing: the cache is rebuilt from disk on the next
 run. That is the one combination where the removal has no safety net.
 
-A copy that fails is not left behind — the half-written sibling is removed
-rather than sitting there looking like a backup — and a sibling's name is
-*claimed* (`create_new`, or `create_dir` for a legacy sled directory), so two
-runs against one root cannot end up writing the same file.
+A copy that fails is not left behind — the working file is removed rather than
+sitting there looking like a backup — and the run fails rather than report a
+backup it does not have. A sibling's name is *claimed* (`create_new`, or
+`create_dir` for a legacy sled directory), so two runs against one root cannot
+end up writing the same file.
+
+A run that is killed mid-copy can leave the working file behind —
+`girpr-cache-partial-<ts>` — because the process died before the rename. It is
+tool state and is never mirrored as content, but nothing reclaims it: remove it
+by hand.
 
 ### `--dry-run`
 

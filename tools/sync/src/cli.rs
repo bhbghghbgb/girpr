@@ -214,6 +214,10 @@ pub struct CommonArgs {
     /// copies and the `girpr-cache-old-…` snapshots beside that folder's
     /// cache alike.
     ///
+    /// A copy is published whole — its name appears only once the copy is
+    /// complete — and the copy this run made is never the one its own bound
+    /// removes.
+    ///
     /// `N` must be at least 1 — keeping none of them is what `--no-backup` is
     /// for. A value of 0 is refused with exit `3`.
     #[arg(long, value_name = "N")]
