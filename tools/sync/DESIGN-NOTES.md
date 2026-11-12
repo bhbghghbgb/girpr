@@ -449,7 +449,8 @@ both are published names — so a published copy carries a **record** of its
 own: `girpr-cache-hold-backup-<ts>` beside `girpr-cache-backup-<ts>`, and
 `girpr-cache-hold-old-<ts>` beside `girpr-cache-old-<ts>`. The publishing run
 holds an exclusive OS lock on that record, and the record is taken **before**
-the copy's name is claimed, so a published name never appears without one.
+the copy's name is claimed, so a published name never appears without one —
+except on a filesystem that cannot lock a file, which has no record to take.
 
 The record is a lock and nothing else. There is no age and no lease in it: the
 OS releases the lock when the process ends, and it releases it when the
