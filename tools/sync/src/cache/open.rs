@@ -501,8 +501,8 @@ fn copy_aside(
         return Err(e);
     }
     // The published name is only ever a whole copy, so the bytes behind it
-    // have to be on disk before the name appears: a rename can reach the disk
-    // before the data it renames does.
+    // have to be on disk before the name appears: the name can reach the disk
+    // before the data it names does.
     if let Err(e) = flush_copy(&work, is_dir) {
         let _ = remove_cache_path(&work);
         return Err(e);
@@ -524,10 +524,11 @@ fn copy_aside(
 
 /// Flush a finished copy before its name is published.
 ///
-/// The publish is a rename, and a rename can be durable before the data it
-/// renames is, so the bytes are flushed first. A legacy sled directory is
-/// copied file by file and is left as it is: the live cache is a file, and
-/// the directory case is a migration path rather than the one that runs.
+/// The publish puts the name on the copy, and the name can be durable before
+/// the data it names is, so the bytes are flushed first. A legacy sled
+/// directory is copied file by file and is left as it is: the live cache is a
+/// file, and the directory case is a migration path rather than the one that
+/// runs.
 fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
     if is_dir {
         return Ok(());
