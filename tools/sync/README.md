@@ -921,9 +921,10 @@ it.** A copy is published before the run opens the folder's cache, so there is
 a short window in which the cache's own lock does not yet speak for it, and a
 bound running in that window could take the copy away from the run that is
 about to report it. So a published copy carries a **record** of its own —
-`girpr-cache-hold-backup-<ts>` beside `girpr-cache-backup-<ts>` — and the run
-that published it holds a lock on that record until it opens the cache. A
-bound that finds the record locked leaves the copy alone; a bound that finds it
+`girpr-cache-hold-backup-<ts>` beside `girpr-cache-backup-<ts>`, and
+`girpr-cache-hold-old-<ts>` beside `girpr-cache-old-<ts>` — and the run that
+published it holds a lock on that record until it opens the cache. A bound
+that finds the record locked leaves the copy alone; a bound that finds it
 unlocked takes the copy like any other, because the lock is released when the
 run ends and when the run is killed, and a record that nothing holds says
 nothing. The name a copy is published under still says when that copy became
@@ -933,6 +934,11 @@ while to make is not treated as an old one the moment it lands.
 A record is tool state: it is never mirrored as content, it is not one of the
 copies the bound counts, and one left behind by a killed run is reclaimed by
 the next bound.
+
+A filesystem that cannot lock a file cannot say any of this: there is no
+record to take, so the copy is published as it was before records existed —
+spared by the run that published it, but not by another run's bound — and the
+run does not fail over a mark it cannot make.
 
 **What a failure leaves behind.** The copies are made *before* the caches are
 removed, so a run that fails while removing them never loses the copy:
@@ -967,9 +973,10 @@ tool state and is never mirrored as content, but nothing reclaims it: remove it
 by hand.
 
 A run killed between publishing a copy and opening the folder's cache can also
-leave that copy's record behind — `girpr-cache-hold-<ts>`. Unlike the working
-file, a record nothing holds says nothing: the next bound takes the copy like
-any other copy and reclaims the record with it.
+leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or
+`girpr-cache-hold-old-<ts>`. Unlike the working file, a record nothing holds
+says nothing: the next bound takes the copy like any other copy and reclaims
+the record with it.
 
 ### `--dry-run`
 
@@ -1081,7 +1088,7 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
   `entries` table + `meta{version, case_sensitive}` in the `meta` table.
   `girpr-cache*` (DB file, backups, olds, and the records that say a copy is in
-  use) is always excluded from scans - at **any depth**, since a nested root or
+  use) is always excluded from scans — at **any depth**, since a nested root or
   a followed link can bring its own cache into the walk, and it is tool state
   rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
@@ -1413,7 +1420,7 @@ by what the planner asked for.
 | a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
 | a backup copy | one whole-file copy of the cache — src's `backup-*`, dst's `old-*`; `--no-backup` skips both |
-| a backup copy's record | one empty file beside it, held until the run opens the folder's cache |
+| a backup copy's record | one small file beside it, held until the run opens the folder's cache |
 
 Two places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
