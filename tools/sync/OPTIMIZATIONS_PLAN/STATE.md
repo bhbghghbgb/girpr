@@ -378,10 +378,10 @@ reviews:
     result: F53 fixed (8505c72a separates the three answers of taking a record, removes the record when the lock cannot be taken, and publishes without one rather than failing the run; fc06393f adds the case the code got wrong; 420485dd and 4a42cf81 correct the record name in the docs and one false sentence); 541 passed without the feature and 554 with it, 1 skipped; the guarantee verified to leave no window where neither the record nor the cache lock protects a live run's copy
     followups: [F57, F58, F60, F61]
   - batch: B21
-    status: pending
+    status: in_progress
     tasks: [F52, F54, F55, F57]
-    base: null
-    head: null
+    base: a32632aa
+    head: 776c3d1e
     result: null
     followups: []
   - batch: B22
@@ -725,9 +725,9 @@ followups:
   - id: F52
     source: F17
     description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
-    status: in_progress
+    status: pending_review
     batch: B21
-    commits: []
+    commits: [9eebcc83, 3eeeb395]
   - id: F53
     source: F17
     description: A copy another run has already published is still the bound's to take, so two concurrent runs can still have one lose its published copy; telling a published copy from one still in use needs a marker of its own.
@@ -737,15 +737,15 @@ followups:
   - id: F54
     source: F49
     description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
-    status: in_progress
+    status: pending_review
     batch: B21
-    commits: []
+    commits: [ca4d5ae4, 3eeeb395]
   - id: F55
     source: F17
     description: The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create.
-    status: in_progress
+    status: pending_review
     batch: B21
-    commits: []
+    commits: [86467207, 3eeeb395]
   - id: F56
     source: F49
     description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
@@ -755,9 +755,9 @@ followups:
   - id: F57
     source: F53
     description: A record that cannot be read or locked spares its copy for good, so on a filesystem that cannot lock a file a record left by an older build defeats the bound for that copy forever.
-    status: in_progress
+    status: pending_review
     batch: B21
-    commits: []
+    commits: [85d1a2d1, 980e7a3d, 77952c07]
   - id: F58
     source: F53
     description: retain_copies is pub, but its safety rests entirely on the caller already holding the folder's cache exclusive lock, and nothing in the signature or doc says so.
@@ -814,6 +814,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B21 review checkpoint opened: F52, F54, F55 and
+  F57 `in_progress` → `pending_review`, commits `9eebcc83`, `86467207`,
+  `85d1a2d1`, `ca4d5ae4`, `3eeeb395`, `77952c07`, `980e7a3d`, `776c3d1e`;
+  review B21 `pending` → `in_progress`, base `a32632aa`, head `776c3d1e`.
 - 2026-11-13 — follow-up batch B21 started: F52, F54, F55 and F57 `pending` →
   `in_progress`; `active_batch: B20` → `B21`.
 - 2026-11-13 — review B20 `done`: F53 fixed (8505c72a, fc06393f, 420485dd,
