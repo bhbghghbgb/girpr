@@ -328,4 +328,30 @@ mod tests {
         assert!(p.is_settled("done.txt"));
         assert_eq!(p.digest_count(), 2);
     }
+
+    /// The plan names a **subset** of the map's files, and `pending` hands back
+    /// exactly those, in sorted order.
+    ///
+    /// This is the list phase C reads, so the two have to be the same list: a
+    /// file the map holds and the plan does not name is never read, and a path
+    /// the plan names that the map does not hold is a read of nothing. The map
+    /// here has four files and a directory, one of the files already cached, so
+    /// the plan owes three of them — in sorted order, which is the order the
+    /// pool is handed.
+    #[test]
+    fn pending_names_a_subset_of_the_map_in_sorted_order() {
+        let mut m = entries();
+        m.insert("aaa.txt".to_string(), entry(&[]));
+        m.insert("zzz.txt".to_string(), entry(&[]));
+        let p = HashPlan::plan_one_side(&m, &[HashAlg::Md5], false);
+        // `cached.txt` holds md5 already and `sub` is a directory: neither is
+        // owed a read.
+        assert_eq!(p.pending(), vec!["aaa.txt", "stale.txt", "zzz.txt"]);
+        for rel in p.pending() {
+            assert!(
+                m.get(rel).is_some_and(|e| e.is_file()),
+                "{rel} is a file the map holds"
+            );
+        }
+    }
 }

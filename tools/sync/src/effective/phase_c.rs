@@ -73,22 +73,31 @@ pub fn resolve_folder(
 ) -> Result<SideScan> {
     let ScanMode { dry_run, .. } = mode;
     let t_eff = std::time::Instant::now();
+    // The plan's own pending list: the paths this side still owes a digest for,
+    // already filtered and already sorted.
+    //
+    // **Sorted even though writes are completion-ordered**: it gives the pool the
+    // same starting order every run, so which paths are in flight when a failure
+    // aborts the run does not depend on `HashMap` iteration order.
+    //
+    // **The plan names files this side's map holds.** Every entry the planner
+    // writes comes from a file in `phase_a.map` — a directory is never planned,
+    // and a path the map does not hold is not a path this side could read — so
+    // the plan's pending list and the map's unsettled files are the same set.
+    // The assertion below is that invariant said out loud, rather than assumed.
+    let pending = plan.pending();
+    debug_assert!(
+        pending
+            .iter()
+            .all(|rel| phase_a.map.get(rel.as_str()).is_some_and(|e| e.is_file())),
+        "every planned path is a file this side's map holds"
+    );
     info!(
         root = %root.display(),
-        pending = plan.pending().len(),
+        pending = pending.len(),
         digests = plan.digest_count(),
         "resolve start"
     );
-    // Sorted even though writes are completion-ordered: it gives the pool the same
-    // starting order every run, so which paths are in flight when a failure aborts
-    // the run does not depend on `HashMap` iteration order.
-    let mut pending: Vec<&String> = phase_a
-        .map
-        .iter()
-        .filter(|(rel, e)| e.is_file() && !plan.is_settled(rel))
-        .map(|(rel, _)| rel)
-        .collect();
-    pending.sort();
 
     // What the workers share: the batch handle, the map they are building, and the
     // counters that drive the heartbeat. One mutex covers all three because a row
