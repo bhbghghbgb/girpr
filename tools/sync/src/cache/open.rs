@@ -1166,8 +1166,11 @@ enum RecordLock {
 /// a live run holds spares the copy, and a record that cannot be read or
 /// whose lock cannot be tested says nothing at all — so it spares nothing
 /// either.
+///
+/// The record is opened the way the run that holds it opens it, so a record
+/// that cannot be opened that way is one no run could be holding.
 fn take_the_lock(path: &Path) -> RecordLock {
-    let file = match File::open(path) {
+    let file = match open_record(path) {
         Ok(file) => file,
         Err(e) => {
             trace!(path = %path.display(), error = %e, "a record cannot be read");
@@ -1181,6 +1184,20 @@ fn take_the_lock(path: &Path) -> RecordLock {
             trace!(path = %path.display(), error = %e, "cannot test a record's lock");
             RecordLock::Untestable
         }
+    }
+}
+
+/// Open a record, the way the run that holds it opens it.
+///
+/// The run that publishes a copy opens its record for reading and writing,
+/// so a record that cannot be opened that way is one no run is holding.
+fn open_record(path: &Path) -> std::io::Result<File> {
+    match OpenOptions::new().read(true).write(true).open(path) {
+        Ok(file) => Ok(file),
+        Err(e) => match File::open(path) {
+            Ok(file) => Ok(file),
+            Err(_) => Err(e),
+        },
     }
 }
 
