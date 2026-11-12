@@ -147,10 +147,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T15-named-sync-phases.md
     batch: F
     report: [L458-L476]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [af640af6]
     review: F
-    note: implementing session starting
+    note: implemented by ses_e3226296bffeAnLUMqf31diRVn; the decision is not to extract cmd_sync into phase functions, so the change is one docs commit naming the phases and their ordering invariants
   - id: T16
     title: Reconcile documentation with the code
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T16-docs-reconcile.md
@@ -402,7 +402,7 @@ followups:
 | E | T12 | completed | 6b50b4d0, 1e0075c5, d576a382 | review E kept |
 | E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
 | F | T14 | pending_review | 2df937bf, fb913a2a, a2df3d11 | implemented by ses_e323038fbffedCTPykVAhY4s4l |
-| F | T15 | in_progress | — | implementing session starting |
+| F | T15 | pending_review | af640af6 | implemented by ses_e3226296bffeAnLUMqf31diRVn |
 | F | T16 | pending | — | — |
 | G | T17 | pending | — | — |
 | G | T18 | pending | — | — |
@@ -413,6 +413,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T15 implemented: `pending` → `in_progress` → `pending_review`,
+  commit `af640af6`; working tree clean.
 - 2026-11-12 — T15 selected: `pending` → `in_progress`.
 - 2026-11-12 — T14 implemented: `pending` → `in_progress` → `pending_review`,
   commits `2df937bf`, `fb913a2a`, `a2df3d11`; working tree clean.
