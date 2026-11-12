@@ -7,6 +7,7 @@ use tracing::{info, trace};
 
 use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
+use crate::filter::ExcludeMemo;
 use crate::hash::{DigestSet, HashAlg};
 use crate::scan::{LiveEnt, check_mixed_case, walk_live};
 use crate::util::{elapsed_s, path_key};
@@ -136,11 +137,18 @@ pub fn scan_stat_only(
         Some(cache.begin_write()?)
     };
     let mut last_prog = std::time::Instant::now();
+    // The filter's decision, remembered per directory: an exclude pattern
+    // that covers a directory covers everything under it, so a child of a
+    // covered directory is covered without a test. The walk yields a
+    // directory before its contents, so a child's parent has usually been
+    // decided already — and where it has not, the memo falls back to the
+    // whole chain, so the order can cost time but cannot change the answer.
+    let mut excl = ExcludeMemo::new(&common.filter);
     for e in &live {
-        // The filter is asked once per entry, here. An entry the filter hides
+        // The filter decides once per entry, here. An entry the filter hides
         // is treated as not existing at all: it is not in the map, and its
         // cache row is a prune.
-        if common.filter.is_excluded(&e.rel) {
+        if excl.is_excluded(e.rel.as_str(), e.is_dir) {
             continue; // treated as not existing at all
         }
         live_set.insert(e.rel.as_str());
@@ -438,6 +446,7 @@ mod tests {
                 ("a/keep/x.txt", b"x"),
                 ("a/keep/deep/y.txt", b"y"),
                 ("a/other/z.txt", b"z"),
+                ("a/other/z.bin", b"b"),
                 ("top.txt", b"t"),
             ],
         );
@@ -449,6 +458,8 @@ mod tests {
             (vec!["a/keep"], vec![]),
             (vec![], vec!["a/other"]),
             (vec![], vec!["a"]),
+            (vec![], vec!["*.bin"]),
+            (vec!["*.txt"], vec!["a/keep/deep"]),
         ] {
             let common = opts(&includes, &excludes);
             let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
@@ -540,6 +551,38 @@ mod tests {
         .unwrap();
 
         assert_eq!(keys(&scan), vec!["keep", "keep/x.txt"]);
+    }
+
+    /// A pattern that hides one file hides that file and nothing else: the
+    /// directories around it are kept, and so is the sibling beside it.
+    ///
+    /// The point is the boundary of the hiding. A directory is kept because
+    /// the filter kept it, not because anything below it was kept, and one
+    /// hidden file in a subtree says nothing about the rest of that subtree.
+    #[test]
+    fn a_pattern_that_hides_one_file_hides_only_that_file() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "one_hidden_file");
+        tree(
+            &root,
+            &[
+                ("a/b/keep.txt", b"k"),
+                ("a/b/hide.bin", b"h"),
+                ("a/c/other.txt", b"o"),
+            ],
+        );
+        let db = CacheDb::open_temp(true).unwrap();
+        let scan = scan_stat_only(
+            &root,
+            &db,
+            &opts(&[], &["*.bin"]),
+            ScanMode::new(false, false),
+        )
+        .unwrap();
+
+        assert_eq!(
+            keys(&scan),
+            vec!["a", "a/b", "a/b/keep.txt", "a/c", "a/c/other.txt"]
+        );
     }
 
     /// The counters a narrowed include produces, on a tree whose cache was
