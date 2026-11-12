@@ -414,11 +414,11 @@ the copy another run is making there, leaving that run reporting a backup that
 is not on disk. It also means the bound's count is a count of whole copies:
 it never keeps a half-written one in place of a good one.
 
-**There is no age, no lease and no marker to interpret.** "Finished" and "in
-flight" are told apart by the name, and the name is the only thing the bound
-reads. A rule that spared the young copies instead — "only remove a copy older
-than an hour" — would be a weaker guarantee wearing the same clothes: the copy
-of a slow run would still be taken, and the hour would be a number nobody
+**There is no age and no lease.** "Finished" and "in flight" are told apart by
+the name, and the name is the only thing the bound reads to make that
+distinction. A rule that spared the young copies instead — "only remove a copy
+older than an hour" — would be a weaker guarantee wearing the same clothes: the
+copy of a slow run would still be taken, and the hour would be a number nobody
 could check.
 
 That is also why the **published** name says when the copy became *whole* and
@@ -440,24 +440,55 @@ The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
 because the count is made up from the next-oldest copy instead.
 
-A copy another run has already **published** is not spared, though: the bound
-is about the folder, and the copies it keeps are the newest ones. Telling a
-published copy from one still in use would take a marker of its own, which
-this mechanism does not have.
+**A copy is published before the lock that would protect it is taken.** That
+gap is the one place where a live run's copy can be lost: the run that
+published it has not opened the folder's cache yet, so another run can be in
+its run phase for the folder, and its bound can take the copy away from the
+run that is about to report it. The bound cannot tell the two apart by name —
+both are published names — so a published copy carries a **record** of its
+own: `girpr-cache-hold-backup-<ts>` beside `girpr-cache-backup-<ts>`, and
+`girpr-cache-hold-old-<ts>` beside `girpr-cache-old-<ts>`. The publishing run
+holds an exclusive OS lock on that record, and the record is taken **before**
+the copy's name is claimed, so a published name never appears without one.
 
-The tool takes **no lock of its own**. A folder on a filesystem that cannot
-lock has nothing to degrade, because the only thing the mechanism needs is
-that a rename inside one directory is atomic; and a publish that fails fails
-the run loudly, rather than leaving a run reporting a backup that is not
-there.
+The record is a lock and nothing else. There is no age and no lease in it: the
+OS releases the lock when the process ends, and it releases it when the
+process is killed, so a record left behind by a dead run is **stale** rather
+than a claim that never expires. A bound that meets a record a live run holds
+leaves the copy alone; a bound that meets a stale record takes the copy like
+any other and reclaims the record with it. Once the run holds the cache's own
+exclusive lock, that lock is the protection — no other run is in its run phase
+for the folder — and the record is released, because it has nothing left to
+say.
+
+The record is **per copy**, not per run, so two runs on one folder never
+share one: a run that finds the record for a name already held is looking at a
+name another run is publishing under, and it moves on to the next name rather
+than racing for it. Taking the record before the claim is also what keeps two
+runs from publishing onto one name.
+
+The tool takes **one lock of its own**, and it is the record's. The bound
+itself still runs under the cache's own lock, which redb holds: a folder whose
+filesystem cannot lock a file still gets the bound, and its copies are
+published and reclaimed as they were before a record existed — the record's
+lock is per copy, and a filesystem that cannot take one leaves the copy
+unmarked rather than failing the run. A publish that fails fails the run
+loudly, rather than leaving a run reporting a backup that is not there.
 
 **Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
 and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
-bound against the run's own copy, and
+bound against the run's own copy,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
-same thing seen through a whole run.
+same thing seen through a whole run, and
+`a_published_copy_carries_a_record_of_its_own`,
+`a_copy_a_live_run_is_using_is_not_the_bounds_to_take`,
+`a_record_whose_run_is_gone_does_not_stop_the_bound`,
+`a_record_of_a_copy_that_is_gone_is_reclaimed`,
+`a_record_is_not_one_of_the_copies_the_bound_counts`,
+`concurrent_publishes_get_copies_and_records_of_their_own` and
+`the_record_is_released_once_the_cache_is_open` for the record itself.
 
 ---
 

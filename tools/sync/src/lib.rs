@@ -4,7 +4,9 @@
 //! Backups: `<folder>/girpr-cache-backup-<ts>` and `<folder>/girpr-cache-old-<ts>`
 //! (file copies; kept all by default, bounded by `--backup-retain N`). A copy
 //! is written under `<folder>/girpr-cache-partial-<ts>` and renamed into place
-//! once it is complete, so a name in a copy list never holds half a copy.
+//! once it is complete, so a name in a copy list never holds half a copy. A
+//! published copy carries a `<folder>/girpr-cache-hold-<ts>` record beside it,
+//! which says the copy is in use by the run that published it.
 //! Record-only inputs: any path whose final component
 //! starts with `girpr-cache`.
 //!
