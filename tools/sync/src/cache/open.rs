@@ -443,9 +443,10 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// the claim — it fails when the name is taken — so two runs cannot publish
 /// onto one name.
 ///
-/// A directory cannot be linked, so it takes its name by being renamed onto
-/// it, because a directory cannot be renamed over an existing name on every
-/// platform; the rename itself then says whether the name was taken.
+/// A directory cannot be linked, so its name is claimed with an exclusive
+/// create and the copy is renamed onto the claim: a POSIX rename onto an
+/// existing empty directory succeeds, so the claim is what keeps two runs
+/// from publishing onto one name.
 ///
 /// **The record of the copy is taken before the name is claimed.** The record
 /// says the copy is in use by the run that is about to publish it, and a
@@ -493,15 +494,7 @@ fn publish_copy(
             Claim::Unusable => None,
         };
         let published = if is_dir {
-            // A directory takes its name by being renamed onto it, because a
-            // directory cannot be renamed over an existing name on every
-            // platform; the rename itself then says whether the name was
-            // taken.
-            match std::fs::rename(work, &cand) {
-                Ok(()) => Ok(()),
-                Err(e) if name_is_taken(&e) => Err(PublishError::Taken),
-                Err(e) => Err(PublishError::Io(e)),
-            }
+            publish_dir(work, &cand)
         } else {
             publish_file(work, &cand)
         };
@@ -607,6 +600,47 @@ fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other("this filesystem cannot link a file"));
     }
     std::fs::hard_link(src, dst)
+}
+
+/// Publish a finished directory copy under its published name.
+///
+/// A directory cannot be linked, so the name is **claimed** with an
+/// exclusive create and the copy is renamed onto the claim. The claim is
+/// what decides: a POSIX rename onto an existing **empty** directory
+/// succeeds, so a rename on its own would let a second run publish onto a
+/// name the first run has, and replace the copy that is there.
+///
+/// The rename replaces the claim where the platform allows it, so the name
+/// is briefly an empty directory. Where a rename refuses to replace a
+/// directory, the claim is dropped and the rename tried again: a name taken
+/// in the meantime makes that rename fail, which is the answer we want.
+fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
+    match std::fs::create_dir(cand) {
+        Ok(()) => {}
+        // The name is taken: it is another run's.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(PublishError::Taken),
+        Err(e) => return Err(PublishError::Io(e)),
+    }
+    match std::fs::rename(work, cand) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // The claim is in the way of the rename. Only an empty directory
+            // goes, so a copy another run has published is never dropped
+            // here.
+            let _ = std::fs::remove_dir(cand);
+            match std::fs::rename(work, cand) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    // The name is there, so another run has it.
+                    if cand.exists() {
+                        Err(PublishError::Taken)
+                    } else {
+                        Err(PublishError::Io(e))
+                    }
+                }
+            }
+        }
+    }
 }
 
 // The test-only switch that makes linking a file fail.
@@ -1509,6 +1543,67 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the publish did not create a name");
+    }
+
+    /// A published directory name is claimed, not renamed onto.
+    ///
+    /// A POSIX rename onto an existing empty directory succeeds, so a rename
+    /// on its own would let a second run replace what the first one
+    /// published. The name is claimed with an exclusive create instead, so
+    /// the second publish is told the name is taken and the copy that is
+    /// there is left alone.
+    #[test]
+    fn a_published_directory_name_is_claimed_and_the_copy_left_alone() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_dir_claim");
+        let dir = t.subdir("w");
+
+        // A name that is already there.
+        let cand = dir.join(format!("{BACKUP_PREFIX}{STAMP}"));
+        std::fs::create_dir(&cand).unwrap();
+
+        // The copy that wants to be published under it.
+        let work = dir.join("work");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::write(work.join("a"), b"the copy").unwrap();
+
+        assert!(
+            matches!(publish_dir(&work, &cand), Err(PublishError::Taken)),
+            "the name that is there is not published onto"
+        );
+        assert!(
+            std::fs::read_dir(&cand).unwrap().next().is_none(),
+            "and what is under that name is left as it is"
+        );
+        assert!(
+            work.join("a").exists(),
+            "the copy that wanted the name still has its own"
+        );
+    }
+
+    /// A legacy sled cache is copied aside as a directory, and published
+    /// whole.
+    ///
+    /// A sled cache is a directory, so its copy is a directory too: it is
+    /// published by being renamed onto a name it claims first.
+    #[test]
+    fn a_directory_copy_is_published_whole() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_dir");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::create_dir(&db).unwrap();
+        std::fs::write(db.join("a"), b"the cache bytes").unwrap();
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+
+        assert!(
+            published.is_dir(),
+            "the copy of a legacy sled cache is a directory"
+        );
+        assert_eq!(
+            std::fs::read(published.join("a")).unwrap(),
+            b"the cache bytes",
+            "and it holds the cache"
+        );
     }
 
     /// The bound does not take back the copy the run applying it published.
