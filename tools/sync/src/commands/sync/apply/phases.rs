@@ -114,6 +114,15 @@ impl<'a> Applier<'a> {
     /// [`CacheWrite`](crate::cache::CacheWrite) is not `Sync` (it owns a live write
     /// transaction), not because the writes want to be serialised: the lock is held
     /// for one `put`, never across a copy.
+    ///
+    /// **Every copy is attempted, and the failure reported is the lowest-index
+    /// one.** More than one copy can fail, and the run reports one of them: the
+    /// failure of the copy that comes first *in the plan*, whatever order the
+    /// workers finished in. The plan's order is the order the report speaks in,
+    /// so a run that named the first failure to *finish* would name a different
+    /// file on a different run. Aborting the pool at the first failure would
+    /// change what the run did — the copies after it would never be attempted,
+    /// and their `COPY` lines and cache rows would never happen.
     pub(crate) fn copy_files(&self, plan: &Plan) -> Result<usize> {
         let threads = self.rw.pool()?.current_num_threads();
         info!(
@@ -158,68 +167,96 @@ impl<'a> Applier<'a> {
         // it, and only the requested digests are judged.
         let algos = AlgoSet::from_iter(self.common.algos.iter().copied());
         let pool = self.rw.pool()?;
-        let results = pool.install(|| {
+        // **The one failure this phase reports.**
+        //
+        // Every copy is attempted and more than one of them can fail, so the
+        // phase has to choose which failure to report: the one of the **lowest
+        // index in the plan**, because the plan's order is the order the report
+        // speaks in. The index is the plan's, not the completion's — a worker
+        // that finished first has no claim on the report.
+        //
+        // Keeping the best failure rather than every failure is what makes this
+        // a fixed-size value instead of one entry per copied file.
+        let failure: std::sync::Mutex<Option<(usize, anyhow::Error)>> = std::sync::Mutex::new(None);
+        let copied = std::sync::atomic::AtomicUsize::new(0);
+        pool.install(|| {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map_init(Vec::<u8>::new, |buf, item| -> Result<()> {
-                    // The permit covers the copy itself. Writing the row is cache
-                    // work, which the rw gate deliberately does not cover, so it is
-                    // done after the permit is released rather than stretching the
-                    // permit over an unrelated fsync.
-                    let r = {
-                        let _rw = self.rw.acquire_copy();
-                        debug!(rel = %item.rel, "copy start");
-                        copy_one(
-                            self.src,
-                            self.src_canonical,
-                            self.dst,
-                            &item.rel,
-                            algos,
-                            &self.common.algos,
-                            buf,
-                        )
-                    };
-                    let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    if n.is_multiple_of(25) || n == copy_total {
-                        info!(done = n, total = copy_total, "copy progress");
-                    } else {
-                        trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
+                .enumerate()
+                .for_each_init(Vec::<u8>::new, |buf, (idx, item)| {
+                    let r: Result<()> = (|| {
+                        // The permit covers the copy itself. Writing the row is cache
+                        // work, which the rw gate deliberately does not cover, so it is
+                        // done after the permit is released rather than stretching the
+                        // permit over an unrelated fsync.
+                        let r = {
+                            let _rw = self.rw.acquire_copy();
+                            debug!(rel = %item.rel, "copy start");
+                            copy_one(
+                                self.src,
+                                self.src_canonical,
+                                self.dst,
+                                &item.rel,
+                                algos,
+                                &self.common.algos,
+                                buf,
+                            )
+                        };
+                        let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        if n.is_multiple_of(25) || n == copy_total {
+                            info!(done = n, total = copy_total, "copy progress");
+                        } else {
+                            trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
+                        }
+                        // A failed copy aborts the run before the summary, so no `COPY`
+                        // line is announced and no row is written: a cache must never
+                        // claim content the dst does not have.
+                        let rec = r?;
+                        // **As done.** Announced the moment the file is in place, not
+                        // after every copy finishes — so with more than one rw operation
+                        // permitted the `COPY` lines come out in completion order rather
+                        // than plan order.
+                        {
+                            let _guard =
+                                emit.lock().map_err(|_| anyhow!("emit lock is poisoned"))?;
+                            self.report.emit(
+                                Record::path("COPY", &item.rel)
+                                    .put("because", item.because.as_str()),
+                            );
+                        }
+                        // Only verified copies reach here, and the row is put now — while
+                        // the copy phase is still running — so the batch handle's
+                        // `CommitLimits` bound uncommitted work instead of checking three
+                        // thresholds after the last file is already durable.
+                        cache
+                            .lock()
+                            .map_err(|_| anyhow!("cache lock is poisoned"))?
+                            .put(&item.rel, &rec)?;
+                        Ok(())
+                    })();
+                    match r {
+                        Ok(()) => {
+                            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            // The lock guards one value and never runs user code, so a
+                            // poisoned guard still holds a usable answer.
+                            let mut best = failure.lock().unwrap_or_else(|e| e.into_inner());
+                            if best.as_ref().is_none_or(|(i, _)| idx < *i) {
+                                *best = Some((idx, e));
+                            }
+                        }
                     }
-                    // A failed copy aborts the run before the summary, so no `COPY`
-                    // line is announced and no row is written: a cache must never
-                    // claim content the dst does not have.
-                    let rec = r?;
-                    // **As done.** Announced the moment the file is in place, not
-                    // after every copy finishes — so with more than one rw operation
-                    // permitted the `COPY` lines come out in completion order rather
-                    // than plan order.
-                    {
-                        let _guard = emit.lock().map_err(|_| anyhow!("emit lock is poisoned"))?;
-                        self.report.emit(
-                            Record::path("COPY", &item.rel).put("because", item.because.as_str()),
-                        );
-                    }
-                    // Only verified copies reach here, and the row is put now — while
-                    // the copy phase is still running — so the batch handle's
-                    // `CommitLimits` bound uncommitted work instead of checking three
-                    // thresholds after the last file is already durable.
-                    cache
-                        .lock()
-                        .map_err(|_| anyhow!("cache lock is poisoned"))?
-                        .put(&item.rel, &rec)?;
-                    Ok(())
-                })
-                .collect::<Vec<_>>()
+                });
         });
-        let mut copied = 0usize;
         // Plan order, so the failure reported is the lowest-index one rather than
         // whichever worker happened to lose. The `COPY` lines were already emitted
         // above, as each copy completed, and the rows were already written.
-        for (item, r) in plan.copy.iter().zip(results) {
-            r.with_context(|| format!("copy {}", item.rel))?;
-            copied += 1;
+        if let Some((idx, e)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            return Err(e).with_context(|| format!("copy {}", plan.copy[idx].rel));
         }
+        let copied = copied.load(std::sync::atomic::Ordering::SeqCst);
         info!(copied, total = copy_total, "copy done");
         // The final partial batch. Batches the thresholds committed during the copy
         // phase are already durable; a run that errored above never reaches this, so
