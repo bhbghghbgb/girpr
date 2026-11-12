@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B12
+active_batch: B20
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -724,7 +724,7 @@ followups:
   - id: F53
     source: F17
     description: A copy another run has already published is still the bound's to take, so two concurrent runs can still have one lose its published copy; telling a published copy from one still in use needs a marker of its own.
-    status: pending
+    status: in_progress
     batch: B20
     commits: []
   - id: F54
@@ -776,6 +776,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B20 started: F53 `pending` → `in_progress`;
+  `active_batch: B12` → `B20`.
 - 2026-11-13 — review B12 `done`: F17 fixed (5b89a4fb, 4f3b7e10), F49 kept;
   follow-ups F52–F56 appended. F53 is the same kind of follow-up as F17 and
   gets its own batch `B20` with a design up front, scheduled before the
