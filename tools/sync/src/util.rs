@@ -258,6 +258,7 @@ mod tests {
             "girpr-cache/rows",
             "girpr-cache-backup-1",
             "girpr-cache-old-2/inner",
+            "girpr-cache-partial-3",
             "sub/girpr-cache",
             "sub/girpr-cache/rows",
             "sub/deeper/girpr-cache-backup-3/x",

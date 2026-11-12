@@ -1949,6 +1949,47 @@ fn run_sync_backs_up_src_and_snapshots_dst() {
     );
 }
 
+/// The bound leaves a copy that is still being written alone.
+///
+/// A copy is written under a working name and published under its real name
+/// once it is complete, so a run that merely opens a folder cannot take away
+/// the copy another run is making there — however often the bound is applied.
+#[test]
+fn a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone() {
+    let t = temp_root("retain_working");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // The copy another run is making: the working name carries neither of the
+    // two published prefixes.
+    wfile(
+        &src,
+        "girpr-cache-partial-20240101T000000.000000Z",
+        b"half a copy",
+    );
+    // Copies from earlier runs, which the bound *is* about.
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(
+        src.join("girpr-cache-partial-20240101T000000.000000Z")
+            .exists(),
+        "the copy that is being written is left alone"
+    );
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        1,
+        "the published copies are still bounded"
+    );
+}
+
 /// `--no-backup` leaves no copy and no snapshot behind.
 ///
 /// It is a policy about what a run leaves behind, so it cannot change what
