@@ -8,7 +8,7 @@ use std::path::Path;
 use tracing::{error, trace};
 
 use crate::cache::FileRec;
-use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, HashAlg, hash_file};
+use crate::hash::{AlgoSet, CHUNK, DigestSet, Digests, hash_file};
 use crate::util::{mtime_ns_of, path_within};
 
 /// Copy `src` over `dst`, digesting the bytes as they pass, and return the
@@ -61,11 +61,14 @@ fn copy_and_digest(
 /// say — which is why the signature takes two, and why a caller that cannot
 /// produce two has no verify to run at all.
 ///
-/// Only the requested `algos` are judged. A digest the run did not ask for is
-/// not evidence about this copy either way.
-fn verify_digests(path: &Path, algos: &[HashAlg], src: &DigestSet, dst: &DigestSet) -> Result<()> {
-    for a in algos {
-        if src.get_algo(*a) != dst.get_algo(*a) {
+/// Only the algorithms in `algos` are judged, and they are the ones this copy
+/// computed: a digest the run did not ask for is not evidence about this copy
+/// either way, and one the copy did not produce could not be compared at all.
+/// The set carries no order of its own, so a disagreement is named in canonical
+/// order — the order the diff's `digest-differs` tag uses as well.
+fn verify_digests(path: &Path, algos: &AlgoSet, src: &DigestSet, dst: &DigestSet) -> Result<()> {
+    for a in algos.iter() {
+        if src.get_algo(a) != dst.get_algo(a) {
             error!(algo = %a, path = %path.display(), "verify hash mismatch");
             bail!("verify hash({}) {}", a, path.display());
         }
@@ -305,10 +308,10 @@ fn copy_and_stamp(
     // (the README documents write-through). Only a directory link is unlinked
     // above, because `File::create` cannot truncate one.
     let mut fout = std::fs::File::create(d).with_context(|| format!("create {}", d.display()))?;
-    // The request is a slice; what the digester wants is a set. The set is
-    // built once per phase and handed down, so this conversion is not repeated
-    // per file. The slice stays the thing `verify_digests` walks, because only
-    // the *requested* digests are judged, and in the order they were asked for.
+    // The digester wants a set, and so does the verify: the same one. It is
+    // built once per phase and handed down, so the conversion from the run's
+    // request is not repeated per file, and the digests computed and the
+    // digests judged are the same set by construction.
     let src_digests = copy_and_digest(&mut fin, &mut fout, algos, buf)
         .with_context(|| format!("copy {} -> {}", s.display(), d.display()))?;
     if !test_no_fsync() {
@@ -389,12 +392,13 @@ fn copy_and_stamp(
 /// clean. That is a race the tool cannot win anyway — phase A's stat sees the new
 /// mtime on the next run and re-copies.
 ///
-/// **Two algorithm arguments, and they answer different questions.** `algos` is
-/// the *set* — which digests to compute — and it is the same for every copy in
-/// a phase, so the caller builds it once and passes it down. `requested` is the
-/// run's request as the user typed it, and it is what `verify_digests` walks:
-/// only the requested digests are judged, and a set would report them in
-/// canonical order rather than the order the user asked in.
+/// **One algorithm argument, and it is the set.** `algos` says which digests
+/// this copy computes, and the verify judges exactly those: a digest the run
+/// did not ask for is not evidence about this copy, and one the copy did not
+/// produce could not be compared anyway. The set is the same for every copy in
+/// a phase, so the caller builds it once from the run's request and passes it
+/// down — and because it is the only algorithm argument, the digests computed
+/// and the digests judged cannot drift apart.
 #[tracing::instrument(skip_all, fields(rel, bytes = tracing::field::Empty))]
 pub(super) fn copy_one(
     src_root: &Path,
@@ -402,7 +406,6 @@ pub(super) fn copy_one(
     dst_root: &Path,
     rel: &str,
     algos: AlgoSet,
-    requested: &[HashAlg],
     buf: &mut Vec<u8>,
 ) -> Result<FileRec> {
     trace!("copy_one start");
@@ -441,7 +444,7 @@ pub(super) fn copy_one(
         });
     }
     let dh = hash_file(&d, &algos).with_context(|| format!("hash {}", d.display()))?;
-    verify_digests(&d, requested, &inputs.src_digests, &dh)?;
+    verify_digests(&d, &algos, &inputs.src_digests, &dh)?;
     tracing::Span::current().record("bytes", inputs.size);
     trace!(bytes = inputs.size, "copy_one done");
     Ok(FileRec {
@@ -455,16 +458,14 @@ pub(super) fn copy_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::HashAlg;
     use std::path::PathBuf;
 
-    fn algos(names: &[&str]) -> Vec<HashAlg> {
-        names.iter().map(|s| s.parse().unwrap()).collect()
-    }
-
-    /// The same algorithms as a set, for the digester. `verify_digests` keeps
-    /// taking the list: it walks the *request*, not the digests.
+    /// The algorithms a copy computes and judges, as the set the caller hands
+    /// it. There is no list beside it: the set is the whole request, so there
+    /// is no second spelling of it that could drift.
     fn aset(names: &[&str]) -> AlgoSet {
-        AlgoSet::from_iter(algos(names))
+        AlgoSet::from_iter(names.iter().map(|s| s.parse::<HashAlg>().unwrap()))
     }
 
     /// Create a link to a directory: a symlink where the platform allows one,
@@ -669,7 +670,7 @@ mod tests {
         let mut dst = src.clone();
         dst.insert_named("md5", &[2u8; 16]);
 
-        let err = verify_digests(path, &algos(&["md5", "sha256"]), &src, &dst)
+        let err = verify_digests(path, &aset(&["md5", "sha256"]), &src, &dst)
             .expect_err("two digests that disagree are not a verified copy");
         let msg = err.to_string();
         assert!(
@@ -690,7 +691,7 @@ mod tests {
         assert!(
             verify_digests(
                 Path::new("dst/file.bin"),
-                &algos(&["md5", "sha256"]),
+                &aset(&["md5", "sha256"]),
                 &both,
                 &both
             )
@@ -709,7 +710,7 @@ mod tests {
         let src = digests(&["md5"], 1);
         let dst = DigestSet::default();
 
-        let err = verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst)
+        let err = verify_digests(Path::new("dst/file.bin"), &aset(&["md5"]), &src, &dst)
             .expect_err("a digest dst never produced is not one it agrees with");
         assert!(
             err.to_string().contains("verify hash(md5)"),
@@ -719,9 +720,9 @@ mod tests {
 
     /// Only what the run asked for is evidence about this copy. A digest nobody
     /// requested is not a disagreement, and treating it as one would fail every
-    /// copy whose maps happen to carry more than `algos` names.
+    /// copy whose maps happen to carry more names than the set.
     ///
-    /// This pins which side the loop walks: `algos`, not the maps. A comparison
+    /// This pins which side the loop walks: the set, not the maps. A comparison
     /// iterating the digests instead would fail here, having found a real
     /// difference in a value no caller asked about.
     #[test]
@@ -731,8 +732,48 @@ mod tests {
         dst.insert_named("sha256", &[2u8; 16]);
 
         assert!(
-            verify_digests(Path::new("dst/file.bin"), &algos(&["md5"]), &src, &dst).is_ok(),
+            verify_digests(Path::new("dst/file.bin"), &aset(&["md5"]), &src, &dst).is_ok(),
             "sha256 was not requested, so its disagreement is not this copy's problem"
+        );
+    }
+
+    /// A copy computes the algorithms it was given and judges exactly those, so
+    /// the digests it produced and the digests it compares are the same set by
+    /// construction.
+    ///
+    /// The record the copy hands back carries the digests it computed, so the
+    /// set is visible in what the cache is given: a digest outside it was
+    /// neither computed nor judged.
+    #[test]
+    fn a_copy_computes_exactly_the_algorithms_it_was_given() {
+        let dir = girpr_tempdir::TempDir::new("girsync_copy", "algoset");
+        let src = dir.subdir("src");
+        let dst = dir.subdir("dst");
+        std::fs::write(src.join("a.txt"), b"content").unwrap();
+        let src_canonical = canonical(&src);
+        let mut buf = Vec::new();
+
+        let rec = copy_one(
+            &src,
+            &src_canonical,
+            &dst,
+            "a.txt",
+            aset(&["md5"]),
+            &mut buf,
+        )
+        .expect("the copy succeeds");
+        assert_eq!(
+            std::fs::read(dst.join("a.txt")).unwrap(),
+            b"content",
+            "the bytes landed"
+        );
+        assert!(
+            rec.hashes.get_algo(HashAlg::Md5).is_some(),
+            "md5 was asked for, so it was computed"
+        );
+        assert!(
+            rec.hashes.get_algo(HashAlg::Sha256).is_none(),
+            "sha256 was not asked for, so it was neither computed nor judged"
         );
     }
 
@@ -869,7 +910,6 @@ mod tests {
             &dst,
             "a.txt",
             aset(&["md5"]),
-            &algos(&["md5"]),
             &mut buf,
         )
         .expect_err("a destination with two names must be refused");
@@ -932,7 +972,6 @@ mod tests {
             &dst,
             "a.txt",
             aset(&["md5"]),
-            &algos(&["md5"]),
             &mut buf,
         )
         .expect_err("the copy must refuse a link into src");

@@ -161,10 +161,11 @@ impl<'a> Applier<'a> {
         // inside `put` only makes another worker's `put` wait; that worker holds no
         // permit and needs none.
         let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
-        // The algorithm set the digester wants, built once for the whole phase
-        // rather than once per copied file. The request slice stays beside it:
-        // `verify_digests` walks the *request*, in the order the user asked for
-        // it, and only the requested digests are judged.
+        // The algorithms every copy in this phase computes and judges, built
+        // once for the whole phase rather than once per copied file. The set is
+        // the run's request, and the verify judges exactly what the copy
+        // produced — so there is one list of algorithms in the copy path, not a
+        // set beside a request that could disagree with it.
         let algos = AlgoSet::from_iter(self.common.algos.iter().copied());
         let pool = self.rw.pool()?;
         // **The one failure this phase reports.**
@@ -199,7 +200,6 @@ impl<'a> Applier<'a> {
                                 self.dst,
                                 &item.rel,
                                 algos,
-                                &self.common.algos,
                                 buf,
                             )
                         };

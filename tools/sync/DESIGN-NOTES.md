@@ -519,3 +519,11 @@ one is a real loss:
 
 Neither shape is derivable from the other, and the reason each is right is
 opposite to the other's.
+
+**The order is a contract where a choice is made, and the copy path makes none.**
+`copy_one` takes the run's algorithms as an `AlgoSet` and judges exactly that
+set: the digests it compares are the ones it computed, so a digest the copy did
+not produce could not be compared at all, and a request beside the set would be
+a second spelling of the same thing waiting to drift. Nothing on that path
+depends on the order the user typed, so a disagreement is named in canonical
+order — as the diff's `digest-differs` tag already names it.
