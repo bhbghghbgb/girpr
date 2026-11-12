@@ -147,10 +147,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T15-named-sync-phases.md
     batch: F
     report: [L458-L476]
-    status: pending
+    status: in_progress
     commits: []
     review: F
-    note: null
+    note: implementing session starting
   - id: T16
     title: Reconcile documentation with the code
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T16-docs-reconcile.md
@@ -402,7 +402,7 @@ followups:
 | E | T12 | completed | 6b50b4d0, 1e0075c5, d576a382 | review E kept |
 | E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
 | F | T14 | pending_review | 2df937bf, fb913a2a, a2df3d11 | implemented by ses_e323038fbffedCTPykVAhY4s4l |
-| F | T15 | pending | — | — |
+| F | T15 | in_progress | — | implementing session starting |
 | F | T16 | pending | — | — |
 | G | T17 | pending | — | — |
 | G | T18 | pending | — | — |
@@ -413,6 +413,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T15 selected: `pending` → `in_progress`.
 - 2026-11-12 — T14 implemented: `pending` → `in_progress` → `pending_review`,
   commits `2df937bf`, `fb913a2a`, `a2df3d11`; working tree clean.
 - 2026-11-12 — batch F started: T14 `pending` → `in_progress`.
