@@ -110,6 +110,13 @@ conversion that fails leaves the previous cache exactly as it was under
 `--force`, and leaves no destination at all without it; the temporary is
 removed either way, so nothing of the tool's own is left in the folder.
 
+The temporary is named inside the tool's own namespace —
+`girpr-cache-convert-<pid>-<ts>.redb` — because it is written into the folder
+the destination cache lives in. A conversion that is killed before it could
+clean up after itself therefore leaves tool state there, not a file the next
+run would mirror out of a source folder or delete as an extra in a
+destination one.
+
 Replacing a **legacy sled directory** is the one step that is not atomic: the
 directory has to be removed before the new file can take its name, so a
 failure in that window leaves no cache at all. The error says so when it
@@ -1031,7 +1038,10 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   **any depth**, since a nested root or a followed link can bring its own cache
   into the walk, and it is tool state rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
-  file; POSIX spellings stay exact.
+  file; POSIX spellings stay exact. The converter's temporary is one of them
+  (`girpr-cache-convert-<pid>-<ts>.redb`), so a conversion that was killed
+  leaves the tool's own residue behind rather than a file that looks like
+  content.
   Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
   convert once with `sled2redb <old-dir> <new-file>` — the converter is behind
   the `convert` feature, see [Build features](#build-features)).
