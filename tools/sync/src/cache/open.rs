@@ -199,14 +199,14 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
                     // accumulate until --ignore-cache rebuilt the cache. The
                     // folder is bounded here instead, under the cache's own
                     // lock where one can be taken.
-                    if let Some(keep) = retain {
-                        if let Err(bound) = bound_after_failed_open(db_path, keep) {
-                            warn!(
-                                path = %db_path.display(),
-                                error = %bound,
-                                "the copies beside a cache that did not open could not be bounded"
-                            );
-                        }
+                    if let Some(keep) = retain
+                        && let Err(bound) = bound_after_failed_open(db_path, keep)
+                    {
+                        warn!(
+                            path = %db_path.display(),
+                            error = %bound,
+                            "the copies beside a cache that did not open could not be bounded"
+                        );
                     }
                     return Err(e);
                 }
@@ -1798,18 +1798,19 @@ mod tests {
         std::fs::write(&older, b"old").unwrap();
         std::fs::write(&newer, b"newer").unwrap();
 
-        match open_db(
-            &db,
-            true,
-            CacheOpen::ReadWrite {
-                ignore_cache: false,
-                backup_first: false,
-                retain: NonZeroUsize::new(1),
-            },
-        ) {
-            Ok(_) => panic!("a corrupt cache is refused"),
-            Err(_) => {}
-        }
+        assert!(
+            open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: NonZeroUsize::new(1),
+                },
+            )
+            .is_err(),
+            "a corrupt cache is refused"
+        );
 
         assert!(
             !older.exists(),
