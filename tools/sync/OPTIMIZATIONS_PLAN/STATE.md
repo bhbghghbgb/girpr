@@ -238,12 +238,12 @@ reviews:
     result: T17 kept (71fe4368, 4cc52111, efdacd32); T18 kept (cce4fed3, efe471f8, 2a244f26); T19 kept (eac1d900, 96e48eb9, 9c0b1c49); no fix or revert commits; 512 passed without the feature and 524 with it, 1 skipped; the converter atomicity test was verified to be the only failure on the pre-T17 code
     followups: [F30, F31, F32]
   - batch: B1
-    status: in_progress
+    status: done
     tasks: [F1, F2]
     base: 107d8751
-    head: a74b92e2
-    result: null
-    followups: []
+    head: b7e332c2
+    result: F1 fixed (b7e332c2 removes a rustdoc link from a public doc to the module-private resolver, the crate's only rustdoc warning); F2 kept (a74b92e2); 513 passed, 1 skipped; the matching rule verified byte-for-byte identical to the old one
+    followups: [F33, F34, F35]
   - batch: B2
     status: pending
     tasks: [F3, F4, F5]
@@ -321,21 +321,28 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: B13
+    status: pending
+    tasks: [F33, F34, F35]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
     description: foreign_known resolves names through HashAlg::from_str, whose error path allocates an UnknownHash string for every non-matching foreign name; an ASCII-case comparison against the canonical spelling would be allocation-free.
-    status: pending_review
+    status: completed
     batch: B1
-    commits: [b55cc628]
-    note: implemented by ses_e2ffcede1ffe6VQilw41qQmxww; a new HashAlg::from_name resolver is used at all three name-resolution sites
+    commits: [b55cc628, b7e332c2]
+    note: review B1 fixed (b7e332c2 removes a rustdoc link from a public doc to the module-private resolver); the matching rule is byte-for-byte the old one
   - id: F2
     source: T01
     description: DESIGN-NOTES "A digest is looked up by name, not by slot" still says "two lookups" and does not mention get_algo or the ASCII-case widening; T16 may already cover this reconciliation.
-    status: pending_review
+    status: completed
     batch: B1
     commits: [a74b92e2]
-    note: implemented by ses_e2ffcede1ffe6VQilw41qQmxww; the "two lookups" and get_algo parts were already accurate in the tree, so only the ASCII-case-widening sentence needed changing
+    note: review B1 kept; the paragraph already read "three lookups" and named get_algo at the base, so only the parsing sentence was stale
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
@@ -517,6 +524,24 @@ followups:
     status: pending
     batch: B11
     commits: []
+  - id: F33
+    source: F1
+    description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
+    status: pending
+    batch: B13
+    commits: []
+  - id: F34
+    source: F1
+    description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
+    status: pending
+    batch: B13
+    commits: []
+  - id: F35
+    source: F2
+    description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
+    status: pending
+    batch: B13
+    commits: []
 ```
 
 ## Human checklist
@@ -548,6 +573,12 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review B1 `done`: F1 fixed (b7e332c2), F2 kept (a74b92e2);
+  follow-ups F33–F35 appended with status `pending` and batch `B13`; F1 and F2
+  `pending_review` → `completed`. B13 is a single test-only batch that pins
+  the digest name matching rules (the allocation-free resolver, the exact
+  replacement rule, and first-match-wins); it is scheduled last and closes
+  the digest area so the follow-up chain terminates there.
 - 2026-11-12 — follow-up batch B1 review checkpoint opened: F1 and F2
   `in_progress` → `pending_review`, commits `b55cc628`, `a74b92e2`; review B1
   `pending` → `in_progress`, base `107d8751`, head `a74b92e2`.
