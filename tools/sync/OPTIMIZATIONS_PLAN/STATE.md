@@ -266,10 +266,10 @@ reviews:
     result: F9 kept (a29c139a); F10 fixed (6f88f283 makes the three new Filter primitives private and states the whole rule in the public doc; the memo work in a7b24113 kept); 522 passed, 1 skipped; the memo's answer verified equal to Filter::is_excluded over 400 random trees, 7 visit orders and 2 case modes, and the phase-A map byte-identical over 15 filter shapes
     followups: [F41]
   - batch: B5
-    status: pending
+    status: in_progress
     tasks: [F14, F24]
-    base: null
-    head: null
+    base: c410f784
+    head: 3f2d992e
     result: null
     followups: []
   - batch: B6
@@ -434,7 +434,7 @@ followups:
   - id: F14
     source: T06
     description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
-    status: in_progress
+    status: pending_review
     batch: B5
     commits: []
   - id: F15
@@ -494,7 +494,7 @@ followups:
   - id: F24
     source: T13
     description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
-    status: in_progress
+    status: pending_review
     batch: B5
     commits: []
   - id: F25
@@ -644,6 +644,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B5 review checkpoint opened: F14 and F24
+  `in_progress` → `pending_review`, commit `3f2d992e`; review B5 `pending` →
+  `in_progress`, base `c410f784`, head `3f2d992e`.
 - 2026-11-13 — follow-up batch B5 started: F14 and F24 `pending` →
   `in_progress`; `active_batch: B4` → `B5`.
 - 2026-11-13 — review B4 `done`: F9 kept, F10 fixed (6f88f283); follow-up F41
