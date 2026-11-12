@@ -37,6 +37,10 @@
 //! Once the run holds the cache's own lock, that lock is the protection: no
 //! other run is in its run phase for the folder, so no other run's bound can
 //! take the copy. The record has done its work, and it is released.
+//!
+//! A filesystem that cannot lock a file has no records to speak: the copy is
+//! published without one, as it was published before a record existed, and the
+//! run does not fail over a mark it cannot make.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
@@ -449,6 +453,12 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// first also settles the name: a run whose record for a name is already held
 /// is looking at a name another run is publishing under, so it moves on to the
 /// next one rather than racing for it.
+///
+/// A filesystem that cannot lock a file has no records to speak, so the copy
+/// is published without one — as it was published before a record existed —
+/// rather than not published at all. The record the attempt made goes with it:
+/// a record nobody holds and nobody can lock reads as "a live run holds it"
+/// to a bound, which would spare the copy for good.
 fn publish_copy(
     work: &Path,
     parent: &Path,
@@ -470,10 +480,16 @@ fn publish_copy(
         }
         // The record comes before the claim, so a published name is never
         // without one.
-        let Some(hold) = take_hold(parent, &name)? else {
+        let hold = match take_hold(parent, &name)? {
+            Claim::Ours(hold) => Some(hold),
             // A live run holds this name's record: the name is that run's,
             // and the next one is ours to try.
-            continue;
+            Claim::Taken => continue,
+            // The filesystem cannot lock a file, so there is no record to
+            // keep: the copy is published as it was before a record existed,
+            // and the run's own bound still spares it through the published
+            // registry.
+            Claim::Unusable => None,
         };
         if is_dir {
             match std::fs::rename(work, &cand) {
@@ -624,7 +640,12 @@ fn hold_registry() -> &'static Mutex<Vec<Hold>> {
 }
 
 /// Keep a record until the folder's cache is open.
-fn keep_hold(hold: Hold) {
+///
+/// A copy published without a record has nothing to keep.
+fn keep_hold(hold: Option<Hold>) {
+    let Some(hold) = hold else {
+        return;
+    };
     hold_registry()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -667,7 +688,12 @@ fn release_holds_under(parent: &Path) {
 ///
 /// The file goes before the handle does. While the lock is held no other run
 /// can take the record over, so the removal is unambiguously ours.
-fn discard_hold(hold: Hold) {
+///
+/// A copy published without a record has nothing to give up.
+fn discard_hold(hold: Option<Hold>) {
+    let Some(hold) = hold else {
+        return;
+    };
     let _ = std::fs::remove_file(&hold.path);
     drop(hold);
 }
@@ -700,6 +726,23 @@ fn record_path(parent: &Path, copy_name: &str) -> Option<PathBuf> {
 /// anything is expected to reach.
 const HOLD_ATTEMPTS: u32 = 3;
 
+/// What taking the record that speaks for a copy about to be published says.
+///
+/// The three answers are three different things, and the publisher reads each
+/// of them differently: one is a mark it holds, one is a name that is not
+/// its own, and one is a mark this filesystem cannot make at all.
+enum Claim {
+    /// The record is ours and locked: the copy is marked in use, and the lock
+    /// is held until the run opens the folder's cache.
+    Ours(Hold),
+    /// Another live run holds the record: the name is that run's, and the
+    /// next name is ours to try.
+    Taken,
+    /// The filesystem cannot lock a file: there is no record to keep, and the
+    /// copy is published without one.
+    Unusable,
+}
+
 /// Take the record that speaks for a copy about to be published.
 ///
 /// The record is created and locked **before** the copy's published name
@@ -712,12 +755,12 @@ const HOLD_ATTEMPTS: u32 = 3;
 /// expires. There is no age and no lease in it: either a run holds the
 /// record or it does not.
 ///
-/// `Ok(None)` means there is no record to keep: another live run holds this
-/// one, or the filesystem cannot lock a file. Both leave the copy as it was
-/// before a record existed — published, and the bound's to take.
-fn take_hold(parent: &Path, copy_name: &str) -> Result<Option<Hold>> {
+/// A filesystem that cannot lock a file has no records to speak: the copy is
+/// published without one, which is what it was published as before a record
+/// existed, and the run does not fail over a mark it cannot make.
+fn take_hold(parent: &Path, copy_name: &str) -> Result<Claim> {
     let Some(path) = record_path(parent, copy_name) else {
-        return Ok(None);
+        return Ok(Claim::Unusable);
     };
     for _ in 1..=HOLD_ATTEMPTS {
         // Create the record, or open the one that is already there.
@@ -728,14 +771,17 @@ fn take_hold(parent: &Path, copy_name: &str) -> Result<Option<Hold>> {
             .open(&path)
         {
             Ok(file) => (file, true),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(&path)
-                    .with_context(|| format!("open record {}", path.display()))?,
-                false,
-            ),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match OpenOptions::new().read(true).write(true).open(&path) {
+                    Ok(file) => (file, false),
+                    // The record was reclaimed between the two opens: it is
+                    // made again from scratch.
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(e) => {
+                        return Err(e).with_context(|| format!("open record {}", path.display()));
+                    }
+                }
+            }
             Err(e) => {
                 return Err(e).with_context(|| format!("create record {}", path.display()));
             }
@@ -749,7 +795,7 @@ fn take_hold(parent: &Path, copy_name: &str) -> Result<Option<Hold>> {
         // The lock is the record: it is taken for as long as the copy is in
         // use, and the OS takes it back when the holder is gone. It is taken
         // once, here, on the handle that will keep it.
-        match file.try_lock() {
+        match lock_record(&file) {
             Ok(()) => {
                 // The record must still be at its path: a bound that met it
                 // between the create and the lock may have reclaimed it, and a
@@ -757,27 +803,61 @@ fn take_hold(parent: &Path, copy_name: &str) -> Result<Option<Hold>> {
                 if path.symlink_metadata().is_err() {
                     continue;
                 }
-                return Ok(Some(Hold { path, file }));
+                return Ok(Claim::Ours(Hold { path, file }));
             }
             Err(TryLockError::WouldBlock) => {
                 // A live run holds this record: the copy is that run's.
-                return Ok(None);
+                return Ok(Claim::Taken);
             }
             Err(TryLockError::Error(e)) => {
-                // The filesystem cannot lock a file, so there is no record to
-                // keep. The copy is published as it was before a record
-                // existed, and the run's own bound still spares it through
-                // the published registry.
                 warn!(
                     path = %path.display(),
                     error = %e,
                     "cannot lock the record of a copy; the copy is published without one"
                 );
-                return Ok(None);
+                // A record this run made goes with the decision: nobody holds
+                // it, and a record nobody holds *and nobody can lock* reads as
+                // "a live run holds it" to a bound, which would spare the copy
+                // for good. One this run did not make is left alone: it is
+                // not ours to remove, and the name is not ours to publish
+                // under.
+                if created {
+                    let _ = std::fs::remove_file(&path);
+                    return Ok(Claim::Unusable);
+                }
+                return Ok(Claim::Taken);
             }
         }
     }
-    Ok(None)
+    // The record would not stay put: it was taken away between the create and
+    // the lock, again and again. A mark that will not stay put is not a mark,
+    // so the copy is published without one rather than not published at all.
+    Ok(Claim::Unusable)
+}
+
+/// Take an exclusive lock on a record, if the filesystem can lock a file.
+///
+/// A filesystem that cannot lock one is a filesystem whose records cannot say
+/// anything: the caller publishes the copy without a record rather than
+/// failing the run.
+fn lock_record(file: &File) -> std::result::Result<(), TryLockError> {
+    #[cfg(test)]
+    if LOCKING_UNAVAILABLE.with(|f| f.get()) {
+        return Err(TryLockError::Error(std::io::Error::other(
+            "this filesystem cannot lock a file",
+        )));
+    }
+    file.try_lock()
+}
+
+// The test-only switch that makes taking a record's lock fail.
+//
+// A filesystem that cannot lock a file is not something a test can make, so
+// the failure is injected here: with the switch on, a record's lock fails the
+// way it fails on such a filesystem.
+#[cfg(test)]
+std::thread_local! {
+    static LOCKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Write the record's body: the pid holding it, and since when.
