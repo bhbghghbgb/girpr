@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: D
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -111,10 +111,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T11-small-performance-notes.md
     batch: D
     report: [L390-L409]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [ef0d1bea, a8ede30e, 92b119ab, 65fa3190]
     review: D
-    note: implementing session starting
+    note: implemented by ses_e329c197affebb6yf3LQFyGsrB; the copy-failure case uses the existing copy and flush hooks so the lower-index copy is guaranteed to fail last, and the walk counts are not asserted because the crate has no log-capture helper
   - id: T12
     title: Filter bundle and pre-built side labels
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T12-filter-bundle-and-labels.md
@@ -210,10 +210,10 @@ reviews:
     result: T06 kept (c648ae6d, 71f72513, 1f86077f); T07 kept (9bb075e6, ed6c2745); T08 kept (a545f9cd, 7b31a903); no fix or revert commits; 485 passed, 1 skipped; the T08 deviation proven required by patching the new code to the task sketch
     followups: [F9, F10, F11, F12, F13, F14]
   - batch: D
-    status: pending
+    status: in_progress
     tasks: [T09, T10, T11]
-    base: null
-    head: null
+    base: 84a3edc5
+    head: 65fa3190
     result: null
     followups: []
   - batch: E
@@ -338,7 +338,7 @@ followups:
 | C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
 | D | T09 | pending_review | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09 | implemented by ses_e32ffb47dffejsI4DcQhl6A8v4 |
 | D | T10 | pending_review | 627407c3, 9a8c920e, 6c517a71, 5f5d7388, df31d02a | implemented by ses_e32e4727effeKk03OJb66KVAfE |
-| D | T11 | in_progress | — | implementing session starting |
+| D | T11 | pending_review | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | implemented by ses_e329c197affebb6yf3LQFyGsrB |
 | E | T12 | pending | — | — |
 | E | T13 | pending | — | — |
 | F | T14 | pending | — | — |
@@ -353,6 +353,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch D review checkpoint opened: `phase: implement` →
+  `review`, review D `pending` → `in_progress`, base `84a3edc5`, head
+  `65fa3190`. T11 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `ef0d1bea`, `a8ede30e`, `92b119ab`, `65fa3190`; working tree clean.
 - 2026-11-12 — T11 selected: `pending` → `in_progress`.
 - 2026-11-12 — T10 implemented: `pending` → `in_progress` → `pending_review`,
   commits `627407c3`, `9a8c920e`, `6c517a71`, `5f5d7388`, `df31d02a`; working
