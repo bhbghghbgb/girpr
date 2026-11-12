@@ -504,7 +504,7 @@ pub(super) fn rename_to_src_casing(
             // The rows to move, as pairs, before any of them is read: the
             // read is one transaction for the whole set, not one per key.
             #[cfg(test)]
-            let reads_before = dst_db.read_transaction_count();
+            let reads_before = dst_db.entries_read_count();
             let keys = dst_db.load_keys()?;
             let mut pairs: Vec<(String, String)> = Vec::new();
             for key in keys {
@@ -518,7 +518,7 @@ pub(super) fn rename_to_src_casing(
             // every read, so it sees the state the reads saw.
             let rows = dst_db.get_many(pairs.iter().map(|(from, _)| from.as_str()))?;
             #[cfg(test)]
-            note_cache_reads(dst_db.read_transaction_count() - reads_before);
+            note_cache_reads(dst_db.entries_read_count() - reads_before);
             let mut moves = Vec::new();
             for ((from, to), (_, rec)) in pairs.iter().zip(rows) {
                 if let Some(rec) = rec {

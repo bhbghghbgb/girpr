@@ -113,13 +113,17 @@ fn read_row(
 /// handles do not conflict with each other.
 pub struct CacheDb {
     pub(super) db: Handle,
-    /// Read transactions this handle has opened.
+    /// Entries-table reads this handle has served.
     ///
     /// A test seam, and the reason the handle carries it rather than the
     /// caller: what a test needs to know is whether a read was **batched**,
     /// and the only honest answer is the number of transactions the read
     /// cost. A count is a fact about the code; a duration would be a
     /// measurement of the machine the code ran on.
+    ///
+    /// The count is the **entries table's** reads and nothing else: a read
+    /// of another table does not come through [`Self::begin_entries_read`],
+    /// so it cannot move a number a test has pinned.
     #[cfg(test)]
     reads: Arc<AtomicU64>,
 }
@@ -374,31 +378,36 @@ impl CacheDb {
         self.db.writable().context("cache is open read-only")
     }
 
-    /// Begin a read transaction, and count it.
+    /// Begin a read transaction over the entries table, and count it.
     ///
     /// Every read of the entries table goes through here, so the count is
-    /// the number of transactions the reads cost — which is what tells a
+    /// the number of transactions those reads cost — which is what tells a
     /// batched read from a per-key one.
-    fn begin_read(&self) -> Result<ReadTransaction> {
+    ///
+    /// A read of **another** table does not come here, and so does not move
+    /// the count: the number says what the entries table cost, and nothing
+    /// else can change it by accident.
+    fn begin_entries_read(&self) -> Result<ReadTransaction> {
         #[cfg(test)]
         self.reads.fetch_add(1, Ordering::Relaxed);
         self.db.begin_read().context("begin read")
     }
 
-    /// How many read transactions this handle has opened.
+    /// How many entries-table reads this handle has served.
     ///
     /// A test seam, for the reason the counter exists at all: a read that
     /// costs one transaction whatever its length is a different thing from a
     /// read that costs one per key, and only a count says which one a caller
-    /// got.
+    /// got. It counts the entries table's reads, so a read of another table
+    /// leaves it where it was.
     #[cfg(test)]
-    pub(crate) fn read_transaction_count(&self) -> u64 {
+    pub(crate) fn entries_read_count(&self) -> u64 {
         self.reads.load(Ordering::Relaxed)
     }
 
     /// Read one entry. Missing tables (fresh temp DBs) read as empty.
     pub fn get(&self, rel: &str) -> Result<Option<FileRec>> {
-        let txn = self.begin_read()?;
+        let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(None),
@@ -434,7 +443,7 @@ impl CacheDb {
             // and no table.
             return Ok(Vec::new());
         }
-        let txn = self.begin_read()?;
+        let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => {
@@ -464,7 +473,7 @@ impl CacheDb {
     /// caller that needs the value wants `load_all`, and one that does not
     /// should not be able to ask for half of it by accident.
     pub fn load_keys(&self) -> Result<Vec<String>> {
-        let txn = self.begin_read()?;
+        let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(Vec::new()),
@@ -485,7 +494,7 @@ impl CacheDb {
     /// [`load_keys`](Self::load_keys). A missing table is still an empty
     /// answer rather than an error.
     pub fn entry_count(&self) -> Result<u64> {
-        let txn = self.begin_read()?;
+        let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(0),
@@ -496,7 +505,7 @@ impl CacheDb {
 
     /// Every cached path, with its record.
     pub fn load_all(&self) -> Result<HashMap<String, FileRec>> {
-        let txn = self.begin_read()?;
+        let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
             Ok(t) => t,
             Err(e) if is_table_missing(&e) => return Ok(HashMap::new()),
@@ -692,21 +701,21 @@ mod tests {
         }
         let keys = ["a.txt", "b.txt", "c.txt", "absent.txt"];
 
-        let before = c.read_transaction_count();
+        let before = c.entries_read_count();
         let rows = c.get_many(keys).unwrap();
         assert_eq!(rows.len(), keys.len());
         assert_eq!(
-            c.read_transaction_count() - before,
+            c.entries_read_count() - before,
             1,
             "one read transaction for every key"
         );
 
-        let before = c.read_transaction_count();
+        let before = c.entries_read_count();
         for key in keys {
             c.get(key).unwrap();
         }
         assert_eq!(
-            c.read_transaction_count() - before,
+            c.entries_read_count() - before,
             keys.len() as u64,
             "a read per key is a read per key"
         );
@@ -738,15 +747,42 @@ mod tests {
     #[test]
     fn get_many_reads_nothing_when_nothing_is_asked() {
         let c = CacheDb::open_temp(true).unwrap();
-        let before = c.read_transaction_count();
+        let before = c.entries_read_count();
         assert!(
             c.get_many(Vec::<&str>::new()).unwrap().is_empty(),
             "no keys, no answers"
         );
         assert_eq!(
-            c.read_transaction_count() - before,
+            c.entries_read_count() - before,
             0,
             "an empty batch does not open a transaction"
+        );
+    }
+
+    /// The count is the **entries** table's reads and nothing else.
+    ///
+    /// A read of another table is not one of them, so it cannot move the
+    /// number a test has pinned. The `meta` row is the other table this
+    /// cache has, so a read of it is the case that says so.
+    #[test]
+    fn a_read_of_another_table_does_not_move_the_count() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let before = c.entries_read_count();
+        assert!(
+            read_meta(&c.db).unwrap().is_some(),
+            "the row is there to be read"
+        );
+        assert_eq!(
+            c.entries_read_count() - before,
+            0,
+            "a meta read is not an entries read"
+        );
+        // An entries read, for contrast: the count moves for that one.
+        c.load_keys().unwrap();
+        assert_eq!(
+            c.entries_read_count() - before,
+            1,
+            "an entries read is counted"
         );
     }
 
