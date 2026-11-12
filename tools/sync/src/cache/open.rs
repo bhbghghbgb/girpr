@@ -15,13 +15,33 @@
 //! bound safe to apply at any moment: it can only ever select a copy that is
 //! whole.
 //!
-//! There is no age, no lease and no marker to interpret anywhere in that
-//! story. "Finished" and "in flight" are told apart by the name, and the
-//! name is the only thing the bound reads.
+//! "Finished" and "in flight" are told apart by the name, and the name is
+//! the only thing the bound reads to make that distinction.
+//!
+//! ## A published copy carries a record of its own
+//!
+//! A copy is published **before** the run opens the folder's cache, and that
+//! gap is where a copy can be lost. The run that published it has not taken
+//! the cache's own exclusive lock yet, so another run can be in its run phase
+//! for the folder — and its bound can take the copy away from the run that is
+//! about to report it.
+//!
+//! So a copy is published together with a **record**: a file of its own,
+//! named after the copy, which the publishing run holds an exclusive OS lock
+//! on until it opens the folder's cache. The lock is what says the run is
+//! still in the gap, and the OS releases it when the process ends and when
+//! the process is *killed*, so a record left behind by a dead run is stale
+//! rather than a claim that never expires. There is no age and no lease in
+//! it: either a run holds the record or it does not.
+//!
+//! Once the run holds the cache's own lock, that lock is the protection: no
+//! other run is in its run phase for the folder, so no other run's bound can
+//! take the copy. The record has done its work, and it is released.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -53,6 +73,25 @@ const OLD_PREFIX: &str = "girpr-cache-old-";
 /// The name is in the tool's own namespace (`girpr-cache*`), so a working
 /// copy is tool state and is never mirrored as content.
 const WORK_PREFIX: &str = "girpr-cache-partial-";
+
+/// The prefix every name of the tool's own state carries.
+///
+/// The live cache, its copies, its snapshots and its records all start with
+/// `girpr-cache`, which is what keeps them out of a mirror.
+const TOOL_PREFIX: &str = "girpr-cache-";
+
+/// The prefix of the record that says a published copy is still in use.
+///
+/// A record is a file of its own beside the copy it speaks for, and the run
+/// that published the copy holds an exclusive OS lock on it until the run
+/// opens the folder's cache. The lock is the whole of the record's meaning:
+/// the OS releases it when the process ends and when the process is killed,
+/// so a record left behind by a dead run is stale rather than a claim that
+/// never expires.
+///
+/// The name is in the tool's own namespace, so a record is tool state and is
+/// never mirrored as content.
+const HOLD_PREFIX: &str = "girpr-cache-hold-";
 
 /// How a cache file should be opened.
 ///
@@ -111,6 +150,14 @@ pub enum CacheOpen {
 /// bound is applied under a lock the tool already holds, rather than under a
 /// lock of its own that a filesystem might not support.
 ///
+/// A copy is published **before** that lock is taken, so there is a gap in
+/// which the lock does not yet speak for it: another run can be in its run
+/// phase for the folder then, and its bound can take the copy away from the
+/// run that is about to report it. A published copy therefore carries a
+/// **record** of its own — a file the publishing run holds an OS lock on
+/// until it opens this cache — and the open releases that record here, where
+/// the cache's own lock takes over the protection.
+///
 /// [`CacheOpen::ReadOnly`] inverts every side effect: the file must exist, is
 /// never opened for writing, and is left byte-identical. It still validates the
 /// schema version, because a cache this build cannot decode is useless
@@ -135,6 +182,12 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
                 backup_db(db_path)?;
             }
             let db = CacheDb::open_file(db_path)?;
+            // The cache's own exclusive lock is now held, so no other run is
+            // in its run phase for this folder: from here on, another run's
+            // bound cannot take a copy this run published. The records that
+            // covered the gap between publishing a copy and taking this lock
+            // have done their work.
+            release_holds_under(db_path.parent().unwrap_or_else(|| Path::new(".")));
             CacheDb::init_meta(&db, case_sensitive)?;
             // The bound, applied whether or not a copy was made: it is a
             // statement about the folder, not about this open.
@@ -248,16 +301,43 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// siblings carrying a prefix are considered, so a file of the user's that
 /// happens to sit in the same directory is never touched.
 ///
-/// **The copies this process published are not the bound's to remove.** The
-/// run that made a copy is the run that reports it, and a bound that took it
-/// back would leave that run reporting a backup that is not on disk. The
-/// bound still holds the folder to its bound: the count is made up from the
-/// next-oldest copy instead.
+/// **A copy a live run is using is not the bound's to remove.** A published
+/// copy carries a record of its own, and the run that published it holds a
+/// lock on that record until it opens the folder's cache. A bound that meets
+/// a locked record leaves the copy alone: the run that published it is the
+/// run that reports it, and a bound that took it back would leave that run
+/// reporting a backup that is not on disk. The bound still holds the folder
+/// to its bound: the count is made up from the next-oldest copy instead.
+///
+/// **The copies this process published are spared as well**, and for the same
+/// reason, whether or not the copy could be given a record at all: a folder
+/// whose filesystem cannot lock a file still must not lose the copy the run
+/// is about to report.
 pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
     let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
     let spared = take_published_under(parent);
-    retain_siblings(parent, BACKUP_PREFIX, keep, &spared)?;
-    retain_siblings(parent, OLD_PREFIX, keep, &spared)
+    // One reading of the folder: the bound is a statement about what the
+    // folder holds now, and a copy published after this is not one of them.
+    let folder = read_folder(parent)?;
+    retain_siblings(&folder, parent, BACKUP_PREFIX, keep, &spared)?;
+    retain_siblings(&folder, parent, OLD_PREFIX, keep, &spared)?;
+    reclaim_records(&folder)
+}
+
+/// The folder's entries, read once and ordered by name.
+///
+/// The names carry a timestamp that sorts lexicographically, so ordering by
+/// name is ordering by age, and the newest copies are the ones at the end.
+/// One reading serves both lists and the records: the bound is a statement
+/// about the folder as it is now.
+fn read_folder(parent: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf)>> {
+    let mut entries: Vec<(std::ffi::OsString, PathBuf)> = std::fs::read_dir(parent)
+        .with_context(|| format!("read dir {}", parent.display()))?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.file_name(), e.path()))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
 }
 
 /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
@@ -361,6 +441,14 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// A directory takes its name by being renamed onto it, because a directory
 /// cannot be renamed over an existing name on every platform; the rename
 /// itself then says whether the name was taken.
+///
+/// **The record of the copy is taken before the name is claimed.** The record
+/// says the copy is in use by the run that is about to publish it, and a
+/// bound that met the name without the record would have nothing to read and
+/// would take the copy away from the run publishing it. Taking the record
+/// first also settles the name: a run whose record for a name is already held
+/// is looking at a name another run is publishing under, so it moves on to the
+/// next one rather than racing for it.
 fn publish_copy(
     work: &Path,
     parent: &Path,
@@ -369,7 +457,8 @@ fn publish_copy(
     is_dir: bool,
 ) -> Result<PathBuf> {
     for n in 1..=MAX_CLAIM_ATTEMPTS {
-        let cand = parent.join(candidate_name(prefix, stamp, n));
+        let name = candidate_name(prefix, stamp, n);
+        let cand = parent.join(&name);
         // Ask first whether the name is taken: `create_new` on an existing
         // *directory* reports `Access is denied` rather than `AlreadyExists`,
         // so the error kind alone cannot distinguish "occupied" from "cannot
@@ -379,27 +468,49 @@ fn publish_copy(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("stat {}", cand.display())),
         }
+        // The record comes before the claim, so a published name is never
+        // without one.
+        let Some(hold) = take_hold(parent, &name)? else {
+            // A live run holds this name's record: the name is that run's,
+            // and the next one is ours to try.
+            continue;
+        };
         if is_dir {
             match std::fs::rename(work, &cand) {
-                Ok(()) => return Ok(cand),
-                Err(e) if name_is_taken(&e) => continue,
+                Ok(()) => {
+                    keep_hold(hold);
+                    return Ok(cand);
+                }
+                Err(e) if name_is_taken(&e) => {
+                    discard_hold(hold);
+                    continue;
+                }
                 Err(e) => {
+                    discard_hold(hold);
                     return Err(e).with_context(|| format!("publish {}", cand.display()));
                 }
             }
         }
         match claim_name(&cand) {
             Ok(()) => {}
-            Err(e) if name_is_taken(&e) => continue,
+            Err(e) if name_is_taken(&e) => {
+                discard_hold(hold);
+                continue;
+            }
             Err(e) => {
+                discard_hold(hold);
                 return Err(e).with_context(|| format!("claim {}", cand.display()));
             }
         }
         match std::fs::rename(work, &cand) {
-            Ok(()) => return Ok(cand),
+            Ok(()) => {
+                keep_hold(hold);
+                return Ok(cand);
+            }
             Err(e) => {
                 // The claim is ours and the copy did not land on it.
                 let _ = std::fs::remove_file(&cand);
+                discard_hold(hold);
                 return Err(e).with_context(|| format!("publish {}", cand.display()));
             }
         }
@@ -472,6 +583,286 @@ fn take_published_under(parent: &Path) -> Vec<PathBuf> {
         }
     });
     taken
+}
+
+/// The record that says a published copy is in use, and the lock that says the
+/// run holding it is still in the gap between publishing the copy and
+/// opening the folder's cache.
+///
+/// The **handle** is the record's life: the OS lock on it is what a bound
+/// tests, and the handle has to stay open for the lock to be held. Dropping
+/// it releases the lock — which is what happens when the process ends, and
+/// what happens when the process is killed.
+struct Hold {
+    path: PathBuf,
+    file: File,
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        // The OS handle is the exclusion; releasing it lets the next run in.
+        // The file is deliberately left behind: a record with no holder says
+        // nothing about the copy it spoke for, and the next bound reclaims it.
+        let _ = self.file.unlock();
+    }
+}
+
+/// The records this process is holding, one per published copy.
+///
+/// A record is held from the moment the copy is published until the run
+/// opens the folder's cache: that is the gap in which another run's bound
+/// could take the copy, and it is over the moment the run holds the cache's
+/// own exclusive lock.
+///
+/// The records are process-wide because the copies are made in more than one
+/// place — the command layer copies a cache aside before it opens one, and an
+/// open can copy one aside itself — and the open has to know about both.
+fn hold_registry() -> &'static Mutex<Vec<Hold>> {
+    static HOLDS: OnceLock<Mutex<Vec<Hold>>> = OnceLock::new();
+    HOLDS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Keep a record until the folder's cache is open.
+fn keep_hold(hold: Hold) {
+    hold_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(hold);
+}
+
+/// Release the records of the copies published beside `parent`.
+///
+/// The run has opened the folder's cache, so it holds the cache's own
+/// exclusive lock, and no other run is in its run phase for the folder: from
+/// here on the lock is what keeps another run's bound off the copy, and the
+/// record has nothing left to say.
+///
+/// The record's file goes with it. The removal happens while the lock is
+/// still held, so no other run can have taken the record over in the
+/// meantime, and the copy is left with the protection that now covers it.
+fn release_holds_under(parent: &Path) {
+    let mut holds = hold_registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut released = Vec::new();
+    let mut kept = Vec::with_capacity(holds.len());
+    for hold in holds.drain(..) {
+        if hold.path.parent() == Some(parent) {
+            released.push(hold);
+        } else {
+            kept.push(hold);
+        }
+    }
+    *holds = kept;
+    drop(holds);
+    // The file goes while the lock is still held: a run that took the record
+    // over in the meantime would be holding the lock, and the record would
+    // not be ours to remove.
+    for hold in &released {
+        let _ = std::fs::remove_file(&hold.path);
+    }
+    drop(released);
+}
+
+/// Give a record up: the copy was not published, so nothing is using it.
+///
+/// The file goes before the handle does. While the lock is held no other run
+/// can take the record over, so the removal is unambiguously ours.
+fn discard_hold(hold: Hold) {
+    let _ = std::fs::remove_file(&hold.path);
+    drop(hold);
+}
+
+/// The name of the record that speaks for a published copy.
+///
+/// The record is named after the copy: the copy's own name with the tool's
+/// prefix (`girpr-cache-`) replaced by the record's (`girpr-cache-hold-`). A
+/// `girpr-cache-backup-<ts>` copy is therefore spoken for by a
+/// `girpr-cache-hold-backup-<ts>` record, and the two lists keep their own
+/// records: a `girpr-cache-old-<ts>` snapshot by a `girpr-cache-hold-old-<ts>`
+/// one. The name never carries a prefix of its own, so a record is not one of
+/// the copies a bound ranges over.
+fn hold_name(copy_name: &str) -> Option<String> {
+    copy_name
+        .strip_prefix(TOOL_PREFIX)
+        .map(|tail| format!("{HOLD_PREFIX}{tail}"))
+}
+
+/// The record that speaks for a published copy, if it has one.
+fn record_path(parent: &Path, copy_name: &str) -> Option<PathBuf> {
+    hold_name(copy_name).map(|name| parent.join(name))
+}
+
+/// How many times a record is taken before the copy is published without one.
+///
+/// The retry is for the one race there is: a bound that meets a record between
+/// its creation and its lock may reclaim it, and the record is then created
+/// again. The number is a floor on a pathological folder, not a number
+/// anything is expected to reach.
+const HOLD_ATTEMPTS: u32 = 3;
+
+/// Take the record that speaks for a copy about to be published.
+///
+/// The record is created and locked **before** the copy's published name
+/// appears, so a bound can never meet a published copy that has no record:
+/// the two are published together, in that order.
+///
+/// The lock is what makes the record live. The OS releases it when the
+/// holding process ends — and it releases it when the process is killed, so a
+/// record left behind by a dead run is stale rather than a claim that never
+/// expires. There is no age and no lease in it: either a run holds the
+/// record or it does not.
+///
+/// `Ok(None)` means there is no record to keep: another live run holds this
+/// one, or the filesystem cannot lock a file. Both leave the copy as it was
+/// before a record existed — published, and the bound's to take.
+fn take_hold(parent: &Path, copy_name: &str) -> Result<Option<Hold>> {
+    let Some(path) = record_path(parent, copy_name) else {
+        return Ok(None);
+    };
+    for _ in 1..=HOLD_ATTEMPTS {
+        // Create the record, or open the one that is already there.
+        let (file, created) = match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => (file, true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (
+                OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&path)
+                    .with_context(|| format!("open record {}", path.display()))?,
+                false,
+            ),
+            Err(e) => {
+                return Err(e).with_context(|| format!("create record {}", path.display()));
+            }
+        };
+        // The body is for a human: which run holds the record, and since when.
+        // A record we did not create is left exactly as it is — it may be
+        // another run's, and its body is that run's to write.
+        if created {
+            write_hold_body(&file);
+        }
+        // The lock is the record: it is taken for as long as the copy is in
+        // use, and the OS takes it back when the holder is gone. It is taken
+        // once, here, on the handle that will keep it.
+        match file.try_lock() {
+            Ok(()) => {
+                // The record must still be at its path: a bound that met it
+                // between the create and the lock may have reclaimed it, and a
+                // record that is not at its path says nothing to a bound.
+                if path.symlink_metadata().is_err() {
+                    continue;
+                }
+                return Ok(Some(Hold { path, file }));
+            }
+            Err(TryLockError::WouldBlock) => {
+                // A live run holds this record: the copy is that run's.
+                return Ok(None);
+            }
+            Err(TryLockError::Error(e)) => {
+                // The filesystem cannot lock a file, so there is no record to
+                // keep. The copy is published as it was before a record
+                // existed, and the run's own bound still spares it through
+                // the published registry.
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "cannot lock the record of a copy; the copy is published without one"
+                );
+                return Ok(None);
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// Write the record's body: the pid holding it, and since when.
+///
+/// A body that cannot be written is not a failure: the lock, not the body,
+/// is what the record means.
+fn write_hold_body(file: &File) {
+    use std::io::Write;
+    let body = format!("pid={}\nstarted={}\n", std::process::id(), ts_now());
+    let _ = file.set_len(0);
+    let _ = (&*file).write_all(body.as_bytes());
+}
+
+/// What a published copy's record says about it.
+enum Record {
+    /// No record: nothing says the copy is in use.
+    Unmarked,
+    /// A live run holds the record: the copy is that run's to keep.
+    InUse,
+    /// The record is stale — the run that made it is gone. The lock is held
+    /// here, so the record can be reclaimed with the copy it spoke for.
+    Stale { path: PathBuf, _file: File },
+}
+
+/// What a copy's record says, and whether the bound may take the copy.
+///
+/// A record a live run holds spares the copy. A stale record says nothing, so
+/// the copy is the bound's to take like any other, and the record is
+/// reclaimed with it. A record that cannot be read or cannot be locked spares
+/// the copy as well: a bound cannot tell a live run from a dead one, and a
+/// copy it cannot judge is not its to take.
+fn record_state(parent: &Path, copy_name: &str) -> Result<Record> {
+    let Some(path) = record_path(parent, copy_name) else {
+        return Ok(Record::Unmarked);
+    };
+    match take_the_lock(&path) {
+        Some(file) => Ok(Record::Stale { path, _file: file }),
+        None => {
+            if path.symlink_metadata().is_err() {
+                Ok(Record::Unmarked)
+            } else {
+                trace!(path = %path.display(), "a copy's record is held; the copy is spared");
+                Ok(Record::InUse)
+            }
+        }
+    }
+}
+
+/// Take the lock on a record, if it can be taken.
+///
+/// `Some` means nobody holds the record: the run that made it is gone. `None`
+/// means a live run holds it, or the lock cannot be taken or tested at all —
+/// the two are told apart by the caller, which looks at the path.
+fn take_the_lock(path: &Path) -> Option<File> {
+    let file = File::open(path).ok()?;
+    match file.try_lock() {
+        Ok(()) => Some(file),
+        Err(TryLockError::WouldBlock) => None,
+        Err(TryLockError::Error(e)) => {
+            trace!(path = %path.display(), error = %e, "cannot test a record's lock");
+            None
+        }
+    }
+}
+
+/// Reclaim the records that no live run is holding.
+///
+/// A record whose run has ended says nothing: the copy it spoke for is an
+/// ordinary copy again, and the record is tool state with no business sitting
+/// in the folder. The lock is what tells the two apart, so a record a live run
+/// holds is left alone.
+///
+/// The removal happens while the lock is held, so a run that took the record
+/// over in the meantime — which it can only do once the lock is free — is not
+/// left holding a record that is no longer there.
+fn reclaim_records(folder: &[(std::ffi::OsString, PathBuf)]) -> Result<()> {
+    for (name, path) in folder {
+        if !name.to_string_lossy().starts_with(HOLD_PREFIX) {
+            continue;
+        }
+        if let Some(file) = take_the_lock(path) {
+            let _ = std::fs::remove_file(path);
+            drop(file);
+        }
+    }
+    Ok(())
 }
 
 /// How many candidate names a claim tries before it gives up.
@@ -569,34 +960,45 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
 /// does not take them: the run that made one is the run that reports it. The
 /// count is made up from the next-oldest copy instead, so the folder still
 /// holds `keep` copies.
+///
+/// A copy whose record a live run holds is spared for the same reason, and by
+/// the same rule: the run that published it is still using it.
 fn retain_siblings(
+    folder: &[(std::ffi::OsString, PathBuf)],
     parent: &Path,
     prefix: &str,
     keep: NonZeroUsize,
     spared: &[PathBuf],
 ) -> Result<()> {
-    let mut siblings: Vec<(std::ffi::OsString, PathBuf)> = std::fs::read_dir(parent)
-        .with_context(|| format!("read dir {}", parent.display()))?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name();
-            name.to_string_lossy()
-                .starts_with(prefix)
-                .then(|| (name, e.path()))
-        })
+    let siblings: Vec<&(std::ffi::OsString, PathBuf)> = folder
+        .iter()
+        .filter(|(name, _)| name.to_string_lossy().starts_with(prefix))
         .collect();
-    siblings.sort_by(|a, b| a.0.cmp(&b.0));
     let keep = keep.get();
     if siblings.len() <= keep {
         return Ok(());
     }
     let mut to_remove = siblings.len() - keep;
-    for (_, path) in &siblings {
+    for (name, path) in siblings {
         if to_remove == 0 {
             break;
         }
         if spared.iter().any(|p| p == path) {
             continue;
+        }
+        match record_state(parent, &name.to_string_lossy())? {
+            // A live run is using this copy: it is not the bound's to take.
+            Record::InUse => continue,
+            Record::Unmarked => {}
+            Record::Stale {
+                path: record,
+                _file,
+            } => {
+                // The record is stale, so it goes with the copy it spoke for.
+                // The removal happens while the lock is held, so no other run
+                // can have taken the record over in the meantime.
+                let _ = std::fs::remove_file(&record);
+            }
         }
         remove_cache_path(path)?;
         to_remove -= 1;
