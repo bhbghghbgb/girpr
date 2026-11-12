@@ -437,14 +437,15 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 
 /// Publish a finished copy under a name of the bounded lists.
 ///
-/// The name is **claimed** first — `create_new` for a file — so two runs
-/// cannot publish onto one name, and the finished copy is then renamed onto
-/// the claim. The rename is the publish: the name appears whole or not at
-/// all.
+/// A file copy is published by **linking** it into place, so the name is
+/// created with the copy's bytes in it: the name appears whole, and it
+/// appears *with* the copy rather than a moment before it. The link is also
+/// the claim — it fails when the name is taken — so two runs cannot publish
+/// onto one name.
 ///
-/// A directory takes its name by being renamed onto it, because a directory
-/// cannot be renamed over an existing name on every platform; the rename
-/// itself then says whether the name was taken.
+/// A directory cannot be linked, so it takes its name by being renamed onto
+/// it, because a directory cannot be renamed over an existing name on every
+/// platform; the rename itself then says whether the name was taken.
 ///
 /// **The record of the copy is taken before the name is claimed.** The record
 /// says the copy is in use by the run that is about to publish it, and a
@@ -491,41 +492,30 @@ fn publish_copy(
             // registry.
             Claim::Unusable => None,
         };
-        if is_dir {
+        let published = if is_dir {
+            // A directory takes its name by being renamed onto it, because a
+            // directory cannot be renamed over an existing name on every
+            // platform; the rename itself then says whether the name was
+            // taken.
             match std::fs::rename(work, &cand) {
-                Ok(()) => {
-                    keep_hold(hold);
-                    return Ok(cand);
-                }
-                Err(e) if name_is_taken(&e) => {
-                    discard_hold(hold);
-                    continue;
-                }
-                Err(e) => {
-                    discard_hold(hold);
-                    return Err(e).with_context(|| format!("publish {}", cand.display()));
-                }
+                Ok(()) => Ok(()),
+                Err(e) if name_is_taken(&e) => Err(PublishError::Taken),
+                Err(e) => Err(PublishError::Io(e)),
             }
-        }
-        match claim_name(&cand) {
-            Ok(()) => {}
-            Err(e) if name_is_taken(&e) => {
-                discard_hold(hold);
-                continue;
-            }
-            Err(e) => {
-                discard_hold(hold);
-                return Err(e).with_context(|| format!("claim {}", cand.display()));
-            }
-        }
-        match std::fs::rename(work, &cand) {
+        } else {
+            publish_file(work, &cand)
+        };
+        match published {
             Ok(()) => {
                 keep_hold(hold);
                 return Ok(cand);
             }
-            Err(e) => {
-                // The claim is ours and the copy did not land on it.
-                let _ = std::fs::remove_file(&cand);
+            // The name is another run's: the next one is ours to try.
+            Err(PublishError::Taken) => {
+                discard_hold(hold);
+                continue;
+            }
+            Err(PublishError::Io(e)) => {
                 discard_hold(hold);
                 return Err(e).with_context(|| format!("publish {}", cand.display()));
             }
@@ -535,6 +525,112 @@ fn publish_copy(
         "no free backup name in {} after {MAX_CLAIM_ATTEMPTS} tries",
         parent.display()
     )
+}
+
+/// Why a copy did not land on the name it was published under.
+enum PublishError {
+    /// The name is taken: another run has it, and the next name is ours.
+    Taken,
+    /// The publish itself failed.
+    Io(std::io::Error),
+}
+
+/// Publish a finished file copy under its published name.
+///
+/// The publish is a **link**: the name is created with the copy's bytes in
+/// it, so there is no moment at which the name is there and empty. A
+/// rename cannot do that on its own — the rename has to be preceded by a
+/// claim of the name, and the claim leaves the name empty for as long as
+/// the rename takes.
+///
+/// The link is also the claim: it fails when the name is taken, so two runs
+/// cannot publish onto one name.
+///
+/// A filesystem that cannot link a file has no such publish. The copy is
+/// then renamed onto a name it claims first, and the name is briefly empty
+/// there — which is how a copy was published before links were used.
+fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
+    match link_file(work, cand) {
+        Ok(()) => {
+            // The name exists with the copy's bytes in it. The working name
+            // is scratch, so it goes: the copy now lives under its
+            // published name alone.
+            #[cfg(test)]
+            pause_publish();
+            if let Err(e) = std::fs::remove_file(work) {
+                warn!(
+                    path = %work.display(),
+                    error = %e,
+                    "the working copy of a published copy could not be removed"
+                );
+            }
+            Ok(())
+        }
+        // The name is taken: it is another run's.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(PublishError::Taken),
+        Err(e) => {
+            // The filesystem cannot link a file, so the copy is published by
+            // renaming it onto a name it claims first.
+            trace!(
+                path = %cand.display(),
+                error = %e,
+                "the copy cannot be linked into place; it is renamed onto a claimed name"
+            );
+            match claim_name(cand) {
+                Ok(()) => {}
+                Err(e) if name_is_taken(&e) => return Err(PublishError::Taken),
+                Err(e) => return Err(PublishError::Io(e)),
+            }
+            // The name is claimed, and the claim is what the rename replaces.
+            #[cfg(test)]
+            pause_publish();
+            match std::fs::rename(work, cand) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    // The claim is ours and the copy did not land on it.
+                    let _ = std::fs::remove_file(cand);
+                    Err(PublishError::Io(e))
+                }
+            }
+        }
+    }
+}
+
+/// Link a file under a second name, if the filesystem can.
+///
+/// A filesystem that cannot link a file is not something a test can make, so
+/// the failure is injected here: with the switch on, the link fails the way
+/// it fails on such a filesystem.
+fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if LINKING_UNAVAILABLE.with(|f| f.get()) {
+        return Err(std::io::Error::other("this filesystem cannot link a file"));
+    }
+    std::fs::hard_link(src, dst)
+}
+
+// The test-only switch that makes linking a file fail.
+#[cfg(test)]
+std::thread_local! {
+    static LINKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// The test-only switch that pauses a publish once the name is there.
+//
+// A publish is over in microseconds, so a test that wants to look at the
+// folder in the middle of one needs the publish to wait. The pause is a
+// plain sleep: it is only ever on for the length of one test.
+#[cfg(test)]
+std::thread_local! {
+    static PUBLISH_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Hold a publish still for a moment, so a test can look at the folder.
+#[cfg(test)]
+fn pause_publish() {
+    if PUBLISH_PAUSED.with(|f| f.get()) {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 }
 
 /// Take a name for a published copy, so that no two runs publish onto one.
@@ -1319,6 +1415,100 @@ mod tests {
             working.is_empty(),
             "the working name is gone once the copy is published"
         );
+    }
+
+    /// A published name appears with the copy's bytes in it.
+    ///
+    /// The copy is published by linking it into place, so the name is
+    /// created with the copy in it: there is no moment at which the name is
+    /// there and empty. The publish is held still for a moment so the folder
+    /// can be looked at in the middle of one.
+    #[test]
+    fn a_published_name_appears_with_the_copy_it_carries() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_whole");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let handle = std::thread::spawn(move || {
+            PUBLISH_PAUSED.with(|f| f.set(true));
+            backup_db(&db)
+        });
+
+        let published = wait_for_published(&dir);
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"the cache bytes",
+            "the published name holds the copy from the moment it exists"
+        );
+
+        let published = handle
+            .join()
+            .unwrap()
+            .unwrap()
+            .expect("the cache was copied aside");
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"the cache bytes",
+            "and the copy is whole once the publish is done"
+        );
+    }
+
+    /// A filesystem that cannot link a file still gets the copy published.
+    ///
+    /// There is no link to publish with, so the copy is renamed onto a name
+    /// it claims first — and the copy is whole either way.
+    #[test]
+    fn a_copy_is_published_on_a_filesystem_that_cannot_link() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "nolink");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        LINKING_UNAVAILABLE.with(|f| f.set(true));
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        LINKING_UNAVAILABLE.with(|f| f.set(false));
+
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"the cache bytes",
+            "the copy is published even though it cannot be linked into place"
+        );
+        let working: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(WORK_PREFIX))
+            .collect();
+        assert!(
+            working.is_empty(),
+            "and the working name is gone once the copy is published"
+        );
+    }
+
+    /// The published copy in `dir`, once it is there.
+    ///
+    /// A publish is over in microseconds, so a test that looks at the folder
+    /// in the middle of one relies on the publish being held still: the name
+    /// is then there long enough to be found.
+    fn wait_for_published(dir: &Path) -> PathBuf {
+        for _ in 0..100 {
+            if let Some(found) = std::fs::read_dir(dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .find(|p| {
+                    p.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with(BACKUP_PREFIX)
+                })
+            {
+                return found;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the publish did not create a name");
     }
 
     /// The bound does not take back the copy the run applying it published.
