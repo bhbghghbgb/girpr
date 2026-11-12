@@ -1599,6 +1599,44 @@ mod tests {
         );
     }
 
+    /// A filesystem that cannot lock a file still gets the copy published.
+    ///
+    /// The record is what says a published copy is in use, and a filesystem
+    /// that cannot lock one cannot say it. The copy is published without a
+    /// record rather than not published at all, and the record the attempt
+    /// made goes with it: a record nobody holds and nobody can lock reads as
+    /// "a live run holds it" to a bound, which would spare the copy for good.
+    #[test]
+    fn a_copy_is_published_on_a_filesystem_that_cannot_lock_a_record() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "nolock");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        LOCKING_UNAVAILABLE.with(|f| f.set(true));
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        LOCKING_UNAVAILABLE.with(|f| f.set(false));
+
+        assert!(
+            published.exists(),
+            "the copy is published even though it cannot be marked"
+        );
+        let name = published.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            !name.ends_with("_2"),
+            "and the publish did not walk the names looking for one it could lock"
+        );
+        let records: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with(HOLD_PREFIX))
+            .collect();
+        assert!(
+            records.is_empty(),
+            "and no record is left behind to spare the copy for good"
+        );
+    }
+
     /// A published copy is named after the time it became whole.
     ///
     /// The bound orders the copies by that name, so a name that said when the
