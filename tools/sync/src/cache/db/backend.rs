@@ -177,6 +177,16 @@ mod tests {
     #[test]
     fn the_default_is_the_size_without_a_variable() {
         assert_eq!(DEFAULT_CACHE_SIZE_MIB, 64);
-        assert_eq!(cache_size_mib(), DEFAULT_CACHE_SIZE_MIB);
+    }
+
+    /// The size a process uses is the one the variable names, or the default.
+    ///
+    /// Stated against whatever the environment holds, so the case says the
+    /// same thing whatever the caller set.
+    #[test]
+    fn the_resolved_size_is_the_parsed_size() {
+        let raw = std::env::var(CACHE_SIZE_ENV).ok();
+        let expected = parse_cache_size_mib(raw.as_deref()).unwrap_or(DEFAULT_CACHE_SIZE_MIB);
+        assert_eq!(cache_size_mib(), expected);
     }
 }
