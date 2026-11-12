@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B7
+active_batch: B12
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -485,7 +485,7 @@ followups:
   - id: F17
     source: T09
     description: Retention can unlink a sibling a concurrent run is still copying into, so that run's backup can vanish while the run reports success.
-    status: pending
+    status: in_progress
     batch: B12
     commits: []
   - id: F18
@@ -683,7 +683,7 @@ followups:
   - id: F49
     source: F16
     description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
-    status: pending
+    status: in_progress
     batch: B12
     commits: []
   - id: F50
@@ -730,6 +730,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B12 started: F17 and F49 `pending` →
+  `in_progress`; `active_batch: B7` → `B12`. This is the batch the evaluator
+  asked to run with a concurrency design up front.
 - 2026-11-13 — review B7 `done`: F16 kept with a fix (be9aed2e), F30 kept;
   follow-ups F49–F51 appended, with F49 joining B12 because it widens the
   retention race that F17 exists to close, F50 recorded as completed by the
