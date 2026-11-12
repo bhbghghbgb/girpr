@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B5
+active_batch: B6
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -447,7 +447,7 @@ followups:
   - id: F15
     source: T09
     description: util::unique_sibling now has no callers left in the crate and should be deleted or given one.
-    status: pending
+    status: in_progress
     batch: B6
     commits: []
   - id: F16
@@ -495,7 +495,7 @@ followups:
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
-    status: pending
+    status: in_progress
     batch: B6
     commits: []
   - id: F24
@@ -669,6 +669,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B6 started: F15 and F23 `pending` →
+  `in_progress`; `active_batch: B5` → `B6`.
 - 2026-11-13 — review B5 `done`: F14 and F24 kept, no fix or revert commits;
   follow-ups F44–F46 appended with batch `B17` (the copy verify's naming order:
   a test, a README line, a trailing newline); F14 and F24 `pending_review` →
