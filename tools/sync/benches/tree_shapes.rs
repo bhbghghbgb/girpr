@@ -45,7 +45,7 @@ const WALK_DEPTH: usize = 64;
 /// of this shape — a file creation costs about 0.7 ms on an ordinary Windows
 /// host, so ten thousand of them is nearly seven seconds before the walk is
 /// even timed, and the whole run then takes longer than a measurement should.
-/// Two thousand is a tenth of that and still walks for long enough to time.
+/// Two thousand is a fifth of that and still walks for long enough to time.
 /// `GIRSYNC_BENCH_SCALE` multiplies it, so a larger run is one variable away.
 const TINY_FILES: u64 = 2_000;
 
