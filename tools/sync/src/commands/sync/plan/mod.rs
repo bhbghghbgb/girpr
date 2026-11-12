@@ -30,6 +30,6 @@ pub(super) use self::build::{DirPrefixes, Plan, build_plan};
 pub(super) use self::build::{CopyBecause, CopyItem};
 pub(super) use self::records::{dry_run_records, summary_record};
 pub(super) use self::safety::{
-    ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
+    SystemProbes, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
     ensure_mkdir_targets_free, spare_link_storage,
 };

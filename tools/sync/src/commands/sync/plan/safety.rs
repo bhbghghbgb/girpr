@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tracing::warn;
@@ -21,6 +21,32 @@ use super::link::{
     LinkStorage, absolute_alias, alias_target, disk_rel, folded_keys, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
+
+/// The disk questions the plan-time guards ask.
+///
+/// A guard is fail-fast: a probe that fails is a refusal at plan time, before
+/// the run has changed anything, so a dry run refuses exactly what a real run
+/// would. The guards ask the disk through this seam, so a test can make a
+/// probe fail, or count the probes, without needing a filesystem that fails
+/// on its own — and those two are what a plan-time refusal turns on.
+///
+/// The seam covers the questions a guard asks about the dst root and about the
+/// paths a plan touches. The link-chain walk asks the disk directly: it is a
+/// walk of the tree rather than a question about the plan, and no plan-time
+/// decision is lost with it.
+pub(crate) trait Probes {
+    /// The canonical form of `path`, with every link resolved.
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
+}
+
+/// The real disk.
+pub(crate) struct SystemProbes;
+
+impl Probes for SystemProbes {
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        std::fs::canonicalize(path)
+    }
+}
 
 /// Find the storage of every dst file link the plan keeps, and refuse a plan
 /// that asks one file to hold two different contents.
@@ -53,9 +79,11 @@ use super::link::{
 /// target is mirrored by src. [`ensure_shared_storage_safe`] judges that set as
 /// a whole after every chain has been walked.
 ///
-/// A tree without a kept link is left alone: the pass returns before it asks
-/// the disk anything, because there is no storage it could spare and no
-/// decision the probes would feed.
+/// A tree without a kept link is left alone: the pass returns before it walks
+/// a chain, because there is no storage it could spare and no decision the
+/// walk would feed. The dst root is still resolved — a root that cannot be
+/// resolved leaves every path under it unanswerable, and that failure is a
+/// plan-time one.
 pub(crate) fn spare_link_storage(
     sm: &HashMap<String, EffRec>,
     dm: &HashMap<String, EffRec>,
@@ -63,11 +91,20 @@ pub(crate) fn spare_link_storage(
     diff: &mut Diff,
     dst: &Path,
     on_disk: Option<&super::super::rename::DiskSpelling>,
+    probes: &dyn Probes,
 ) -> Result<()> {
+    // The dst root must resolve before the pass decides anything: every path
+    // under it is compared with the canonical root, and a root that cannot be
+    // resolved leaves the whole plan unanswerable. The failure belongs here,
+    // at plan time — a run that found it later would act on a plan it could
+    // not check.
+    let canonical_dst = probes
+        .canonicalize(dst)
+        .with_context(|| format!("resolve dst root {}", dst.display()))?;
     // The links this plan keeps: a dst file link src mirrors as a file stays,
     // and its storage is then the plan's business. A tree without one has
-    // nothing to spare, so the probes this pass would make — the dst root and
-    // the folded key map — are work no decision depends on.
+    // nothing to spare, so the folded key map — and the chain walk below —
+    // are work no decision depends on.
     let mut rels: Vec<&String> = Vec::new();
     for (rel, rec) in dm {
         if !rec.is_link || rec.kind != "file" {
@@ -90,8 +127,6 @@ pub(crate) fn spare_link_storage(
     // in its copy and fix-dir sets can be read once up front.
     let copy_rels: HashSet<&str> = plan.copy.iter().map(|item| item.rel.as_str()).collect();
     let fix_dirs: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
-    let canonical_dst = std::fs::canonicalize(dst)
-        .with_context(|| format!("resolve dst root {}", dst.display()))?;
     // Every kept link's terminal storage: (link, grouping key, display name).
     let mut terminals: Vec<(String, String, String)> = Vec::new();
     let folded = folded_keys(dm);

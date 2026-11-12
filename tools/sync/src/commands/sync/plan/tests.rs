@@ -5,14 +5,16 @@ use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
-use super::safety::{PrefixStats, ensure_shared_storage_safe};
+use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
 use crate::effective::EffRec;
 use crate::hash::DigestSet;
 use girpr_tempdir::TempDir;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 fn file() -> EffRec {
     EffRec {
@@ -60,6 +62,42 @@ fn plan(mkdir: &[&str], copy: &[&str], fix_dirs: &[&str]) -> Plan {
             .collect(),
         fix_dirs: fix_dirs.iter().map(|s| s.to_string()).collect(),
         ..Plan::default()
+    }
+}
+
+/// The disk the guards ask, under the test's control.
+///
+/// It answers like the real disk, records the paths it was asked about, and
+/// can be told to fail one of them. A probe that fails and a probe that is
+/// asked twice are the two things a real filesystem cannot be asked for on
+/// demand, and a plan-time refusal turns on both.
+struct TestProbes {
+    asked: RefCell<Vec<PathBuf>>,
+    fail: Option<PathBuf>,
+}
+
+impl TestProbes {
+    /// A probe that fails for `path`, and answers like the real disk otherwise.
+    fn failing(path: &Path) -> Self {
+        Self {
+            asked: RefCell::new(Vec::new()),
+            fail: Some(path.to_path_buf()),
+        }
+    }
+
+    fn record(&self, path: &Path) -> io::Result<()> {
+        self.asked.borrow_mut().push(path.to_path_buf());
+        match &self.fail {
+            Some(fail) if fail == path => Err(io::Error::other("the disk refused the probe")),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Probes for TestProbes {
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.record(path)?;
+        std::fs::canonicalize(path)
     }
 }
 
@@ -675,7 +713,7 @@ fn the_spare_pass_walks_through_a_directory_link_component() {
     p.delete_files = vec!["link".to_string(), "real/x".to_string()];
     p.rmdir = vec!["real".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(
         p.delete_files.is_empty(),
@@ -719,7 +757,7 @@ fn the_spare_pass_keeps_an_intermediate_links_ancestors() {
     p.delete_files = vec!["extra/b".to_string()];
     p.rmdir = vec!["extra".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(p.delete_files.is_empty(), "{:?}", p.delete_files);
     assert!(
@@ -757,7 +795,7 @@ fn the_spare_pass_refuses_two_links_on_one_storage() {
 
     let mut p = plan(&[], &["a", "b"], &[]);
     let mut diff = Diff::default();
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("two kept links on one inode cannot both be copied");
     let msg = err.to_string();
     assert!(
@@ -782,7 +820,7 @@ fn the_spare_pass_refuses_two_links_on_one_storage() {
     dm.insert("b".to_string(), link_file());
     dm.insert("c".to_string(), dir());
     let mut p = plan(&[], &["a", "b"], &[]);
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("the chained pair shares the same terminal storage");
     let msg = err.to_string();
     assert!(
@@ -918,7 +956,7 @@ fn a_case_differing_mirrored_target_is_refused() {
 
     let mut diff = Diff::default();
     let mut p = plan(&[], &["a"], &[]);
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("a mirrored target cannot also be given a new content");
     let msg = err.to_string();
     assert!(msg.contains("`real`"), "names the target's walk key: {msg}");
@@ -947,16 +985,16 @@ fn a_kept_link_with_a_mirrored_target_is_still_refused() {
 
     let mut diff = Diff::default();
     let mut p = plan(&[], &["a"], &[]);
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("one file cannot hold two contents");
     let msg = err.to_string();
     assert!(msg.contains("`a`"), "names the kept link: {msg}");
     assert!(msg.contains("`real`"), "names the mirrored target: {msg}");
 }
 
-/// A tree without a kept link has nothing to spare, so the pass answers
-/// without asking the disk anything. The plan and the record it would have
-/// adjusted must come out the same.
+/// A tree without a kept link has nothing to spare, so the pass walks no
+/// chain. The plan and the record it would have adjusted must come out the
+/// same.
 #[test]
 fn a_link_free_tree_leaves_the_plan_unchanged() {
     let t = TempDir::new("girsync_plan", "link_free");
@@ -973,11 +1011,42 @@ fn a_link_free_tree_leaves_the_plan_unchanged() {
     let mut p = plan(&[], &[], &[]);
     p.delete_files = vec!["extra.bin".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect("a tree without a kept link has nothing to spare");
 
     assert_eq!(p.delete_files, ["extra.bin"], "the plan is unchanged");
     assert_eq!(diff.extra, ["extra.bin"], "and so is the record");
+}
+
+/// The dst root has to resolve before a plan exists: every path under it is
+/// compared with the canonical root, and a root that cannot be resolved leaves
+/// the whole plan unanswerable. The failure belongs at plan time — a run that
+/// found it later would act on a plan it could not check, and the rename has
+/// already changed dst by then.
+#[test]
+fn an_unresolvable_dst_root_is_refused_at_plan_time() {
+    let t = TempDir::new("girsync_plan", "unresolvable_root");
+    let dst = t.subdir("dst");
+    let sm = HashMap::new();
+    let dm = HashMap::new();
+    let mut diff = Diff::default();
+    let mut p = plan(&[], &[], &[]);
+    let probes = TestProbes::failing(&dst);
+
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &probes)
+        .expect_err("the dst root must resolve before the plan exists");
+    let msg = err.to_string();
+    assert!(msg.contains("resolve dst root"), "names the root: {msg}");
+
+    // The same refusal without the probe: a root that is not there cannot be
+    // resolved either.
+    let missing = t.join("not-there");
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &missing, None, &SystemProbes)
+        .expect_err("a root that is not there cannot be resolved");
+    assert!(
+        err.to_string().contains("resolve dst root"),
+        "names the root: {err}"
+    );
 }
 
 /// The alias half: a link text can spell a chain component with
@@ -1039,7 +1108,7 @@ fn a_case_differing_terminal_is_spared_by_the_full_pass() {
     let mut p = plan(&[], &[], &[]);
     p.rmdir = vec!["real".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(
         p.rmdir.is_empty(),

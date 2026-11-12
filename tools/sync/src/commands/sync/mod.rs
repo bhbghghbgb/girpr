@@ -117,8 +117,8 @@ use crate::util::{canonical_or_raw, elapsed_s, is_record_path, path_within};
 
 use apply::Applier;
 use plan::{
-    build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe, ensure_link_safe,
-    ensure_mkdir_targets_free, spare_link_storage,
+    SystemProbes, build_plan, ensure_dirs_applicable, ensure_hard_linked_targets_safe,
+    ensure_link_safe, ensure_mkdir_targets_free, spare_link_storage,
 };
 use rename::{RenameOutcome, rename_to_src_casing};
 
@@ -394,7 +394,15 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // must not ask the two names to hold two contents. The diff's `EXTRA` record
     // is dropped with the delete, so the printed plan and the applied plan name
     // the same set.
-    spare_link_storage(&sm, &dm, &mut plan, &mut diff, &dst, on_disk.as_ref())?;
+    spare_link_storage(
+        &sm,
+        &dm,
+        &mut plan,
+        &mut diff,
+        &dst,
+        on_disk.as_ref(),
+        &SystemProbes,
+    )?;
 
     // The plan print, the way `compare` prints it — every record except its
     // `SUMMARY`. `sync` emits its **own** summary at the end, counting actions
