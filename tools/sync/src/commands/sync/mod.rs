@@ -221,6 +221,14 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // to form the same pairs. Planning post-rename would make a case-only pair
     // look one-sided and skip a digest it needs; diffing pre-rename would
     // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
+    // The two side labels, built before the plan rather than inside it.
+    //
+    // A label is how a side is named in a coverage error, so it is a value the
+    // plan borrows — and a value built inline in the argument list reads as
+    // though it were borrowed from a temporary that has already gone. Built
+    // here, each label is a name that outlives the call.
+    let src_label = format!("folder {}", src.display());
+    let dst_label = format!("folder {}", dst.display());
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
@@ -230,14 +238,14 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             // coverage. That is a property of the shape, not an omission: the check
             // is the same one `compare` uses, and here it is vacuous.
             cap: SideCapability::for_folder(&src_db, src_mode),
-            label: &format!("folder {}", src.display()),
+            label: &src_label,
         },
         SideRequest {
             entries: &dst_a.map,
             algos: &common.algos,
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, dst_mode),
-            label: &format!("folder {}", dst.display()),
+            label: &dst_label,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
