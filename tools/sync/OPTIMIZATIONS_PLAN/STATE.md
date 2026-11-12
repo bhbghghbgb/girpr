@@ -273,12 +273,12 @@ reviews:
     result: F14 kept and F24 kept (one commit 3f2d992e closes both); no fix or revert commits; 523 passed, 1 skipped; the --hash-any-of flag-order tie-break verified intact and the copy still digests every requested algorithm
     followups: [F44, F45, F46]
   - batch: B6
-    status: in_progress
+    status: done
     tasks: [F15, F23]
     base: e6ab7477
     head: b0342361
-    result: null
-    followups: []
+    result: F15 kept (e031b0e4); F23 kept (b0342361); no fix or revert commits; 523 passed without the feature and 535 with it, 1 skipped; the deletion confirmed to have no caller anywhere in the workspace
+    followups: [F47, F48]
   - batch: B7
     status: pending
     tasks: [F16, F30]
@@ -352,6 +352,13 @@ reviews:
   - batch: B17
     status: pending
     tasks: [F44, F45, F46]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B18
+    status: pending
+    tasks: [F47, F48]
     base: null
     head: null
     result: null
@@ -447,7 +454,7 @@ followups:
   - id: F15
     source: T09
     description: util::unique_sibling now has no callers left in the crate and should be deleted or given one.
-    status: pending_review
+    status: completed
     batch: B6
     commits: []
   - id: F16
@@ -495,7 +502,7 @@ followups:
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
-    status: pending_review
+    status: completed
     batch: B6
     commits: []
   - id: F24
@@ -638,6 +645,18 @@ followups:
     status: pending
     batch: B17
     commits: []
+  - id: F47
+    source: F23
+    description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
+    status: pending
+    batch: B18
+    commits: []
+  - id: F48
+    source: F23
+    description: The new root comment calls compile_patterns "the one way to build its patterns", but glob::Pattern::new is a second way for a caller that already depends on glob, so the wording could be narrowed to "the crate's own way".
+    status: pending
+    batch: B18
+    commits: []
 ```
 
 ## Human checklist
@@ -669,6 +688,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B6 `done`: F15 and F23 kept, no fix or revert commits;
+  follow-ups F47–F48 appended with batch `B18`; F15 and F23 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B6 review checkpoint opened: F15 and F23
   `in_progress` → `pending_review`, commits `e031b0e4`, `b0342361`; review B6
   `pending` → `in_progress`, base `e6ab7477`, head `b0342361`.
