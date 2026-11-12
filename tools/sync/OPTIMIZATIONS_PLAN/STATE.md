@@ -11,7 +11,7 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: implement
+phase: review
 active_batch: G
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
@@ -183,10 +183,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T19-benchmark-harness.md
     batch: G
     report: [L590-L593]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [eac1d900, 96e48eb9, 9c0b1c49]
     review: G
-    note: implementing session starting
+    note: implemented by ses_e30229219ffewvbNHZ6ZoqgrRH; many-tiny is 2000 files at scale 1 instead of 10000, three commits instead of two, and the deep shape is walked only to the task's 64-level cap
 reviews:
   - batch: A
     status: done
@@ -231,10 +231,10 @@ reviews:
     result: T14 kept (2df937bf, fb913a2a, a2df3d11); T15 kept (af640af6); T16 fixed (930efdf3 corrects a README paragraph that contradicted the mixed-case collision refusal); 520 passed, 1 skipped; every remaining README and DESIGN-NOTES claim checked against the tree
     followups: [F25, F26, F27, F28, F29]
   - batch: G
-    status: pending
+    status: in_progress
     tasks: [T17, T18, T19]
-    base: null
-    head: null
+    base: 2c23bd11
+    head: 9c0b1c49
     result: null
     followups: []
 followups:
@@ -436,13 +436,17 @@ followups:
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
 | G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
 | G | T18 | pending_review | cce4fed3, efe471f8, 2a244f26 | implemented by ses_e3062be0affekJg6Y62KsyWlcA |
-| G | T19 | in_progress | — | implementing session starting |
+| G | T19 | pending_review | eac1d900, 96e48eb9, 9c0b1c49 | implemented by ses_e30229219ffewvbNHZ6ZoqgrRH |
 
 ## Transition log
 
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — batch G review checkpoint opened: `phase: implement` →
+  `review`, review G `pending` → `in_progress`, base `2c23bd11`, head
+  `9c0b1c49`. T19 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `eac1d900`, `96e48eb9`, `9c0b1c49`; working tree clean.
 - 2026-11-12 — T19 selected: `pending` → `in_progress`.
 - 2026-11-12 — T18 implemented: `pending` → `in_progress` → `pending_review`,
   commits `cce4fed3`, `efe471f8`, `2a244f26`; working tree clean.
