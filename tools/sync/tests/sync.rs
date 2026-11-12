@@ -1713,6 +1713,69 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
     assert!(recs(&dst).contains_key("a.bin"));
 }
 
+/// The failure a run reports is the **first copy in the plan**, not the first
+/// copy to fail.
+///
+/// Two copies fail here, and they are arranged so that the two orders are not
+/// the same order: `zzz.bin` fails before it opens anything, while `aaa.bin`
+/// is copied in full and fails at the flush. The first failure to *finish* is
+/// therefore `zzz.bin`, and the first copy *in the plan* is `aaa.bin`. A
+/// phase that reported the first failure to finish would name `zzz.bin`; the
+/// plan's order says `aaa.bin`, and that is what has to be reported.
+///
+/// The third file is the control: it succeeds, and it was still copied, so
+/// the failure did not cut the phase short.
+#[test]
+fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
+    let t = temp_root("copy_fail_order");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    // Big enough that copying it takes longer than the failure that never
+    // opens the file, so the two failures are not over at the same moment.
+    let big = vec![7u8; 1024 * 1024];
+    wfile(&src, "aaa.bin", &big);
+    wfile(&src, "mmm.bin", b"middle");
+    wfile(&src, "zzz.bin", b"last");
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &["--rw-threads", "2"],
+        &[
+            ("GIRSYNC_TEST_FAIL_COPY", "zzz.bin"),
+            ("GIRSYNC_TEST_FAIL_FLUSH", "aaa.bin"),
+            // The workspace's nextest setup turns the flush off for speed; this
+            // case is about the flush.
+            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "two copies failed, so the run failed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("copy aaa.bin"),
+        "the failure reported is the first copy in the plan: {stderr}"
+    );
+    assert!(
+        !stderr.contains("zzz.bin"),
+        "the copy that failed first is not the one reported: {stderr}"
+    );
+
+    // Every copy was attempted: the one that could succeed was copied and
+    // announced, and neither failure announced anything.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(
+        paths(&recs, "copy"),
+        vec!["mmm.bin"],
+        "the successful copy was announced and the failed ones were not: {recs:?}"
+    );
+    assert!(dst.join("mmm.bin").is_file(), "the successful copy landed");
+}
+
 /// A case-only rename of a directory must move the subtree once, not try to
 /// rename its children at the old path: on a case-sensitive host that path no
 /// longer exists after the parent move. Here the child's leaf casing is already
