@@ -625,7 +625,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.test_cache = TestCacheBackend::Memory;
-    dry.common.case_sensitive = false;
+    dry.common.set_case_sensitive(false);
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
@@ -637,7 +637,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Real run: dst adopts src's casing.
     let mut real = sync(src.clone(), dst.clone());
     real.common.test_cache = TestCacheBackend::Memory;
-    real.common.case_sensitive = false;
+    real.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
     assert_eq!(
         entry_names(&dst),
@@ -647,7 +647,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Converged: no further differences in either mode.
     let mut same = compare_mem(src.clone(), dst.clone());
-    same.common.case_sensitive = false;
+    same.common.set_case_sensitive(false);
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
@@ -1070,7 +1070,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     // committed to disk.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.test_cache = TestCacheBackend::Memory;
-    dry.common.case_sensitive = false;
+    dry.common.set_case_sensitive(false);
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
@@ -1081,7 +1081,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
 
     let mut real = sync(src.clone(), dst.clone());
     real.common.test_cache = TestCacheBackend::Memory;
-    real.common.case_sensitive = false;
+    real.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
 
     assert_eq!(
@@ -1365,7 +1365,7 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
     }
 
     let mut o = sync(src.clone(), dst.clone());
-    o.common.case_sensitive = true;
+    o.common.set_case_sensitive(true);
     let _ = cmd_sync(o, &log());
 
     let rows = recs(&dst);
@@ -1800,7 +1800,7 @@ fn run_sync_renames_a_case_only_directory_before_its_children() {
     assert!(!dst.join("Dir/Dir").exists());
 
     let mut same = compare_mem(src, dst);
-    same.common.case_sensitive = false;
+    same.common.set_case_sensitive(false);
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
 }
 

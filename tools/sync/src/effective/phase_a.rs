@@ -1,14 +1,12 @@
 //! **Phase A** — walk the tree, consult the cache, read no bytes.
 
 use anyhow::Result;
-use glob::Pattern;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use tracing::{info, trace};
 
 use crate::cache::{CacheDb, FileRec};
 use crate::config::{CommonOpts, ScanMode};
-use crate::filter::is_excluded;
 use crate::hash::{DigestSet, HashAlg};
 use crate::scan::{LiveEnt, check_mixed_case, walk_live};
 use crate::util::{elapsed_s, path_key};
@@ -66,8 +64,6 @@ pub fn scan_stat_only(
     mode: ScanMode,
 ) -> Result<SideScan<SideEntry>> {
     let algos: &[HashAlg] = &common.algos;
-    let includes: &[Pattern] = &common.includes;
-    let excludes: &[Pattern] = &common.excludes;
     let case_sensitive = common.case_sensitive;
     let max_depth = common.max_depth;
     let ScanMode {
@@ -144,7 +140,7 @@ pub fn scan_stat_only(
         // The filter is asked once per entry, here. An entry the filter hides
         // is treated as not existing at all: it is not in the map, and its
         // cache row is a prune.
-        if is_excluded(&e.rel, includes, excludes, case_sensitive) {
+        if common.filter.is_excluded(&e.rel) {
             continue; // treated as not existing at all
         }
         live_set.insert(e.rel.as_str());
@@ -348,7 +344,7 @@ pub fn scan_stat_only(
 mod tests {
     use super::*;
     use crate::cache::TestCacheBackend;
-    use crate::filter::compile_patterns;
+    use crate::filter::{Filter, compile_patterns};
     use crate::planner::{HashMode, StatTrust};
     use crate::rw::RwLimits;
 
@@ -370,8 +366,11 @@ mod tests {
             hash_mode: HashMode::default(),
             why: false,
             show_identical: false,
-            includes: compile_patterns(&owned(includes)).unwrap(),
-            excludes: compile_patterns(&owned(excludes)).unwrap(),
+            filter: Filter::new(
+                compile_patterns(&owned(includes)).unwrap(),
+                compile_patterns(&owned(excludes)).unwrap(),
+                true,
+            ),
             case_sensitive: true,
             max_depth: 10,
             ignore_cache: false,
@@ -400,14 +399,7 @@ mod tests {
     /// instead of saying how it is built.
     fn expected_keys(root: &Path, common: &CommonOpts) -> Vec<String> {
         let live = walk_live(root, common.max_depth).unwrap();
-        let kept = |rel: &str| {
-            !is_excluded(
-                rel,
-                &common.includes,
-                &common.excludes,
-                common.case_sensitive,
-            )
-        };
+        let kept = |rel: &str| !common.filter.is_excluded(rel);
         let is_dir = |rel: &str| live.iter().any(|e| e.is_dir && e.rel == rel);
         let mut out: Vec<String> = Vec::new();
         for e in &live {

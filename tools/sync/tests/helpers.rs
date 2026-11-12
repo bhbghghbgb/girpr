@@ -8,7 +8,7 @@ use common::{md5arg, opts, rw, scan, serial_rw, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
-use girsync::filter::{compile_patterns, is_excluded};
+use girsync::filter::{Filter, compile_patterns};
 use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
@@ -81,11 +81,14 @@ fn hash_arg_none_exclusive() {
 
 #[test]
 fn exclude_wins_over_include() {
-    let inc = compile_patterns(&["*.dat".to_string()]).unwrap();
-    let exc = compile_patterns(&["secret*".to_string()]).unwrap();
-    assert!(is_excluded("other.txt", &inc, &exc, true));
-    assert!(!is_excluded("a.dat", &inc, &exc, true));
-    assert!(is_excluded("secret.dat", &inc, &exc, true));
+    let filter = Filter::new(
+        compile_patterns(&["*.dat".to_string()]).unwrap(),
+        compile_patterns(&["secret*".to_string()]).unwrap(),
+        true,
+    );
+    assert!(filter.is_excluded("other.txt"));
+    assert!(!filter.is_excluded("a.dat"));
+    assert!(filter.is_excluded("secret.dat"));
 }
 
 /// An excluded directory is a subtree, not one entry. Before this, `--exclude
@@ -93,15 +96,19 @@ fn exclude_wins_over_include() {
 /// under the excluded link and the runtime guard deleted the link itself.
 #[test]
 fn excluding_a_directory_excludes_its_subtree() {
-    let exc = compile_patterns(&["link".to_string()]).unwrap();
-    assert!(is_excluded("link", &[], &exc, true));
-    assert!(is_excluded("link/x.txt", &[], &exc, true));
-    assert!(is_excluded("link/sub/y.txt", &[], &exc, true));
+    let filter = Filter::new(
+        vec![],
+        compile_patterns(&["link".to_string()]).unwrap(),
+        true,
+    );
+    assert!(filter.is_excluded("link"));
+    assert!(filter.is_excluded("link/x.txt"));
+    assert!(filter.is_excluded("link/sub/y.txt"));
     assert!(
-        !is_excluded("linkage/x.txt", &[], &exc, true),
+        !filter.is_excluded("linkage/x.txt"),
         "a prefix is not a subtree: the separator is the boundary"
     );
-    assert!(!is_excluded("other/x.txt", &[], &exc, true));
+    assert!(!filter.is_excluded("other/x.txt"));
 }
 
 /// `--include '*.txt'` matches the file and not the directory above it. The
@@ -116,7 +123,11 @@ fn an_included_file_pulls_its_ancestor_directories_into_the_map() {
     wfile(&dir, "sub/skip.bin", b"skip");
 
     let common = CommonOpts {
-        includes: compile_patterns(&["*.txt".to_string()]).unwrap(),
+        filter: Filter::new(
+            compile_patterns(&["*.txt".to_string()]).unwrap(),
+            vec![],
+            true,
+        ),
         ..opts()
     };
     let db = CacheDb::open_temp(common.case_sensitive).unwrap();
@@ -146,10 +157,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db_path = dir.join(CACHE_PREFIX);
 
     let sensitive = opts();
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
 
     let db = open_db(&db_path, true, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &sensitive, ScanMode::new(true, false));
@@ -207,10 +216,8 @@ fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
     std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
     std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
     let (dry_map, dry_stats) = {
         let db = open_db(&db_path, false, rw()).unwrap();
         let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
@@ -290,10 +297,8 @@ fn insensitive_dry_run_counts_every_adopted_key_as_renamed_not_pruned() {
         std::fs::rename(&tmp, dir.join(to)).unwrap();
     }
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
     let (dry_map, dry_stats) = {
         let db = open_db(&db_path, false, rw()).unwrap();
         let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();

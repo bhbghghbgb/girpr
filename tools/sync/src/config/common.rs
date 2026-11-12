@@ -7,7 +7,6 @@
 //! folder scan treats the cache and the filesystem.
 
 use anyhow::{Result, bail};
-use glob::Pattern;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -15,7 +14,7 @@ use girpr_log::Level;
 
 use crate::cache::TestCacheBackend;
 use crate::cli::{CommonArgs, RwArgs};
-use crate::filter::compile_patterns;
+use crate::filter::{Filter, compile_patterns};
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report};
@@ -112,11 +111,22 @@ pub struct CommonOpts {
     /// mean asking a question the diff has already answered. It is off by default
     /// because it is one record per equal file.
     pub show_identical: bool,
-    /// `--include` globs; empty means "everything".
-    pub includes: Vec<Pattern>,
-    /// `--exclude` globs; these win over `includes`.
-    pub excludes: Vec<Pattern>,
+    /// `--include` / `--exclude` globs, compiled and ready to match.
+    ///
+    /// The patterns and the options they are matched with live together, so a
+    /// path is always tested against the rules this run was configured with.
+    /// Empty includes mean "everything"; the excludes win over them.
+    pub filter: Filter,
     /// Default false: insensitive, with rename/abort rules.
+    ///
+    /// **A run-wide mode, not a filter property.** It also selects the cache's
+    /// case flag, the planner's pairing, the rename pass and the mkdir check,
+    /// so it stays here rather than inside [`Filter`], where it would look as
+    /// though it belonged to globbing alone.
+    ///
+    /// The filter's matching options are built from this value, so the two have
+    /// to agree: use [`CommonOpts::set_case_sensitive`] to change the mode
+    /// rather than assigning the field.
     pub case_sensitive: bool,
     /// Walk depth cap for the whole tree (default 10).
     pub max_depth: usize,
@@ -151,6 +161,23 @@ pub struct CommonOpts {
     /// nowhere else; a caller that builds these options by hand gets exactly
     /// what it put here, whatever the environment holds.
     pub test_cache: TestCacheBackend,
+}
+
+impl CommonOpts {
+    /// Set the run's case mode, and rebuild the filter's matching options to
+    /// match it.
+    ///
+    /// The filter caches the options it matches with, and the case mode is one
+    /// of them, so the two move together: changing the mode without rebuilding
+    /// the filter would leave the filter matching under the old one.
+    pub fn set_case_sensitive(&mut self, case_sensitive: bool) {
+        self.case_sensitive = case_sensitive;
+        self.filter = Filter::new(
+            self.filter.includes().to_vec(),
+            self.filter.excludes().to_vec(),
+            case_sensitive,
+        );
+    }
 }
 
 /// What a run copies aside, and how much of it it keeps.
@@ -345,8 +372,11 @@ impl TryFrom<CommonArgs> for CommonOpts {
             stat,
             why: a.why,
             show_identical: a.show_identical,
-            includes: compile_patterns(&a.include)?,
-            excludes: compile_patterns(&a.exclude)?,
+            filter: Filter::new(
+                compile_patterns(&a.include)?,
+                compile_patterns(&a.exclude)?,
+                a.case_sensitive,
+            ),
             case_sensitive: a.case_sensitive,
             max_depth: a.max_depth,
             ignore_cache: a.ignore_cache,

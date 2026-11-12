@@ -11,7 +11,6 @@ use std::collections::HashMap;
 
 use crate::cache::CacheDb;
 use crate::config::CommonOpts;
-use crate::filter::is_excluded;
 use crate::util::{check_mixed_case_keys, is_cache_rel};
 
 use super::entry::{SideEntry, SideScan};
@@ -38,12 +37,7 @@ pub fn load_record_side_from(
         if is_cache_rel(&rel) {
             continue;
         }
-        if is_excluded(
-            &rel,
-            &common.includes,
-            &common.excludes,
-            common.case_sensitive,
-        ) {
+        if common.filter.is_excluded(&rel) {
             continue;
         }
         out.insert(

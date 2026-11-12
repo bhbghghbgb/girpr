@@ -9,6 +9,7 @@ use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::filter::Filter;
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
@@ -274,8 +275,7 @@ pub fn opts() -> CommonOpts {
         stat: StatTrust::default(),
         why: false,
         show_identical: false,
-        includes: vec![],
-        excludes: vec![],
+        filter: Filter::new(vec![], vec![], true),
         case_sensitive: true,
         max_depth: 10,
         ignore_cache: false,

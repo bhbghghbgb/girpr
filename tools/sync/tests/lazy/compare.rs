@@ -317,10 +317,8 @@ fn a_case_only_difference_with_equal_content_is_still_compared() {
     wfile(&dst, "A.txt", b"alpha");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts_mem()
-    };
+    let mut insensitive = opts_mem();
+    insensitive.set_case_sensitive(false);
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
         r.records(),
@@ -354,10 +352,8 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
     wfile(&dst, "A.txt", b"ALPHA");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts_mem()
-    };
+    let mut insensitive = opts_mem();
+    insensitive.set_case_sensitive(false);
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
         r.records(),

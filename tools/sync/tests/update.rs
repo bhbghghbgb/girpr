@@ -7,7 +7,7 @@ use common::{
     compare, compare_self_opts, log, poison_digest, recs_of, sync_mem, sync_mtime, temp_root,
     update_mem, wfile,
 };
-use girsync::filter::compile_patterns;
+use girsync::filter::{Filter, compile_patterns};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 #[test]
@@ -37,7 +37,11 @@ fn run_update_prunes_and_excludes() {
     // Excluded paths are treated as nonexistent: re-update with an
     // exclude prunes skip.me even though it is still on disk.
     let excluding = CommonOpts {
-        excludes: compile_patterns(&["*.me".to_string()]).unwrap(),
+        filter: Filter::new(
+            vec![],
+            compile_patterns(&["*.me".to_string()]).unwrap(),
+            true,
+        ),
         ..common::opts_mem()
     };
     cmd_update(

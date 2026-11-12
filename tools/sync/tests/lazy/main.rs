@@ -175,7 +175,7 @@ fn four_differing(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 /// not perturbed by a rename pass; a case that wants insensitive sets it.
 fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncOpts {
     let mut common = opts_mem();
-    common.case_sensitive = true;
+    common.set_case_sensitive(true);
     girsync::SyncOpts {
         src,
         dst,

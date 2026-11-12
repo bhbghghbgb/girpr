@@ -127,7 +127,7 @@ fn a_lazy_sync_records_no_digest_it_never_needed() {
     let t = temp_root("lz_sync_lazy");
     let (src, dst) = four_differing(&t);
     let mut o = sync_opts(src.clone(), dst.clone());
-    o.common.case_sensitive = true;
+    o.common.set_case_sensitive(true);
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     // Every pair differed in size, so every pair was decided by stat.
