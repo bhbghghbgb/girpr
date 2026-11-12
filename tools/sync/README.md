@@ -995,6 +995,15 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
+- **Cache memory.** Every redb handle gets a **64 MiB** page cache — the budget
+  redb may spend on pages it has cached. The default is small on purpose:
+  `cargo nextest` runs one process per test, so parallel tests each get their
+  own. `GIRSYNC_CACHE_SIZE_MIB` raises or lowers it, in MiB, and applies to
+  **each handle** a run opens — so a `sync` that opens src's and dst's caches
+  gets that budget twice. It is read once per process, so every handle in a run
+  gets the same size. A value that is not a positive whole number of MiB is
+  ignored and the default is used, with a warning; a value too large for the
+  machine is capped at the largest that fits.
 - **Read-only vs read/write opens.** `open_db` takes a `CacheOpen`:
   `ReadWrite` may create the file, back it up, and reconcile `meta`;
   `ReadOnly` requires an existing, current-version cache and never opens it for
@@ -1209,6 +1218,16 @@ directory, an environment variable — can reach the next one.
 
 **Doctests are not run**: nextest has no doctest support at all. This crate has
 none, so nothing is lost.
+
+The suite has one test-only switch of its own: **`GIRSYNC_TEST_CACHE=memory`**
+makes a folder's cache open against redb's shared in-memory backend instead of
+the `girpr-cache` file, so a case that asserts a verdict rather than the cache
+file pays no 1 MB create + fsync per command. It is resolved **once, at command
+start**, and the run's options carry the answer from there — so a subprocess
+suite sets it on the child process and the child uses it for every cache it
+opens, while a caller that builds the options itself gets exactly what it
+asked for. Any value other than exactly `memory` means the real file, which is
+what production uses.
 
 ## Cost model
 
