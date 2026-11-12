@@ -6,6 +6,13 @@ edition = "2024"
 rust-version = "1.89"
 description = "Dev-only one-way folder mirror (src old-version -> dst working dir) with redb hash cache"
 
+# The one-shot converter, and nothing else. `sled` is used by the converter
+# alone, so the default build does not compile it: `convert` turns it on, and
+# the `sled2redb` binary and the converter's own cases are behind that feature.
+[features]
+default = []
+convert = ["dep:sled"]
+
 # A tools-only subset of the shared policy. The dev tools do not inherit the
 # workspace table because `unwrap_used`/`expect_used` are deliberate there for
 # the repair path and would be noise here: a panic in a dev tool is a failed
@@ -28,6 +35,9 @@ path = "src/main.rs"
 [[bin]]
 name = "sled2redb"
 path = "src/bin/sled2redb.rs"
+# The converter is the only user of `sled`, so it is only built when that
+# dependency is: a default build has no `sled2redb` at all.
+required-features = ["convert"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -38,8 +48,9 @@ girpr-log = { path = "../../crates/log" }
 anyhow = "1"
 walkdir = "2"
 # sled is used ONLY by the one-shot `sled2redb` converter (src/convert.rs).
-# All live cache paths use redb.
-sled = "0.34"
+# All live cache paths use redb. It is optional, so a default build does not
+# compile it: the `convert` feature is what pulls it in.
+sled = { version = "0.34", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 md-5 = "0.10"

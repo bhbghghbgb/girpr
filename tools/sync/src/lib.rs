@@ -9,7 +9,10 @@
 //! Module map:
 //! - [`cli`] / [`config`] — argument surface and validated per-run options
 //! - [`cache`] — redb schema, open/rebuild, backup snapshots
-//! - [`convert`] — one-shot sled -> redb converter
+#![cfg_attr(
+    feature = "convert",
+    doc = "- [`convert`] — one-shot sled -> redb converter (the `convert` feature)"
+)]
 //! - [`scan`] — live filesystem walk
 //! - [`effective`] — phase A (stat + cache) and phase C (hash) for one side
 //! - [`planner`] — [`HashPlan`]: the only place that decides what must be hashed
@@ -40,6 +43,7 @@ pub mod cache;
 pub mod cli;
 pub mod commands;
 pub mod config;
+#[cfg(feature = "convert")]
 pub mod convert;
 pub mod diff;
 pub mod effective;

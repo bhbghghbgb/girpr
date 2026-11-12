@@ -3,6 +3,11 @@
 //! Builds a legacy sled DB with the old JSON/hex layout directly, converts
 //! it, and reads the result back through the public redb cache API.
 
+// The cases build a legacy sled database and convert it, so they need the
+// converter's own dependency and exist only when the feature carrying it is
+// on. Without the feature the file compiles to nothing.
+#![cfg(feature = "convert")]
+
 mod common;
 
 use common::{log, parse_ndjson, rw, temp_root};
