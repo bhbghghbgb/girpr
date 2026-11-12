@@ -138,10 +138,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T14-sled2redb-cli.md
     batch: F
     report: [L478-L493]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [2df937bf, fb913a2a, a2df3d11]
     review: F
-    note: implementing session starting
+    note: implemented by ses_e323038fbffedCTPykVAhY4s4l; no --version flag was added, so an unknown flag exits 3 as before
   - id: T15
     title: Named sync phases decision
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T15-named-sync-phases.md
@@ -401,7 +401,7 @@ followups:
 | D | T11 | completed | ef0d1bea, a8ede30e, 92b119ab, 65fa3190 | review D kept |
 | E | T12 | completed | 6b50b4d0, 1e0075c5, d576a382 | review E kept |
 | E | T13 | completed | ce3f0f94, f37e231f, b5cea4e0 | review E kept |
-| F | T14 | in_progress | — | implementing session starting |
+| F | T14 | pending_review | 2df937bf, fb913a2a, a2df3d11 | implemented by ses_e323038fbffedCTPykVAhY4s4l |
 | F | T15 | pending | — | — |
 | F | T16 | pending | — | — |
 | G | T17 | pending | — | — |
@@ -413,6 +413,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T14 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `2df937bf`, `fb913a2a`, `a2df3d11`; working tree clean.
 - 2026-11-12 — batch F started: T14 `pending` → `in_progress`.
 - 2026-11-12 — review E `done`: T12 kept, T13 kept, no fix or revert commits;
   follow-ups F21–F24 appended with status `pending`; T12 and T13
