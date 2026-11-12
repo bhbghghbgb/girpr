@@ -99,6 +99,20 @@ usage error in it exits `3`, not clap's `2`: the converter shares one failure
 code with a failed conversion, so every way it can fail is `3` — while
 `girsync` itself keeps `2` for a parse error.
 
+**A conversion is atomic for a file destination.** The new cache is written
+into a temporary beside the destination and moved onto it only once it is
+whole, so the destination is either the old cache or the new one — never a
+half-written mixture, and never a file that opens as a valid cache. A
+conversion that fails leaves the previous cache exactly as it was under
+`--force`, and leaves no destination at all without it; the temporary is
+removed either way, so nothing of the tool's own is left in the folder.
+
+Replacing a **legacy sled directory** is the one step that is not atomic: the
+directory has to be removed before the new file can take its name, so a
+failure in that window leaves no cache at all. The error says so when it
+happens. The source directory is left alone either way — the conversion never
+writes to it, so deleting it is your call.
+
 `--no-backup` and `--backup-retain N` are on every subcommand too — see
 [Backups and failures](#backups-and-failures).
 
