@@ -102,10 +102,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T10-cache-memory-and-test-cache.md
     batch: D
     report: [L370-L388, L536-L540, L550-L555]
-    status: pending
+    status: in_progress
     commits: []
     review: D
-    note: null
+    note: implementing session starting
   - id: T11
     title: Small performance notes
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T11-small-performance-notes.md
@@ -337,7 +337,7 @@ followups:
 | C | T07 | completed | 9bb075e6, ed6c2745 | review C kept |
 | C | T08 | completed | a545f9cd, 7b31a903 | review C kept |
 | D | T09 | pending_review | 42995b17, 86d2a027, 4692f4d9, 54b726d6, 5cdecf09 | implemented by ses_e32ffb47dffejsI4DcQhl6A8v4 |
-| D | T10 | pending | — | — |
+| D | T10 | in_progress | — | implementing session starting |
 | D | T11 | pending | — | — |
 | E | T12 | pending | — | — |
 | E | T13 | pending | — | — |
@@ -353,6 +353,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T10 selected: `pending` → `in_progress`.
 - 2026-11-12 — T09 implemented: `pending` → `in_progress` → `pending_review`,
   commits `42995b17`, `86d2a027`, `4692f4d9`, `54b726d6`, `5cdecf09`; working
   tree clean.
