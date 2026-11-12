@@ -12,7 +12,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{Handle, memory_registry, redb_builder};
+use super::{Handle, SharedCache, memory_registry, redb_builder};
 use crate::cache::codec::{decode_meta, decode_rec, encode_meta};
 use crate::cache::open::{
     is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
@@ -136,6 +136,17 @@ impl CacheDb {
             #[cfg(test)]
             reads: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Wrap a handle onto a cache whose reads are counted across handles.
+    ///
+    /// The shared (test) backend hands every open of one path the same
+    /// counter, so the count is a property of the **cache** rather than of
+    /// the handle that happens to be holding it — and a handle opened after
+    /// a run can say what that run's handle did.
+    #[cfg(test)]
+    fn with_shared_reads(db: Handle, reads: Arc<AtomicU64>) -> Self {
+        Self { db, reads }
     }
 
     /// Wrap an already-open handle as this crate's participant side. The only
@@ -303,32 +314,53 @@ impl CacheDb {
     /// Only ever reached through [`super::TestCacheBackend::Memory`] or
     /// `GIRSYNC_TEST_CACHE=memory`; production opens files.
     pub fn open_memory_cache(db_path: &Path, case_sensitive: bool) -> Result<Self> {
-        let db = {
+        let shared = {
             let mut caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
             match caches.get(db_path) {
-                Some(db) => db.clone(),
+                Some(shared) => shared.clone(),
                 None => {
                     let db = redb_builder()
                         .create_with_backend(InMemoryBackend::new())
                         .context("open shared temp cache")?;
                     Self::init_meta(&db, case_sensitive)?;
-                    let db = Arc::new(db);
-                    caches.insert(db_path.to_path_buf(), db.clone());
-                    db
+                    let shared = SharedCache {
+                        db: Arc::new(db),
+                        #[cfg(test)]
+                        reads: Arc::new(AtomicU64::new(0)),
+                    };
+                    caches.insert(db_path.to_path_buf(), shared.clone());
+                    shared
                 }
             }
         };
-        Ok(Self::with_handle(Handle::Writable(db)))
+        // The counter belongs to the cache, so every handle on this path
+        // counts into the same one.
+        #[cfg(test)]
+        let handle =
+            Self::with_shared_reads(Handle::Writable(shared.db.clone()), shared.reads.clone());
+        #[cfg(not(test))]
+        let handle = Self::with_handle(Handle::Writable(shared.db.clone()));
+        Ok(handle)
     }
 
     /// The shared in-memory cache at `db_path`, if a run in this process opened
     /// one. `None` means the path was served from a file (or never opened), so a
     /// caller falls back to the file cache.
+    ///
+    /// The handle it returns shares the cache's read counter, so it can also
+    /// say how many reads the cache has served — including the ones a run made
+    /// before this handle existed.
     pub fn memory_cache_at(db_path: &Path) -> Option<Self> {
-        let caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
-        caches
-            .get(db_path)
-            .map(|db| Self::with_handle(Handle::Writable(db.clone())))
+        let shared = {
+            let caches = memory_registry().lock().unwrap_or_else(|e| e.into_inner());
+            caches.get(db_path).cloned()
+        };
+        #[cfg(test)]
+        let handle =
+            shared.map(|shared| Self::with_shared_reads(Handle::Writable(shared.db), shared.reads));
+        #[cfg(not(test))]
+        let handle = shared.map(|shared| Self::with_handle(Handle::Writable(shared.db)));
+        handle
     }
 
     /// Forget the shared in-memory cache at `db_path`, so the next open is cold.

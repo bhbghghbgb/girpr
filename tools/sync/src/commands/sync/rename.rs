@@ -961,16 +961,13 @@ mod tests {
         );
     }
 
-    /// A no-op sync does not enter the re-key at all: the pass reads the
-    /// cache only when something moved, so a run with nothing to rename does
-    /// not scan the cache.
+    /// A src and a dst that are already in step: the same file, the same
+    /// bytes, the same mtime. A run over this pair has nothing to do.
     ///
-    /// The count is the observable — a duration would be a measurement of the
-    /// machine — and it is the re-key's own count, so the other passes a run
-    /// makes cannot be mistaken for it.
-    #[test]
-    fn a_no_op_sync_does_not_read_the_cache_in_the_rekey() {
-        let root = girpr_tempdir::TempDir::new("girsync_rename_sync", "noop");
+    /// The temp directory comes back as the guard that owns it, so the tree
+    /// is removed when the test ends rather than when it remembers to ask.
+    fn no_op_pair(tag: &str) -> (girpr_tempdir::TempDir, PathBuf, PathBuf) {
+        let root = girpr_tempdir::TempDir::new("girsync_rename_sync", tag);
         let src = root.join("src");
         let dst = root.join("dst");
         std::fs::create_dir_all(&src).unwrap();
@@ -989,6 +986,19 @@ mod tests {
             .unwrap()
             .set_modified(mtime)
             .unwrap();
+        (root, src, dst)
+    }
+
+    /// A no-op sync does not enter the re-key at all: the pass reads the
+    /// cache only when something moved, so a run with nothing to rename does
+    /// not scan the cache.
+    ///
+    /// The count is the observable — a duration would be a measurement of the
+    /// machine — and it is the re-key's own count, so the other passes a run
+    /// makes cannot be mistaken for it.
+    #[test]
+    fn a_no_op_sync_does_not_read_the_cache_in_the_rekey() {
+        let (_root, src, dst) = no_op_pair("noop");
 
         let code = super::super::cmd_sync(sync_opts(&src, &dst), &log_ctx()).unwrap();
         assert_eq!(code, 0, "the run succeeded");
@@ -997,6 +1007,34 @@ mod tests {
             0,
             "the re-key did not read the cache: nothing moved"
         );
+    }
+
+    /// A no-op run reads each side's cache once, and no more.
+    ///
+    /// The re-key's own count is not the run's count: the run opens a cache
+    /// per side, and each side's scan reads it. This case pins the **run's**
+    /// reads, so a second read of the same cache anywhere in the run — a
+    /// pass that re-reads the entries table because it could not see the
+    /// rows another pass had — shows up as a number that moved.
+    ///
+    /// The count is per cache, so the two sides are told apart: a run that
+    /// scanned one side twice and the other side not at all would not pass.
+    #[test]
+    fn a_no_op_sync_reads_each_cache_once() {
+        let (_root, src, dst) = no_op_pair("scans");
+
+        let code = super::super::cmd_sync(sync_opts(&src, &dst), &log_ctx()).unwrap();
+        assert_eq!(code, 0, "the run succeeded");
+        for (side, root) in [("src", &src), ("dst", &dst)] {
+            let cache =
+                crate::cache::CacheDb::memory_cache_at(&root.join(crate::cache::CACHE_PREFIX))
+                    .expect("the run opened this side's cache");
+            assert_eq!(
+                cache.entries_read_count(),
+                1,
+                "{side}'s cache was read once"
+            );
+        }
     }
 
     /// The options a no-op sync runs with: one algorithm, no filters, and the

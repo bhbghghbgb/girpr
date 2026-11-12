@@ -4,6 +4,8 @@
 use redb::{Builder, Database};
 use std::collections::HashMap;
 use std::path::PathBuf;
+#[cfg(test)]
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::warn;
 
@@ -83,12 +85,30 @@ pub(in crate::cache) fn redb_builder() -> Builder {
     b
 }
 
+/// A cache the test backend shares between every open of one path.
+///
+/// The database is shared so the rows a command wrote are still there for
+/// the next command that opens the same path. The read counter is shared
+/// for the same reason: the count belongs to the **cache**, so a handle
+/// opened later can say what an earlier one did.
+#[derive(Clone)]
+pub(in crate::cache) struct SharedCache {
+    /// The database every open of this path talks to.
+    pub db: Arc<Database>,
+    /// The entries-table reads this cache has served.
+    ///
+    /// Test-only: the count answers "how many reads did this cache serve?",
+    /// which is a question a test asks and a production caller does not.
+    #[cfg(test)]
+    pub reads: Arc<AtomicU64>,
+}
+
 /// The path-keyed in-memory caches tests share across calls.
 ///
 /// One process is one test under `cargo nextest`, so this grows to at most the
 /// caches a single test opened and is released with the process.
-pub(in crate::cache) fn memory_registry() -> &'static Mutex<HashMap<PathBuf, Arc<Database>>> {
-    static CACHES: OnceLock<Mutex<HashMap<PathBuf, Arc<Database>>>> = OnceLock::new();
+pub(in crate::cache) fn memory_registry() -> &'static Mutex<HashMap<PathBuf, SharedCache>> {
+    static CACHES: OnceLock<Mutex<HashMap<PathBuf, SharedCache>>> = OnceLock::new();
     CACHES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 

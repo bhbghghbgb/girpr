@@ -9,6 +9,6 @@ mod cachedb;
 mod handle;
 
 pub use backend::TestCacheBackend;
-pub(super) use backend::{memory_registry, redb_builder};
+pub(super) use backend::{SharedCache, memory_registry, redb_builder};
 pub use cachedb::CacheDb;
 pub(super) use handle::Handle;
