@@ -54,7 +54,16 @@ where
 /// never heard of must survive conversion untouched and must not affect a diff that
 /// never asks for it.
 fn build_sled_db(dir: &std::path::Path) {
-    let db_path = dir.join("legacy-cache");
+    build_sled_db_at(dir, "legacy-cache");
+}
+
+/// The same fixture as [`build_sled_db`], in a database of the given name.
+///
+/// The name is a parameter so a case can hold a source that converts and a
+/// source that does not at the same time, which is what the `--force` case
+/// needs: it needs a cache to preserve *and* a source that fails.
+fn build_sled_db_at(dir: &std::path::Path, name: &str) {
+    let db_path = dir.join(name);
     let db = sled::open(&db_path).unwrap();
     db.insert(
         "\0meta",
@@ -110,6 +119,54 @@ fn build_sled_db(dir: &std::path::Path) {
     .unwrap();
     db.flush().unwrap();
     drop(db);
+}
+
+/// A legacy sled DB with one row the converter cannot decode.
+///
+/// The row is bad the way a real legacy cache goes bad: a digest that is not
+/// hex. It is a database of its own, so a case can hold a source that
+/// converts and one that does not at the same time.
+fn build_sled_db_with_bad_row(dir: &std::path::Path) {
+    let db_path = dir.join("legacy-cache-bad");
+    let db = sled::open(&db_path).unwrap();
+    db.insert(
+        "\0meta",
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "case_sensitive": true,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    db.insert(
+        "bad.txt",
+        serde_json::to_vec(&old_rec(
+            "file",
+            3,
+            [("md5".to_string(), "zz".to_string())]
+                .into_iter()
+                .collect(),
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    db.flush().unwrap();
+    drop(db);
+}
+
+/// The names of the entries in `dir`, sorted.
+///
+/// The whole directory, not a filtered view of it: what a case wants to know
+/// is what the tool left in the user's tree, and a filter would hide the very
+/// entry it is looking for.
+fn entry_names(dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 #[test]
@@ -200,6 +257,160 @@ fn convert_rejects_missing_source() {
     assert!(
         girsync::convert::sled_to_redb(&work.join("nope"), &work.join("girpr-cache"), false)
             .is_err()
+    );
+}
+
+/// A conversion that fails leaves **no destination at all**, and nothing else.
+///
+/// Two things are pinned, and they are different questions. The destination
+/// is absent, because there was no `--force` and therefore no previous cache
+/// to preserve — a failed conversion must not leave a file that opens as a
+/// cache, because the next run would trust it. And the directory holds
+/// nothing but the source: the conversion writes into a temporary sibling
+/// beside the destination, and that temporary is the tool's own residue. It
+/// must not outlive the failure, because a file in the user's tree that
+/// looks like a cache is a file the user has to clean up by hand.
+#[test]
+fn a_failed_conversion_leaves_no_destination_and_no_temporary() {
+    let t = temp_root("convert_fail");
+    let work = t.subdir("w");
+    build_sled_db_with_bad_row(&work);
+    let src = work.join("legacy-cache-bad");
+    let dst = work.join("girpr-cache");
+
+    let err = girsync::convert::sled_to_redb(&src, &dst, false).unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("bad.txt") && msg.contains("md5"),
+        "the failure names the row it could not decode: {msg}"
+    );
+    assert!(!dst.exists(), "a failed conversion leaves no destination");
+    assert_eq!(
+        entry_names(&work),
+        vec!["legacy-cache-bad".to_string()],
+        "nothing but the source is left behind"
+    );
+}
+
+/// Under `--force`, a conversion that fails leaves the previous cache exactly
+/// as it was.
+///
+/// This is the half that decides whether `--force` is safe to use: the
+/// previous cache is the only copy of the hashes the old build had, so
+/// destroying it before the new one is known to be good trades a cache for
+/// nothing.
+///
+/// The old cache is compared byte for byte and then opened, because "the file
+/// is still there" and "the file is still a cache" are different answers, and
+/// only the second one is worth anything to the next run.
+#[test]
+fn a_failed_forced_conversion_leaves_the_previous_cache_intact() {
+    let t = temp_root("convert_force_fail");
+    let work = t.subdir("w");
+    build_sled_db(&work);
+    build_sled_db_with_bad_row(&work);
+    let good = work.join("legacy-cache");
+    let bad = work.join("legacy-cache-bad");
+    let dst = work.join("girpr-cache");
+
+    girsync::convert::sled_to_redb(&good, &dst, false).unwrap();
+    let before = std::fs::read(&dst).unwrap();
+
+    let err = girsync::convert::sled_to_redb(&bad, &dst, true).unwrap_err();
+    assert!(
+        format!("{:#}", err).contains("bad.txt"),
+        "the failure names the row it could not decode: {:#}",
+        err
+    );
+    assert_eq!(
+        std::fs::read(&dst).unwrap(),
+        before,
+        "the previous cache is byte-identical"
+    );
+
+    // ...and it is still a cache, not just a file of the right size.
+    let recs = {
+        let cache = open_db(&dst, true, rw()).unwrap();
+        load_all_records(&cache).unwrap()
+        // cache handle drops here, releasing the file lock
+    };
+    assert_eq!(recs.len(), 3, "the previous cache still holds its rows");
+    assert_eq!(
+        entry_names(&work),
+        vec![
+            "girpr-cache".to_string(),
+            "legacy-cache".to_string(),
+            "legacy-cache-bad".to_string(),
+        ],
+        "the failed conversion left nothing behind"
+    );
+}
+
+/// A successful `--force` conversion **replaces** the old destination.
+///
+/// The source gains a row between the two conversions, so the second result
+/// is observably different from the first: a destination that was left
+/// alone would still hold three rows rather than four.
+#[test]
+fn a_forced_conversion_replaces_the_destination_and_leaves_no_temporary() {
+    let t = temp_root("convert_force_ok");
+    let work = t.subdir("w");
+    build_sled_db(&work);
+    let src = work.join("legacy-cache");
+    let dst = work.join("girpr-cache");
+
+    girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
+    {
+        let db = sled::open(&src).unwrap();
+        db.insert(
+            "later.txt",
+            serde_json::to_vec(&old_rec("file", 7, HashMap::new())).unwrap(),
+        )
+        .unwrap();
+        db.flush().unwrap();
+    }
+
+    let c = girsync::convert::sled_to_redb(&src, &dst, true).unwrap();
+    assert_eq!((c.files, c.dirs), (3, 1));
+    assert!(dst.is_file(), "the destination is a redb file");
+
+    let recs = {
+        let cache = open_db(&dst, true, rw()).unwrap();
+        load_all_records(&cache).unwrap()
+        // cache handle drops here, releasing the file lock
+    };
+    assert_eq!(recs.len(), 4, "the new cache replaced the old one");
+    assert!(
+        recs.contains_key("later.txt"),
+        "the row the first conversion did not have is there"
+    );
+    assert_eq!(
+        entry_names(&work),
+        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
+        "the conversion left nothing behind"
+    );
+}
+
+/// A conversion that succeeds creates the destination and nothing else.
+///
+/// The temporary the conversion writes into is gone, which is the half of
+/// the atomicity that is easy to forget: a leftover beside the destination
+/// is a file in the user's tree that nothing will ever clean up.
+#[test]
+fn a_successful_conversion_creates_the_destination_and_no_temporary() {
+    let t = temp_root("convert_ok");
+    let work = t.subdir("w");
+    build_sled_db(&work);
+    let src = work.join("legacy-cache");
+    let dst = work.join("girpr-cache");
+
+    let c = girsync::convert::sled_to_redb(&src, &dst, false).unwrap();
+    assert_eq!((c.files, c.dirs), (2, 1));
+    assert!(dst.is_file(), "the destination is a redb file");
+    assert_eq!(
+        entry_names(&work),
+        vec!["girpr-cache".to_string(), "legacy-cache".to_string()],
+        "the conversion left nothing behind"
     );
 }
 
