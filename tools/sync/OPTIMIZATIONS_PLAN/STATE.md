@@ -371,15 +371,22 @@ reviews:
     result: null
     followups: []
   - batch: B20
-    status: in_progress
+    status: done
     tasks: [F53]
     base: 80b419d6
-    head: 0ce5c0f3
-    result: null
-    followups: []
+    head: 4a42cf81
+    result: F53 fixed (8505c72a separates the three answers of taking a record, removes the record when the lock cannot be taken, and publishes without one rather than failing the run; fc06393f adds the case the code got wrong; 420485dd and 4a42cf81 correct the record name in the docs and one false sentence); 541 passed without the feature and 554 with it, 1 skipped; the guarantee verified to leave no window where neither the record nor the cache lock protects a live run's copy
+    followups: [F57, F58, F60, F61]
   - batch: B21
     status: pending
-    tasks: [F52, F54, F55, F56]
+    tasks: [F52, F54, F55, F57]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B22
+    status: pending
+    tasks: [F56, F58, F60, F61]
     base: null
     head: null
     result: null
@@ -724,9 +731,9 @@ followups:
   - id: F53
     source: F17
     description: A copy another run has already published is still the bound's to take, so two concurrent runs can still have one lose its published copy; telling a published copy from one still in use needs a marker of its own.
-    status: pending_review
+    status: completed
     batch: B20
-    commits: [cd3942ee, 29ea8fab, 214cc1ae, 0ce5c0f3]
+    commits: [cd3942ee, 29ea8fab, 214cc1ae, 0ce5c0f3, 8505c72a, fc06393f, 420485dd, 4a42cf81]
   - id: F54
     source: F49
     description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
@@ -743,7 +750,38 @@ followups:
     source: F49
     description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
     status: pending
+    batch: B22
+    commits: []
+  - id: F57
+    source: F53
+    description: A record that cannot be read or locked spares its copy for good, so on a filesystem that cannot lock a file a record left by an older build defeats the bound for that copy forever.
+    status: pending
     batch: B21
+    commits: []
+  - id: F58
+    source: F53
+    description: retain_copies is pub, but its safety rests entirely on the caller already holding the folder's cache exclusive lock, and nothing in the signature or doc says so.
+    status: pending
+    batch: B22
+    commits: []
+  - id: F59
+    source: F53
+    description: The published-copy registry forgets a copy once the bound for its folder has run, so a second bound on the same folder inside one process would no longer spare the copy that run is still using.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same defect as F56, which is already scheduled; recording it twice would make the same fix look like two items
+  - id: F60
+    source: F53
+    description: The record's body (pid=, started=) is written but never read, so nothing reports or checks which run holds a record.
+    status: pending
+    batch: B22
+    commits: []
+  - id: F61
+    source: F53
+    description: The copy's protection after the record is released rests on redb's exclusive file lock, which is redb's property rather than something the suite pins.
+    status: pending
+    batch: B22
     commits: []
 ```
 
@@ -776,6 +814,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B20 `done`: F53 fixed (8505c72a, fc06393f, 420485dd,
+  4a42cf81); follow-ups F57, F58, F60 and F61 appended, F59 recorded as
+  `skipped` because it is the same defect as F56, which is already scheduled.
+  B21 and B22 are scheduled next, and the state records that the concurrency
+  chain ends there: any further follow-up of the same kind that B21 or B22
+  produces is to be recorded as `skipped` with the reason. F53
+  `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch B20 review checkpoint opened: F53
   `in_progress` → `pending_review`, commits `cd3942ee`, `29ea8fab`,
   `214cc1ae`, `0ce5c0f3`; review B20 `pending` → `in_progress`, base
