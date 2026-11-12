@@ -371,10 +371,10 @@ reviews:
     result: null
     followups: []
   - batch: B20
-    status: pending
+    status: in_progress
     tasks: [F53]
-    base: null
-    head: null
+    base: 80b419d6
+    head: 0ce5c0f3
     result: null
     followups: []
   - batch: B21
@@ -724,9 +724,9 @@ followups:
   - id: F53
     source: F17
     description: A copy another run has already published is still the bound's to take, so two concurrent runs can still have one lose its published copy; telling a published copy from one still in use needs a marker of its own.
-    status: in_progress
+    status: pending_review
     batch: B20
-    commits: []
+    commits: [cd3942ee, 29ea8fab, 214cc1ae, 0ce5c0f3]
   - id: F54
     source: F49
     description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
@@ -776,6 +776,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B20 review checkpoint opened: F53
+  `in_progress` → `pending_review`, commits `cd3942ee`, `29ea8fab`,
+  `214cc1ae`, `0ce5c0f3`; review B20 `pending` → `in_progress`, base
+  `80b419d6`, head `0ce5c0f3`.
 - 2026-11-13 — follow-up batch B20 started: F53 `pending` → `in_progress`;
   `active_batch: B12` → `B20`.
 - 2026-11-13 — review B12 `done`: F17 fixed (5b89a4fb, 4f3b7e10), F49 kept;
