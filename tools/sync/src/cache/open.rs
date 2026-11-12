@@ -297,9 +297,9 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// published under its own name once it is complete, so the name never holds
 /// half a copy and no bound can select a copy that is still being made.
 ///
-/// How many copies are kept beside the cache is [`retain_copies`]'s business:
-/// the bound is about the folder, so it is applied by the caller whether or
-/// not this call made a copy.
+/// How many copies are kept beside the cache is the bound's business: the
+/// bound is about the folder, so it is applied by the caller whether or not
+/// this call made a copy.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
     copy_aside(db_path, BACKUP_PREFIX, "backup", ts_now)
@@ -310,7 +310,8 @@ pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
 ///
 /// The snapshot is published like a backup is: whole, or not at all.
 ///
-/// The bound is [`retain_copies`]'s business here too, for the same reason.
+/// The bound is applied here too, for the same reason: it is about the
+/// folder, so the caller applies it whether or not this call made a copy.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
 pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     copy_aside(db_path, OLD_PREFIX, "snapshot-old", ts_now)
@@ -330,6 +331,15 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// siblings carrying a prefix are considered, so a file of the user's that
 /// happens to sit in the same directory is never touched.
 ///
+/// **The bound runs under the folder's cache lock.** A bound that runs while
+/// another run is in its run phase for the folder can take that run's
+/// copies: the cache's own exclusive lock is what says no other run is
+/// there. The open holds that lock while it bounds, and a folder whose cache
+/// did not open takes it for the bound; a folder with no lock to take — a
+/// legacy sled directory, or a cache that cannot be locked — is bounded
+/// without one, and the copies a live run published there are protected by
+/// the records beside them instead.
+///
 /// **A copy a live run is using is not the bound's to remove.** A published
 /// copy carries a record of its own, and the run that published it holds a
 /// lock on that record until it opens the folder's cache. A bound that meets
@@ -345,7 +355,7 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// them, and not only the first one: the copy a run published is the copy
 /// that run reports, so a bound that took it would leave a later bound free
 /// to take the copy the run is still about to report.
-pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
+fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
     let parent = folder_of(db_path);
     let spared = published_under(parent);
     // One reading of the folder: the bound is a statement about what the
