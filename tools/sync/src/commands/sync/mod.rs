@@ -201,13 +201,18 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         // the record of what dst held before the mirror moved, so a second
         // copy of the same bytes under another name would be a third copy of
         // one file.
+        //
+        // The bound is not a step here either: it is applied when the caches
+        // are opened below, because it is about the folder and not about this
+        // run's copy — a folder whose cache is absent, and a `--no-backup`
+        // run, are bounded just the same.
         if common.backup.wants_backup() {
             if src_db_path.exists() {
-                backup_db(&src_db_path, common.backup.retain)?;
+                backup_db(&src_db_path)?;
             }
             if dst_db_path.exists() {
                 // old-state snapshot before any dst changes
-                snapshot_old(&dst_db_path, common.backup.retain)?;
+                snapshot_old(&dst_db_path)?;
             }
         }
         if common.ignore_cache {

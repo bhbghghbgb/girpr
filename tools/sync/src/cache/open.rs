@@ -1,9 +1,10 @@
 //! Opening a cache: [`open_db`], the backups and snapshots, and the version gate.
 //!
 //! Everything here is a decision about **the file as a whole** — whether it
-//! exists, what version it is, whether it is copied aside first — rather than
-//! about any one row. That is why [`CacheOpen`] is its own enum here rather than
-//! a parameter threaded through [`CacheDb`]'s methods.
+//! exists, what version it is, whether it is copied aside first, how many
+//! copies of it are kept beside it — rather than about any one row. That is
+//! why [`CacheOpen`] is its own enum here rather than a parameter threaded
+//! through [`CacheDb`]'s methods.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
@@ -19,6 +20,15 @@ use super::db::{CacheDb, redb_builder};
 use super::schema::{CACHE_VERSION, FileRec, Meta};
 use super::{META_KEY, META_TBL};
 
+/// The prefix of the copies the tool keeps beside a cache.
+///
+/// Every sibling carrying this prefix is one of the tool's own, so a bound
+/// over them is the tool's business and never the user's files'.
+const BACKUP_PREFIX: &str = "girpr-cache-backup-";
+
+/// The prefix of the pre-sync snapshots the tool keeps beside a cache.
+const OLD_PREFIX: &str = "girpr-cache-old-";
+
 /// How a cache file should be opened.
 ///
 /// A read/write open is a *participant* in the run: it may create the file,
@@ -32,11 +42,15 @@ pub enum CacheOpen {
     /// `ignore_cache` backs up (when `backup_first`) and deletes the file so it
     /// is rebuilt from scratch. `backup_first` copies it aside to
     /// `girpr-cache-backup-<ts>` before opening, and `retain` says how many
-    /// siblings of that prefix are kept beside it — `None` keeps them all.
+    /// siblings of each prefix are kept beside it — `None` keeps them all.
+    ///
+    /// The bound is about the **folder**, not about this open: it is applied
+    /// whether or not a copy was made, so a folder with no cache and an open
+    /// that copies nothing aside are bounded just the same.
     ReadWrite {
         ignore_cache: bool,
         backup_first: bool,
-        /// How many `girpr-cache-backup-*` siblings to keep beside the cache.
+        /// How many siblings of each prefix to keep beside the cache.
         retain: Option<NonZeroUsize>,
     },
     /// Open the existing file for reading only: no create-if-missing, no
@@ -56,6 +70,13 @@ pub enum CacheOpen {
 /// force a rebuild. A corrupt cache is a hard error; the message points at
 /// `--ignore-cache`.
 ///
+/// A read/write open applies the **bound** it was given to the folder the
+/// cache lives in: only the newest `retain` siblings of each prefix are kept
+/// beside it. The bound is about the folder rather than about the copy this
+/// open made, so it holds for a folder whose cache is absent and for an open
+/// that copies nothing aside — the copies already sitting beside a folder are
+/// the ones the bound is about.
+///
 /// [`CacheOpen::ReadOnly`] inverts every side effect: the file must exist, is
 /// never opened for writing, and is left byte-identical. It still validates the
 /// schema version, because a cache this build cannot decode is useless
@@ -72,12 +93,18 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
         } => {
             if ignore_cache && db_path.exists() {
                 if backup_first {
-                    backup_db(db_path, retain)?;
+                    backup_db(db_path)?;
                 }
                 remove_cache_path(db_path)?;
                 info!(path = %db_path.display(), "ignore-cache removed");
             } else if backup_first && db_path.exists() {
-                backup_db(db_path, retain)?;
+                backup_db(db_path)?;
+            }
+            // The bound, applied whether or not a copy was made: it is a
+            // statement about the folder, not about this open. After the copy,
+            // so the copy just made is one of the newest the folder keeps.
+            if let Some(keep) = retain {
+                retain_copies(db_path, keep)?;
             }
             let db = CacheDb::open_file(db_path)?;
             CacheDb::init_meta(&db, case_sensitive)?;
@@ -133,36 +160,46 @@ pub fn remove_cache_path(db_path: &Path) -> Result<()> {
 /// Works for redb files and legacy sled directories alike.
 /// Returns the backup path, or `None` when there was nothing to copy.
 ///
-/// `retain` is how many `girpr-cache-backup-*` siblings are kept beside the
-/// cache; `None` keeps them all.
+/// How many copies are kept beside the cache is [`retain_copies`]'s business:
+/// the bound is about the folder, so it is applied by the caller whether or
+/// not this call made a copy.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
-pub fn backup_db(db_path: &Path, retain: Option<NonZeroUsize>) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, "girpr-cache-backup-", "backup", retain)
+pub fn backup_db(db_path: &Path) -> Result<Option<PathBuf>> {
+    copy_aside(db_path, BACKUP_PREFIX, "backup")
 }
 
 /// Copy an existing cache to `<parent>/girpr-cache-old-<ts>` to record the
 /// pre-sync dst state. Returns the snapshot path, or `None` when absent.
 ///
-/// `retain` is how many `girpr-cache-old-*` siblings are kept beside the
-/// cache; `None` keeps them all.
+/// The bound is [`retain_copies`]'s business here too, for the same reason.
 #[tracing::instrument(skip_all, fields(db = %db_path.display()))]
-pub fn snapshot_old(db_path: &Path, retain: Option<NonZeroUsize>) -> Result<Option<PathBuf>> {
-    copy_aside(db_path, "girpr-cache-old-", "snapshot-old", retain)
+pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
+    copy_aside(db_path, OLD_PREFIX, "snapshot-old")
+}
+
+/// Keep only the newest `keep` copies the tool keeps beside a cache.
+///
+/// **The bound is about the folder, not about a copy.** The copies a folder
+/// accumulates are bounded by what the user asked for whether or not this run
+/// added one, so the bound is a step of its own rather than a side effect of
+/// a successful copy: a folder whose cache is absent, and a run that copies
+/// nothing aside, are bounded just the same.
+///
+/// The two prefixes are separate lists with separate bounds — the
+/// `girpr-cache-backup-*` copies and the `girpr-cache-old-*` snapshots are
+/// different things, and a bound on one is not a bound on the other. Only
+/// siblings carrying a prefix are considered, so a file of the user's that
+/// happens to sit in the same directory is never touched.
+pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
+    let parent = db_path.parent().unwrap_or_else(|| Path::new("."));
+    retain_siblings(parent, BACKUP_PREFIX, keep)?;
+    retain_siblings(parent, OLD_PREFIX, keep)
 }
 
 /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
 /// cache) is copied recursively; a redb file is copied in one call. The
 /// destination never replaces an existing sibling.
-///
-/// `retain` bounds what accumulates beside the cache: the newest `retain`
-/// siblings of this prefix are kept and the older ones are removed. `None`
-/// keeps them all.
-fn copy_aside(
-    db_path: &Path,
-    prefix: &str,
-    label: &str,
-    retain: Option<NonZeroUsize>,
-) -> Result<Option<PathBuf>> {
+fn copy_aside(db_path: &Path, prefix: &str, label: &str) -> Result<Option<PathBuf>> {
     if !db_path.exists() {
         trace!(path = %db_path.display(), "{label} skip: db missing");
         return Ok(None);
@@ -186,9 +223,6 @@ fn copy_aside(
         return Err(e);
     }
     info!(src = %db_path.display(), dst = %dest.display(), "{label} done");
-    if let Some(keep) = retain {
-        retain_siblings(parent, prefix, keep)?;
-    }
     Ok(Some(dest))
 }
 

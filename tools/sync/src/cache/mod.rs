@@ -92,7 +92,7 @@ pub use db::{CacheDb, TestCacheBackend};
 // `GIRSYNC_TEST_CACHE=memory`.
 pub use open::{
     CacheOpen, backup_db, get_rec, load_all_records, open_db, put_rec, remove_cache_path,
-    remove_rec, snapshot_old,
+    remove_rec, retain_copies, snapshot_old,
 };
 pub use schema::{CACHE_PREFIX, CACHE_VERSION, FileRec, Meta};
 pub use write::{COMMIT_BATCH, COMMIT_BYTES, COMMIT_INTERVAL, CacheWrite, CommitLimits};
