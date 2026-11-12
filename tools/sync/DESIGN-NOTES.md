@@ -339,26 +339,53 @@ self-skip on a host that refuses `symlink_file`), and the `plan::tests` cases
 
 ### A digest is looked up by name, not by slot
 
-`DigestSet` has two lookups and they are not interchangeable: `get(HashAlg)` reads
-a slot, `get_named(&str)` reads the slot *and* the foreign arm.
+`DigestSet` has three lookups, and the two that answer the usual question agree.
+`get_algo(HashAlg)` reads the slot *and* the foreign arm; `get_named(&str)` asks
+by name; `get(HashAlg)` reads the slot and nothing else.
 
 **Every caller asking "does this row hold algorithm X" must use the by-name one** —
-`obtainable` in the planner, `hashes_differ`, `verify_digests`, and
-`HashPlan::missing`. A row whose `md5` is stored with eight bytes is not in the md5
-slot, and a slot lookup reports that row as holding nothing at all.
+`obtainable` and `pick_one` in the planner, `HashPlan::missing`, `hashes_differ` in
+the diff, and `verify_digests` in the copy phase. A row whose `md5` is stored with
+eight bytes is not in the md5 slot, and a slot lookup reports that row as holding
+nothing at all.
 
-The consequences are not cosmetic, and they point in opposite directions.
-`plan_pairs`'s coverage check would fail a run that is perfectly answerable, so the
-user is refused work they could have had. Worse, `hashes_differ` is *silent* on a
-missing digest — bounded only because the planner chose those algorithms — so a
-slot lookup would report a corrupt row as clean. That is the false clean, reached
-from the other side, and the coverage check cannot see it because the row genuinely
-does hold a digest under that name.
+**The foreign arm is searched by name, not by spelling.** A known algorithm is
+found under any ASCII-case spelling of its name — `MD5` as well as `md5` — because
+the arm is matched by *parsing* the stored name, and that parser is the
+algorithm's own, which folds ASCII case only. `get_named` answers a **known** name
+exactly as `get_algo` does, so the two cannot disagree about a row that holds
+`MD5` where the request says `md5`. Both go through the same helper, and the
+first match wins: the answer is a property of the row rather than of an iteration
+order.
 
-**Enforced by:** `tests/why/disagreement.rs`, whose fixtures deliberately give
-`sha256` a six-byte digest so the row really does carry a known name in the foreign
-arm, and which asserts the comparison still finds it; and
-`a_known_name_with_the_wrong_length_routes_to_foreign`.
+**An unknown name is matched exactly.** `get_named("blake3")` finds a foreign
+digest stored under that spelling and no other, and no known algorithm's lookup
+can return it — it is not an algorithm, so nothing this build knows how to ask for
+could mean it.
+
+`get(HashAlg)` is the **slot** read, and it is what `get_algo` asks first. A
+caller that means *the digest in this algorithm's slot* may use it; a caller that
+means *the digest this row holds under this name* — which is every caller in a
+run — must not, because the two have different answers for a row whose known name
+carries an unexpected length.
+
+The consequences of getting that wrong are not cosmetic, and they point in opposite
+directions. `plan_pairs`'s coverage check would fail a run that is perfectly
+answerable, so the user is refused work they could have had. Worse, `hashes_differ`
+is *silent* on a missing digest — bounded only because the planner chose those
+algorithms — so a slot lookup would report a corrupt row as clean. That is the
+false clean, reached from the other side, and the coverage check cannot see it
+because the row genuinely does hold a digest under that name.
+
+**Enforced by:** `a_known_name_in_the_foreign_arm_is_found_under_any_ascii_case`,
+`an_unknown_name_is_matched_exactly_and_by_no_algorithm`,
+`a_known_name_with_the_right_length_still_goes_to_its_slot`,
+`a_typed_lookup_finds_a_known_name_carried_in_foreign` and
+`a_non_ascii_lookalike_name_is_never_matched` in `src/hash/tests.rs`;
+`a_known_name_with_the_wrong_length_routes_to_foreign` for the routing rule; and
+`tests/why/disagreement.rs`, whose fixtures give `sha256` a digest of the wrong
+length so the row really does carry a known name in the foreign arm, and which
+asserts the comparison still finds it.
 
 ---
 
