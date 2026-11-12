@@ -968,8 +968,9 @@ fn take_hold(parent: &Path, copy_name: &str) -> Result<Claim> {
 /// Take an exclusive lock on a record, if the filesystem can lock a file.
 ///
 /// A filesystem that cannot lock one is a filesystem whose records cannot say
-/// anything: the caller publishes the copy without a record rather than
-/// failing the run.
+/// anything: the publisher publishes the copy without a record rather than
+/// failing the run, and a bound reads such a record as saying nothing at
+/// all.
 fn lock_record(file: &File) -> std::result::Result<(), TryLockError> {
     #[cfg(test)]
     if LOCKING_UNAVAILABLE.with(|f| f.get()) {
@@ -984,7 +985,8 @@ fn lock_record(file: &File) -> std::result::Result<(), TryLockError> {
 //
 // A filesystem that cannot lock a file is not something a test can make, so
 // the failure is injected here: with the switch on, a record's lock fails the
-// way it fails on such a filesystem.
+// way it fails on such a filesystem — for the publisher and for the bound
+// alike, because both read the same lock.
 #[cfg(test)]
 std::thread_local! {
     static LOCKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -1003,7 +1005,9 @@ fn write_hold_body(file: &File) {
 
 /// What a published copy's record says about it.
 enum Record {
-    /// No record: nothing says the copy is in use.
+    /// Nothing says the copy is in use: there is no record, or the record
+    /// cannot be read or cannot be locked — and either of those says
+    /// nothing at all.
     Unmarked,
     /// A live run holds the record: the copy is that run's to keep.
     InUse,
@@ -1016,39 +1020,61 @@ enum Record {
 ///
 /// A record a live run holds spares the copy. A stale record says nothing, so
 /// the copy is the bound's to take like any other, and the record is
-/// reclaimed with it. A record that cannot be read or cannot be locked spares
-/// the copy as well: a bound cannot tell a live run from a dead one, and a
-/// copy it cannot judge is not its to take.
+/// reclaimed with it.
+///
+/// A record that cannot be read or cannot be locked says nothing as well, so
+/// it does not spare the copy either: nobody can be holding a lock on a file
+/// the filesystem cannot lock, and a record that cannot be read cannot be the
+/// record of a live run. Such a record is left where it is — a bound that
+/// cannot judge a record cannot claim it either — but it does not stop the
+/// bound, so the copy it spoke for is an ordinary copy again.
 fn record_state(parent: &Path, copy_name: &str) -> Result<Record> {
     let Some(path) = record_path(parent, copy_name) else {
         return Ok(Record::Unmarked);
     };
     match take_the_lock(&path) {
-        Some(file) => Ok(Record::Stale { path, _file: file }),
-        None => {
-            if path.symlink_metadata().is_err() {
-                Ok(Record::Unmarked)
-            } else {
-                trace!(path = %path.display(), "a copy's record is held; the copy is spared");
-                Ok(Record::InUse)
-            }
+        RecordLock::Stale(file) => Ok(Record::Stale { path, _file: file }),
+        RecordLock::Held => {
+            trace!(path = %path.display(), "a copy's record is held; the copy is spared");
+            Ok(Record::InUse)
         }
+        RecordLock::Unreadable | RecordLock::Untestable => Ok(Record::Unmarked),
     }
+}
+
+/// What a record's lock says.
+enum RecordLock {
+    /// The lock was taken: nobody holds the record, so it is stale.
+    Stale(File),
+    /// A live run holds the record.
+    Held,
+    /// The record cannot be read.
+    Unreadable,
+    /// The lock cannot be tested: the filesystem cannot lock a file.
+    Untestable,
 }
 
 /// Take the lock on a record, if it can be taken.
 ///
-/// `Some` means nobody holds the record: the run that made it is gone. `None`
-/// means a live run holds it, or the lock cannot be taken or tested at all —
-/// the two are told apart by the caller, which looks at the path.
-fn take_the_lock(path: &Path) -> Option<File> {
-    let file = File::open(path).ok()?;
-    match file.try_lock() {
-        Ok(()) => Some(file),
-        Err(TryLockError::WouldBlock) => None,
+/// The answers are told apart because the bound reads them differently: a
+/// record nobody holds is stale and the copy is the bound's to take, a record
+/// a live run holds spares the copy, and a record that cannot be read or
+/// whose lock cannot be tested says nothing at all — so it spares nothing
+/// either.
+fn take_the_lock(path: &Path) -> RecordLock {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            trace!(path = %path.display(), error = %e, "a record cannot be read");
+            return RecordLock::Unreadable;
+        }
+    };
+    match lock_record(&file) {
+        Ok(()) => RecordLock::Stale(file),
+        Err(TryLockError::WouldBlock) => RecordLock::Held,
         Err(TryLockError::Error(e)) => {
             trace!(path = %path.display(), error = %e, "cannot test a record's lock");
-            None
+            RecordLock::Untestable
         }
     }
 }
@@ -1068,7 +1094,11 @@ fn reclaim_records(folder: &[(std::ffi::OsString, PathBuf)]) -> Result<()> {
         if !name.to_string_lossy().starts_with(HOLD_PREFIX) {
             continue;
         }
-        if let Some(file) = take_the_lock(path) {
+        // Only a record whose lock can be taken is reclaimed: that is the
+        // one that says its run is gone. A record that cannot be read or
+        // whose lock cannot be tested says nothing, and a bound that cannot
+        // judge it does not own it.
+        if let RecordLock::Stale(file) = take_the_lock(path) {
             let _ = std::fs::remove_file(path);
             drop(file);
         }
@@ -1740,6 +1770,41 @@ mod tests {
             "a copy whose run is gone is the bound's to take again"
         );
         assert!(!record.exists(), "and the stale record goes with it");
+        assert!(newer.exists(), "the newest copy is kept");
+    }
+
+    /// A record that cannot be locked does not spare its copy for good.
+    ///
+    /// A filesystem that cannot lock a file has no records to speak: a
+    /// record left behind by an older build says nothing, so the copy it
+    /// spoke for is an ordinary copy again and the bound takes it like any
+    /// other. A record that spared the copy for good would leave the copy
+    /// beside the cache for ever.
+    #[test]
+    fn a_record_that_cannot_be_locked_does_not_spare_its_copy() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "nolock_record");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        let name = format!("{BACKUP_PREFIX}{STAMP}");
+        let copy = dir.join(&name);
+        std::fs::write(&copy, b"a copy").unwrap();
+        // A record nobody holds, on a filesystem that cannot lock a file:
+        // the lock cannot be tested, so the record says nothing.
+        let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
+        std::fs::write(&record, b"pid=1\n").unwrap();
+
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        LOCKING_UNAVAILABLE.with(|f| f.set(true));
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+        LOCKING_UNAVAILABLE.with(|f| f.set(false));
+
+        assert!(
+            !copy.exists(),
+            "a record that cannot be locked does not spare the copy for good"
+        );
         assert!(newer.exists(), "the newest copy is kept");
     }
 
