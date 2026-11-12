@@ -13,6 +13,12 @@
 //! not atomic: the directory has to be removed before the new file can take
 //! its name.
 //!
+//! The temporary is written into the folder the destination cache lives in,
+//! so its name is inside the tool's own namespace — see
+//! [`CONVERT_TEMP_PREFIX`]. A conversion that is killed before it can clean
+//! up after itself therefore leaves tool state behind, not a file the next
+//! run would treat as ordinary content.
+//!
 //! Used by the `sled2redb` binary and covered by `tests/convert.rs`. This is
 //! the only module that still touches `sled`.
 
@@ -29,11 +35,18 @@ const OLD_META_KEY: &str = "\0meta";
 
 /// The prefix of the temporary sibling a conversion writes into.
 ///
-/// Deliberately **not** `girpr-cache`: that prefix is the cache's own
-/// namespace — the live cache, its `backup-*` copies and its `old-*`
-/// snapshots — and a scan prunes anything under it. A temporary with that
-/// name would be mistaken for a live cache.
-const TEMP_PREFIX: &str = ".girsync-convert-";
+/// **The name is in the tool's own namespace**, and it has to be. The
+/// temporary is written into the folder the destination cache lives in, so a
+/// conversion that is killed before it can clean up after itself leaves a
+/// file in the user's tree. Every `girpr-cache*` component is reserved by the
+/// scan, so a name inside that namespace leaves the leftover looking like
+/// what it is — the tool's own residue — rather than like ordinary content,
+/// which a later run would copy out of a source folder or delete as an extra
+/// in a destination one.
+///
+/// It is not the live cache's name: that is `girpr-cache` itself, and only
+/// the rename puts the finished database there.
+pub const CONVERT_TEMP_PREFIX: &str = "girpr-cache-convert-";
 
 /// How many candidate names a claim tries before it gives up.
 ///
@@ -245,9 +258,9 @@ fn replace_destination(temp: &Path, dst: &Path) -> Result<()> {
 /// window is exactly where two concurrent runs would collide.
 ///
 /// The name carries the process id and a timestamp, so a leftover from an
-/// interrupted run is recognisable rather than anonymous, and it never
-/// starts with `girpr-cache` so that a scan cannot mistake it for a live
-/// cache.
+/// interrupted run is recognisable rather than anonymous, and it carries the
+/// tool's own prefix so that a scan reads such a leftover as tool state
+/// rather than as content.
 fn claim_temp_sibling(dst: &Path) -> Result<PathBuf> {
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
     let stamp = format!("{}-{}", std::process::id(), crate::util::ts_now());
@@ -291,9 +304,9 @@ fn claim_temp_sibling(dst: &Path) -> Result<PathBuf> {
 /// so on.
 fn temp_candidate_name(stamp: &str, n: u32) -> String {
     if n == 1 {
-        format!("{TEMP_PREFIX}{stamp}.redb")
+        format!("{CONVERT_TEMP_PREFIX}{stamp}.redb")
     } else {
-        format!("{TEMP_PREFIX}{stamp}_{n}.redb")
+        format!("{CONVERT_TEMP_PREFIX}{stamp}_{n}.redb")
     }
 }
 
