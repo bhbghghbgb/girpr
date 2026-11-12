@@ -259,10 +259,10 @@ reviews:
     result: F7 kept (f1b638e1); F11 kept (d4548755); F12 kept (cb4456f4); F13 kept (0b3afb32); F18 kept (84af494b); no fix or revert commits; 520 passed, 1 skipped; the repair was verified to commit the table it creates
     followups: [F39, F40]
   - batch: B4
-    status: pending
+    status: in_progress
     tasks: [F9, F10]
-    base: null
-    head: null
+    base: 1dbf85a5
+    head: a29c139a
     result: null
     followups: []
   - batch: B5
@@ -397,13 +397,13 @@ followups:
   - id: F9
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
-    status: in_progress
+    status: pending_review
     batch: B4
     commits: []
   - id: F10
     source: T08
     description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
-    status: in_progress
+    status: pending_review
     batch: B4
     commits: []
   - id: F11
@@ -617,6 +617,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B4 review checkpoint opened: F9 and F10
+  `in_progress` → `pending_review`, commits `a7b24113`, `a29c139a`; review B4
+  `pending` → `in_progress`, base `1dbf85a5`, head `a29c139a`.
 - 2026-11-12 — follow-up batch B4 started: F9 and F10 `pending` →
   `in_progress`; `active_batch: B3` → `B4`.
 - 2026-11-12 — review B3 `done`: F7, F11, F12, F13 and F18 kept, no fix or
