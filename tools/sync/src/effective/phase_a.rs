@@ -238,15 +238,17 @@ pub fn scan_stat_only(
                 last_prog = std::time::Instant::now();
             }
         }
-        // An included entry pulls its ancestor directories back in: the
-        // directories above it are part of the path the filter kept, and the
-        // directory entry is what carries `is_link`.
+        // An included entry pulls its ancestor directories back in: the map
+        // holds every path the filter keeps *and* every directory above one
+        // of them, so a directory above a kept path is in the map whether the
+        // filter kept it or hid it. The directory entry is what carries
+        // `is_link`.
         //
         // The pull-in is *recorded* rather than done here. The ancestor may be
         // an entry the walk has already passed — it was hidden by the filter on
         // its own account — and the walk's order says nothing about which of
-        // the two comes first. The fix-up below inserts it, and inserts it
-        // once.
+        // the two comes first, so the pull-in cannot depend on it. The fix-up
+        // below inserts it, and inserts it once.
         let mut end = 0;
         while let Some(i) = e.rel[end..].find('/') {
             let prefix = &e.rel[..end + i];
