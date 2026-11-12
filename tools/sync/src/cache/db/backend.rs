@@ -171,11 +171,12 @@ mod tests {
         assert_eq!(parse_cache_size_mib(Some(too_big)), None);
     }
 
-    /// The default is the size a process uses when nothing else is asked for,
-    /// and it is the one the nextest workload needs: one process per test, so
-    /// each parallel test gets its own.
+    /// The default page-cache size, stated as the number it is.
+    ///
+    /// The reason for the number is on the constant; what this case pins is
+    /// the value, so a change to it has to be a deliberate one.
     #[test]
-    fn the_default_is_the_size_without_a_variable() {
+    fn the_default_size_is_sixty_four_mib() {
         assert_eq!(DEFAULT_CACHE_SIZE_MIB, 64);
     }
 
