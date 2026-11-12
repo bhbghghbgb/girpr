@@ -2025,6 +2025,108 @@ fn run_sync_backup_retain_keeps_the_newest_of_each_prefix() {
     );
 }
 
+/// `--backup-retain N` bounds the copies beside a folder, whether or not this
+/// run copied one.
+///
+/// The copies are what accumulates in a folder over time, so the bound is
+/// about the folder rather than about the run that happens to be looking at
+/// it. A folder whose cache is absent is bounded just the same — otherwise
+/// the copies would only ever be pruned by a run that happened to make
+/// another one.
+#[test]
+fn run_sync_backup_retain_bounds_a_folder_with_no_cache() {
+    let t = temp_root("retain_nocache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // Copies from earlier runs, sitting beside caches these folders do not
+    // have. Both lists are bounded on their own.
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+    wfile(&dst, "girpr-cache-old-20240101T000000.000000Z", b"old");
+    wfile(&dst, "girpr-cache-old-20240102T000000.000000Z", b"newer");
+    assert!(!src.join(CACHE_PREFIX).exists(), "src has no cache");
+    assert!(!dst.join(CACHE_PREFIX).exists(), "dst has no cache");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-"),
+        vec!["girpr-cache-backup-20240102T000000.000000Z".to_string()],
+        "the oldest copy beside src's cache is gone"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-"),
+        vec!["girpr-cache-old-20240102T000000.000000Z".to_string()],
+        "and the oldest snapshot beside dst's cache is gone"
+    );
+}
+
+/// `--no-backup` skips the copies; it does not skip the bound.
+///
+/// The two are separate questions: the copies are what this run leaves
+/// behind, and the bound is what the folder keeps. A run that copies nothing
+/// aside still has to leave the folder within the bound the user asked for.
+#[test]
+fn run_sync_with_no_backup_still_bounds_the_copies() {
+    let t = temp_root("retain_nobak");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // A cache, so a run that copied aside would have copied this one.
+    let mut up = update(src.clone());
+    up.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    cmd_update(up, &log()).unwrap();
+    assert!(src.join(CACHE_PREFIX).exists(), "src has a cache");
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-"),
+        vec!["girpr-cache-backup-20240102T000000.000000Z".to_string()],
+        "the bound holds even though this run copied nothing aside"
+    );
+}
+
+/// A dry run writes nothing, and a bound is a removal.
+#[test]
+fn run_sync_dry_run_bounds_nothing() {
+    let t = temp_root("retain_dry");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync_dry(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        2,
+        "a dry run removes nothing"
+    );
+}
+
 /// A dry run writes nothing, and a copy is a write.
 #[test]
 fn run_sync_dry_run_leaves_no_copy() {
