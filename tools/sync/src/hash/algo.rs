@@ -153,10 +153,14 @@ impl std::str::FromStr for HashAlg {
     /// parser every new caller gets wrong. ASCII case only, which is all an
     /// algorithm name can be.
     ///
-    /// The match is [`HashAlg::from_name`]'s, so this parser and the lookups
+    /// The match is `HashAlg::from_name`'s, so this parser and the lookups
     /// that resolve a *stored* name cannot drift apart. Only the refusal is
     /// this function's own: only a refusal has to name the spelling, and only
     /// a refusal may allocate to keep it.
+    ///
+    /// The resolver is named in plain text rather than linked: it is private to
+    /// the module tree, and a public doc that links to a private item is a
+    /// warning, not a link.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         HashAlg::from_name(s).ok_or_else(|| UnknownHash {
             name: s.to_string(),
