@@ -452,7 +452,7 @@ faithful copy of a src that no longer exists, and the pair compares clean. The
 race is unwinnable by construction — phase A's stat sees the new mtime on the next
 run and re-copies — so it self-heals, but the run that did it reports no error.
 This is the price of not re-reading src, and it is recorded in `README.md`'s
-"What a copy costs", in `copy_one`'s doc, and in `predrop_cache_entries`.
+"What a copy costs" and in `copy_one`'s own doc.
 
 **A stat-only row can get stuck.** A size-changed row arrives in phase A with its
 digests dropped, and a size difference settles the pair for free, so nothing ever

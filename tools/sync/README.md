@@ -799,7 +799,7 @@ not that internal order.
    converging). Neither ever resumes mid-file.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
-The planner pairs the two sides as they are *on disk* — by lowercase in
+The planner pairs the two sides as they are *on disk* — by the ASCII-case fold in
 insensitive mode — and the rename then collapses exactly those pairs onto exact
 keys, which is what the diff compares. Pairing by exact key instead would make a
 case-only pair look one-sided, skip the digest it needs, and leave the diff
@@ -1116,15 +1116,23 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   corrupt cache errors (exit 3,
   `--ignore-cache` backs up + rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
-  **false**): within one side, two live/record paths differing only by case is a
-  fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first
-  (sync). If disk casing differs from the cached key, the key is fixed to the
-  disk name first with hashes reused. Mode mixing never errors by itself — the
-  meta flag is informational; the same record works in both modes.
+  **false**): within one side, two live/record paths differing only by ASCII
+  case is a fatal conflict; across sides it is `CASE-MISMATCH` (compare) or
+  rename-dst-first (sync). If disk casing differs from the cached key, the key
+  is fixed to the disk name first with hashes reused. Mode mixing never errors
+  by itself — the meta flag is informational; the same record works in both
+  modes.
+
+  **The fold is ASCII case only.** Two spellings are one path when they differ
+  only in ASCII case: `Readme.TXT` and `readme.txt` are one path in the default
+  mode. `Ärger` and `ärger` are **two**, because a Unicode fold would merge
+  spellings the filesystem keeps apart — so a case-only difference that is not
+  ASCII is not a `CASE-MISMATCH` at all, but two unrelated paths: one
+  `MISSING` and one `EXTRA`.
 
   **The fatal conflict is what makes the rename pass an index rather than a scan.**
-  Both sides are keyed by lowercase and every src key is a hash lookup, which is
-  only equivalent to the naive "scan all of dst" because a lowercase key maps to
+  Both sides are keyed by that fold and every src key is a hash lookup, which is
+  only equivalent to the naive "scan all of dst" because a folded key maps to
   exactly one path *per side* — `check_mixed_case` has already made the collision
   fatal, and the pass runs only in the mode that check guards. Without that
   invariant the two forms could disagree on which of two colliding keys they pick,
@@ -1273,7 +1281,7 @@ property worth preserving:
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
   comparisons. It is on the default path — insensitive mode is the default — and
   the scan form quadrupled per doubling of the tree.
-- **`diff_maps`' insensitive branch** walks two lowercase indices once each, not
+- **`diff_maps`' insensitive branch** walks two case-folded indices once each, not
   three collections plus a lookup per key.
 
 A `compare` that writes both caches costs the same read count as one that reads
