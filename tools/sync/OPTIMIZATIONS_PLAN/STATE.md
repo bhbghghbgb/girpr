@@ -365,7 +365,7 @@ reviews:
     followups: []
   - batch: B19
     status: pending
-    tasks: [F51]
+    tasks: [F51, F64]
     base: null
     head: null
     result: null
@@ -378,15 +378,22 @@ reviews:
     result: F53 fixed (8505c72a separates the three answers of taking a record, removes the record when the lock cannot be taken, and publishes without one rather than failing the run; fc06393f adds the case the code got wrong; 420485dd and 4a42cf81 correct the record name in the docs and one false sentence); 541 passed without the feature and 554 with it, 1 skipped; the guarantee verified to leave no window where neither the record nor the cache lock protects a live run's copy
     followups: [F57, F58, F60, F61]
   - batch: B21
-    status: in_progress
+    status: done
     tasks: [F52, F54, F55, F57]
     base: a32632aa
     head: 776c3d1e
-    result: null
-    followups: []
+    result: F52 kept (9eebcc83); F54 kept (ca4d5ae4); F55 kept (86467207); F57 kept (85d1a2d1, 980e7a3d); the review also fixed two stale code doc comments (086c4d2f, 6a7e78a5); 549 passed, 1 skipped; the live-record sparing was confirmed on this host with a standalone lock probe
+    followups: [F65, F66, F68]
   - batch: B22
     status: pending
     tasks: [F56, F58, F60, F61]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B23
+    status: pending
+    tasks: [F65, F66, F68]
     base: null
     head: null
     result: null
@@ -725,7 +732,7 @@ followups:
   - id: F52
     source: F17
     description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
-    status: pending_review
+    status: completed
     batch: B21
     commits: [9eebcc83, 3eeeb395]
   - id: F53
@@ -737,13 +744,13 @@ followups:
   - id: F54
     source: F49
     description: The bound now runs after the open, so a cache that fails to open, whether corrupt or a legacy sled directory the open refuses, no longer gets its folder bounded, and those copies accumulate until --ignore-cache rebuilds the cache.
-    status: pending_review
+    status: completed
     batch: B21
     commits: [ca4d5ae4, 3eeeb395]
   - id: F55
     source: F17
     description: The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create.
-    status: pending_review
+    status: completed
     batch: B21
     commits: [86467207, 3eeeb395]
   - id: F56
@@ -755,7 +762,7 @@ followups:
   - id: F57
     source: F53
     description: A record that cannot be read or locked spares its copy for good, so on a filesystem that cannot lock a file a record left by an older build defeats the bound for that copy forever.
-    status: pending_review
+    status: completed
     batch: B21
     commits: [85d1a2d1, 980e7a3d, 77952c07]
   - id: F58
@@ -783,6 +790,44 @@ followups:
     status: pending
     batch: B22
     commits: []
+  - id: F64
+    source: F21
+    description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
+    status: pending
+    batch: B19
+    commits: []
+  - id: F65
+    source: F52
+    description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
+    status: pending
+    batch: B23
+    commits: []
+  - id: F66
+    source: F52
+    description: publish_file warns and carries on when the working file cannot be removed after the link, so a girpr-cache-partial-<ts> can be left behind by a run that was never killed, while the README describes that name only as the result of a killed run.
+    status: pending
+    batch: B23
+    commits: []
+  - id: F67
+    source: F54
+    description: On the open-failure path the bound runs with no lock at all when the cache is a directory, so a live run's copies there rest on their records alone.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a directory has no file to lock, and the records are the protection that already exists there; the notes state the limit
+  - id: F68
+    source: F54
+    description: take_the_cache_lock opens the cache read+write, so a cache file that is not writable fails the open and the bound then runs without the lock, with a warning; the design notes spell out the directory case but not this one.
+    status: pending
+    batch: B23
+    commits: []
+  - id: F69
+    source: F57
+    description: A record that cannot be read or whose lock cannot be tested is never reclaimed, so girpr-cache-hold-* files left behind by an older build accumulate for good on a filesystem that cannot lock a file, even though the copy they spoke for is taken away.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same kind of follow-up as F57, and the copy is reclaimed; only the record file lingers, and only on a filesystem that cannot lock a file
 ```
 
 ## Human checklist
@@ -814,6 +859,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B21 `done`: F52, F54, F55 and F57 kept, plus two
+  comment-only fixes (086c4d2f, 6a7e78a5); follow-ups F65, F66 and F68
+  appended with batch `B23`, F64 added to B19, and F67 and F69 recorded as
+  `skipped` with reasons (a directory cache has nothing to lock and the
+  records already protect it; F69 is the same kind as F57 and the copy it
+  spoke for is reclaimed). F52, F54, F55 and F57 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B21 review checkpoint opened: F52, F54, F55 and
   F57 `in_progress` → `pending_review`, commits `9eebcc83`, `86467207`,
   `85d1a2d1`, `ca4d5ae4`, `3eeeb395`, `77952c07`, `980e7a3d`, `776c3d1e`;
