@@ -1270,6 +1270,254 @@ mod tests {
         );
     }
 
+    /// A published copy carries a record of its own, and the record is held.
+    ///
+    /// The record says the copy is in use by the run that published it, and
+    /// the lock on it is what says that run is still alive: while the run
+    /// holds it, no other handle can take it.
+    #[test]
+    fn a_published_copy_carries_a_record_of_its_own() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "record");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+
+        let record = dir.join(
+            hold_name(published.file_name().unwrap().to_str().unwrap())
+                .expect("the record is named after the copy"),
+        );
+        assert!(
+            record.exists(),
+            "a published copy is published with a record of its own"
+        );
+        let other = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&record)
+            .expect("the record can be opened");
+        assert!(
+            other.try_lock().is_err(),
+            "the record is held by the run that published the copy"
+        );
+    }
+
+    /// A copy a live run is using is not the bound's to take.
+    ///
+    /// The run that published the copy is the run that reports it, so a bound
+    /// that took it back would leave that run reporting a backup that is not
+    /// on disk. The record is what says the copy is in use, and the lock on
+    /// it is what says the run is still alive.
+    #[test]
+    fn a_copy_a_live_run_is_using_is_not_the_bounds_to_take() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "in_use");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        // A copy another run published, and the record saying that run is
+        // still using it.
+        let name = format!("{BACKUP_PREFIX}{STAMP}");
+        let copy = dir.join(&name);
+        std::fs::write(&copy, b"a copy").unwrap();
+        let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&record)
+            .expect("the record is created");
+        held.try_lock().expect("the other run holds the record");
+
+        // A newer copy, so the bound has something to remove.
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            copy.exists(),
+            "a copy a live run is using is not the bound's to take"
+        );
+        assert!(
+            !newer.exists(),
+            "and the folder still ends within its bound"
+        );
+        assert!(record.exists(), "the record of a copy in use is left alone");
+    }
+
+    /// A record whose run is gone does not stop the bound.
+    ///
+    /// The OS releases the lock when the holding process ends — and when it
+    /// is killed — so a record left behind says nothing: the copy it spoke
+    /// for is an ordinary copy again, and the bound takes it like any other.
+    #[test]
+    fn a_record_whose_run_is_gone_does_not_stop_the_bound() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "stale");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        let name = format!("{BACKUP_PREFIX}{STAMP}");
+        let copy = dir.join(&name);
+        std::fs::write(&copy, b"a copy").unwrap();
+        // A record nobody holds: the run that made it is gone.
+        let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
+        std::fs::write(&record, b"pid=1\n").unwrap();
+
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            !copy.exists(),
+            "a copy whose run is gone is the bound's to take again"
+        );
+        assert!(!record.exists(), "and the stale record goes with it");
+        assert!(newer.exists(), "the newest copy is kept");
+    }
+
+    /// A record nothing speaks for any more is reclaimed.
+    ///
+    /// The copy it spoke for is gone and the run that made it is gone with
+    /// it, so the record is tool state with nothing left to say.
+    #[test]
+    fn a_record_of_a_copy_that_is_gone_is_reclaimed() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "orphan");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        let record = dir.join(format!("{HOLD_PREFIX}backup-{STAMP}"));
+        std::fs::write(&record, b"pid=1\n").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(!record.exists(), "a record no live run holds is reclaimed");
+    }
+
+    /// A record is not one of the copies the bound ranges over.
+    ///
+    /// The record is named after the copy it speaks for, but it is not a
+    /// copy: the bound counts copies, and a folder holding two copies and a
+    /// record is a folder holding two copies.
+    #[test]
+    fn a_record_is_not_one_of_the_copies_the_bound_counts() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "count");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+        let record = dir.join(hold_name(older.file_name().unwrap().to_str().unwrap()).unwrap());
+        std::fs::write(&record, b"").unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(2).unwrap()).unwrap();
+
+        assert!(
+            older.exists(),
+            "two copies and a record are two copies, and the bound keeps them"
+        );
+        assert!(newer.exists(), "the newest copy is kept");
+    }
+
+    /// Two runs publishing at once each end up with a copy and a record.
+    ///
+    /// The record is taken before the name is claimed, so the two runs cannot
+    /// land on one name: the second run finds the first run's record held and
+    /// moves on to the next name.
+    #[test]
+    fn concurrent_publishes_get_copies_and_records_of_their_own() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "publish_race");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let db = db.clone();
+                std::thread::spawn(move || backup_db(&db).unwrap())
+            })
+            .collect();
+        let published: Vec<PathBuf> = handles
+            .into_iter()
+            .map(|h| h.join().unwrap().expect("the cache was copied aside"))
+            .collect();
+
+        let names: std::collections::HashSet<&PathBuf> = published.iter().collect();
+        assert_eq!(
+            names.len(),
+            published.len(),
+            "every run published under a name of its own"
+        );
+        for copy in &published {
+            let record = dir.join(hold_name(copy.file_name().unwrap().to_str().unwrap()).unwrap());
+            assert!(
+                record.exists(),
+                "every published copy carries a record of its own"
+            );
+        }
+    }
+
+    /// The record is released once the run holds the cache's own lock.
+    ///
+    /// From then on the cache's lock is what keeps another run's bound off
+    /// the copy: no other run is in its run phase for a folder whose cache is
+    /// open. The record has nothing left to say, and it goes.
+    #[test]
+    fn the_record_is_released_once_the_cache_is_open() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "release");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        {
+            // A first open, so that the cache is a cache and not a copy of
+            // one.
+            let _first = open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: None,
+                },
+            )
+            .expect("the cache opens");
+        }
+
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        let record = dir.join(
+            hold_name(published.file_name().unwrap().to_str().unwrap())
+                .expect("the record is named after the copy"),
+        );
+        assert!(
+            record.exists(),
+            "the copy is published with a record of its own"
+        );
+
+        {
+            let _second = open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: None,
+                },
+            )
+            .expect("the cache opens again");
+        }
+
+        assert!(
+            !record.exists(),
+            "the record is released once the cache's lock is held"
+        );
+        assert!(
+            published.exists(),
+            "and the copy is left with the lock's protection"
+        );
+    }
+
     /// A published copy is named after the time it became whole.
     ///
     /// The bound orders the copies by that name, so a name that said when the
