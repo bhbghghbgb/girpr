@@ -855,17 +855,21 @@ newest N. `N` must be at least 1 — `--backup-retain 0` is refused with exit
 the copies accumulate and are cleaned by hand.
 
 **What a failure leaves behind.** The copies are made *before* the caches are
-removed, so a run that fails while removing them leaves **both** a copy and a
-live cache:
+removed, so a run that fails while removing them never loses the copy:
 
-- src: `girpr-cache-backup-<ts>` *and* the live `girpr-cache`;
-- dst: `girpr-cache-old-<ts>` *and* the live `girpr-cache`.
+- src: `girpr-cache-backup-<ts>`, plus the live `girpr-cache` if src's own
+  removal is the one that failed;
+- dst: `girpr-cache-old-<ts>`, plus the live `girpr-cache` if dst's own
+  removal is the one that failed.
+
+The removals run src first, so a failure on dst's side leaves src with its
+copy and **no** live cache — that one is rebuilt from disk on the next run.
 
 That is not a bug — the copy is what the removal was for — but it is the state
 a failed `--ignore-cache` leaves, and it is worth knowing before you go
-looking for "the missing cache". The next run with `--ignore-cache` removes it
-again; the copies are there to look at, and the tool will not look at them for
-you.
+looking for "the missing cache". The next run with `--ignore-cache` removes
+what is left again; the copies are there to look at, and the tool will not
+look at them for you.
 
 With `--no-backup` there is no copy at all, so `--no-backup --ignore-cache`
 removes the cache and keeps nothing: the cache is rebuilt from disk on the next
