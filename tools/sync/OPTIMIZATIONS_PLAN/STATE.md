@@ -183,10 +183,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T19-benchmark-harness.md
     batch: G
     report: [L590-L593]
-    status: pending
+    status: in_progress
     commits: []
     review: G
-    note: null
+    note: implementing session starting
 reviews:
   - batch: A
     status: done
@@ -436,13 +436,14 @@ followups:
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
 | G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
 | G | T18 | pending_review | cce4fed3, efe471f8, 2a244f26 | implemented by ses_e3062be0affekJg6Y62KsyWlcA |
-| G | T19 | pending | — | — |
+| G | T19 | in_progress | — | implementing session starting |
 
 ## Transition log
 
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T19 selected: `pending` → `in_progress`.
 - 2026-11-12 — T18 implemented: `pending` → `in_progress` → `pending_review`,
   commits `cce4fed3`, `efe471f8`, `2a244f26`; working tree clean.
 - 2026-11-12 — T18 selected: `pending` → `in_progress`.
