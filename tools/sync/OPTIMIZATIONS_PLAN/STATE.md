@@ -245,12 +245,12 @@ reviews:
     result: F1 fixed (b7e332c2 removes a rustdoc link from a public doc to the module-private resolver, the crate's only rustdoc warning); F2 kept (a74b92e2); 513 passed, 1 skipped; the matching rule verified byte-for-byte identical to the old one
     followups: [F33, F34, F35]
   - batch: B2
-    status: in_progress
+    status: done
     tasks: [F3, F4, F5]
     base: ac4cdf20
     head: 4aa601b6
-    result: null
-    followups: []
+    result: F3 kept (3c30627d); F4 kept (00f56668, 4aa601b6); F5 kept (79f64048); no fix or revert commits; 516 passed, 1 skipped; each new test was verified to fail with its fix reverted
+    followups: [F36, F37, F38]
   - batch: B3
     status: pending
     tasks: [F7, F11, F12, F13, F18]
@@ -328,6 +328,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: B14
+    status: pending
+    tasks: [F36, F37, F38]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -346,19 +353,19 @@ followups:
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
-    status: pending_review
+    status: completed
     batch: B2
     commits: []
   - id: F4
     source: T02
     description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
-    status: pending_review
+    status: completed
     batch: B2
     commits: []
   - id: F5
     source: T02
     description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
-    status: pending_review
+    status: completed
     batch: B2
     commits: []
   - id: F6
@@ -542,6 +549,24 @@ followups:
     status: pending
     batch: B13
     commits: []
+  - id: F36
+    source: F3
+    description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
+    status: pending
+    batch: B14
+    commits: []
+  - id: F37
+    source: F3
+    description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
+    status: pending
+    batch: B14
+    commits: []
+  - id: F38
+    source: F3
+    description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
+    status: pending
+    batch: B14
+    commits: []
 ```
 
 ## Human checklist
@@ -573,6 +598,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — review B2 `done`: F3 kept, F4 kept, F5 kept, no fix or revert
+  commits; follow-ups F36–F38 appended with status `pending` and batch `B14`
+  (the Probes doc wording and the design-notes test list, all documentation);
+  F3, F4 and F5 `pending_review` → `completed`.
 - 2026-11-12 — follow-up batch B2 review checkpoint opened: F3, F4 and F5
   `in_progress` → `pending_review`, commits `3c30627d`, `00f56668`,
   `79f64048`, `4aa601b6`; review B2 `pending` → `in_progress`, base
