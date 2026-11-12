@@ -40,6 +40,10 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
     debug!(root = %root.display(), max_depth, "scan start");
     let t0 = std::time::Instant::now();
     let mut out = Vec::new();
+    // Counted as the entries are pushed, so the walk does not walk its own
+    // output a second time to find out how many files it saw. A dir is the
+    // other half of the count, and the two add up to the entries.
+    let mut files = 0usize;
     let mut it = walkdir::WalkDir::new(root)
         .follow_links(true)
         .max_depth(max_depth)
@@ -109,6 +113,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else if ft.is_file() {
                     let meta = std::fs::metadata(ent.path())
                         .with_context(|| format!("stat {}", ent.path().display()))?;
+                    files += 1;
                     out.push(LiveEnt {
                         rel,
                         is_dir: false,
@@ -125,7 +130,6 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
             }
         }
     }
-    let files = out.iter().filter(|e| !e.is_dir).count();
     let dirs = out.len() - files;
     info!(
         root = %root.display(),
