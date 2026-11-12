@@ -174,10 +174,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T18-feature-gate-sled.md
     batch: G
     report: [L597-L610]
-    status: pending
+    status: in_progress
     commits: []
     review: G
-    note: null
+    note: implementing session starting
   - id: T19
     title: Benchmark harness over three tree shapes
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T19-benchmark-harness.md
@@ -435,7 +435,7 @@ followups:
 | F | T15 | completed | af640af6 | review F kept |
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
 | G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
-| G | T18 | pending | — | — |
+| G | T18 | in_progress | — | implementing session starting |
 | G | T19 | pending | — | — |
 
 ## Transition log
@@ -443,6 +443,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T18 selected: `pending` → `in_progress`.
 - 2026-11-12 — T17 implemented: `pending` → `in_progress` → `pending_review`,
   commits `71fe4368`, `4cc52111`, `efdacd32`; working tree clean.
 - 2026-11-12 — batch G started: T17 `pending` → `in_progress`.
