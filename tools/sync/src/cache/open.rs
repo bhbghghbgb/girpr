@@ -154,6 +154,11 @@ pub enum CacheOpen {
 /// bound is applied under a lock the tool already holds, rather than under a
 /// lock of its own that a filesystem might not support.
 ///
+/// A cache that does **not** open is bounded as well, under the same lock
+/// taken for the bound: a corrupt cache, or a legacy sled directory the open
+/// refuses, must not leave the copies beside it to accumulate until
+/// `--ignore-cache` rebuilds the cache.
+///
 /// A copy is published **before** that lock is taken, so there is a gap in
 /// which the lock does not yet speak for it: another run can be in its run
 /// phase for the folder then, and its bound can take the copy away from the
@@ -185,7 +190,27 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
             } else if backup_first && db_path.exists() {
                 backup_db(db_path)?;
             }
-            let db = CacheDb::open_file(db_path)?;
+            let db = match CacheDb::open_file(db_path) {
+                Ok(db) => db,
+                Err(e) => {
+                    // The cache did not open, so the bound below does not
+                    // run — and a corrupt cache, or a legacy sled directory
+                    // the open refuses, would leave the copies beside it to
+                    // accumulate until --ignore-cache rebuilt the cache. The
+                    // folder is bounded here instead, under the cache's own
+                    // lock where one can be taken.
+                    if let Some(keep) = retain {
+                        if let Err(bound) = bound_after_failed_open(db_path, keep) {
+                            warn!(
+                                path = %db_path.display(),
+                                error = %bound,
+                                "the copies beside a cache that did not open could not be bounded"
+                            );
+                        }
+                    }
+                    return Err(e);
+                }
+            };
             // The cache's own exclusive lock is now held, so no other run is
             // in its run phase for this folder: from here on, another run's
             // bound cannot take a copy this run published. The records that
@@ -326,6 +351,86 @@ pub fn retain_copies(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
     retain_siblings(&folder, parent, BACKUP_PREFIX, keep, &spared)?;
     retain_siblings(&folder, parent, OLD_PREFIX, keep, &spared)?;
     reclaim_records(&folder)
+}
+
+/// Bound the folder of a cache that did not open.
+///
+/// The bound is applied under the cache's own exclusive lock, which the open
+/// holds. A cache that did not open holds no such lock, so the folder is
+/// bounded only when this run can take that lock itself: a lock another run
+/// holds says that run is in its run phase for the folder, and the copies it
+/// published are protected by it — so that run bounds the folder, and this
+/// one leaves it alone.
+///
+/// A cache that is a directory — a legacy sled cache the open refuses — has
+/// no file to lock, and nothing opens one, so every copy published beside it
+/// is still marked by the record of the run that published it, and the bound
+/// leaves those alone.
+fn bound_after_failed_open(db_path: &Path, keep: NonZeroUsize) -> Result<()> {
+    match take_the_cache_lock(db_path) {
+        CacheLock::Ours(file) => {
+            // The lock is held for as long as the bound runs, so no other
+            // run is in its run phase for the folder while it does.
+            let bounded = retain_copies(db_path, keep);
+            drop(file);
+            bounded
+        }
+        // Another run holds the cache: it is in its run phase for the
+        // folder, and it bounds the folder itself.
+        CacheLock::Theirs => Ok(()),
+        // There is no lock to take: the bound runs without one, as it does
+        // on a folder whose filesystem cannot lock a file.
+        CacheLock::Unheld => retain_copies(db_path, keep),
+    }
+}
+
+/// The cache's own exclusive lock, for a folder whose cache did not open.
+enum CacheLock {
+    /// The lock is ours, and is held for as long as the bound runs.
+    Ours(File),
+    /// Another run holds it: that run is in its run phase for the folder,
+    /// and the copies it published are protected by that lock.
+    Theirs,
+    /// There is no lock to take: the bound runs without one.
+    Unheld,
+}
+
+/// Take the cache's own exclusive lock, for a folder whose cache did not
+/// open.
+fn take_the_cache_lock(db_path: &Path) -> CacheLock {
+    if !db_path.is_file() {
+        // A cache that is not a file is a legacy sled directory, and
+        // nothing opens one.
+        return CacheLock::Unheld;
+    }
+    let file = match OpenOptions::new().read(true).write(true).open(db_path) {
+        Ok(file) => file,
+        Err(e) => {
+            // The cache cannot be opened for writing, so no run has it open
+            // either.
+            warn!(
+                path = %db_path.display(),
+                error = %e,
+                "the cache cannot be opened; the folder is bounded without its lock"
+            );
+            return CacheLock::Unheld;
+        }
+    };
+    match file.try_lock() {
+        Ok(()) => CacheLock::Ours(file),
+        Err(TryLockError::WouldBlock) => CacheLock::Theirs,
+        Err(TryLockError::Error(e)) => {
+            // The filesystem cannot lock a file, so the records cannot
+            // speak either: the bound is applied as it is on a folder whose
+            // cache cannot be locked at all.
+            warn!(
+                path = %db_path.display(),
+                error = %e,
+                "the cache's lock cannot be taken; the folder is bounded without it"
+            );
+            CacheLock::Unheld
+        }
+    }
 }
 
 /// The folder's entries, read once and ordered by name.
@@ -1634,6 +1739,130 @@ mod tests {
             b"the cache bytes",
             "and it holds the cache"
         );
+    }
+
+    /// The folder of a cache that did not open is bounded just the same.
+    ///
+    /// A legacy sled directory the open refuses must not leave the copies
+    /// beside it to accumulate until `--ignore-cache` rebuilds the cache.
+    #[test]
+    fn the_folder_of_a_legacy_sled_cache_is_bounded() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_sled");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        // A legacy sled cache is a directory, and the open refuses it.
+        std::fs::create_dir(&db).unwrap();
+
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+
+        let err = match open_db(
+            &db,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: NonZeroUsize::new(1),
+            },
+        ) {
+            Ok(_) => panic!("a legacy sled directory is refused"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("sled"),
+            "the open refuses a legacy sled directory: {err}"
+        );
+
+        assert!(
+            !older.exists(),
+            "the oldest copy is gone: the folder is bounded even though the cache did not open"
+        );
+        assert!(newer.exists(), "the newest copy is kept");
+    }
+
+    /// The folder of a corrupt cache is bounded just the same.
+    ///
+    /// A cache that cannot be decoded must not leave the copies beside it to
+    /// accumulate until `--ignore-cache` rebuilds the cache.
+    #[test]
+    fn the_folder_of_a_corrupt_cache_is_bounded() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_corrupt");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"this is not a cache").unwrap();
+
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+
+        match open_db(
+            &db,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: NonZeroUsize::new(1),
+            },
+        ) {
+            Ok(_) => panic!("a corrupt cache is refused"),
+            Err(_) => {}
+        }
+
+        assert!(
+            !older.exists(),
+            "the oldest copy is gone: the folder is bounded even though the cache did not open"
+        );
+        assert!(newer.exists(), "the newest copy is kept");
+    }
+
+    /// The folder of a cache another run holds is left to that run.
+    ///
+    /// The bound runs under the cache's own lock. A cache another run holds
+    /// cannot be opened, so this run must leave the folder alone: the run
+    /// that is in its run phase for the folder bounds it, and the copies it
+    /// published are protected by the lock it holds.
+    #[test]
+    fn the_folder_of_a_cache_another_run_holds_is_left_to_it() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_held");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        // Another run holds the cache.
+        let held = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&db)
+            .expect("the cache can be opened");
+        held.try_lock().expect("the other run holds the cache");
+
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+
+        assert!(
+            open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: NonZeroUsize::new(1),
+                },
+            )
+            .is_err(),
+            "the cache another run holds cannot be opened"
+        );
+
+        assert!(
+            older.exists(),
+            "the folder is left to the run that holds the cache"
+        );
+        assert!(newer.exists(), "and nothing in it is touched");
     }
 
     /// The bound does not take back the copy the run applying it published.
