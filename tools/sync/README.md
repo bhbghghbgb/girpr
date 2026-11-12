@@ -1123,13 +1123,14 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   by itself — the meta flag is informational; the same record works in both
   modes.
 
-  **The fold is ASCII case only.** Two spellings are one path when they differ
-  only in ASCII case: `Readme.TXT` and `readme.txt` are one path in the default
-  mode. `Ärger` and `ärger` are **two** — the run keys paths by ASCII case and
-  by nothing else, because a Unicode fold would merge spellings that some
-  filesystems keep apart and there is no portable case table to consult
-  instead. So a case-only difference that is not ASCII is not a
-  `CASE-MISMATCH` at all, but two different paths: one `MISSING` and one
+  **The fold is ASCII case only.** The path key folds ASCII case and nothing
+  else, so two spellings that differ only in ASCII case are one path **across**
+  the two sides — `Readme.TXT` and `readme.txt` are the same path in the
+  default mode — and a fatal conflict when they sit on **one** side, as the
+  rule above says. `Ärger` and `ärger` are **two**: a Unicode fold would merge
+  spellings that some filesystems keep apart, and there is no portable case
+  table to consult instead. So a case-only difference that is not ASCII is not
+  a `CASE-MISMATCH` at all, but two different paths: one `MISSING` and one
   `EXTRA`.
 
   **The fatal conflict is what makes the rename pass an index rather than a scan.**
