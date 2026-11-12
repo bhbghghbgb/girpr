@@ -94,10 +94,12 @@ girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-ext
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
-`sled2redb <SLED_DIR> <REDB_PATH>` takes `--force` and the same `--output`. A
-usage error in it exits `3`, not clap's `2`: the converter shares one failure
-code with a failed conversion, so every way it can fail is `3` — while
-`girsync` itself keeps `2` for a parse error.
+`sled2redb <SLED_DIR> <REDB_PATH>` takes `--force` and the same `--output`. It is
+not in a default build: the converter is behind the `convert` feature, so it is
+built with `cargo build -p girsync --features convert --bin sled2redb` — see
+[Build features](#build-features). A usage error in it exits `3`, not clap's `2`:
+the converter shares one failure code with a failed conversion, so every way it
+can fail is `3` — while `girsync` itself keeps `2` for a parse error.
 
 **A conversion is atomic for a file destination.** The new cache is written
 into a temporary beside the destination and moved onto it only once it is
@@ -1022,8 +1024,9 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   into the walk, and it is tool state rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
   file; POSIX spellings stay exact.
-  Legacy sled directories are rejected (rebuild with `--ignore-cache` or
-  convert once with `sled2redb <old-dir> <new-file>`).
+  Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
+  convert once with `sled2redb <old-dir> <new-file>` — the converter is behind
+  the `convert` feature, see [Build features](#build-features)).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
@@ -1225,6 +1228,25 @@ cargo build -p girsync
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
+### Build features
+
+The default build has no `sled` in it. `sled` was used by exactly one thing —
+the one-shot converter that reads a legacy sled cache directory and writes a
+redb one — so it is behind the `convert` feature, along with the `sled2redb`
+binary and the converter's own cases:
+
+```powershell
+cargo build -p girsync                                     # the default: no sled, no converter
+cargo build -p girsync --features convert --bin sled2redb  # the converter
+cargo nextest run -p girsync --features convert --test convert  # the converter's cases
+```
+
+The feature is additive and off by default: `girsync` itself behaves the same
+either way, and `girsync::convert::sled_to_redb` is present exactly when the
+feature is on. Without it the converter is not built and its cases do not run,
+so a default `cargo nextest run -p girsync` does not touch the legacy format at
+all.
+
 Same, machine-readable — `--output json` on stdout, logs still on stderr:
 
 ```powershell
@@ -1259,6 +1281,10 @@ The number of cases is not written down here, because it moves every time one
 is added. `cargo nextest list -p girsync` prints them all, one per line, and
 `cargo nextest list -p girsync --run-ignored only` prints the `#[ignore]`d ones
 on their own.
+
+The converter's cases are behind the `convert` feature, so they are not in that
+run: `cargo nextest run -p girsync --features convert --test convert` runs
+them — see [Build features](#build-features).
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real rather than incidental: nothing one test does — a global, a temp
