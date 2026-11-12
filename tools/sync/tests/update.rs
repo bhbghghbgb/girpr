@@ -7,8 +7,9 @@ use common::{
     compare, compare_self_opts, log, poison_digest, recs_of, sync_mem, sync_mtime, temp_root,
     update_mem, wfile,
 };
-use girsync::filter::{Filter, compile_patterns};
-use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::{
+    CommonOpts, Filter, cmd_compare, cmd_compare_self, cmd_sync, cmd_update, compile_patterns,
+};
 
 #[test]
 fn run_update_prunes_and_excludes() {

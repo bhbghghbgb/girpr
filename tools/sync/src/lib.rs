@@ -71,6 +71,11 @@ pub use config::{
     UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
+// The filter's type and the one way to build its patterns, re-exported so a
+// caller that builds a [`CommonOpts`] by hand names one module path: the
+// options are at the crate root, so the type of one of their fields has to be
+// reachable there too.
+pub use filter::{Filter, compile_patterns};
 pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;

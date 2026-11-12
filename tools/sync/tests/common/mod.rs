@@ -9,14 +9,13 @@ use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
-use girsync::filter::Filter;
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
-    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
-    UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, Filter, LogCtx, ScanMode, SyncOpts,
+    TrustOpts, UpdateOpts,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

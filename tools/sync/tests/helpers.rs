@@ -8,11 +8,10 @@ use common::{md5arg, opts, rw, scan, serial_rw, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
 use girsync::config::ScanMode;
 use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
-use girsync::filter::{Filter, compile_patterns};
 use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
-use girsync::{CommonOpts, ScanStats};
+use girsync::{CommonOpts, Filter, ScanStats, compile_patterns};
 use md5::{Digest as _, Md5};
 
 /// A folder-side run's counters, kept **per phase** rather than merged.
