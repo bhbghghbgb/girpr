@@ -20,6 +20,27 @@ fn old_rec(kind: &str, size: u64, hashes: HashMap<String, String>) -> serde_json
     })
 }
 
+/// Run the converter binary and hand back its exit code, stdout and stderr.
+///
+/// The binary is spawned rather than the library called because the arguments
+/// and the exit code live in the binary: `girsync::convert::sled_to_redb` has
+/// no opinion about how the run was spelled.
+fn run_converter<I>(args: I) -> (i32, String, String)
+where
+    I: IntoIterator,
+    I::Item: AsRef<std::ffi::OsStr>,
+{
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sled2redb"))
+        .args(args)
+        .output()
+        .expect("spawn sled2redb");
+    (
+        out.status.code().expect("sled2redb exits with a code"),
+        String::from_utf8(out.stdout).expect("utf-8"),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// A legacy sled DB, holding exactly what the case below needs.
 ///
 /// **Both file rows carry every algorithm the case requests**, and that is
@@ -195,17 +216,9 @@ fn the_converter_reports_json_records_on_stdout() {
     let dst = work.join("girpr-cache");
 
     let run = |extra: &[&str]| -> (i32, String, String) {
-        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sled2redb"))
-            .arg(&src)
-            .arg(&dst)
-            .args(extra)
-            .output()
-            .expect("spawn sled2redb");
-        (
-            out.status.code().expect("sled2redb exits with a code"),
-            String::from_utf8(out.stdout).expect("utf-8"),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
+        let mut args: Vec<&std::ffi::OsStr> = vec![src.as_os_str(), dst.as_os_str()];
+        args.extend(extra.iter().map(std::ffi::OsStr::new));
+        run_converter(args)
     };
     // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them. The
     // count tracks the fixture: `build_sled_db` gives every row both requested
@@ -236,4 +249,69 @@ fn the_converter_reports_json_records_on_stdout() {
         stdout.starts_with("converted src="),
         "text is the default: {stdout}"
     );
+}
+
+/// A usage error is a failure like any other, and fails with the converter's
+/// own code.
+///
+/// `clap` exits `2` for a parse error, and the main binary keeps that. This
+/// binary does not: it has one exit code for every way it can fail, so a
+/// script that ran the converter needs no second code to remember.
+#[test]
+fn a_usage_error_exits_three() {
+    let (code, _stdout, stderr) = run_converter(["--not-a-flag"]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("--not-a-flag"),
+        "the error names the flag it did not know: {stderr}"
+    );
+}
+
+/// Both positionals are required: the sled directory is read, and the redb
+/// file is what is written.
+#[test]
+fn a_missing_positional_exits_three() {
+    let (code, _stdout, stderr) = run_converter(["only-one"]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("REDB_PATH"),
+        "the error names the argument it did not get: {stderr}"
+    );
+}
+
+/// `--output` still takes only the two formats it always took, and says which
+/// when the value is not one of them.
+///
+/// The paths are placeholders: the arguments are rejected before anything is
+/// read or written, so no fixture is needed for a case that never converts.
+#[test]
+fn an_unknown_output_format_exits_three_and_names_the_accepted_values() {
+    let (code, _stdout, stderr) = run_converter(["sled", "cache.redb", "--output", "yaml"]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(stderr.contains("text"), "the error names text: {stderr}");
+    assert!(stderr.contains("json"), "the error names json: {stderr}");
+}
+
+/// `--help` is an answer, not a failure: it exits 0 and prints the flags.
+#[test]
+fn the_help_exits_zero_and_documents_the_flags() {
+    let (code, stdout, stderr) = run_converter(["--help"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(
+        stdout.contains("--force"),
+        "the help names --force: {stdout}"
+    );
+    assert!(
+        stdout.contains("--output"),
+        "the help names --output: {stdout}"
+    );
+    // The order of the two positionals is part of the contract: the sled
+    // directory is read, the redb file is written.
+    let sled = stdout
+        .find("SLED_DIR")
+        .expect("the help names the sled dir");
+    let redb = stdout
+        .find("REDB_PATH")
+        .expect("the help names the redb file");
+    assert!(sled < redb, "the sled dir comes first: {stdout}");
 }
