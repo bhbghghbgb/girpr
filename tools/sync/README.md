@@ -29,7 +29,7 @@ tests travel with the code they exercise).
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
 | `commands/compare_self.rs` | diff a folder against its own cache, folder side scanned with no cache |
-| `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
+| `commands/sync/mod.rs` | the mirror run; its phases are named in the module doc, which says what each one's order protects |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
 | `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
@@ -729,7 +729,13 @@ There is exactly one `SUMMARY`, and it is `sync`'s own — counting actions. The
 own summary is dropped: two differently-shaped summaries in one stream would make
 "the last line is the summary" true only by luck.
 
-Mirrors `src` → `dst`:
+Mirrors `src` → `dst`. The internal phases, in the order they run, are named in
+`commands/sync/mod.rs`, which also says what each one's order protects:
+**validate the roots, then back up and snapshot**; **open the caches, then phase
+A on each side**; **pair plan**; **resolve both sides**; **mkdir preflight**;
+**rename dst paths to src casing**; **diff, plan and the guards**; **the dry-run
+records, or the apply**. The steps below are what a run reports, not that
+internal order.
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
    path, if one root contains the other (a mirror may not contain its own source;

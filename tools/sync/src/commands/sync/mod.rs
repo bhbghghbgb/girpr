@@ -6,13 +6,60 @@
 //! - [`plan`] — turn the diff into a work list, and print it for `--dry-run`
 //! - [`apply`] — execute that work list, in an order that is load-bearing
 //!
-//! Phase order overall:
-//! 1. validate inputs, back up src's cache, snapshot dst's pre-sync state,
-//! 2. open both caches and run phase A on each side,
-//! 3. plan across both sides at once, so a file is read only if the pair needs it,
-//! 4. phase C, then rename dst paths to src's casing,
-//! 5. diff, **print it**, plan, then either print the actions (`--dry-run`) or
-//!    apply them.
+//! ## The phases
+//!
+//! `cmd_sync` is one linear function on purpose: the order of its steps is the
+//! invariant, and moving one of them changes what a run reports. The phases are
+//! therefore **named rather than extracted** — a phase function would have to
+//! take most of `cmd_sync`'s locals, and the order would move into the
+//! signatures, where it is harder to see than it is here. The numbers below are
+//! the numbered comments in the body.
+//!
+//! | # | phase | the invariant the order protects |
+//! | --- | --- | --- |
+//! | 1 | validate the roots, then back up and snapshot | nothing is opened before the roots are refused, and the copies are taken before either side changes; they are a policy, not a step — `--no-backup` skips them and a dry run takes none. |
+//! | 2 | open both caches, then phase A on each side | the link-disjointness check runs after **each** side's walk, so it sees the tree the filters kept, and it refuses before a plan exists. |
+//! | 3 | pair plan | the sides are paired as they are **on disk**, so the plan sees the pairs the rename then collapses onto exact keys. |
+//! | 4 | resolve both sides | phase C hashes only what the plan asked for, and it resolves before the rename, so it reads each path under the spelling it has on disk. |
+//! | 5 | mkdir preflight | it runs before the rename, the run's first filesystem change, so a dst blocker a filter hid is refused while dst is untouched. |
+//! | 6 | rename dst paths to src casing | the diff is taken case-sensitively on exact keys, so the rename comes first; the pass re-keys `dm` even in a dry run. |
+//! | 7 | diff, plan and the guards | the plan print is the diff and the actions follow it; the guards refuse a plan that could not be applied, in both modes. |
+//! | 8 | the dry-run records, or the apply | the apply order is not this module's — [`apply`] lists it — and its pre-drop is committed before the change to each path it touches. |
+//!
+//! ### Three orders that are easy to break
+//!
+//! **The pair plan comes before the rename.** The planner pairs the sides as
+//! they are on disk, and the rename then collapses exactly those pairs onto
+//! exact keys. Planning *after* the rename, with exact pairing, would make a
+//! case-only pair look one-sided, skip the digest it needs, and leave the diff
+//! comparing two entries where one has no digest — `hashes_differ` is silent on
+//! a missing digest, size and mtime agree, and the run reports success having
+//! copied nothing. Pinned by `a_case_only_difference_in_content_is_copied_not_merely_renamed`
+//! in `tests/sync.rs`, whose two sides differ in content, and by the `Case.txt`
+//! row of the table in `tests/sync_plan/`.
+//!
+//! **The rename comes before the diff.** The diff pairs exactly, so it can only
+//! run once the rename has collapsed the two spellings: a diff taken first
+//! would find src's `Data.txt` and dst's `data.txt` to be two unrelated paths
+//! and plan a copy and a delete where the rename belongs, and a diff that
+//! paired by lowercase instead would report the `CASE-MISMATCH` bucket the
+//! rename pass exists to eliminate (`a_case_only_pair_is_reported_but_not_counted_as_a_difference`
+//! in `src/diff/mod.rs` is that bucket's own shape). Pinned by
+//! `the_dry_run_does_exactly_what_the_table_says` in `tests/sync_plan/`, whose
+//! expected records put the rename ahead of the plan and report nothing else
+//! for a case-only pair.
+//!
+//! **The pre-drop comes before the filesystem change.** The dst cache rows for
+//! every path a run will copy or delete are dropped *and committed* before
+//! those changes, so an interrupted run copies again rather than trusting a
+//! half-written file. That order belongs to the apply phases — [`apply`] states
+//! it — and it is belt-and-braces rather than the mechanism: truncation, the
+//! deferred mtime and the verify each catch a failed copy on their own. What a
+//! test can see is the other half of the same fact: a copy which fails leaves
+//! no row claiming content the dst does not have
+//! (`a_failed_flush_aborts_before_the_copy_is_cached` and
+//! `a_failed_copy_discards_only_the_uncommitted_cache_tail` in `tests/sync.rs`),
+//! so the rerun copies the file again.
 //!
 //! ## The plan print
 //!
@@ -125,6 +172,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let _span_guard = span.enter();
     info!("start");
 
+    // 1. Validate the roots, then back up and snapshot, before either cache is
+    //    touched.
     let roots = validate_inputs(&src, &dst)?;
 
     // One runtime for the whole run: one limiter, one worker pool. A runtime per
@@ -138,7 +187,6 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         "rw limits"
     );
 
-    // 1. Backups and snapshots, before either cache is touched.
     let src_db_path = src.join(CACHE_PREFIX);
     let dst_db_path = dst.join(CACHE_PREFIX);
     if dry_run {
@@ -208,10 +256,10 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         "phase A done"
     );
 
-    // 3. One decision, both sides in — the same shape `compare` uses. A file is
-    // read only if it is on *both* sides with equal size and mtime; every other
-    // pair state is already decided, and `diff_maps` short-circuits the digest
-    // comparison anyway.
+    // 3. Pair plan: one decision, both sides in — the same shape `compare`
+    // uses. A file is read only if it is on *both* sides with equal size and
+    // mtime; every other pair state is already decided, and `diff_maps`
+    // short-circuits the digest comparison anyway.
     //
     // `CasePairing::from(common.case_sensitive)` here, and `CasePairing::Exact`
     // in the `diff_maps` call below. **The two must differ**, and the values say
@@ -257,7 +305,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
         "planned"
     );
 
-    // 4. Resolve, then rename, then diff.
+    // 4. Resolve both sides, before the rename and the diff.
     //
     // Resolve before rename, always. `resolve_folder` hashes `root.join(rel)`, so
     // re-keying dst first would have phase C read `dst/A.txt` while the file was
@@ -304,20 +352,22 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     info!(side = "dst", hashed = dm.stats.hashed, "dst map built");
     let mut dm = dm.map;
 
-    // 5. Refuse a mkdir dst cannot create **before** the rename, which is the
-    // first filesystem change. A filter can hide the blocking dst entry from
-    // `dm`, so this asks the disk about every mkdir candidate's path and strict
-    // prefixes; the map-based `ensure_dirs_applicable` below cannot see them.
+    // 5. mkdir preflight — refuse a mkdir dst cannot create **before** the
+    // rename, which is the first filesystem change. A filter can hide the
+    // blocking dst entry from `dm`, so this asks the disk about every mkdir
+    // candidate's path and strict prefixes; the map-based
+    // `ensure_dirs_applicable` below cannot see them.
     ensure_mkdir_targets_free(&sm, &dm, &dst, common.case_sensitive)?;
 
-    // 6. Align casing before diffing, so the diff can be case-sensitive.
+    // 6. Rename dst paths to src casing, before the diff, so the diff can be
+    // case-sensitive.
     let RenameOutcome { renamed, on_disk } = if common.case_sensitive {
         RenameOutcome::default()
     } else {
         rename_to_src_casing(&sm, &dst, &dst_db, &mut dm, dry_run, &report)?
     };
 
-    // 7. Plan, then print or apply.
+    // 7. Diff, plan and the guards.
     //
     // `plans.required`, and it is keyed by **src** path — which survives the rename,
     // because the rename re-keys dst onto src's casing and never touches src's own
@@ -388,6 +438,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     tracing::debug!(copy = ?plan.copy.iter().map(|i| &i.rel).collect::<Vec<_>>(), "plan copy list");
     tracing::debug!(mkdir = ?plan.mkdir, "plan mkdir list");
 
+    // 8. The dry-run records, or the apply.
     if dry_run {
         for rec in plan::dry_run_records(&plan, renamed, missing_only, keep_extra) {
             report.emit(rec);
