@@ -273,10 +273,10 @@ reviews:
     result: F14 kept and F24 kept (one commit 3f2d992e closes both); no fix or revert commits; 523 passed, 1 skipped; the --hash-any-of flag-order tie-break verified intact and the copy still digests every requested algorithm
     followups: [F44, F45, F46]
   - batch: B6
-    status: pending
+    status: in_progress
     tasks: [F15, F23]
-    base: null
-    head: null
+    base: e6ab7477
+    head: b0342361
     result: null
     followups: []
   - batch: B7
@@ -447,7 +447,7 @@ followups:
   - id: F15
     source: T09
     description: util::unique_sibling now has no callers left in the crate and should be deleted or given one.
-    status: in_progress
+    status: pending_review
     batch: B6
     commits: []
   - id: F16
@@ -495,7 +495,7 @@ followups:
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
-    status: in_progress
+    status: pending_review
     batch: B6
     commits: []
   - id: F24
@@ -669,6 +669,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B6 review checkpoint opened: F15 and F23
+  `in_progress` → `pending_review`, commits `e031b0e4`, `b0342361`; review B6
+  `pending` → `in_progress`, base `e6ab7477`, head `b0342361`.
 - 2026-11-13 — follow-up batch B6 started: F15 and F23 `pending` →
   `in_progress`; `active_batch: B5` → `B6`.
 - 2026-11-13 — review B5 `done`: F14 and F24 kept, no fix or revert commits;
