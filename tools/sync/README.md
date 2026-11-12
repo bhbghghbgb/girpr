@@ -72,7 +72,8 @@ rendered by `--output` (see "Output" below). **stderr** is the narration:
 a JSON log file. `logging.rs` owns stderr and `report/` owns stdout; neither
 writes to the other's, which is what lets `--output json` hand a caller a clean
 stream of JSON records with no log chatter mixed in. The only `println!` in the
-crate is `Report::emit`; the raw stderr writes are the few that are not
+program is `Report::emit`; the benchmark under `benches/` is a separate binary
+and prints its own numbers. The raw stderr writes are the few that are not
 diagnostics at all — the `WARN` lines the log policy raises before a subscriber
 exists, and the log file's path when the caller named one.
 
@@ -1302,6 +1303,37 @@ suite sets it on the child process and the child uses it for every cache it
 opens, while a caller that builds the options itself gets exactly what it
 asked for. Any value other than exactly `memory` means the real file, which is
 what production uses.
+
+### Benchmarks
+
+A small harness walks three tree shapes — **many tiny files**, **few large
+files**, **deep nesting** — and prints the elapsed time and a throughput
+number for each:
+
+```text
+cargo bench -p girsync --bench tree_shapes
+GIRSYNC_BENCH_SCALE=4 cargo bench -p girsync --bench tree_shapes
+```
+
+On PowerShell the scale is an environment variable:
+
+```powershell
+$env:GIRSYNC_BENCH_SCALE = 4
+cargo bench -p girsync --bench tree_shapes
+```
+
+It is a **local measurement aid, not a gate**: it prints numbers and asserts
+nothing about them, so a slow disk is not a failure, nothing in CI runs it,
+and no timing threshold exists anywhere in it. `GIRSYNC_BENCH_SCALE`
+multiplies the fixture size (default `1`, and a value that is not a positive
+whole number is read as `1`); the tree is built in a scratch directory and
+removed when the run ends, so nothing is left behind.
+
+Each shape's line carries the walk's own counts beside the fixture's:
+`files` and `bytes` are what the walk saw — the files' sizes, not the
+directory's size on disk — while `fixture_files` and `fixture_bytes` are what
+the tree holds. The two differ for the deep shape, whose chain is deeper
+than the walk's 64-level cap.
 
 ## Cost model
 
