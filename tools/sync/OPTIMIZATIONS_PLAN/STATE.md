@@ -165,10 +165,10 @@ tasks:
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T17-converter-atomicity.md
     batch: G
     report: [L166-L189, L587-L589]
-    status: in_progress
-    commits: []
+    status: pending_review
+    commits: [71fe4368, 4cc52111, efdacd32]
     review: G
-    note: implementing session starting
+    note: implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN; the conversion now writes a temp sibling and renames, the temp is claimed before the source is read, and the --force preservation case was verified to fail on the pre-fix code
   - id: T18
     title: Feature-gate sled
     plan: tools/sync/OPTIMIZATIONS_PLAN/tasks/T18-feature-gate-sled.md
@@ -434,7 +434,7 @@ followups:
 | F | T14 | completed | 2df937bf, fb913a2a, a2df3d11 | review F kept |
 | F | T15 | completed | af640af6 | review F kept |
 | F | T16 | completed | efb71184, 5b9a405a, 49830066, de233c05, 371a7413, 930efdf3 | review F fixed (930efdf3) |
-| G | T17 | in_progress | — | implementing session starting |
+| G | T17 | pending_review | 71fe4368, 4cc52111, efdacd32 | implemented by ses_e306e87a2ffeV9Pw1PtFe4OFPN |
 | G | T18 | pending | — | — |
 | G | T19 | pending | — | — |
 
@@ -443,6 +443,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — T17 implemented: `pending` → `in_progress` → `pending_review`,
+  commits `71fe4368`, `4cc52111`, `efdacd32`; working tree clean.
 - 2026-11-12 — batch G started: T17 `pending` → `in_progress`.
 - 2026-11-12 — review F `done`: T14 kept, T15 kept, T16 fixed (930efdf3);
   follow-ups F25–F29 appended with status `pending`; T14, T15 and T16
