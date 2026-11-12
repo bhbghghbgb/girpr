@@ -91,7 +91,10 @@ girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-ext
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
-`sled2redb` takes `--force` and the same `--output`.
+`sled2redb <SLED_DIR> <REDB_PATH>` takes `--force` and the same `--output`. A
+usage error in it exits `3`, not clap's `2`: the converter shares one failure
+code with a failed conversion, so every way it can fail is `3` — while
+`girsync` itself keeps `2` for a parse error.
 
 `--no-backup` and `--backup-retain N` are on every subcommand too — see
 [Backups and failures](#backups-and-failures).
