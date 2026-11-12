@@ -11,13 +11,48 @@ use common::{
     log, parse_ndjson, recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update,
     update_mem, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
-use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::cache::{CACHE_PREFIX, CacheOpen, TestCacheBackend, load_all_records, open_db};
+use girsync::{BackupPolicy, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::path::Path;
 
 fn recs(dir: &Path) -> std::collections::HashMap<String, girsync::cache::FileRec> {
     recs_of(dir)
+}
+
+/// The names of the entries in `dir` that start with `prefix`, sorted.
+///
+/// The tool's own namespace, so the answer is "what the tool left behind"
+/// rather than "what is in the directory".
+fn siblings(dir: &Path, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The md5 digest a folder's cache holds for `rel`.
+fn md5_in(dir: &Path, rel: &str) -> Vec<u8> {
+    recs(dir)[rel]
+        .hashes
+        .get_named("md5")
+        .expect("the row holds an md5")
+        .to_vec()
+}
+
+/// The md5 digest a cache *file* holds for `rel` — a copy of one, read
+/// without touching it.
+fn md5_in_file(path: &Path, rel: &str) -> Vec<u8> {
+    let db = open_db(path, true, CacheOpen::ReadOnly).expect("the copy is a readable cache");
+    load_all_records(&db).unwrap()[rel]
+        .hashes
+        .get_named("md5")
+        .expect("the row holds an md5")
+        .to_vec()
 }
 
 /// Run the real binary and return the records it reported on stdout.
@@ -1815,4 +1850,269 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
     // Both caches still open; a dst cache readable before the run stays readable.
     assert_eq!(cmd_update(update(src.clone()), &log()).unwrap(), 0);
     assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
+}
+
+/// A sync backs up src's cache and snapshots dst's pre-sync state.
+///
+/// dst gets the snapshot only. The two would be copies of the same bytes
+/// taken at the same moment, so the second name is a second copy of one file
+/// and nothing else.
+#[test]
+fn run_sync_backs_up_src_and_snapshots_dst() {
+    let t = temp_root("bakpolicy");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    // Both sides have a cache, so both have something to copy aside.
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        1,
+        "src keeps one copy of its cache"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-").len(),
+        1,
+        "dst keeps one snapshot of its pre-sync state"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-backup-").is_empty(),
+        "dst does not get a second copy of the same bytes"
+    );
+}
+
+/// `--no-backup` leaves no copy and no snapshot behind.
+///
+/// It is a policy about what a run leaves behind, so it cannot change what
+/// the run answers: the mirror is the same either way.
+#[test]
+fn run_sync_with_no_backup_leaves_no_copy() {
+    let t = temp_root("nobak");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    for dir in [&src, &dst] {
+        assert!(
+            siblings(dir, "girpr-cache-backup-").is_empty(),
+            "{} keeps no copy",
+            dir.display()
+        );
+        assert!(
+            siblings(dir, "girpr-cache-old-").is_empty(),
+            "{} keeps no snapshot",
+            dir.display()
+        );
+    }
+    // The run still did its work.
+    assert_eq!(rfile(&dst, "a.txt"), b"one");
+}
+
+/// `--backup-retain N` keeps the newest N siblings of each prefix.
+///
+/// The prefixes are counted separately: src's copies and dst's snapshots are
+/// two lists, each with its own bound.
+#[test]
+fn run_sync_backup_retain_keeps_the_newest_of_each_prefix() {
+    let t = temp_root("retain");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    for _ in 0..3 {
+        let mut o = sync(src.clone(), dst.clone());
+        o.common.backup = BackupPolicy {
+            disabled: false,
+            retain: NonZeroUsize::new(2),
+        };
+        assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+    }
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        2,
+        "two copies kept, the oldest one gone"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-").len(),
+        2,
+        "two snapshots kept, the oldest one gone"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-backup-").is_empty(),
+        "dst keeps no copy of its own"
+    );
+}
+
+/// A dry run writes nothing, and a copy is a write.
+#[test]
+fn run_sync_dry_run_leaves_no_copy() {
+    let t = temp_root("drycopy");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    assert_eq!(
+        cmd_sync(sync_dry(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+
+    for dir in [&src, &dst] {
+        assert!(
+            siblings(dir, "girpr-cache-backup-").is_empty(),
+            "{} keeps no copy",
+            dir.display()
+        );
+        assert!(
+            siblings(dir, "girpr-cache-old-").is_empty(),
+            "{} keeps no snapshot",
+            dir.display()
+        );
+    }
+}
+
+/// The copy is taken **before** the cache is removed, so the copy holds the
+/// cache as it was and the live cache is a new one.
+///
+/// The order is what makes the copy worth having: a copy taken after the
+/// removal would be a copy of the rebuilt cache, which is the thing the run
+/// could always make again.
+#[test]
+fn run_sync_copies_the_cache_before_ignore_cache_removes_it() {
+    let t = temp_root("copyorder");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"one");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    // A digest that is wrong but the right length, so it is stored as it is:
+    // the row's stat still matches the file, so a run that keeps the cache
+    // trusts it and leaves it alone.
+    common::poison_digest(&src, "a.txt", "md5");
+    let planted = md5_in(&src, "a.txt");
+    assert!(
+        planted.iter().all(|b| *b == 0xAB),
+        "the planted digest is in the cache"
+    );
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.ignore_cache = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    let copies = siblings(&src, "girpr-cache-backup-");
+    assert_eq!(
+        copies.len(),
+        1,
+        "the cache was copied before it was removed"
+    );
+    assert_eq!(
+        md5_in_file(&src.join(&copies[0]), "a.txt"),
+        planted,
+        "the copy holds the cache as it was before the run"
+    );
+    assert_ne!(
+        md5_in(&src, "a.txt"),
+        planted,
+        "the live cache was removed and rebuilt from the disk"
+    );
+}
+
+/// `--ignore-cache` still removes the cache when the copy is skipped: the
+/// flag is about the copy, not about the removal.
+///
+/// The removal is what the planted digest shows — a cache that was removed
+/// and rebuilt does not hold what the old one held.
+#[test]
+fn run_sync_with_no_backup_still_removes_the_cache() {
+    let t = temp_root("nobakignore");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"one");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    common::poison_digest(&src, "a.txt", "md5");
+    let planted = md5_in(&src, "a.txt");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    o.common.ignore_cache = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(
+        siblings(&src, "girpr-cache-backup-").is_empty(),
+        "no copy was made"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-old-").is_empty(),
+        "no snapshot was made"
+    );
+    assert_ne!(
+        md5_in(&src, "a.txt"),
+        planted,
+        "the cache was removed and rebuilt from the disk anyway"
+    );
+}
+
+/// `--backup-retain 0` is refused, and the refusal names the flag.
+///
+/// Keeping none of the copies is what `--no-backup` is for, so a bound of
+/// zero is a contradiction rather than a request — and it is a runtime usage
+/// mistake, which is exit `3` rather than the `2` a parse error gets.
+#[test]
+fn run_backup_retain_zero_is_refused() {
+    let t = temp_root("retain0");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(&src)
+        .arg("--dst")
+        .arg(&dst)
+        .arg("--backup-retain")
+        .arg("0")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a runtime usage mistake exits 3: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--backup-retain"),
+        "the message names the flag: {stderr}"
+    );
 }

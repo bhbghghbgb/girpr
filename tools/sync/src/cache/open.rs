@@ -388,3 +388,82 @@ pub fn get_rec(cache: &CacheDb, rel: &str) -> Result<Option<FileRec>> {
 pub fn remove_rec(cache: &CacheDb, rel: &str) -> Result<()> {
     cache.remove(rel)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stamp every claim in these cases asks for: a claim is asked for a
+    /// *name*, so the name is the thing under test and the timestamp is
+    /// pinned to keep the expectation readable.
+    const STAMP: &str = "20240101T000000.000000Z";
+
+    /// A claim steps over a name that is already taken rather than taking it:
+    /// the name is claimed, not chosen.
+    #[test]
+    fn a_claim_steps_over_a_taken_name() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim");
+        let dir = t.subdir("w");
+
+        let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        assert_eq!(
+            first.file_name().unwrap().to_string_lossy(),
+            format!("girpr-cache-backup-{STAMP}")
+        );
+
+        let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        assert_eq!(
+            second.file_name().unwrap().to_string_lossy(),
+            format!("girpr-cache-backup-{STAMP}_2"),
+            "the second claim takes the next name"
+        );
+        assert_ne!(first, second, "the two claims are two names");
+    }
+
+    /// The same for a directory claim: a legacy sled cache is a directory, and
+    /// so is the copy of one.
+    #[test]
+    fn a_directory_claim_steps_over_a_taken_name() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim_dir");
+        let dir = t.subdir("w");
+
+        let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP, true).unwrap();
+        assert!(first.is_dir(), "a directory claim leaves a directory");
+        let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP, true).unwrap();
+        assert!(second.is_dir(), "and so does the next one");
+        assert_ne!(first, second);
+        assert!(
+            second
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("_2"),
+            "the second claim takes the next name"
+        );
+    }
+
+    /// Concurrent claims of one name each end up with a name of their own.
+    /// The timestamp is the same for all of them, so nothing but the claim
+    /// itself keeps them apart — which is the whole point of claiming rather
+    /// than choosing.
+    #[test]
+    fn concurrent_claims_get_names_of_their_own() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim_race");
+        let dir = t.subdir("w");
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap()
+                })
+            })
+            .collect();
+        let names: Vec<PathBuf> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        let unique: std::collections::HashSet<&PathBuf> = names.iter().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "every claim got a name of its own"
+        );
+    }
+}
