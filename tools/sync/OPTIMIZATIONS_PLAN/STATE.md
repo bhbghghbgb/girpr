@@ -11,8 +11,8 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: followups-evaluate
-active_batch: G
+phase: followups-implement
+active_batch: B1
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -237,48 +237,132 @@ reviews:
     head: 9c0b1c49
     result: T17 kept (71fe4368, 4cc52111, efdacd32); T18 kept (cce4fed3, efe471f8, 2a244f26); T19 kept (eac1d900, 96e48eb9, 9c0b1c49); no fix or revert commits; 512 passed without the feature and 524 with it, 1 skipped; the converter atomicity test was verified to be the only failure on the pre-T17 code
     followups: [F30, F31, F32]
+  - batch: B1
+    status: pending
+    tasks: [F1, F2]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B2
+    status: pending
+    tasks: [F3, F4, F5]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B3
+    status: pending
+    tasks: [F7, F11, F12, F13, F18]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B4
+    status: pending
+    tasks: [F9, F10]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B5
+    status: pending
+    tasks: [F14, F24]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B6
+    status: pending
+    tasks: [F15, F23]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B7
+    status: pending
+    tasks: [F16, F30]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B8
+    status: pending
+    tasks: [F25, F26, F31]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B9
+    status: pending
+    tasks: [F19, F20, F21]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B10
+    status: pending
+    tasks: [F22, F27]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B11
+    status: pending
+    tasks: [F6, F28, F29, F32]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: B12
+    status: pending
+    tasks: [F17]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
     description: foreign_known resolves names through HashAlg::from_str, whose error path allocates an UnknownHash string for every non-matching foreign name; an ASCII-case comparison against the canonical spelling would be allocation-free.
     status: pending
-    batch: null
+    batch: B1
     commits: []
   - id: F2
     source: T01
     description: DESIGN-NOTES "A digest is looked up by name, not by slot" still says "two lookups" and does not mention get_algo or the ASCII-case widening; T16 may already cover this reconciliation.
     status: pending
-    batch: null
+    batch: B1
     commits: []
   - id: F3
     source: T02
     description: spare_link_storage no longer canonicalizes the dst root when there is no kept link, so an unresolvable dst root surfaces later instead of failing at plan time with "resolve dst root".
     status: pending
-    batch: null
+    batch: B2
     commits: []
   - id: F4
     source: T02
     description: The copy-free early return drops a possible plan-time IO error from stat'ing a planned delete/fix-dir target that a copy-free run used to surface.
     status: pending
-    batch: null
+    batch: B2
     commits: []
   - id: F5
     source: T02
     description: a_prefix_is_asked_about_once_per_call pins the PrefixStats memo directly rather than observing the guard's probe count; an end-to-end proof would need an injectable stat hook.
     status: pending
-    batch: null
+    batch: B2
     commits: []
   - id: F6
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
     status: pending
-    batch: null
+    batch: B11
     commits: []
   - id: F7
     source: T05
     description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
     status: pending
-    batch: null
+    batch: B3
     commits: []
   - id: F8
     source: T05
@@ -291,145 +375,145 @@ followups:
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
     status: pending
-    batch: null
+    batch: B4
     commits: []
   - id: F10
     source: T08
     description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
     status: pending
-    batch: null
+    batch: B4
     commits: []
   - id: F11
     source: T07
     description: The no-op test observes only the re-key pass's read-transaction count, not the run's total cache scans, so the broader claim that a no-op run does not scan the cache more than once is still unpinned.
     status: pending
-    batch: null
+    batch: B3
     commits: []
   - id: F12
     source: T07
     description: CacheDb::read_transaction_count counts every read transaction on the handle rather than only entries-table reads, so a future read on another table would silently move the number the new tests pin.
     status: pending
-    batch: null
+    batch: B3
     commits: []
   - id: F13
     source: T07
     description: get_many allocates a String per key; a borrow-shaped variant would avoid the copies for a caller that only needs the rows.
     status: pending
-    batch: null
+    batch: B3
     commits: []
   - id: F14
     source: T06
     description: copy_one now carries both an AlgoSet and the request slice it is derived from, and nothing prevents the two from drifting apart.
     status: pending
-    batch: null
+    batch: B5
     commits: []
   - id: F15
     source: T09
     description: util::unique_sibling now has no callers left in the crate and should be deleted or given one.
     status: pending
-    batch: null
+    batch: B6
     commits: []
   - id: F16
     source: T09
     description: --backup-retain prunes only after a successful copy, so a folder whose cache is absent, or a --no-backup run, never prunes the copies already sitting beside it.
     status: pending
-    batch: null
+    batch: B7
     commits: []
   - id: F17
     source: T09
     description: Retention can unlink a sibling a concurrent run is still copying into, so that run's backup can vanish while the run reports success.
     status: pending
-    batch: null
+    batch: B12
     commits: []
   - id: F18
     source: T10
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
     status: pending
-    batch: null
+    batch: B3
     commits: []
   - id: F19
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
     status: pending
-    batch: null
+    batch: B9
     commits: []
   - id: F20
     source: T11
     description: The lowest-index copy-failure case discriminates the two orders only because a 1 MiB copy is slower than the injected failure, so it can pass vacuously on a very fast host.
     status: pending
-    batch: null
+    batch: B9
     commits: []
   - id: F21
     source: T12
     description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
     status: pending
-    batch: null
+    batch: B9
     commits: []
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
     status: pending
-    batch: null
+    batch: B10
     commits: []
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
     status: pending
-    batch: null
+    batch: B6
     commits: []
   - id: F24
     source: T13
     description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
     status: pending
-    batch: null
+    batch: B5
     commits: []
   - id: F25
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
     status: pending
-    batch: null
+    batch: B8
     commits: []
   - id: F26
     source: T14
     description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
     status: pending
-    batch: null
+    batch: B8
     commits: []
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
     status: pending
-    batch: null
+    batch: B10
     commits: []
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
     status: pending
-    batch: null
+    batch: B11
     commits: []
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
     status: pending
-    batch: null
+    batch: B11
     commits: []
   - id: F30
     source: T17
     description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
     status: pending
-    batch: null
+    batch: B7
     commits: []
   - id: F31
     source: T18
-    description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today.
+    description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
     status: pending
-    batch: null
+    batch: B8
     commits: []
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
     status: pending
-    batch: null
+    batch: B11
     commits: []
 ```
 
@@ -462,6 +546,14 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up grouping recorded: 31 pending follow-ups split into
+  batches B1–B12, and a `reviews[]` row added for each. Execution order is
+  B1, B2, B3, B4, B5, B6, B7, B12, B8, B9, B10, B11: B12 (F17) runs directly
+  after B7 because the evaluator judged that F17's concurrency rule for
+  retention must land on the retention policy that F16 settles, and doing it
+  earlier would design the protection twice. F5 may be promoted to its own
+  batch if the injectable stat hook needs a wider seam than the plan tests.
+  `phase: followups-evaluate` → `followups-implement`, `active_batch: B1`.
 - 2026-11-12 — F8 `pending` → `skipped`: it names only a task file in this plan
   directory, which is deleted when the plan ends, so there is no code work to
   do. 31 follow-ups remain `pending`.
