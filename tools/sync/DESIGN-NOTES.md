@@ -401,15 +401,18 @@ is complete.
 Two things follow, and both are load-bearing.
 
 **The bound can only ever select a whole copy.** The bound ranges over the
-published names, and a published name only comes into existence complete. A
-copy that is still being written is not a member of any list, so no bound —
-however often it is applied — can take it away. That is the whole reason the
-copy is published rather than written in place: writing it straight into
-`girpr-cache-backup-<ts>` puts a half-written file under a name the bound
-reads, and a run that merely opens the folder can then remove the copy another
-run is making there, leaving that run reporting a backup that is not on disk.
-It also means the bound's count is a count of whole copies: it never keeps a
-half-written one in place of a good one.
+published names, and a published name holds the whole copy or none of it: the
+copy is renamed into place, so a name in a list never carries part of a
+backup. A published name is empty for the moment between the claim and the
+rename, and that costs nothing: the name holds no copy, and the copy lands
+on it either way. A copy that is still being written is not a member of any
+list, so no bound — however often it is applied — can take it away. That is
+the whole reason the copy is published rather than written in place: writing
+it straight into `girpr-cache-backup-<ts>` puts a half-written file under a
+name the bound reads, and a run that merely opens the folder can then remove
+the copy another run is making there, leaving that run reporting a backup that
+is not on disk. It also means the bound's count is a count of whole copies:
+it never keeps a half-written one in place of a good one.
 
 **There is no age, no lease and no marker to interpret.** "Finished" and "in
 flight" are told apart by the name, and the name is the only thing the bound
@@ -418,11 +421,17 @@ than an hour" — would be a weaker guarantee wearing the same clothes: the copy
 of a slow run would still be taken, and the hour would be a number nobody
 could check.
 
+That is also why the **published** name says when the copy became *whole* and
+not when the copy started. The bound orders the copies by that name, so a name
+that said "started" would make the copy of a slow run look old the moment it
+landed, and the bound would take it away from the run that had just made it.
+The working name carries the start, because it is scratch: nothing but the
+run making it ever reads it.
+
 The bound is applied **after** the cache is opened, and the open holds the
 cache file's exclusive lock until the run is done with the cache. redb takes
 that lock exclusively and does not wait for it, so at most one run is in its
-run phase for a folder's cache at a time — which is what lets the bound spare
-the copies a running run is still using. The bound also enumerates the folder
+run phase for a folder's cache at a time. The bound also enumerates the folder
 once, at its start, so a copy published after that is not a candidate at all:
 a run that publishes while another run is bounding the folder is spared by
 the enumeration, not by a rule about ages.
@@ -430,6 +439,11 @@ the enumeration, not by a rule about ages.
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
 because the count is made up from the next-oldest copy instead.
+
+A copy another run has already **published** is not spared, though: the bound
+is about the folder, and the copies it keeps are the newest ones. Telling a
+published copy from one still in use would take a marker of its own, which
+this mechanism does not have.
 
 The tool takes **no lock of its own**. A folder on a filesystem that cannot
 lock has nothing to degrade, because the only thing the mechanism needs is
@@ -439,8 +453,9 @@ there.
 
 **Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
 and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
-`the_bound_keeps_the_copy_the_run_published` for the bound against the run's
-own copy, and
+`a_published_copy_is_named_after_it_became_whole` for the name the bound
+orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
+bound against the run's own copy, and
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
 same thing seen through a whole run.
 

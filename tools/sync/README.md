@@ -902,9 +902,8 @@ effect when a new copy was made would leave them there forever. A dry run
 still writes nothing at all, so it bounds nothing.
 
 The bound is applied when a folder's cache is **opened for writing**, so it
-runs under that cache's own lock. While one run holds it, no other run is
-working on that folder's cache, so the bound never takes away a copy another
-run is still using.
+runs under that cache's own lock. While one run holds it, no other run is in
+its run phase for that folder's cache.
 
 **A copy appears whole, or not at all.** It is written under a working name
 (`girpr-cache-partial-<ts>`) and renamed onto `girpr-cache-backup-<ts>` (or
@@ -916,6 +915,13 @@ applied. The bound never removes the copy the run itself made either — the run
 that reports a backup is the run that has to keep it — and the folder still
 ends within its bound, because the count is made up from the next-oldest copy
 instead.
+
+A copy another run has already published is the bound's to take, like any
+other copy: the bound keeps the newest N, and telling a published copy from one
+still in use would take a marker of its own. The name a copy is published
+under says when that copy became whole, so the newest copies are the ones a
+bound keeps — a copy that took a while to make is not treated as an old one the
+moment it lands.
 
 **What a failure leaves behind.** The copies are made *before* the caches are
 removed, so a run that fails while removing them never loses the copy:
