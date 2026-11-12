@@ -315,10 +315,10 @@ reviews:
     result: null
     followups: []
   - batch: B12
-    status: pending
+    status: in_progress
     tasks: [F17, F49]
-    base: null
-    head: null
+    base: 186d22a2
+    head: 63ff19bf
     result: null
     followups: []
   - batch: B13
@@ -485,9 +485,10 @@ followups:
   - id: F17
     source: T09
     description: Retention can unlink a sibling a concurrent run is still copying into, so that run's backup can vanish while the run reports success.
-    status: in_progress
+    status: pending_review
     batch: B12
-    commits: []
+    commits: [55d0b59a, dd816c83, 63ff19bf]
+    note: implemented by ses_e2f044c17ffe74H79CzfSsDiwb; an atomic publish design: a copy is written under a reserved working name and published by an atomic rename onto a claimed published name, so a published name only ever exists complete and the bound cannot select a half-written file
   - id: F18
     source: T10
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
@@ -683,9 +684,10 @@ followups:
   - id: F49
     source: F16
     description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
-    status: in_progress
+    status: pending_review
     batch: B12
-    commits: []
+    commits: [55d0b59a, dd816c83, 63ff19bf]
+    note: same change as F17; the bound now runs after the cache is opened, under the database lock, and enumerates the folder once at its start
   - id: F50
     source: F16
     description: The bound covers the other prefix in a folder too, so a folder that is both source and destination loses snapshots it never wrote; consistent with the folder-scoped rule, but worth stating in the flag's own help.
@@ -730,6 +732,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B12 review checkpoint opened: F17 and F49
+  `in_progress` → `pending_review`, commits `55d0b59a`, `dd816c83`,
+  `63ff19bf`; review B12 `pending` → `in_progress`, base `186d22a2`, head
+  `63ff19bf`.
 - 2026-11-13 — follow-up batch B12 started: F17 and F49 `pending` →
   `in_progress`; `active_batch: B7` → `B12`. This is the batch the evaluator
   asked to run with a concurrency design up front.
