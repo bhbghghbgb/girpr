@@ -982,8 +982,8 @@ enum Claim {
 /// Take the record that speaks for a copy about to be published.
 ///
 /// The record is created and locked **before** the copy's published name
-/// appears, so a bound can never meet a published copy that has no record:
-/// the two are published together, in that order.
+/// appears, so a published name does not appear without one beside it: the
+/// two are published together, in that order.
 ///
 /// The lock is what makes the record live. The OS releases it when the
 /// holding process ends — and it releases it when the process is killed, so a
