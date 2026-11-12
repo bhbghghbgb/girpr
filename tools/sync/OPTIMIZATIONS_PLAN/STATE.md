@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B3
+active_batch: B4
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -252,12 +252,12 @@ reviews:
     result: F3 kept (3c30627d); F4 kept (00f56668, 4aa601b6); F5 kept (79f64048); no fix or revert commits; 516 passed, 1 skipped; each new test was verified to fail with its fix reverted
     followups: [F36, F37, F38]
   - batch: B3
-    status: in_progress
+    status: done
     tasks: [F7, F11, F12, F13, F18]
     base: 1e9685dd
     head: d4548755
-    result: null
-    followups: []
+    result: F7 kept (f1b638e1); F11 kept (d4548755); F12 kept (cb4456f4); F13 kept (0b3afb32); F18 kept (84af494b); no fix or revert commits; 520 passed, 1 skipped; the repair was verified to commit the table it creates
+    followups: [F39, F40]
   - batch: B4
     status: pending
     tasks: [F9, F10]
@@ -335,6 +335,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: B15
+    status: pending
+    tasks: [F39, F40]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -377,7 +384,7 @@ followups:
   - id: F7
     source: T05
     description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
-    status: pending_review
+    status: completed
     batch: B3
     commits: []
   - id: F8
@@ -390,31 +397,31 @@ followups:
   - id: F9
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
-    status: pending
+    status: in_progress
     batch: B4
     commits: []
   - id: F10
     source: T08
     description: is_excluded still rebuilds MatchOptions per entry and re-tests every exclude against every ancestor prefix; the adjacent phase-A micro-opportunity is still unaddressed.
-    status: pending
+    status: in_progress
     batch: B4
     commits: []
   - id: F11
     source: T07
     description: The no-op test observes only the re-key pass's read-transaction count, not the run's total cache scans, so the broader claim that a no-op run does not scan the cache more than once is still unpinned.
-    status: pending_review
+    status: completed
     batch: B3
     commits: []
   - id: F12
     source: T07
     description: CacheDb::read_transaction_count counts every read transaction on the handle rather than only entries-table reads, so a future read on another table would silently move the number the new tests pin.
-    status: pending_review
+    status: completed
     batch: B3
     commits: []
   - id: F13
     source: T07
     description: get_many allocates a String per key; a borrow-shaped variant would avoid the copies for a caller that only needs the rows.
-    status: pending_review
+    status: completed
     batch: B3
     commits: []
   - id: F14
@@ -444,7 +451,7 @@ followups:
   - id: F18
     source: T10
     description: The test the_default_is_the_size_without_a_variable no longer matches what it asserts after the fifth commit, which now pins the constant only.
-    status: pending_review
+    status: completed
     batch: B3
     commits: []
   - id: F19
@@ -567,6 +574,18 @@ followups:
     status: pending
     batch: B14
     commits: []
+  - id: F39
+    source: F11
+    description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
+    status: pending
+    batch: B15
+    commits: []
+  - id: F40
+    source: F12
+    description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
+    status: pending
+    batch: B15
+    commits: []
 ```
 
 ## Human checklist
@@ -598,6 +617,12 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-12 — follow-up batch B4 started: F9 and F10 `pending` →
+  `in_progress`; `active_batch: B3` → `B4`.
+- 2026-11-12 — review B3 `done`: F7, F11, F12, F13 and F18 kept, no fix or
+  revert commits; follow-ups F39–F40 appended with status `pending` and batch
+  `B15` (two doc wordings in the cache db); F7, F11, F12, F13 and F18
+  `pending_review` → `completed`.
 - 2026-11-12 — follow-up batch B3 review checkpoint opened: F7, F11, F12, F13
   and F18 `in_progress` → `pending_review`, commits `84af494b`, `cb4456f4`,
   `0b3afb32`, `f1b638e1`, `d4548755`; review B3 `pending` → `in_progress`,
