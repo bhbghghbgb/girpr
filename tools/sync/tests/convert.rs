@@ -480,6 +480,87 @@ fn the_converter_reports_json_records_on_stdout() {
     );
 }
 
+/// The flags are accepted on either side of the two paths, and `--output=json`
+/// is the same as `--output json`.
+///
+/// The parser is `clap`'s, so its spelling is the spelling and no narrower set
+/// of forms sits behind it. The forms are pinned here because a run that
+/// refused one of them would fail on the spelling rather than on the
+/// conversion — and the spelling is what a script writes.
+///
+/// Every form prints the same record, and the two spellings of `--output`
+/// print it byte for byte: they are one run and not two.
+#[test]
+fn the_flags_are_accepted_on_either_side_of_the_paths() {
+    let t = temp_root("convert_args");
+    let work = t.subdir("w");
+    build_sled_db(&work);
+    let src = work.join("legacy-cache");
+
+    // The arguments of a run, in the order the form spells them: the flags
+    // before the paths, the two paths, the flags after them.
+    let args_of = |before: &[&str], after: &[&str], dst: &std::path::Path| {
+        let mut args: Vec<std::ffi::OsString> = before
+            .iter()
+            .map(|a| std::ffi::OsStr::new(*a).to_os_string())
+            .collect();
+        args.push(src.as_os_str().to_os_string());
+        args.push(dst.as_os_str().to_os_string());
+        args.extend(
+            after
+                .iter()
+                .map(|a| std::ffi::OsStr::new(*a).to_os_string()),
+        );
+        args
+    };
+
+    // The forms, as the flags before the paths and the flags after them: the
+    // flags after the paths, the flags before them, the `=` spelling on either
+    // side of the paths, and `--force` on either side of them.
+    //
+    // Each form gets a destination of its own, so no form has to force over
+    // the cache another one left, and every record is about its own run.
+    let forms: &[(&[&str], &[&str])] = &[
+        (&[], &["--output", "json"]),
+        (&["--output", "json"], &[]),
+        (&[], &["--output=json"]),
+        (&["--output=json"], &[]),
+        (&["--force", "--output", "json"], &[]),
+        (&["--output", "json"], &["--force"]),
+    ];
+
+    for (i, (before, after)) in forms.iter().enumerate() {
+        let dst = work.join(format!("girpr-cache-{i}"));
+        let (code, stdout, stderr) = run_converter(args_of(before, after, &dst));
+        assert_eq!(
+            code, 0,
+            "the form {before:?} before the paths and {after:?} after them: stderr: {stderr}"
+        );
+        assert_eq!(
+            parse_ndjson(stdout.as_bytes()),
+            vec![serde_json::json!({
+                "event": "converted",
+                "src": src.display().to_string(),
+                "dst": dst.display().to_string(),
+                "files": 2,
+                "dirs": 1,
+                "hashes": 5,
+            })],
+            "the form {before:?} before the paths and {after:?} after them: \
+             the record is the one every spelling prints"
+        );
+    }
+
+    // The two spellings of `--output` are the same run: the same destination,
+    // the same record, byte for byte.
+    let dst = work.join("girpr-cache-spellings");
+    let (code, spaced, stderr) = run_converter(args_of(&["--output", "json"], &[], &dst));
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let (code, equals, stderr) = run_converter(args_of(&["--force", "--output=json"], &[], &dst));
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(spaced, equals, "the two spellings are the same run");
+}
+
 /// A usage error is a failure like any other, and fails with the converter's
 /// own code.
 ///
