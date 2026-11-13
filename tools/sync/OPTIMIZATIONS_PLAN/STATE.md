@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: Y2
+active_batch: X1
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -558,13 +558,13 @@ followups:
   - id: F25
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
-    status: pending
+    status: in_progress
     batch: X1
     commits: []
   - id: F26
     source: T14
     description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
-    status: pending
+    status: in_progress
     batch: X1
     commits: []
   - id: F27
@@ -595,7 +595,7 @@ followups:
   - id: F31
     source: T18
     description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
-    status: pending
+    status: in_progress
     batch: X1
     commits: []
   - id: F32
@@ -719,7 +719,7 @@ followups:
   - id: F51
     source: F30
     description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
-    status: pending
+    status: in_progress
     batch: X1
     commits: []
   - id: F52
@@ -786,7 +786,7 @@ followups:
   - id: F64
     source: F21
     description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
-    status: pending
+    status: in_progress
     batch: X1
     commits: []
   - id: F65
@@ -1058,6 +1058,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X1 started: F25, F26, F31, F51 and F64 `pending`
+  → `in_progress`; `active_batch: Y2` → `X1`.
 - 2026-11-13 — review Y2 `done`: F101 fixed (f0033492), F102 kept (33faafce),
   F103 fixed (5a4bec0e); follow-ups F108–F110 appended and recorded as
   `skipped` with reasons, since the backup publish chain ends here. F101, F102
