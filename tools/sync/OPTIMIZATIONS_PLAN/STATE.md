@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B23
+active_batch: B24
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -330,17 +330,17 @@ reviews:
     followups: []
   - batch: B14
     status: pending
-    tasks: [F36, F37, F38]
+    tasks: [F36, F37, F38, F39, F40]
     base: null
     head: null
     result: null
     followups: []
   - batch: B15
-    status: pending
-    tasks: [F39, F40]
+    status: skipped
+    tasks: []
     base: null
     head: null
-    result: null
+    result: F39 and F40 were merged into B14, which now holds both of them and the plan guards' three doc items; all five are doc wordings that must say what the code does
     followups: []
   - batch: B16
     status: pending
@@ -658,13 +658,13 @@ followups:
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
     status: pending
-    batch: B15
+    batch: B14
     commits: []
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
     status: pending
-    batch: B15
+    batch: B14
     commits: []
   - id: F41
     source: F10
@@ -857,7 +857,7 @@ followups:
   - id: F79
     source: F65
     description: The claim check tests that something is at the name, not that the claim is still ours, so if a bound took the claim away and another run took the same name in that window the publish still lands over that run's copy; reachable only where the filesystem can neither link nor lock a file.
-    status: pending
+    status: in_progress
     batch: B24
     commits: []
   - id: F80
@@ -870,13 +870,13 @@ followups:
   - id: F81
     source: F73
     description: A copy published by a run that never opens the folder's cache stays pending and is adopted, and spared, by the next run that opens that folder, so an older copy is kept in place of a newer one for one bound cycle.
-    status: pending
+    status: in_progress
     batch: B24
     commits: []
   - id: F82
     source: F74
     description: The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case.
-    status: pending
+    status: in_progress
     batch: B24
     commits: []
 ```
@@ -910,6 +910,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B24 started: F79, F81 and F82 `pending` →
+  `in_progress`; `active_batch: B23` → `B24`. B15 was merged into B14 (five
+  doc wordings in one batch) and recorded as such.
 - 2026-11-13 — review B23 `done`: F65, F66, F68 and F75 kept; F73 and F74
   fixed (f07a728b, 04dab01f); follow-ups F79, F81 and F82 appended with batch
   `B24`, and F80 recorded as `skipped` because it cannot be checked on this
