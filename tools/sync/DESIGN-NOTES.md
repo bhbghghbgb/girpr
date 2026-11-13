@@ -426,8 +426,8 @@ has to be preceded by a claim, and the claim leaves the name empty for as
 long as the rename takes, so the name would be a published name with no bytes
 in it. A filesystem that cannot link a file has no such publish, and the copy
 is renamed onto a name it claims first there — the name is briefly empty, and
-the copy lands on it either way, as long as the platform's rename can replace
-what is at a name. Where it cannot, the copy never lands: the publish fails
+the copy lands on it as long as the platform's rename can replace what is at
+a name. Where it cannot, the copy never lands there: the publish fails
 loudly, the claim is dropped and the name left free, and the run reports the
 failure rather than a backup that is not on disk. A **file** copy does not
 drop its claim and try again the way a directory copy does: a rename of a
