@@ -830,10 +830,9 @@ fn name_is_taken(e: &std::io::Error) -> bool {
 /// entry is forgotten when the copy is gone, because there is nothing left to
 /// spare.
 ///
-/// The entries of a list are ordered by name, and the bound spares the
-/// newest of them: a run publishes one copy per list, so the newest is the
-/// copy the current run published, and the ones before it belong to earlier
-/// runs in the same process.
+/// The bound spares the newest of a list's entries: a run publishes one copy
+/// per list, so the newest is the copy the current run published, and the
+/// ones before it belong to earlier runs in the same process.
 fn published_registry() -> &'static Mutex<HashMap<PathBuf, Vec<PathBuf>>> {
     static PUBLISHED: OnceLock<Mutex<HashMap<PathBuf, Vec<PathBuf>>>> = OnceLock::new();
     PUBLISHED.get_or_init(|| Mutex::new(HashMap::new()))
@@ -851,8 +850,8 @@ fn remember_published(path: &Path) {
 
 /// The copies this process published in `folder`.
 ///
-/// The entries are read and not taken: a bound spares the copies the run
-/// published, and a later bound for the same folder spares them too. An entry
+/// The entries are read and not taken: a bound spares the copy the run
+/// published, and a later bound for the same folder spares it too. An entry
 /// whose copy is gone is forgotten — there is nothing left to spare.
 fn published_under(folder: &Path) -> Vec<PathBuf> {
     let mut published = published_registry()
