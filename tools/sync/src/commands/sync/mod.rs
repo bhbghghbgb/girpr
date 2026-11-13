@@ -42,8 +42,8 @@
 //! run once the rename has collapsed the two spellings: a diff taken first
 //! would find src's `Data.txt` and dst's `data.txt` to be two unrelated paths
 //! and plan a copy and a delete where the rename belongs, and a diff that
-//! paired by lowercase instead would report the `CASE-MISMATCH` bucket the
-//! rename pass exists to eliminate (`a_case_only_pair_is_reported_but_not_counted_as_a_difference`
+//! paired by the ASCII-case fold instead would report the `CASE-MISMATCH` bucket
+//! the rename pass exists to eliminate (`a_case_only_pair_is_reported_but_not_counted_as_a_difference`
 //! in `src/diff/mod.rs` is that bucket's own shape). Pinned by
 //! `the_dry_run_does_exactly_what_the_table_says` in `tests/sync_plan/`, whose
 //! expected records put the rename ahead of the plan and report nothing else
@@ -88,8 +88,9 @@
 //! on this path at all.
 //! The rename still precedes the diff and always will: the diff is taken
 //! case-sensitively on exact keys. The plan therefore runs *before* the
-//! rename, paired by lowercase in insensitive mode — see the comment at the call
-//! site, which is the one place the two case flags deliberately disagree.
+//! rename, paired by the ASCII-case fold in insensitive mode — see the comment
+//! at the call site, which is the one place the two case flags deliberately
+//! disagree.
 //!
 //! A record path (`girpr-cache*`) is not a valid sync input — that is
 //! `compare`-only. Errors propagate as `Err`; the exit code is always 0.
@@ -269,11 +270,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // `CasePairing::from(common.case_sensitive)` here, and `CasePairing::Exact`
     // in the `diff_maps` call below. **The two must differ**, and the values say
     // so where a bare `true`/`false` pair could not. This pairs the sides as they
-    // are *on disk*, which in insensitive mode means by lowercase — and the rename
-    // pass then collapses exactly those pairs onto exact keys, so the diff goes on
-    // to form the same pairs. Planning post-rename would make a case-only pair
-    // look one-sided and skip a digest it needs; diffing pre-rename would
-    // resurrect the `CASE-MISMATCH` bucket the rename pass exists to eliminate.
+    // are *on disk*, which in insensitive mode means by the ASCII-case fold — and
+    // the rename pass then collapses exactly those pairs onto exact keys, so the
+    // diff goes on to form the same pairs. Planning post-rename would make a
+    // case-only pair look one-sided and skip a digest it needs; diffing
+    // pre-rename would resurrect the `CASE-MISMATCH` bucket the rename pass
+    // exists to eliminate.
     // The two side labels, built before the plan rather than inside it.
     //
     // A label is how a side is named in a coverage error, so it is a value the
