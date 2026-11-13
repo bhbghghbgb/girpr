@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: Y1
+active_batch: Y2
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -962,19 +962,19 @@ followups:
   - id: F101
     source: F94
     description: The directory retry's window between dropping the claim and the second rename is not stated, and publish_dir's doc claims that a name taken in the meantime makes that rename fail, which holds only for a name with content in it, since a POSIX rename replaces an empty directory.
-    status: pending
+    status: in_progress
     batch: Y2
     commits: []
   - id: F102
     source: F91
     description: The file publish's no-retry rationale ends with "a name is only worth a second try on a platform whose rename cannot replace anything at all", naming as the only retry-safe platform the very one the same paragraph says the copy never lands on, so the sentence reads as an argument for a retry rather than against one.
-    status: pending
+    status: in_progress
     batch: Y2
     commits: []
   - id: F103
     source: F95
     description: The claim drop is best-effort, since drop_the_claim ignores the removal error and still reports the claim as gone, while the notes and the code doc say unconditionally that the claim goes and the name is left free; a removal that fails leaves an empty file under a published prefix, which the bound reads as a published copy.
-    status: pending
+    status: in_progress
     batch: Y2
     commits: []
 ```
@@ -1008,6 +1008,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Y2 started: F101, F102 and F103 `pending` →
+  `in_progress`; `active_batch: Y1` → `Y2`.
 - 2026-11-13 — review Y1 `done`: F90, F91, F94 and F95 kept; F96 fixed
   (0531886c) and F97 fixed (0d287806); follow-ups F101–F103 appended with batch
   `Y2`. Those three are documentation corrections to sentences that state
