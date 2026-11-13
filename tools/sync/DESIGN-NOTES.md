@@ -511,16 +511,14 @@ the claim goes, so another run's published copy is left alone, and the gap
 between the ask and the removal is still there.
 
 **The drop and the rename are two calls as well, and that is the window a
-directory copy is published in.** The claim is gone and the name is free,
-and the rename is the next call, so another run can take the name in
-between. What the name holds then decides what the rename does: a name with
-content in it makes the rename fail, so the publish moves on to the next
-name, and a name holding an **empty** directory is replaced by the rename —
-a POSIX rename replaces an empty directory — so the copy lands on a claim
-another run holds. The gap is one syscall wide and cannot be closed. It is
-reachable only where the filesystem cannot lock a file: the record the
-publishing run holds keeps another run off the name, and a bound off it,
-until the run opens the folder's cache.
+directory copy is published in.** Where the removal succeeded the claim is
+gone and the name is free, and the rename is the next call, so another run
+can take the name in between. The rename then fails: a platform that cannot
+replace a directory cannot replace the claim another run holds either, so
+the name is taken and the publish moves on to the next name. The gap is one
+syscall wide and cannot be closed. It is reachable only where the filesystem
+cannot lock a file: the record the publishing run holds keeps another run
+off the name, and a bound off it, until the run opens the folder's cache.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that

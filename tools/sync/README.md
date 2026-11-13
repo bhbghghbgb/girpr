@@ -974,13 +974,11 @@ directory goes, so the one published copy that was ever in reach is the copy
 of an empty legacy cache — an empty directory — and the check is what stops
 it.
 
-The drop and the rename are two calls, so the name is free in between and
-another run can take it in that window. What the name holds decides what
-the rename does: a name with content in it makes the rename fail, so the
-publish moves on to the next name, and a name holding an *empty* directory is
-replaced by the rename — a POSIX rename replaces an empty directory — so the
-copy lands on the claim another run holds. The gap is one syscall wide and
-cannot be closed.
+The drop and the rename are two calls: where the removal succeeded the name is
+free in between, and another run can take it in that window. The rename then
+fails: a platform that cannot replace a directory cannot replace the claim
+another run holds either, so the name is taken and the publish moves on to
+the next name. The gap is one syscall wide and cannot be closed.
 
 The ask and the removal are two calls as well, and no portable call removes a
 claim by what it is rather than by what it is called, so a claim taken away
