@@ -845,7 +845,11 @@ enum PublishError {
 ///
 /// The rename has to be able to replace the claim for the copy to land at
 /// all, and a filesystem whose rename cannot is one where the copy can never
-/// be published.
+/// be published. The claim is dropped and the publish fails there, rather
+/// than dropped and tried again: a rename of a file replaces whatever is at
+/// the name, so a second try could put the copy over another run's published
+/// copy — and a name is only worth a second try on a platform whose rename
+/// cannot replace anything at all.
 ///
 /// **A rename that does not land drops the claim.** The copy is not
 /// published, so the publish fails and the run reports the failure rather

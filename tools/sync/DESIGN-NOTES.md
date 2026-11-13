@@ -429,13 +429,17 @@ is renamed onto a name it claims first there — the name is briefly empty, and
 the copy lands on it either way, as long as the platform's rename can replace
 what is at a name. Where it cannot, the copy never lands: the publish fails
 loudly, the claim is dropped and the name left free, and the run reports the
-failure rather than a backup that is not on disk. A directory copy cannot be
-linked at all, so its name is claimed with an exclusive create and the copy
-is renamed onto that claim: a POSIX rename onto an existing **empty**
-directory succeeds, so a rename on its own would let a second run publish
-onto a name the first run has and replace the copy that is there. The name is
-briefly an empty directory instead, which is the price of an exclusive claim
-on a filesystem whose rename replaces a directory.
+failure rather than a backup that is not on disk. A **file** copy does not
+drop its claim and try again the way a directory copy does: a rename of a
+file replaces whatever is at the name, so a second try could put the copy
+over another run's published copy — and a name is only worth a second try
+on a platform whose rename cannot replace anything at all. A directory copy
+cannot be linked at all, so its name is claimed with an exclusive create and
+the copy is renamed onto that claim: a POSIX rename onto an existing
+**empty** directory succeeds, so a rename on its own would let a second run
+publish onto a name the first run has and replace the copy that is there.
+The name is briefly an empty directory instead, which is the price of an
+exclusive claim on a filesystem whose rename replaces a directory.
 
 **A claim that is taken away fails the publish.** A bound cannot tell a claim
 from a published copy — both are a name under a list's prefix — and on a
