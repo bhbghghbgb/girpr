@@ -571,8 +571,9 @@ itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 that went away,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, and
-`the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself, `the_bound_keeps_the_copy_the_run_published` for the
-bound against the run's own copy,
+`the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself,
+`the_bound_keeps_the_copy_the_run_published` for the bound against the run's
+own copy,
 `a_second_bound_still_spares_the_copy_the_process_published` for a later bound
 in the same run,
 `an_earlier_runs_copy_is_an_ordinary_copy_again` for a copy an earlier run in
