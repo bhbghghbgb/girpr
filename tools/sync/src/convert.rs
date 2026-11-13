@@ -17,7 +17,9 @@
 //! so its name is inside the tool's own namespace — see
 //! [`CONVERT_TEMP_PREFIX`]. A conversion that is killed before it can clean
 //! up after itself therefore leaves tool state behind, not a file the next
-//! run would treat as ordinary content.
+//! run would treat as ordinary content. Nothing reclaims it, and it stays in
+//! the folder until it is removed by hand: a temporary is the file a live
+//! conversion is writing, so no sweep may take one.
 //!
 //! Used by the `sled2redb` binary and covered by `tests/convert.rs`. This is
 //! the only module that still touches `sled`.
@@ -46,6 +48,15 @@ const OLD_META_KEY: &str = "\0meta";
 ///
 /// It is not the live cache's name: that is `girpr-cache` itself, and only
 /// the rename puts the finished database there.
+///
+/// **Nothing reclaims it.** The retention bound ranges over the two published
+/// lists beside a cache — the backups and the `old-*` snapshots — and not over
+/// this name, so a temporary that a killed conversion left behind stays in the
+/// folder until it is removed by hand. That is the deliberate answer rather
+/// than a gap: a temporary is the file a live conversion is writing, and a
+/// sweep that could not tell a live one from a dead one would take the copy a
+/// running conversion is making. The name carries the process id, so a
+/// leftover says which run left it.
 pub const CONVERT_TEMP_PREFIX: &str = "girpr-cache-convert-";
 
 /// How many candidate names a claim tries before it gives up.

@@ -120,6 +120,15 @@ clean up after itself therefore leaves tool state there, not a file the next
 run would mirror out of a source folder or delete as an extra in a
 destination one.
 
+**Nothing reclaims that temporary.** The retention bound
+([Backups and failures](#backups-and-failures)) ranges over a cache's
+published copies — the `girpr-cache-backup-*` copies and the `girpr-cache-old-*`
+snapshots — and not over the converter's temporary, so a leftover stays in the
+folder until you remove it by hand. That is deliberate: a temporary is the
+file a live conversion is writing, and a sweep that could not tell a live one
+from a dead one would take the copy a running conversion is making. The name
+carries the process id, so a leftover says which run left it.
+
 Replacing a **legacy sled directory** is the one step that is not atomic: the
 directory has to be removed before the new file can take its name, so a
 failure in that window leaves no cache at all. The error says so when it
