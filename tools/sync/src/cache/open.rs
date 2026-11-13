@@ -25,6 +25,16 @@
 //! claim can have been taken away and the name taken by another run, and
 //! landing the copy on it would publish it over that run's copy.
 //!
+//! A directory copy is renamed onto its claim, and a rename cannot replace a
+//! directory on every platform, so the claim is dropped and the rename tried
+//! again. The claim is asked about **again** before it is dropped: dropping
+//! it takes whatever is at the name with it, and a name another run has
+//! taken over holds that run's copy — a copy of an empty legacy cache is an
+//! empty directory, and that is the one shape a published copy can be
+//! dropped for. A name that is no longer this run's claim fails the publish
+//! rather than taking another run's copy away from under the run that is
+//! about to report it.
+//!
 //! The working name is scratch: it goes once the copy is published. A
 //! removal that fails leaves it behind and the run warns about it — the copy
 //! is published and whole either way, so the run does not fail over the
@@ -878,7 +888,9 @@ fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// The claim is checked before the copy lands on it, so a claim that was
 /// taken away — a bound cannot tell a claim from a published copy — fails
 /// the publish rather than landing the copy on a name this run no longer
-/// holds.
+/// holds. It is checked again before the claim is dropped, because dropping
+/// it takes whatever is at the name with it: a name another run has taken
+/// over holds that run's copy, and that copy is not this run's to remove.
 fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
     match std::fs::create_dir(cand) {
         Ok(()) => {}
@@ -907,21 +919,42 @@ fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
     }
     match std::fs::rename(work, cand) {
         Ok(()) => Ok(()),
-        Err(_) => {
-            // The claim is in the way of the rename. Only an empty directory
-            // goes, so a copy another run has published is never dropped
-            // here.
-            let _ = std::fs::remove_dir(cand);
-            match std::fs::rename(work, cand) {
-                Ok(()) => Ok(()),
-                Err(e) => {
-                    // The name is there, so another run has it.
-                    if cand.exists() {
-                        Err(PublishError::Taken)
-                    } else {
-                        Err(PublishError::Io(e))
-                    }
-                }
+        Err(_) => publish_onto_the_claimed_name(work, cand, &claim),
+    }
+}
+
+/// Publish the copy onto a name whose claim is in the way of the rename.
+///
+/// A rename cannot replace a directory on every platform, so the claim is
+/// dropped and the rename is tried again.
+///
+/// **The claim is dropped only while the name still holds it.** A name that
+/// holds something else — another run's claim, or another run's published
+/// copy — is not ours to drop: dropping it would take that run's copy away
+/// from under the run that is about to report it, and the copy is not landed
+/// on it either. Only an empty directory goes, so a copy another run has
+/// published with content in it is never dropped either.
+///
+/// A claim that was taken away fails the publish, like every other claim
+/// that is no longer this run's: the copy is not landed on a name this run
+/// no longer holds.
+fn publish_onto_the_claimed_name(
+    work: &Path,
+    cand: &Path,
+    claim: &NameClaim,
+) -> Result<(), PublishError> {
+    if !claim_is_in_place(cand, claim) {
+        return Err(PublishError::Io(claim_taken_away()));
+    }
+    let _ = std::fs::remove_dir(cand);
+    match std::fs::rename(work, cand) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            // The name is there, so another run has it.
+            if cand.exists() {
+                Err(PublishError::Taken)
+            } else {
+                Err(PublishError::Io(e))
             }
         }
     }
@@ -2324,6 +2357,64 @@ mod tests {
         assert!(
             published_under(&dir).is_empty(),
             "and nothing of this run's was published under that name"
+        );
+    }
+
+    /// A publish does not drop the copy of another run to make room for its
+    /// own.
+    ///
+    /// The claim is what keeps two runs off one name, and the name it holds
+    /// is empty — the same shape a bound cannot tell from a published copy.
+    /// So the claim can be taken away, and another run can take the name and
+    /// publish there. A copy of an empty legacy cache is an empty directory,
+    /// and that is the one shape a published copy can be dropped for: the
+    /// claim is dropped and the rename tried again, and an empty directory
+    /// is the one a removal takes.
+    ///
+    /// The publish has to notice that the name no longer holds its own
+    /// claim and fail, rather than dropping that run's copy: the copy is
+    /// the one its run is about to report.
+    #[test]
+    fn a_publish_does_not_drop_the_copy_of_another_run() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "drop_not_ours");
+        let dir = t.subdir("w");
+
+        // The claim: an empty directory under a published name.
+        let cand = dir.join(format!("{BACKUP_PREFIX}{STAMP}"));
+        std::fs::create_dir(&cand).unwrap();
+        let claim = NameClaim {
+            id: identity_at(&cand).expect("the claim can be named"),
+            _file: None,
+        };
+
+        // Another run takes the name and publishes there: the copy of an
+        // empty legacy cache is an empty directory too.
+        std::fs::remove_dir(&cand).unwrap();
+        std::fs::create_dir(&cand).unwrap();
+        let theirs = identity_at(&cand).expect("the other run's copy can be named");
+
+        // The copy that wants to be published under it.
+        let work = dir.join("work");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::write(work.join("a"), b"the copy").unwrap();
+
+        let err = publish_onto_the_claimed_name(&work, &cand, &claim)
+            .expect_err("a publish whose claim was taken over fails");
+        let PublishError::Io(e) = err else {
+            panic!("the publish fails on the claim, not on the name");
+        };
+        assert!(
+            e.to_string().contains("claimed name"),
+            "the failure says the claim was taken away: {e}"
+        );
+        assert_eq!(
+            identity_at(&cand),
+            Some(theirs),
+            "the copy of the run that took the name is left alone"
+        );
+        assert!(
+            work.join("a").exists(),
+            "and the copy that wanted the name still has its own"
         );
     }
 

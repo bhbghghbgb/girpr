@@ -453,9 +453,18 @@ notice that the name is no longer its own. The identity of a file claim is
 read from the **handle** the claim was created with, not from the name: a
 handle names the object it was opened on even after the name has gone, so the
 answer cannot be another run's file. A directory claim has no portable
-handle, and its identity is read from the name — which is enough, because a
-rename cannot replace a directory that holds a published copy: it fails
-instead, and the other run's copy is never overwritten.
+handle, and its identity is read from the name — which is enough, because the
+name is asked about **again** before the claim is dropped.
+
+**A directory claim is dropped, and dropping it takes what is at the name
+with it.** A rename cannot replace a directory on every platform, so the
+claim is dropped and the rename is tried again. Only an empty directory goes,
+so a copy another run has published *with content in it* is never dropped —
+but a copy of an empty legacy cache is an empty directory, and that is the
+one shape a published copy can be dropped for. So the claim is asked about
+before it goes, and a name that has been taken over fails the publish loudly
+rather than dropping that run's copy: the copy is the one its run is about to
+report, and it is not this run's to remove.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
@@ -600,9 +609,11 @@ itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 `a_directory_copy_is_published_whole` for the directory case,
 `a_publish_whose_claim_was_taken_away_fails_loudly` and
 `a_publish_whose_claimed_name_was_taken_away_fails_loudly` for the claim
-that went away, and
+that went away,
 `a_publish_whose_claim_was_taken_over_by_another_run_fails_loudly` for the
-claim that another run took over,
+claim that another run took over, and
+`a_publish_does_not_drop_the_copy_of_another_run` for the copy that is at the
+name when the claim is dropped,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, and
 `the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself,
