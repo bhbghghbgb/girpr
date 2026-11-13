@@ -2027,12 +2027,20 @@ fn run_sync_with_no_backup_leaves_no_copy() {
     assert_eq!(rfile(&dst, "a.txt"), b"one");
 }
 
-/// `--backup-retain N` keeps the newest N siblings of each prefix.
+/// `--backup-retain N` holds each prefix to N siblings.
 ///
 /// The prefixes are counted separately: src's copies and dst's snapshots are
 /// two lists, each with its own bound.
+///
+/// What the bound takes is the oldest copies it may remove — a copy a live
+/// run is still using is left alone and does not spend the removal budget,
+/// so the bound walks on to the next copy in age order and can take one that
+/// is among the newest N. None is spoken for here, so the oldest of each
+/// list goes and what is left is the newest of the three. That is what this
+/// case shows, not what the bound promises: the copies a folder keeps are
+/// not necessarily its newest.
 #[test]
-fn run_sync_backup_retain_keeps_the_newest_of_each_prefix() {
+fn run_sync_backup_retain_bounds_each_prefix() {
     let t = temp_root("retain");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
