@@ -419,11 +419,18 @@ reviews:
     head: 0d49c077
     result: F36 kept (fb7fdc23); F37 kept (773d1c53); F38 kept (f398aa2a); F39 kept (779de219); F40 kept (0d49c077); no fix or revert commits; 572 passed, 1 skipped; the reviewer enumerated every direct filesystem call reachable from the guards and found the seam list complete
     followups: [F160, F161, F162, F163, F164, F165]
-  - batch: M3
+  - batch: M13
     status: pending
-    tasks: [F33, F34, F35, F41]
+    tasks: [F166, F167, F168, F169, F170, F171]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M3
+    status: in_progress
+    tasks: [F33, F34, F35, F41]
+    base: a5bc410d
+    head: 1f66fcc7
     result: null
     followups: []
   - batch: M4
@@ -685,21 +692,21 @@ followups:
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
-    status: in_progress
+    status: pending_review
     batch: M3
-    commits: []
+    commits: [643ebcb2]
   - id: F34
     source: F1
     description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
-    status: in_progress
+    status: pending_review
     batch: M3
-    commits: []
+    commits: [0d7f7646]
   - id: F35
     source: F2
     description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
-    status: in_progress
+    status: pending_review
     batch: M3
-    commits: []
+    commits: [4fb0741f, 822254ab]
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
@@ -733,9 +740,9 @@ followups:
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
-    status: in_progress
+    status: pending_review
     batch: M3
-    commits: []
+    commits: [dfa16d0b, 1f66fcc7]
   - id: F42
     source: F10
     description: ExcludeMemo::is_excluded takes &'a str tied to the filter's lifetime, so a caller whose paths are not borrowed for that lifetime has to work around the public type.
@@ -1454,6 +1461,42 @@ followups:
     status: pending
     batch: M12
     commits: []
+  - id: F166
+    source: F34
+    description: DigestSet::insert_named rebuilds the whole foreign slice on every insert, including an in-place replacement, and merge does the same.
+    status: pending
+    batch: M13
+    commits: []
+  - id: F167
+    source: F41
+    description: The adoption arm allocates a Vec of references per exact-case miss just to count the alternates.
+    status: pending
+    batch: M13
+    commits: []
+  - id: F168
+    source: F41
+    description: The phase-A prune still walks the whole key set every scan; only the alternate index became lazy.
+    status: pending
+    batch: M13
+    commits: []
+  - id: F169
+    source: F34
+    description: DigestSet::merge and insert_named spell the same-name comparison two ways.
+    status: pending
+    batch: M13
+    commits: []
+  - id: F170
+    source: F33
+    description: The fold-equivalence case uses eq_ignore_ascii_case as its oracle, so it would follow std rather than catch a std change.
+    status: pending
+    batch: M13
+    commits: []
+  - id: F171
+    source: F41
+    description: fold_alternates allocates a Vec of Strings per folded group, and groups with several stale spellings are the common shape there.
+    status: pending
+    batch: M13
+    commits: []
 ```
 
 ## Human checklist
@@ -1485,6 +1528,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M3 review checkpoint opened: F33, F34, F35 and
+  F41 `in_progress` → `pending_review`, commits `643ebcb2`, `0d7f7646`,
+  `4fb0741f`, `822254ab`, `dfa16d0b`, `1f66fcc7`; review M3 `pending` →
+  `in_progress`, base `a5bc410d`, head `1f66fcc7`. Follow-ups F166–F171
+  appended with batch `M13`.
 - 2026-11-13 — follow-up batch M3 started: F33, F34, F35 and F41 `pending` →
   `in_progress`; `active_batch: M2` → `M3`.
 - 2026-11-13 — review M2 `done`: F36, F37, F38, F39 and F40 all kept, no fix
