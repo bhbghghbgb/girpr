@@ -286,34 +286,6 @@ reviews:
     head: be9aed2e
     result: F16 kept with a fix (be9aed2e updates the --backup-retain help to say the bound covers every folder the run touches); F30 kept (f612e0d4, 4d1a8820, fc5956b6); 527 passed without the feature and 540 with it, 1 skipped; both behaviour changes confirmed empirically
     followups: [F49, F50, F51]
-  - batch: B8
-    status: pending
-    tasks: [F25, F26, F31]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B9
-    status: pending
-    tasks: [F19, F20, F21]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B10
-    status: pending
-    tasks: [F22, F27]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B11
-    status: pending
-    tasks: [F6, F28, F29, F32]
-    base: null
-    head: null
-    result: null
-    followups: []
   - batch: B12
     status: done
     tasks: [F17, F49]
@@ -321,55 +293,6 @@ reviews:
     head: 4f3b7e10
     result: F17 fixed (5b89a4fb stamps the published name with the time the copy became whole rather than when it started, so a slow copy is not ordered as old and taken away; 4f3b7e10 updates the notes and README); F49 kept; 533 passed, 1 skipped; the copy-ordering defect was verified by collapsing the two stamps back into one
     followups: [F52, F53, F54, F55, F56]
-  - batch: B13
-    status: pending
-    tasks: [F33, F34, F35]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B14
-    status: pending
-    tasks: [F36, F37, F38, F39, F40]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B15
-    status: skipped
-    tasks: []
-    base: null
-    head: null
-    result: F39 and F40 were merged into B14, which now holds both of them and the plan guards' three doc items; all five are doc wordings that must say what the code does
-    followups: []
-  - batch: B16
-    status: pending
-    tasks: [F41]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B17
-    status: pending
-    tasks: [F44, F45, F46]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B18
-    status: pending
-    tasks: [F47, F48]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: B19
-    status: pending
-    tasks: [F51, F64]
-    base: null
-    head: null
-    result: null
-    followups: []
   - batch: B20
     status: done
     tasks: [F53]
@@ -399,10 +322,59 @@ reviews:
     result: F65 kept (046b53d3); F66 kept (d8ea86be); F68 kept (4d764527); F73 fixed (f07a728b brings three doc paragraphs in line with the run-scoped registry); F74 fixed (04dab01f makes the sort use sort_by_cached_key, which is what its message described); F75 kept (08959674); 559 passed, 1 skipped
     followups: [F79, F81, F82]
   - batch: B24
-    status: in_progress
+    status: done
     tasks: [F79, F81, F82]
     base: 6ea86b57
-    head: 7a04252e
+    head: 3341ec24
+    result: F79 kept (fe0e4c95); F81 kept (ca6ad054, 7a04252e); F82 fixed (3341ec24 rewraps the paragraph the follow-up left broken, the claim itself was already true); 562 passed, 1 skipped; the identity comparison was checked to hold on both arms
+    followups: [F87, F88, F89]
+  - batch: X1
+    status: pending
+    tasks: [F25, F26, F31, F51, F64]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X2
+    status: pending
+    tasks: [F19, F20, F21, F44, F45, F46]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X3
+    status: pending
+    tasks: [F22, F27, F47, F48]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X4
+    status: pending
+    tasks: [F6, F28, F29, F32, F39, F40]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X5
+    status: pending
+    tasks: [F36, F37, F38]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X6
+    status: pending
+    tasks: [F33, F34, F35, F41]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: X7
+    status: pending
+    tasks: [F87, F88, F89]
+    base: null
+    head: null
     result: null
     followups: []
 followups:
@@ -445,7 +417,7 @@ followups:
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
     status: pending
-    batch: B11
+    batch: X4
     commits: []
   - id: F7
     source: T05
@@ -535,25 +507,25 @@ followups:
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
     status: pending
-    batch: B9
+    batch: X2
     commits: []
   - id: F20
     source: T11
     description: The lowest-index copy-failure case discriminates the two orders only because a 1 MiB copy is slower than the injected failure, so it can pass vacuously on a very fast host.
     status: pending
-    batch: B9
+    batch: X2
     commits: []
   - id: F21
     source: T12
     description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
     status: pending
-    batch: B9
+    batch: X2
     commits: []
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
     status: pending
-    batch: B10
+    batch: X3
     commits: []
   - id: F23
     source: T12
@@ -573,31 +545,31 @@ followups:
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
     status: pending
-    batch: B8
+    batch: X1
     commits: []
   - id: F26
     source: T14
     description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
     status: pending
-    batch: B8
+    batch: X1
     commits: []
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
     status: pending
-    batch: B10
+    batch: X3
     commits: []
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
     status: pending
-    batch: B11
+    batch: X4
     commits: []
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
     status: pending
-    batch: B11
+    batch: X4
     commits: []
   - id: F30
     source: T17
@@ -610,67 +582,67 @@ followups:
     source: T18
     description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
     status: pending
-    batch: B8
+    batch: X1
     commits: []
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
     status: pending
-    batch: B11
+    batch: X4
     commits: []
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
     status: pending
-    batch: B13
+    batch: X6
     commits: []
   - id: F34
     source: F1
     description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
     status: pending
-    batch: B13
+    batch: X6
     commits: []
   - id: F35
     source: F2
     description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
     status: pending
-    batch: B13
+    batch: X6
     commits: []
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
     status: pending
-    batch: B14
+    batch: X5
     commits: []
   - id: F37
     source: F3
     description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
     status: pending
-    batch: B14
+    batch: X5
     commits: []
   - id: F38
     source: F3
     description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
     status: pending
-    batch: B14
+    batch: X5
     commits: []
   - id: F39
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
     status: pending
-    batch: B14
+    batch: X4
     commits: []
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
     status: pending
-    batch: B14
+    batch: X4
     commits: []
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
     status: pending
-    batch: B16
+    batch: X6
     commits: []
   - id: F42
     source: F10
@@ -690,31 +662,31 @@ followups:
     source: F14
     description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
     status: pending
-    batch: B17
+    batch: X2
     commits: []
   - id: F45
     source: F14
     description: README.md documents the fixed order of the digest-differs tag but not of the copy verify's failure message, so the algorithm a failed copy names is discoverable only from the design notes.
     status: pending
-    batch: B17
+    batch: X2
     commits: []
   - id: F46
     source: F14
     description: tools/sync/DESIGN-NOTES.md still ends without a trailing newline; pre-existing, but the file was appended to by this batch.
     status: pending
-    batch: B17
+    batch: X2
     commits: []
   - id: F47
     source: F23
     description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
     status: pending
-    batch: B18
+    batch: X3
     commits: []
   - id: F48
     source: F23
     description: The new root comment calls compile_patterns "the one way to build its patterns", but glob::Pattern::new is a second way for a caller that already depends on glob, so the wording could be narrowed to "the crate's own way".
     status: pending
-    batch: B18
+    batch: X3
     commits: []
   - id: F49
     source: F16
@@ -734,7 +706,7 @@ followups:
     source: F30
     description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
     status: pending
-    batch: B19
+    batch: X1
     commits: []
   - id: F52
     source: F17
@@ -801,7 +773,7 @@ followups:
     source: F21
     description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
     status: pending
-    batch: B19
+    batch: X1
     commits: []
   - id: F65
     source: F52
@@ -857,10 +829,10 @@ followups:
   - id: F79
     source: F65
     description: The claim check tests that something is at the name, not that the claim is still ours, so if a bound took the claim away and another run took the same name in that window the publish still lands over that run's copy; reachable only where the filesystem can neither link nor lock a file.
-    status: pending_review
+    status: completed
     batch: B24
     commits: [fe0e4c95]
-    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the claim check now compares the identity of the object at the published name with the identity of the object the run created, so a file belonging to another run can never answer it
+    note: review B24 kept (fe0e4c95); the identity is read from the handle the claim was created with, so the platform pair cannot be freed and reused while the publish is in flight, and both arms read it through the same platform pair
   - id: F80
     source: F68
     description: An exclusive lock on a read-only handle is fine on Windows and on Linux, but is worth a check on the BSDs and macOS, where a refusal would degrade the folder back to bounded without its lock rather than weaken it.
@@ -871,17 +843,35 @@ followups:
   - id: F81
     source: F73
     description: A copy published by a run that never opens the folder's cache stays pending and is adopted, and spared, by the next run that opens that folder, so an older copy is kept in place of a newer one for one bound cycle.
-    status: pending_review
+    status: completed
     batch: B24
     commits: [ca6ad054, 7a04252e]
-    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the claim was softened, because the registry is process-wide and the boundary is the open, so the command line never meets the case
+    note: review B24 kept (ca6ad054, 7a04252e); the softened claim is true, and the registry is process-wide with one run per process, so the command line never meets the case
   - id: F82
     source: F74
     description: The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case.
-    status: pending_review
+    status: completed
     batch: B24
-    commits: [0aeaa4a7]
-    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the code is right and the claim was softened, so the notes and the README now say when the bound holds a folder to its count
+    commits: [0aeaa4a7, 3341ec24]
+    note: review B24 fixed (3341ec24 rewraps the paragraph the follow-up left broken); the claim itself was already true and needed no code change
+  - id: F87
+    source: F82
+    description: The bound's walk starts at the oldest copy and skips the spoken-for ones without spending the removal budget, so it can remove a copy that is among the newest N; the docs say the bound walks on to the next-oldest copy but never say that a newer copy can go.
+    status: pending
+    batch: X7
+    commits: []
+  - id: F88
+    source: F79
+    description: publish_dir's retry path removes the claim directory before renaming again, so another run's empty published directory copy, a copy of an empty legacy cache, can be removed in the window between the identity check and that removal; the notes' claim that the other run's copy is never overwritten holds for a copy that has content.
+    status: pending
+    batch: X7
+    commits: []
+  - id: F89
+    source: F81
+    description: A run whose cache open fails also adopts the waiting copies, because begin_run runs before the bound in that path, while the documents say the next run that opens it.
+    status: pending
+    batch: X7
+    commits: []
 ```
 
 ## Human checklist
@@ -913,6 +903,18 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B24 `done`: F79 kept (fe0e4c95), F81 kept (ca6ad054,
+  7a04252e), F82 fixed (3341ec24); follow-ups F87–F89 appended with batch
+  `X7`. F79, F81 and F82 `pending_review` → `completed`.
+- 2026-11-13 — the remaining small follow-up batches were consolidated into
+  seven batches X1–X7 by subsystem, since each of B8–B19 and B25 held only
+  one to five small items and each batch costs an implementing session and a
+  review session. X1 converter CLI and stale tool state, X2 test-only items
+  and the copy verify naming, X3 the command layer wording and the crate
+  root re-export, X4 documentation accuracy and the cache db wordings, X5 the
+  plan guards' doc wordings, X6 the digest matching tests and the phase-A
+  alternate-key index, X7 the backup bound details. The old rows B8–B19 were
+  replaced and B15, already merged into B14, was dropped.
 - 2026-11-13 — follow-up batch B24 review checkpoint opened: F79, F81 and F82
   `in_progress` → `pending_review`, commits `fe0e4c95`, `0aeaa4a7`,
   `ca6ad054`, `7a04252e`; review B24 `pending` → `in_progress`, base
