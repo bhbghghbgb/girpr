@@ -1368,6 +1368,13 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   a `CASE-MISMATCH` at all, but two different paths: one `MISSING` and one
   `EXTRA`.
 
+  **Neither fold is the filesystem's own case table.** Windows treats `Ärger`
+  and `ärger` as one file and the Kelvin sign and `k` as two, so the
+  ASCII-only key keeps apart a pair the disk has merged, while the containment
+  and link-overlap checks — which compare names the way Windows does, with a
+  Unicode fold — merge a pair the disk keeps apart; there is no portable exact
+  NTFS fold, so the approximation is kept rather than guessed at.
+
   **The fatal conflict is what makes the rename pass an index rather than a scan.**
   Both sides are keyed by that fold and every src key is a hash lookup, which is
   only equivalent to the naive "scan all of dst" because a folded key maps to

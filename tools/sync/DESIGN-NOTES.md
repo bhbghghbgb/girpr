@@ -774,9 +774,11 @@ look fine, only the verdict is wrong.
 
 ## Known limits, deliberately not fixed
 
-Each is cache hygiene or a race, not a wrong answer. All are stated in `README.md`
-where a user can meet them; recorded here so a reader deciding whether to "fix"
-one knows what the trade was.
+Each is cache hygiene or a race, not a wrong answer. All but one are stated in
+`README.md` where a user can meet them; the exception is the host-coverage
+one, which is about the test suite rather than about a run, so it is here
+alone. Recorded here so a reader deciding whether to "fix" one knows what the
+trade was.
 
 **A row for a directory created and removed in one run survives until the next
 prune.** Reachable only with `--case-sensitive` on a case-insensitive filesystem:
