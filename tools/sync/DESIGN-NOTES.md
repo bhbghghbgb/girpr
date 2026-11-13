@@ -427,6 +427,15 @@ has and replace the copy that is there. The name is briefly an empty
 directory instead, which is the price of an exclusive claim on a filesystem
 whose rename replaces a directory.
 
+**A claim that is taken away fails the publish.** A bound cannot tell a claim
+from a published copy — both are a name under a list's prefix — and on a
+filesystem that cannot lock a file there is no record beside the name to say
+the name is being claimed, so the bound can take the claim away. The publish
+checks that its claim is still in place before the copy lands on it, and
+fails loudly when it is not: landing the copy on a name this run no longer
+holds would publish it over whatever holds it now, which is the one thing
+the claim exists to prevent.
+
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
 distinction. A rule that spared the young copies instead — "only remove a copy
@@ -518,6 +527,9 @@ and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
 `a_copy_is_published_on_a_filesystem_that_cannot_link` for the publish
 itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 `a_directory_copy_is_published_whole` for the directory case,
+`a_publish_whose_claim_was_taken_away_fails_loudly` and
+`a_publish_whose_claimed_name_was_taken_away_fails_loudly` for the claim
+that went away,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
 bound against the run's own copy,

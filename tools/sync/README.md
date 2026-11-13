@@ -921,7 +921,14 @@ name is created with the copy's bytes in it — there is no moment at which the
 name is there and empty — and the link fails if the name is taken, so two runs
 cannot publish onto one name. A filesystem that cannot link a file has no such
 publish: the copy is renamed onto a name it claims first, and the name is
-briefly empty until the rename lands. That also means a copy that is still
+briefly empty until the rename lands. A directory copy — a legacy sled cache
+is a directory — cannot be linked either, so its name is claimed with an
+exclusive create and the copy is renamed onto the claim: the name is briefly
+an *empty directory* until the rename lands. The claim is what keeps two runs
+off one name, and a bound that meets one cannot tell it from a published copy,
+so on a filesystem that cannot lock a file the claim can be taken away; a
+publish that finds its claim gone fails the run loudly rather than landing the
+copy on a name it no longer holds. That also means a copy that is still
 being written is not one of the copies the bound ranges over: a run that
 merely opens a folder cannot remove the copy another run is making there,
 however often the bound is applied. The bound never removes the copy the run
