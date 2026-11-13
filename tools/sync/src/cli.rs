@@ -205,10 +205,11 @@ pub struct CommonArgs {
     /// Keep the newest N backups/snapshots with this prefix.
     ///
     /// The default keeps everything, so the copies accumulate until they are
-    /// removed by hand. This bounds that: the newest N siblings of each
-    /// prefix are kept and the older ones are removed. A copy another run is
-    /// still using is left alone, so a folder can hold more than N while one
-    /// is there.
+    /// removed by hand. This bounds that: the oldest siblings of each prefix
+    /// are removed until the folder holds N of them. A copy another run is
+    /// still using is left alone, and does not spend the removal budget
+    /// either, so a folder can hold more than N while one is there — and the
+    /// copy the bound takes in its place can be one of the newest.
     ///
     /// The bound is about the **folder**, not about the run: it is applied
     /// whether or not this run copied anything aside, and it covers both

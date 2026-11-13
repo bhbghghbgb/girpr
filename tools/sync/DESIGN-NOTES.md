@@ -508,15 +508,18 @@ opened at all — not even for reading — has no lock to take, and the bound
 runs without one there.
 
 The bound also never removes the copy the run applying it published: that run
-is the one reporting the copy. The count is made up from the next-oldest copy
-instead, so the folder ends within its bound — but only while there are enough
-copies the bound may remove to make the count up. A copy that is spoken for
-does not spend the removal budget either: the bound walks on to the next-oldest
-copy, and a folder whose oldest copies are all spoken for by live runs ends
-with more copies than the bound asks for. The copy is spared by every bound
-**that run** makes for that list, and not only by the first one; the copies an
-earlier run in this process published belong to earlier runs, and those are
-ordinary copies again.
+is the one reporting the copy. The count is made up from the next copy in age
+order instead, so the folder ends within its bound — but only while there are
+enough copies the bound may remove to make the count up. A copy that is spoken
+for does not spend the removal budget either: the bound walks on to the next
+copy in age order, and the count is made up from there — and that copy may be
+one of the newest ones, so the bound can take a copy that is among the newest
+it keeps and leave an older copy in its place. The copies a folder keeps are
+therefore not necessarily its newest. A folder whose oldest copies are all
+spoken for by live runs ends with more copies than the bound asks for. The
+copy is spared by every bound **that run** makes for that list, and not only
+by the first one; the copies an earlier run in this process published belong
+to earlier runs, and those are ordinary copies again.
 
 **The run is the boundary, and the boundary is the open.** The copies a run
 published are the ones published since the folder's cache was last opened:

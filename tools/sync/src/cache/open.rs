@@ -58,6 +58,19 @@
 //! A filesystem that cannot lock a file has no records to speak: the copy is
 //! published without one, as it was published before a record existed, and the
 //! run does not fail over a mark it cannot make.
+//!
+//! ## The bound takes the oldest copies it may take
+//!
+//! The bound keeps a folder from accumulating copies: it removes the oldest
+//! ones until the folder holds the number the user asked for. It removes the
+//! **oldest copies it may remove** — a copy a live run is still using, and
+//! the copy the run itself made, are left alone — and neither of those spends
+//! the removal budget. The walk goes on to the next copy in age order, and
+//! that copy may be one of the newest ones, so the bound can take a copy that
+//! is among the newest it keeps and leave an older copy in its place: the
+//! copies a folder keeps are not necessarily its newest. The folder ends
+//! within its bound only while there are enough copies the bound may remove
+//! to make the count up.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
@@ -163,12 +176,14 @@ pub enum CacheOpen {
 /// `--ignore-cache`.
 ///
 /// A read/write open applies the **bound** it was given to the folder the
-/// cache lives in: the newest `retain` siblings of each prefix are kept
-/// beside it, and so is any copy a live run is still using — so the folder
-/// can hold more than `retain` while one is. The bound is about the folder
-/// rather than about the copy this open made, so it holds for a folder whose
-/// cache is absent and for an open that copies nothing aside — the copies
-/// already sitting beside a folder are the ones the bound is about.
+/// cache lives in: the oldest siblings of each prefix are removed until the
+/// folder holds `retain` of them, and so is any copy a live run is still
+/// using — so the folder can hold more than `retain` while one is, and the
+/// copy the bound takes in its place can be one of the newest. The bound is
+/// about the folder rather than about the copy this open made, so it holds
+/// for a folder whose cache is absent and for an open that copies nothing
+/// aside — the copies already sitting beside a folder are the ones the bound
+/// is about.
 ///
 /// The bound runs **after** the cache is open, and the open holds the cache
 /// file's exclusive lock until the run is done with it. That is what makes
@@ -354,8 +369,8 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     copy_aside(db_path, OLD_PREFIX, "snapshot-old", ts_now)
 }
 
-/// Keep the newest `keep` copies the tool keeps beside a cache, and the ones
-/// that are spoken for.
+/// Bound the copies the tool keeps beside a cache to `keep` of each list, and
+/// leave the ones that are spoken for alone.
 ///
 /// **The bound is about the folder, not about a copy.** The copies a folder
 /// accumulates are bounded by what the user asked for whether or not this run
@@ -386,12 +401,15 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// reporting a backup that is not on disk.
 ///
 /// **The folder ends within its bound only while no copy in it is spoken
-/// for.** A copy that is spoken for does not spend the removal budget either:
-/// the bound walks on to the next-oldest copy instead, and the count is made
-/// up from there. So the folder holds the bound while there are enough copies
-/// the bound may remove to make the count up, and a folder whose oldest
-/// copies are all spoken for by live runs ends with more copies than the
-/// bound asks for.
+/// for.** A copy that is spoken for does not spend the removal budget
+/// either: the bound walks on to the next copy in age order instead, and the
+/// count is made up from there. That next copy may be one of the newest
+/// ones, so the bound can take a copy that is among the newest it keeps and
+/// leave an older copy in its place — the copies a folder keeps are not
+/// necessarily its newest. The folder holds the bound while there are enough
+/// copies the bound may remove to make the count up, and a folder whose
+/// oldest copies are all spoken for by live runs ends with more copies than
+/// the bound asks for.
 ///
 /// **The copy the run published is spared as well**, and for the same reason,
 /// whether or not the copy could be given a record at all: a folder whose
@@ -1598,20 +1616,22 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
     }
 }
 
-/// Keep the newest `keep` siblings of `prefix` in `parent`, and the ones that
-/// are spoken for.
+/// Remove the oldest siblings of `prefix` in `parent` until `keep` of them
+/// are left, and leave the ones that are spoken for alone.
 ///
 /// The sibling names carry a timestamp that sorts lexicographically, so the
 /// age of a copy is read from its name (see [`published_age`]), and the
-/// newest `keep` are the ones that are left. Everything older is removed — a
-/// directory recursively, a file outright — because the user asked for a
-/// bound and a bound that does not remove anything is not a bound. A copy
-/// that is spoken for by a live run is not removed at all, and it does not
-/// spend the removal budget either: the bound walks on to the next-oldest
-/// copy, and the count is made up from there. So the folder holds the bound
-/// while there are enough copies the bound may remove to make the count up,
-/// and a folder whose oldest copies are all spoken for ends with more copies
-/// than the bound asks for.
+/// copies are walked from the oldest to the newest. The bound removes the
+/// oldest copies it may remove — a directory recursively, a file outright —
+/// because the user asked for a bound and a bound that does not remove
+/// anything is not a bound. A copy that is spoken for by a live run is not
+/// removed at all, and it does not spend the removal budget either: the
+/// bound walks on to the next copy in age order, and the count is made up
+/// from there. That next copy can be one of the newest ones, so the bound
+/// can take a copy that is among the newest `keep` and leave an older copy
+/// in its place. The folder holds the bound while there are enough copies
+/// the bound may remove to make the count up, and a folder whose oldest
+/// copies are all spoken for ends with more copies than the bound asks for.
 ///
 /// Only siblings carrying **this** prefix are considered: the tool's own
 /// namespace. A file of the user's that happens to sit in the same directory
@@ -3022,12 +3042,14 @@ mod tests {
     /// A folder of copies that live runs are using can hold more than its
     /// bound.
     ///
-    /// The bound removes the oldest copies until the folder holds the bound.
-    /// A copy a live run is using is not the bound's to remove, and it does
-    /// not spend the removal budget either: the bound walks on to the
-    /// next-oldest copy. So a folder whose oldest copies are all spoken for
-    /// by live runs ends with more copies than the bound asks for — the
-    /// exactly-N holds only while no copy in the folder is spoken for.
+    /// The bound removes the oldest copies it may remove. A copy a live run
+    /// is using is not the bound's to remove, and it does not spend the
+    /// removal budget either: the bound walks on to the next copy in age
+    /// order, and that copy may be one of the newest. So a folder whose
+    /// oldest copies are all spoken for by live runs ends with more copies
+    /// than the bound asks for — the exactly-N holds only while no copy in
+    /// the folder is spoken for — and the copy that is taken in their place
+    /// can be one of the newest.
     #[test]
     fn a_folder_of_copies_a_live_run_is_using_can_hold_more_than_its_bound() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_spoken_for");
@@ -3051,11 +3073,8 @@ mod tests {
             held.push(file);
         }
         // A third copy, which nothing holds.
-        std::fs::write(
-            dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z")),
-            b"newest",
-        )
-        .unwrap();
+        let newest = format!("{BACKUP_PREFIX}29991231T235959.999999Z");
+        std::fs::write(dir.join(&newest), b"newest").unwrap();
 
         retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
 
@@ -3073,6 +3092,10 @@ mod tests {
         assert!(
             held.iter().all(|h| h.try_lock().is_err()),
             "and the copies a live run is using are still there"
+        );
+        assert!(
+            !dir.join(&newest).exists(),
+            "the newest copy is the one that goes: the spoken-for copies did not spend the removal budget"
         );
     }
 

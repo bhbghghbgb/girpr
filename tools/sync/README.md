@@ -878,7 +878,7 @@ What a run leaves behind is therefore a **policy**, not a fixed step:
 | --- | --- |
 | default | src: `girpr-cache-backup-<ts>`; dst: `girpr-cache-old-<ts>` (dst's pre-sync state) |
 | `--no-backup` | nothing — no copy, no snapshot |
-| `--backup-retain N` | the same, but the newest N siblings of each prefix are kept — and so is any copy a live run is still using |
+| `--backup-retain N` | the same, but the folder is bounded to `N` copies of each prefix — the oldest are removed, and a copy a live run is still using is left alone |
 
 `update` and `compare` copy the cache they open — `girpr-cache-backup-<ts>`
 beside that folder's cache — and `sync` adds dst's `old-*` snapshot on top.
@@ -887,18 +887,21 @@ all: it is opened read-only.
 
 `--backup-retain N` counts **per prefix and per directory**: the
 `girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
-snapshots beside dst's cache are two separate lists, each keeping its own
-newest N. The bound covers both lists in every folder the run touches, so a
+snapshots beside dst's cache are two separate lists, each bounded to its own
+N. The bound covers both lists in every folder the run touches, so a
 folder used as a source and as a destination is bounded on its copies and on
 its snapshots alike. `N` must be at least 1 — `--backup-retain 0` is refused
 with exit `3`, and `--no-backup` is how you ask for no copies at all. Without
 the flag the copies accumulate and are cleaned by hand.
 
 The bound holds a folder to `N` copies while no copy in it is spoken for by a
-live run. A copy that is spoken for is left alone and does not spend the
-removal budget — the bound walks on to the next-oldest copy instead — so a
-folder whose oldest copies are all spoken for can hold more than `N` for as
-long as they are.
+live run. It removes the **oldest** copies it is allowed to remove, and a
+copy that is spoken for is left alone and does not spend the removal budget —
+the bound walks on to the next copy in age order instead. That next copy may
+be one of the newest ones, so the bound can take a copy that is among the
+newest `N` and leave an older copy in its place: the copies a folder keeps
+are not necessarily its newest. A folder holds more than `N` for as long as
+there are not enough copies the bound may remove to make the count up.
 
 The bound is about the **folder**, not about the run: it is applied whether or
 not this run copied anything aside. A folder whose cache is absent, and a
@@ -949,18 +952,18 @@ A copy that is still being written is not one of the copies the bound ranges
 over: a run that merely opens a folder cannot remove the copy another run is
 making there, however often the bound is applied. The bound never removes the
 copy the run itself made either — the run that reports a backup is the run
-that has to keep it — and the count is made up from the next-oldest copy
-instead, so the folder ends within its bound as long as there are enough
-copies the bound may remove to make the count up.
+that has to keep it — and the count is made up from the next copy in age
+order instead, so the folder ends within its bound as long as there are
+enough copies the bound may remove to make the count up.
 
 **The copy a bound spares is the one the run applying it made.** A copy
-another run published is an ordinary copy again, so the bound keeps the newest
-copies rather than an older one. A run that published a copy and never opened
-the folder's cache is the exception: the copy waits for the next run that
-opens that folder, which adopts it and spares it too — an older copy kept in
-place of a newer one, for one bound cycle. The command line runs one command
-per process and the copies waiting live in the process, so this needs two runs
-in one process to happen.
+another run published is an ordinary copy again, so the bound takes it like
+any other and keeps the newer copies in its place. A run that published a copy
+and never opened the folder's cache is the exception: the copy waits for the
+next run that opens that folder, which adopts it and spares it too — an older
+copy kept in place of a newer one, for one bound cycle. The command line runs
+one command per process and the copies waiting live in the process, so this
+needs two runs in one process to happen.
 
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
@@ -978,9 +981,9 @@ test, says nothing either: nobody can be holding a lock on a file that cannot
 be locked, so it does not spare the copy for good. A spared copy does not
 spend the removal budget either, so a folder can hold more than `N` copies
 while one of them is spoken for. The name a copy is
-published under still says when that copy became whole, so the newest copies
-are the ones a bound keeps — a copy that took a while to make is not treated
-as an old one the moment it lands.
+published under still says when that copy became whole, so a bound takes the
+oldest copies first — a copy that took a while to make is not treated as an
+old one the moment it lands.
 
 A record is tool state: it is never mirrored as content, it is not one of the
 copies the bound counts, and one left behind by a killed run is reclaimed by

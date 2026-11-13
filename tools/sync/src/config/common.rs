@@ -197,9 +197,10 @@ impl CommonOpts {
 pub struct BackupPolicy {
     /// `--no-backup`: copy nothing aside.
     pub disabled: bool,
-    /// `--backup-retain N`: keep the newest N siblings of each prefix.
+    /// `--backup-retain N`: bound each prefix to N copies.
     ///
-    /// A copy another run is still using is kept as well, so a folder can
+    /// The oldest copies are removed until the folder holds N of them. A
+    /// copy another run is still using is kept as well, so a folder can
     /// hold more than N while one is there.
     ///
     /// `None` keeps them all, which is the default.
