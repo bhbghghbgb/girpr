@@ -426,6 +426,49 @@ fn a_known_name_in_the_foreign_arm_is_found_under_any_ascii_case() {
     );
 }
 
+/// **A foreign entry is replaced only under the spelling it was stored with.**
+///
+/// `insert_named` matches the name it is given against the stored names
+/// *exactly*, so the same algorithm under two spellings is two entries: the
+/// cache's vocabulary is open, and a hand-written row may spell a name any
+/// way it likes.
+///
+/// The rule is pinned on the row's own terms, because it is a rule about the
+/// write and not about the answer: the arm holds one entry per spelling, a
+/// repeat of a spelling replaces that entry where it stands, and a spelling
+/// that is not there yet adds to the arm rather than taking the place of the
+/// one before it.
+#[test]
+fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
+    let mut d = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "two spellings of one algorithm are two entries, in the order they were written"
+    );
+
+    // A repeat of one spelling replaces that entry, where it stands.
+    d.insert_named("md5", b"\x03\x03\x03\x03");
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "and it is not a third entry"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(1).map(|(_, digest)| digest),
+        Some(&b"\x03\x03\x03\x03"[..]),
+        "the entry that was replaced holds the new digest"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(0).map(|(_, digest)| digest),
+        Some(&b"\x01\x01\x01\x01"[..]),
+        "and the other entry is untouched"
+    );
+}
+
 /// **An unknown name stays exact.** A name this build has never heard of is not
 /// an algorithm, so no known-algorithm lookup may match it, and the name is
 /// matched by the spelling it was given and no other.
