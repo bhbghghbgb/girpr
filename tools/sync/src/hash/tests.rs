@@ -469,6 +469,45 @@ fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
     );
 }
 
+/// **First match wins, and the answer is a property of the row.**
+///
+/// Two entries can name the same algorithm — `MD5` and `md5`, both with a
+/// length their algorithm does not have — and the arm is a slice, so the
+/// answer is the first of them. It is not an iteration order: the arm has
+/// one, and the entry that comes first in it is the one that answers.
+///
+/// Both lookups go through the same helper, so they cannot disagree about
+/// which entry that is: the typed lookup and the named one answer the same
+/// digest, whichever spelling the caller asks by.
+#[test]
+fn the_first_of_two_entries_that_name_one_algorithm_answers() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+
+    let first = &b"\x01\x01\x01\x01"[..];
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(first),
+        "the typed lookup takes the first entry that names the algorithm"
+    );
+    assert_eq!(
+        d.get_named("md5"),
+        Some(first),
+        "the named lookup agrees with it, though it was asked by the other spelling"
+    );
+    assert_eq!(
+        d.get_named("MD5"),
+        Some(first),
+        "and so does the lookup by the spelling the entry was stored under"
+    );
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: neither entry is this algorithm's digest"
+    );
+}
+
 /// **An unknown name stays exact.** A name this build has never heard of is not
 /// an algorithm, so no known-algorithm lookup may match it, and the name is
 /// matched by the spelling it was given and no other.
