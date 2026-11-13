@@ -953,7 +953,16 @@ fn link_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// The rename replaces the claim where the platform allows it, so the name
 /// is briefly an empty directory. Where a rename refuses to replace a
 /// directory, the claim is dropped and the rename tried again: a name taken
-/// in the meantime makes that rename fail, which is the answer we want.
+/// in the meantime makes that rename fail **where it holds content** — a
+/// POSIX rename replaces an **empty** directory, so where the platform
+/// replaces one, a name another run has claimed but not filled is replaced
+/// instead and the copy lands on it.
+///
+/// The drop and the rename are two calls, and the name is free in between,
+/// so another run can take it in that window. The gap is one syscall wide
+/// and cannot be closed; it is reachable only where the filesystem cannot
+/// lock a file, since the record the publishing run holds keeps another run
+/// off the name until the run opens the folder's cache.
 ///
 /// The claim is checked before the copy lands on it, so a claim that was
 /// taken away — a bound cannot tell a claim from a published copy — fails
@@ -998,6 +1007,15 @@ fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
 ///
 /// A rename cannot replace a directory on every platform, so the claim is
 /// dropped and the rename is tried again.
+///
+/// **The drop and the rename are two calls.** The name is free between them,
+/// so another run can take it in that window: a name that holds content
+/// makes the rename fail, so the publish moves on to the next name, and a
+/// name that holds an empty directory is replaced by the rename where the
+/// platform replaces empty directories, so the copy lands on it. The gap is
+/// one syscall wide and cannot be closed; it is reachable only where the
+/// filesystem cannot lock a file, since the record the publishing run holds
+/// keeps another run off the name until the run opens the folder's cache.
 ///
 /// **The claim is dropped only while the name still holds it.** A name that
 /// holds something else — another run's claim, or another run's published
