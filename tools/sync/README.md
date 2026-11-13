@@ -992,8 +992,11 @@ runs against one root cannot end up writing the same file.
 
 A run that is killed mid-copy can leave the working file behind —
 `girpr-cache-partial-<ts>` — because the process died before the copy was
-published. It is tool state and is never mirrored as content, but nothing
-reclaims it: remove it by hand.
+published. A run that was *not* killed can leave it behind too: once the copy
+is published the working file is scratch and is removed, and that removal can
+fail, which the run warns about. The copy itself is published and whole
+either way, so the run does not fail over the leftover. It is tool state and
+is never mirrored as content, but nothing reclaims it: remove it by hand.
 
 A run killed between publishing a copy and opening the folder's cache can also
 leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or

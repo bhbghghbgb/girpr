@@ -23,6 +23,11 @@
 //! published copy, so the publish checks that its claim is still in place
 //! before the copy lands on it and fails loudly when it is not.
 //!
+//! The working name is scratch: it goes once the copy is published. A
+//! removal that fails leaves it behind and the run warns about it — the copy
+//! is published and whole either way, so the run does not fail over the
+//! leftover.
+//!
 //! "Finished" and "in flight" are told apart by the name, and the name is
 //! the only thing the bound reads to make that distinction.
 //!
@@ -695,11 +700,11 @@ fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
             // published name alone.
             #[cfg(test)]
             pause_publish();
-            if let Err(e) = std::fs::remove_file(work) {
+            if let Err(e) = remove_working_copy(work) {
                 warn!(
                     path = %work.display(),
                     error = %e,
-                    "the working copy of a published copy could not be removed"
+                    "the working copy of a published copy could not be removed; the working name is left behind"
                 );
             }
             Ok(())
@@ -837,6 +842,20 @@ fn claim_name(path: &Path) -> std::io::Result<()> {
         .create_new(true)
         .open(path)
         .map(drop)
+}
+
+/// Remove the working copy of a published copy.
+///
+/// The working name is scratch: the copy now lives under its published name
+/// alone, so the working name goes. A removal that fails is not a failure of
+/// the publish — the copy is published and whole — so the caller warns about
+/// the leftover rather than failing the run over it.
+fn remove_working_copy(work: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if REMOVAL_UNAVAILABLE.with(|f| f.get()) {
+        return Err(std::io::Error::other("this file cannot be removed"));
+    }
+    std::fs::remove_file(work)
 }
 
 /// Whether the claim on a published name is still in place.
@@ -1185,6 +1204,16 @@ fn lock_record(file: &File) -> std::result::Result<(), TryLockError> {
 #[cfg(test)]
 std::thread_local! {
     static LOCKING_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// The test-only switch that makes removing the working copy fail.
+//
+// A removal that fails is not something a test can make the same way on
+// every platform, so the failure is injected here: with the switch on, the
+// removal fails the way it fails when the file will not go.
+#[cfg(test)]
+std::thread_local! {
+    static REMOVAL_UNAVAILABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What a published copy's record says about it.
@@ -1900,6 +1929,37 @@ mod tests {
         assert!(
             working_under(&dir).is_empty(),
             "and the working copy does not sit there looking like a backup"
+        );
+    }
+
+    /// A working copy that cannot be removed is left behind, and the run
+    /// carries on.
+    ///
+    /// The copy is published and whole — it is under its published name — so
+    /// the leftover scratch is not worth failing a run over. The run warns
+    /// about it, and the working name is left in the folder for a human to
+    /// remove.
+    #[test]
+    fn a_working_copy_that_cannot_be_removed_is_left_behind() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "work_left");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        REMOVAL_UNAVAILABLE.with(|f| f.set(true));
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+        REMOVAL_UNAVAILABLE.with(|f| f.set(false));
+
+        assert_eq!(
+            std::fs::read(&published).unwrap(),
+            b"the cache bytes",
+            "the copy is published and whole"
+        );
+        let working = working_under(&dir);
+        assert_eq!(
+            working.len(),
+            1,
+            "the working name is left behind, and it is the only one: {working:?}"
         );
     }
 

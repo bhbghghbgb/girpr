@@ -412,6 +412,13 @@ another run is making there, leaving that run reporting a backup that is not
 on disk. It also means the bound's count is a count of whole copies: it never
 keeps a half-written one in place of a good one.
 
+**The working name is scratch, and it goes.** A file copy is linked into
+place, so the published name and the working name are two names for one copy,
+and the working one is removed once the copy is published. A removal that
+fails leaves the working name behind, and the run warns about it: the copy is
+published and whole either way, so the run does not fail over the leftover —
+and the leftover is tool state that nothing reclaims.
+
 **The publish is the claim.** A link fails when the name is taken, so the link
 that publishes a file copy is also what keeps two runs off one name — there is
 no separate claim that a rename could undo. A rename cannot do that job: it
@@ -523,6 +530,8 @@ loudly, rather than leaving a run reporting a backup that is not there.
 
 **Enforced by:** `a_copy_that_is_still_being_written_is_not_the_bounds_business`
 and `a_published_copy_is_the_whole_cache` for the two halves of the publish,
+`a_working_copy_that_cannot_be_removed_is_left_behind` for the scratch the
+publish leaves behind when the removal fails,
 `a_published_name_appears_with_the_copy_it_carries` and
 `a_copy_is_published_on_a_filesystem_that_cannot_link` for the publish
 itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
