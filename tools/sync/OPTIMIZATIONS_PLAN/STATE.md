@@ -349,11 +349,18 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: X2
+  - batch: Z3
     status: pending
-    tasks: [F19, F20, F21, F44, F45, F46]
+    tasks: [F121, F122]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: X2
+    status: in_progress
+    tasks: [F19, F20, F21, F44, F45, F46]
+    base: 272effd3
+    head: 4e90c67e
     result: null
     followups: []
   - batch: X3
@@ -534,21 +541,21 @@ followups:
   - id: F19
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [927df439]
   - id: F20
     source: T11
     description: The lowest-index copy-failure case discriminates the two orders only because a 1 MiB copy is slower than the injected failure, so it can pass vacuously on a very fast host.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [0958cb81]
   - id: F21
     source: T12
     description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [6eb52866]
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
@@ -689,21 +696,21 @@ followups:
   - id: F44
     source: F14
     description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [eaf252c5]
   - id: F45
     source: F14
     description: README.md documents the fixed order of the digest-differs tag but not of the copy verify's failure message, so the algorithm a failed copy names is discoverable only from the design notes.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [552e07d8, 4e90c67e]
   - id: F46
     source: F14
     description: tools/sync/DESIGN-NOTES.md still ends without a trailing newline; pre-existing, but the file was appended to by this batch.
-    status: in_progress
+    status: pending_review
     batch: X2
-    commits: []
+    commits: [4c279930]
   - id: F47
     source: F23
     description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
@@ -1105,6 +1112,31 @@ followups:
     status: pending
     batch: Z2
     commits: []
+  - id: F121
+    source: F20
+    description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F122
+    source: F19
+    description: The walk's other counters, scan start and scan progress, and the effective-map counters are still unpinned; only scan done is now.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F123
+    source: F20
+    description: The blocking-destination fixture costs about half a second on this host because of antivirus; a smaller tree would be cheaper but would give a thinner margin.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a cost trade-off with no defect, and the slower fixture is what gives the case its margin
+  - id: F124
+    source: F44
+    description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
+    status: pending
+    batch: X4
+    commits: []
 ```
 
 ## Human checklist
@@ -1136,6 +1168,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X2 review checkpoint opened: F19, F20, F21,
+  F44, F45 and F46 `in_progress` → `pending_review`, commits `927df439`,
+  `0958cb81`, `6eb52866`, `eaf252c5`, `552e07d8`, `4e90c67e`, `4c279930`;
+  review X2 `pending` → `in_progress`, base `272effd3`, head `4e90c67e`.
 - 2026-11-13 — follow-up batch X2 started: F19, F20, F21, F44, F45 and F46
   `pending` → `in_progress`; `active_batch: X1` → `X2`.
 - 2026-11-13 — review X1 `done`: F25, F26, F31, F51 and F64 all kept, no fix
