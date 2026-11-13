@@ -363,11 +363,18 @@ reviews:
     head: 4e90c67e
     result: F19 kept (927df439); F20 kept (0958cb81); F21 kept (6eb52866); F44 kept (eaf252c5); F45 kept (552e07d8, 4e90c67e); F46 kept (4c279930); no fix or revert commits; 569 passed, 1 skipped; the reviewer ran its own mutation checks, with the copy-phase mutation caught 25 of 25 runs
     followups: [F125, F126, F127, F129, F130]
-  - batch: Z4
+  - batch: Z5
     status: pending
-    tasks: [F132, F133, F134, F136]
+    tasks: [F138, F139, F140, F141]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: Z4
+    status: in_progress
+    tasks: [F132, F133, F134, F136]
+    base: e9914420
+    head: 339c0957
     result: null
     followups: []
   - batch: X3
@@ -1191,21 +1198,21 @@ followups:
   - id: F132
     source: F22
     description: commands/sync/mod.rs still builds its two folder labels inline instead of the shared side_label; identical text today, but a second spelling of the same rule.
-    status: in_progress
+    status: pending_review
     batch: Z4
-    commits: []
+    commits: [0fa1a663]
   - id: F133
     source: F27
     description: The same lowercase versus ASCII-case fold wording survives elsewhere, in src/diff/mod.rs, src/commands/sync/rename.rs and src/planner/pairs.rs, which says "Pair by lowercase key".
-    status: in_progress
+    status: pending_review
     batch: Z4
-    commits: []
+    commits: [c9a512e8]
   - id: F134
     source: F27
     description: src/util.rs still uses a raw to_lowercase() comparison for the identity fallback, which is worth a look for the same reason the wording was corrected.
-    status: in_progress
+    status: pending_review
     batch: Z4
-    commits: []
+    commits: [72d9e889]
   - id: F135
     source: F27
     description: The variant name CasePairing::Lowercase itself says lowercase although it folds ASCII case only; renaming it would touch every call site and the design notes.
@@ -1216,9 +1223,9 @@ followups:
   - id: F136
     source: F22
     description: The existing case assertion that the label resolves to the folder to run it on now holds only because the folder path is a prefix of the record path, so it is weaker than its comment claims.
-    status: in_progress
+    status: pending_review
     batch: Z4
-    commits: []
+    commits: [339c0957]
   - id: F137
     source: F47
     description: The crate root now re-exports the whole glob crate rather than only glob::Pattern, which is wider than the type the public signatures actually name; the same shape as the existing girpr_log re-export, so a choice rather than a defect.
@@ -1226,6 +1233,44 @@ followups:
     batch: null
     commits: []
     note: skipped: it mirrors the existing girpr_log re-export precedent, and narrowing the re-export to one type would be a second convention in the same block
+  - id: F138
+    source: F133
+    description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
+    status: pending
+    batch: Z5
+    commits: []
+  - id: F139
+    source: F133
+    description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
+    status: pending
+    batch: Z5
+    commits: []
+  - id: F140
+    source: F136
+    description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
+    status: pending
+    batch: Z5
+    commits: []
+  - id: F141
+    source: F134
+    description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
+    status: pending
+    batch: Z5
+    commits: []
+  - id: F142
+    source: F134
+    description: util::identity_fold's lossy conversion folds two distinct invalid-UTF-8 byte sequences onto the replacement character, so two different non-UTF-8 names can compare equal; documented in the code, not fixed.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: inherent to the lossy conversion the identity rule is defined by, and it is documented
+  - id: F143
+    source: F133
+    description: The CasePairing::Lowercase variant still says lowercase although it folds ASCII case only.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F135, already recorded as skipped
 ```
 
 ## Human checklist
@@ -1257,6 +1302,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Z4 review checkpoint opened: F132, F133, F134
+  and F136 `in_progress` → `pending_review`, commits `0fa1a663`, `c9a512e8`,
+  `72d9e889`, `339c0957`; review Z4 `pending` → `in_progress`, base
+  `e9914420`, head `339c0957`.
 - 2026-11-13 — follow-up batch Z4 started: F132, F133, F134 and F136 `pending`
   → `in_progress`; `active_batch: X3` → `Z4`.
 - 2026-11-13 — review X3 `done`: F22, F27, F47 and F48 all kept, no fix or
