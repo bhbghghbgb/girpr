@@ -911,7 +911,10 @@ directory the open refuses, would otherwise leave the copies beside it to
 accumulate until `--ignore-cache` rebuilt the cache. The bound runs under the
 cache's own lock there too, taken for the bound; a lock another run holds
 means that run is in its run phase for the folder and bounds it itself, so
-that run's copies are left alone.
+that run's copies are left alone. The lock is taken on the cache file
+whatever the file can be opened for, so a cache that is not writable is still
+locked; only a cache that cannot be opened at all — not even for reading —
+has no lock to take, and is bounded without one.
 
 **A copy appears whole, or not at all.** It is written under a working name
 (`girpr-cache-partial-<ts>`) and published under `girpr-cache-backup-<ts>` (or

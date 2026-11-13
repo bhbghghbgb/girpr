@@ -177,7 +177,9 @@ pub enum CacheOpen {
 /// A cache that does **not** open is bounded as well, under the same lock
 /// taken for the bound: a corrupt cache, or a legacy sled directory the open
 /// refuses, must not leave the copies beside it to accumulate until
-/// `--ignore-cache` rebuilds the cache.
+/// `--ignore-cache` rebuilds the cache. The lock is taken on the cache file
+/// whatever the file can be opened for, so a cache that is not writable is
+/// locked too; only a cache that cannot be opened at all has no lock to take.
 ///
 /// A copy is published **before** that lock is taken, so there is a gap in
 /// which the lock does not yet speak for it: another run can be in its run
@@ -356,9 +358,9 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// copies: the cache's own exclusive lock is what says no other run is
 /// there. The open holds that lock while it bounds, and a folder whose cache
 /// did not open takes it for the bound; a folder with no lock to take — a
-/// legacy sled directory, or a cache that cannot be locked — is bounded
-/// without one, and the copies a live run published there are protected by
-/// the records beside them instead.
+/// legacy sled directory, a cache that cannot be locked, or a cache that
+/// cannot be opened at all — is bounded without one, and the copies a live
+/// run published there are protected by the records beside them instead.
 ///
 /// **A copy a live run is using is not the bound's to remove.** A published
 /// copy carries a record of its own, and the run that published it holds a
@@ -436,11 +438,11 @@ fn take_the_cache_lock(db_path: &Path) -> CacheLock {
         // nothing opens one.
         return CacheLock::Unheld;
     }
-    let file = match OpenOptions::new().read(true).write(true).open(db_path) {
+    let file = match open_for_the_lock(db_path) {
         Ok(file) => file,
         Err(e) => {
-            // The cache cannot be opened for writing, so no run has it open
-            // either.
+            // The cache cannot be opened at all, so no run has it open
+            // either, and there is no lock to take.
             warn!(
                 path = %db_path.display(),
                 error = %e,
@@ -463,6 +465,25 @@ fn take_the_cache_lock(db_path: &Path) -> CacheLock {
             );
             CacheLock::Unheld
         }
+    }
+}
+
+/// Open the cache file for the lock the bound takes.
+///
+/// The lock is taken on the cache file itself, and it is what says that no
+/// other run is in its run phase for the folder. **A cache file that cannot
+/// be opened for writing is still a file that can be locked.** A run in its
+/// run phase holds the cache open for writing, so a cache nobody can open
+/// for writing is a cache no run has open — but a run that opened it before
+/// the file stopped being writable is still holding it, and the lock is
+/// exactly what says so.
+fn open_for_the_lock(db_path: &Path) -> std::io::Result<File> {
+    match OpenOptions::new().read(true).write(true).open(db_path) {
+        Ok(file) => Ok(file),
+        Err(e) => match OpenOptions::new().read(true).open(db_path) {
+            Ok(file) => Ok(file),
+            Err(_) => Err(e),
+        },
     }
 }
 
@@ -2136,6 +2157,86 @@ mod tests {
             "the folder is left to the run that holds the cache"
         );
         assert!(newer.exists(), "and nothing in it is touched");
+    }
+
+    /// A cache file that cannot be opened for writing is still locked.
+    ///
+    /// The lock is what says that no other run is in its run phase for the
+    /// folder, and it is taken on the cache file whatever the file can be
+    /// opened for. A cache that is not writable is a cache no run has open —
+    /// a run in its run phase holds the cache open for writing — but a run
+    /// that opened it before the file stopped being writable is still
+    /// holding it, and the lock is what says so.
+    #[test]
+    fn a_cache_that_cannot_be_opened_for_writing_is_still_locked() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_readonly");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        // Another run holds the cache.
+        let held = OpenOptions::new()
+            .read(true)
+            .open(&db)
+            .expect("the cache can be read");
+        held.try_lock().expect("the other run holds the cache");
+
+        // The cache is not writable, so it cannot be opened for writing.
+        let mut perms = std::fs::metadata(&db).unwrap().permissions();
+        set_read_only(&mut perms);
+        std::fs::set_permissions(&db, perms).unwrap();
+
+        let older = dir.join(format!("{BACKUP_PREFIX}20240101T000000.000000Z"));
+        let newer = dir.join(format!("{BACKUP_PREFIX}20240102T000000.000000Z"));
+        std::fs::write(&older, b"old").unwrap();
+        std::fs::write(&newer, b"newer").unwrap();
+
+        assert!(
+            open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: NonZeroUsize::new(1),
+                },
+            )
+            .is_err(),
+            "a cache that is not writable does not open"
+        );
+
+        assert!(
+            older.exists(),
+            "the folder is left to the run that holds the cache: the lock was taken"
+        );
+        assert!(newer.exists(), "and nothing in it is touched");
+
+        // The cache is writable again, so the scratch tree can be removed.
+        let mut perms = std::fs::metadata(&db).unwrap().permissions();
+        set_writable(&mut perms);
+        std::fs::set_permissions(&db, perms).unwrap();
+    }
+
+    /// Make a file read-only, whichever way this platform spells it.
+    fn set_read_only(perms: &mut std::fs::Permissions) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o444);
+        }
+        #[cfg(windows)]
+        perms.set_readonly(true);
+    }
+
+    /// Make a file writable again, whichever way this platform spells it.
+    fn set_writable(perms: &mut std::fs::Permissions) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(0o644);
+        }
+        #[cfg(windows)]
+        perms.set_readonly(false);
     }
 
     /// A copy whose record has been released is safe while the cache is open.

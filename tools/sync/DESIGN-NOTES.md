@@ -475,6 +475,16 @@ beside it to accumulate until `--ignore-cache` rebuilt the cache. A cache
 that is a directory has no lock to take and nothing opens one, so the bound
 runs without one there.
 
+**A cache file that cannot be opened for writing is still locked.** The lock
+is taken on the cache file, and it is what says that no other run is in its
+run phase for the folder — so the file is opened for reading when it cannot
+be opened for writing. A run in its run phase holds the cache open for
+writing, so a cache nobody can open for writing is a cache no run has open;
+but a run that opened it before the file stopped being writable is still
+holding it, and the lock is exactly what says so. Only a cache that cannot be
+opened at all — not even for reading — has no lock to take, and the bound
+runs without one there.
+
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
 because the count is made up from the next-oldest copy instead. The copy is
@@ -552,6 +562,8 @@ same thing seen through a whole run,
 `the_folder_of_a_corrupt_cache_is_bounded` and
 `the_folder_of_a_cache_another_run_holds_is_left_to_it` for the bound on a
 cache that did not open, and
+`a_cache_that_cannot_be_opened_for_writing_is_still_locked` for the lock on
+a cache that is not writable,
 `a_copy_whose_record_is_released_is_kept_while_the_cache_is_open` for the
 protection the cache's own lock gives once the record is released,
 `a_published_copy_carries_a_record_of_its_own`,
