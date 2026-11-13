@@ -35,6 +35,11 @@ pub struct LiveEnt {
 ///
 /// `girpr-cache*` subtrees are pruned. Any walk error (dangling link, loop,
 /// IO failure) aborts the whole run rather than yielding a partial listing.
+///
+/// The "scan done" event carries what the walk saw — the entries it pushed and
+/// the files and directories among them — and those counts are the walk's own,
+/// not the effective map's. They are read from the log file; see the counters'
+/// note at the subtraction below.
 #[tracing::instrument(skip_all, fields(root = %root.display(), max_depth))]
 pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
     debug!(root = %root.display(), max_depth, "scan start");
@@ -130,6 +135,17 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
             }
         }
     }
+    // The counters the "scan done" event carries are the **walk's own**: every
+    // entry this walk saw, before anything else looked at them. The filter is
+    // applied to the walk's output afterwards, in phase A, so a path the run
+    // hides is counted here and is not in the effective map — the two numbers
+    // answer different questions, and a run with an `--exclude` is where they
+    // part company.
+    //
+    // `dirs` is the remainder rather than a second counter: a directory is
+    // pushed into `out` without being counted as a file, so the entries that
+    // are not files are the directories. One subtraction, and the two cannot
+    // drift apart.
     let dirs = out.len() - files;
     info!(
         root = %root.display(),

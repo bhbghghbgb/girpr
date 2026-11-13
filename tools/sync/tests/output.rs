@@ -737,6 +737,73 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
     );
 }
 
+/// **The walk's counters are in the log, and they are the walk's own.**
+///
+/// `walk_live` counts the files and the directories it found, and the "scan
+/// done" event carries both. Nothing else reports them: the run's own record
+/// counts the *effective* map, which is the walk's output after the filter has
+/// hidden what the run excludes. A tree with an excluded file is therefore the
+/// fixture that tells the two apart — and the only way to notice that the
+/// walk's counters stopped counting.
+#[test]
+fn the_scan_counts_the_entries_the_walk_saw() {
+    let t = temp_root("out_scan_counts");
+    let dir = t.subdir("tree");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    wfile(&dir, "skip.log", b"excluded");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--exclude",
+            "*.log",
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let scans: Vec<&Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "scan done")
+        .collect();
+    assert_eq!(
+        scans.len(),
+        1,
+        "one walk, one scan-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    // The excluded file is counted: these are the walk's counts, and the walk
+    // does not know what the run excludes.
+    assert_eq!(
+        scans[0]["fields"]["files"], 3,
+        "the walk counted every file"
+    );
+    assert_eq!(scans[0]["fields"]["dirs"], 1, "and every directory");
+    assert_eq!(scans[0]["fields"]["entries"], 4, "and the two add up");
+
+    // The run's own record counts the effective map, which the filter has
+    // already pruned — so the excluded file is not in it.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(
+        recs[0]["files"], 2,
+        "the run's own count leaves the excluded file out"
+    );
+}
+
 /// The directory the executable is in — where the default log file lands.
 fn exe_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_BIN_EXE_girsync"))
