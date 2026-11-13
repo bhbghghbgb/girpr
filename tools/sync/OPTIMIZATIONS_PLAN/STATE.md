@@ -385,10 +385,10 @@ reviews:
     result: F52 kept (9eebcc83); F54 kept (ca4d5ae4); F55 kept (86467207); F57 kept (85d1a2d1, 980e7a3d); the review also fixed two stale code doc comments (086c4d2f, 6a7e78a5); 549 passed, 1 skipped; the live-record sparing was confirmed on this host with a standalone lock probe
     followups: [F65, F66, F68]
   - batch: B22
-    status: pending
+    status: in_progress
     tasks: [F56, F58, F60, F61]
-    base: null
-    head: null
+    base: 0dba9367
+    head: fb7dd522
     result: null
     followups: []
   - batch: B23
@@ -756,9 +756,9 @@ followups:
   - id: F56
     source: F49
     description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
-    status: in_progress
+    status: pending_review
     batch: B22
-    commits: []
+    commits: [a39d5550, a1a0a602, fb7dd522]
   - id: F57
     source: F53
     description: A record that cannot be read or locked spares its copy for good, so on a filesystem that cannot lock a file a record left by an older build defeats the bound for that copy forever.
@@ -768,9 +768,9 @@ followups:
   - id: F58
     source: F53
     description: retain_copies is pub, but its safety rests entirely on the caller already holding the folder's cache exclusive lock, and nothing in the signature or doc says so.
-    status: in_progress
+    status: pending_review
     batch: B22
-    commits: []
+    commits: [62f7f950]
   - id: F59
     source: F53
     description: The published-copy registry forgets a copy once the bound for its folder has run, so a second bound on the same folder inside one process would no longer spare the copy that run is still using.
@@ -781,15 +781,15 @@ followups:
   - id: F60
     source: F53
     description: The record's body (pid=, started=) is written but never read, so nothing reports or checks which run holds a record.
-    status: in_progress
+    status: pending_review
     batch: B22
-    commits: []
+    commits: [c9d86e57]
   - id: F61
     source: F53
     description: The copy's protection after the record is released rests on redb's exclusive file lock, which is redb's property rather than something the suite pins.
-    status: in_progress
+    status: pending_review
     batch: B22
-    commits: []
+    commits: [3b9a60e3]
   - id: F64
     source: F21
     description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
@@ -859,6 +859,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B22 review checkpoint opened: F56, F58, F60 and
+  F61 `in_progress` → `pending_review`, commits `a39d5550`, `62f7f950`,
+  `c9d86e57`, `3b9a60e3`, `a1a0a602`, `fb7dd522`; review B22 `pending` →
+  `in_progress`, base `0dba9367`, head `fb7dd522`.
 - 2026-11-13 — follow-up batch B22 started: F56, F58, F60 and F61 `pending` →
   `in_progress`; `active_batch: B21` → `B22`.
 - 2026-11-13 — review B21 `done`: F52, F54, F55 and F57 kept, plus two
