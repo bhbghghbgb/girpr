@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M1
+active_batch: M2
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -689,31 +689,31 @@ followups:
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
-    status: pending
+    status: in_progress
     batch: M2
     commits: []
   - id: F37
     source: F3
     description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
-    status: pending
+    status: in_progress
     batch: M2
     commits: []
   - id: F38
     source: F3
     description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
-    status: pending
+    status: in_progress
     batch: M2
     commits: []
   - id: F39
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
-    status: pending
+    status: in_progress
     batch: M2
     commits: []
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
-    status: pending
+    status: in_progress
     batch: M2
     commits: []
   - id: F41
@@ -1411,6 +1411,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M2 started: F36, F37, F38, F39 and F40 `pending`
+  → `in_progress`; `active_batch: M1` → `M2`.
 - 2026-11-13 — review M1 `done`: F6, F28, F29, F32 and F124 all kept, no fix
   or revert commits; follow-ups F152–F154 appended with batch `M10` and F155
   recorded as `skipped` because it is the same item as F151. F6, F28, F29,
