@@ -358,8 +358,10 @@ found under any ASCII-case spelling of its name — `MD5` as well as `md5` — b
 the arm is matched by *comparing* the stored name with that algorithm's canonical
 spelling, folding ASCII case only. The comparison is `HashAlg::from_name`'s —
 the one the algorithm's own parser uses, so a lookup and the command line cannot
-disagree about what a name means — and it allocates nothing, because a match has
-no refusal to build and nothing to keep. `get_named` answers a **known** name
+disagree about what a name means — and it allocates nothing: the resolver is a
+`const fn`, and a const fn may not allocate, so the property is the compiler's
+and not the reader's. A match has no refusal to build and nothing to keep, so
+there was nothing for the comparison to keep. `get_named` answers a **known** name
 exactly as `get_algo` does, so the two cannot disagree about a row that holds
 `MD5` where the request says `md5`. Both go through the same helper, and the
 first match wins: the answer is a property of the row rather than of an iteration
@@ -390,7 +392,15 @@ because the row genuinely does hold a digest under that name.
 `a_typed_lookup_finds_a_known_name_carried_in_foreign` and
 `a_non_ascii_lookalike_name_is_never_matched` in `src/hash/tests.rs`;
 `the_name_resolver_agrees_with_the_parser` for the resolver and the parser
-answering one question; `a_known_name_with_the_wrong_length_routes_to_foreign`
+answering one question, and
+`the_resolver_folds_exactly_as_the_ascii_case_comparison_does` for the
+resolver folding as the string comparison folds; the resolver's `const`
+context for the comparison's allocation-freedom: a resolver that stopped
+being `const` would not compile there;
+`a_foreign_entry_is_replaced_only_under_its_own_spelling` for the arm
+holding one entry per spelling, and
+`the_first_of_two_entries_that_name_one_algorithm_answers` for the first
+match that wins; `a_known_name_with_the_wrong_length_routes_to_foreign`
 for the routing rule; and `tests/why/disagreement.rs`, whose fixtures give
 `sha256` a digest of the wrong length so the row really does carry a known name
 in the foreign arm, and which asserts the comparison still finds it.
