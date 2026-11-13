@@ -10,6 +10,12 @@
 //! same as `--output json`: the parser is `clap`'s, so its spelling is the
 //! spelling, and no narrower set of forms sits behind it.
 //!
+//! **There is no `--version`.** The command declares no version, so the flag
+//! is an unknown one and the run fails with `3` like any other usage error.
+//! `#[command(version)]` on the argument struct is what would add it — and the
+//! error path in `main` already treats a version request as an answer rather
+//! than a failure, so the flag would exit `0` the moment it was declared.
+//!
 //! Reports through the same [`girsync::report`] writer as `girsync` itself, so
 //! `--output json` means the same thing in both binaries and there is one
 //! definition of a conversion record rather than a `println!` per tool.
@@ -20,6 +26,9 @@ use std::path::PathBuf;
 
 /// The converter's command line: the legacy sled directory, the redb file to
 /// write, and the two flags.
+///
+/// **No version is declared**, so `--version` is an unknown flag and the run
+/// fails with `3`. `#[command(version)]` below is what would add one.
 #[derive(clap::Parser, Debug)]
 #[command(
     name = "sled2redb",
@@ -43,6 +52,9 @@ fn main() {
         Ok(args) => args,
         Err(e) => {
             // `--help` is an answer, not a failure: clap prints it and exits 0.
+            // A version request is the same kind of answer, and the command
+            // declares no version today — so that arm is there for the day one
+            // is declared, and it exits 0 then too.
             // Every other error is a usage error, and a usage error here is a
             // failure like any other, so it exits 3 rather than clap's 2 — this
             // binary has one code for every way it can fail.
