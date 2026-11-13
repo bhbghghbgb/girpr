@@ -51,6 +51,10 @@ pub(super) fn side_kind(side: &Side) -> &'static str {
 /// `girsync update --dir <the folder this record describes>` — is where that
 /// folder belongs. A side is therefore named by its path and nothing else, and
 /// two commands reading the same record name it the same way.
+///
+/// Every command names its sides through here, including `sync`: its two sides
+/// are always folders, and the word beside a folder's path is `folder` there
+/// too.
 pub(super) fn side_label(side: &Side) -> String {
     let path = match side {
         Side::Record(p) => p,

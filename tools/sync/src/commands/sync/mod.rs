@@ -108,8 +108,8 @@ use crate::cache::{CACHE_PREFIX, backup_db, remove_cache_path, snapshot_old};
 use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
-    SideCapability, SideEntry, classify, ensure_distinct_sides, open_folder_cache, resolve_folder,
-    resolve_sides_concurrently, scan_stat_only,
+    Side, SideCapability, SideEntry, classify, ensure_distinct_sides, open_folder_cache,
+    resolve_folder, resolve_sides_concurrently, scan_stat_only,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::report::visit_verdict;
@@ -122,6 +122,8 @@ use plan::{
     ensure_link_safe, ensure_mkdir_targets_free, spare_link_storage,
 };
 use rename::{RenameOutcome, rename_to_src_casing};
+
+use super::side_label;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
@@ -282,8 +284,12 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // plan borrows — and a value built inline in the argument list reads as
     // though it were borrowed from a temporary that has already gone. Built
     // here, each label is a name that outlives the call.
-    let src_label = format!("folder {}", src.display());
-    let dst_label = format!("folder {}", dst.display());
+    //
+    // Built by the shared helper rather than spelled out here: a side is named
+    // the same way in every command, and `sync` is no exception — both of its
+    // sides are folders, and the helper says so.
+    let src_label = side_label(&Side::Folder(src.clone()));
+    let dst_label = side_label(&Side::Folder(dst.clone()));
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
