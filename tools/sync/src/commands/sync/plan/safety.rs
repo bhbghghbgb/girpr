@@ -1,7 +1,10 @@
 //! The plan-time guards (`ensure_*_safe`, `spare_link_storage`).
 //!
-//! Every guard is a **fail-fast, plan-time** check: it refuses a plan before the
-//! first filesystem change, so a dry run refuses exactly what a real run would.
+//! Every guard is a **fail-fast, plan-time** check: it refuses a plan before
+//! the apply phases run, so a dry run refuses exactly what a real run would.
+//! Only the mkdir preflight refuses before the run's first change to dst; the
+//! guards that run after the rename refuse a plan that is already one change
+//! in.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -24,11 +27,18 @@ use super::link::{
 
 /// The disk questions the plan-time guards ask.
 ///
-/// A guard is fail-fast: a probe that fails is a refusal at plan time, before
-/// the run has changed anything, so a dry run refuses exactly what a real run
-/// would. The guards ask the disk through this seam, so a test can make a
-/// probe fail, or count the probes, without needing a filesystem that fails
-/// on its own — and those two are what a plan-time refusal turns on.
+/// A guard is fail-fast: a probe that fails is a refusal at plan time, so a
+/// dry run refuses exactly what a real run would. The guards ask the disk
+/// through this seam, so a test can make a probe fail, or count the probes,
+/// without needing a filesystem that fails on its own — and those two are what
+/// a plan-time refusal turns on.
+///
+/// **"Before the run has changed anything" is the mkdir preflight's alone.**
+/// It runs before the rename pass, which is the run's first change to dst.
+/// The guards that ask the disk after the rename — [`spare_link_storage`],
+/// [`ensure_link_safe`] and [`ensure_hard_linked_targets_safe`] — refuse a
+/// plan that is already one change in, so a refusal there does not leave dst
+/// as it was.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
 /// paths a plan touches. The link-chain walk asks the disk directly: it is a
