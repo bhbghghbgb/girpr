@@ -371,8 +371,15 @@ reviews:
     result: null
     followups: []
   - batch: X7
-    status: pending
+    status: in_progress
     tasks: [F87, F88, F89]
+    base: 757e2bf0
+    head: 91533514
+    result: null
+    followups: []
+  - batch: Y1
+    status: pending
+    tasks: [F90, F91]
     base: null
     head: null
     result: null
@@ -857,21 +864,48 @@ followups:
   - id: F87
     source: F82
     description: The bound's walk starts at the oldest copy and skips the spoken-for ones without spending the removal budget, so it can remove a copy that is among the newest N; the docs say the bound walks on to the next-oldest copy but never say that a newer copy can go.
-    status: in_progress
+    status: pending_review
     batch: X7
-    commits: []
+    commits: [6da18401, 91533514]
   - id: F88
     source: F79
     description: publish_dir's retry path removes the claim directory before renaming again, so another run's empty published directory copy, a copy of an empty legacy cache, can be removed in the window between the identity check and that removal; the notes' claim that the other run's copy is never overwritten holds for a copy that has content.
-    status: in_progress
+    status: pending_review
     batch: X7
-    commits: []
+    commits: [7772be18]
   - id: F89
     source: F81
     description: A run whose cache open fails also adopts the waiting copies, because begin_run runs before the bound in that path, while the documents say the next run that opens it.
-    status: in_progress
+    status: pending_review
     batch: X7
+    commits: [df7e2c36]
+    note: implemented by ses_e2cd843b7ffeYkc4yqlDZgOUdG; a failed open now spares the waiting copies for that run bound but leaves them waiting, so the next run that opens the folder is the one that adopts them
+  - id: F90
+    source: F88
+    description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
+    status: pending
+    batch: Y1
     commits: []
+  - id: F91
+    source: F88
+    description: publish_file's fallback removes the claim and reports the error rather than retrying the rename, so on a platform whose rename cannot replace a file that publish can never succeed; practically unreachable, since Windows can link and POSIX replaces.
+    status: pending
+    batch: Y1
+    commits: []
+  - id: F92
+    source: F87
+    description: The bound's "keep the newest N" reading could be a behaviour choice instead of a documented one, keeping the newest N plus the spoken-for copies at the cost of the folder exceeding N; a policy decision, not a defect.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a policy decision rather than a defect, and the current behaviour is now documented
+  - id: F93
+    source: F88
+    description: A published directory copy of an empty legacy cache is indistinguishable from a claim to a bound; a marker would change the copy content, so it is a design question.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a design question with a behaviour cost, not a defect
 ```
 
 ## Human checklist
@@ -903,6 +937,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X7 review checkpoint opened: F87, F88 and F89
+  `in_progress` → `pending_review`, commits `6da18401`, `7772be18`,
+  `df7e2c36`, `91533514`; review X7 `pending` → `in_progress`, base
+  `757e2bf0`, head `91533514`.
 - 2026-11-13 — follow-up batch X7 started: F87, F88 and F89 `pending` →
   `in_progress`; `active_batch: B24` → `X7`.
 - 2026-11-13 — review B24 `done`: F79 kept (fe0e4c95), F81 kept (ca6ad054,
