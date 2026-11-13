@@ -984,9 +984,11 @@ struct FolderCopies {
 /// entry is forgotten when the copy is gone, because there is nothing left to
 /// spare.
 ///
-/// The bound spares the newest of a list's entries: a run publishes one copy
-/// per list, so the newest is the copy the current run published, and the
-/// ones before it belong to earlier runs in the same process.
+/// The bound spares the copies the run that opened the folder's cache
+/// published, and for each list the newest of them: a run publishes one copy
+/// per list, so the newest is the copy that run reports. A copy an earlier
+/// run in this process published is not among them — it is an ordinary copy
+/// again — and nothing in the registry speaks for it.
 fn published_registry() -> &'static Mutex<HashMap<PathBuf, FolderCopies>> {
     static PUBLISHED: OnceLock<Mutex<HashMap<PathBuf, FolderCopies>>> = OnceLock::new();
     PUBLISHED.get_or_init(|| Mutex::new(HashMap::new()))
@@ -1533,13 +1535,14 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
 /// still being written carries a working name and is not in this list at all
 /// — so the bound can only ever take a whole copy away.
 ///
-/// The copies in `published` that this process published under `prefix`.
+/// The copies in `published` under `prefix`: the ones the run that opened the
+/// folder's cache published.
 ///
 /// A run publishes one copy per list, and the copy it publishes is the one
-/// it reports, so the bound spares the **newest** copy this process published
-/// in that list. The copies it published before that belong to earlier runs
-/// in the same process, and those are ordinary copies again: the bound takes
-/// them like any other, which is what keeps the folder within its bound.
+/// it reports, so the bound spares the **newest** of them. A copy an earlier
+/// run published is not among them — it is an ordinary copy again — so the
+/// bound takes it like any other, which is what keeps the folder within its
+/// bound.
 fn newest_published<'a>(published: &'a [PathBuf], prefix: &str) -> Option<&'a Path> {
     published
         .iter()
@@ -2580,7 +2583,7 @@ mod tests {
     /// A second bound for a folder still spares the copy the run published.
     ///
     /// The copy a run published is the copy that run reports, so every bound
-    /// the process makes for that folder spares it, and not only the first
+    /// that run makes for that folder spares it, and not only the first
     /// one. A bound that took the copy's entry would leave the next bound
     /// free to take the copy the run is still about to report.
     ///
