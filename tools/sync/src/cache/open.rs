@@ -25,6 +25,14 @@
 //! claim can have been taken away and the name taken by another run, and
 //! landing the copy on it would publish it over that run's copy.
 //!
+//! **The check and the rename are two calls.** No portable rename is
+//! conditional on the name holding this run's claim, so the gap between them
+//! is one syscall wide and cannot be closed: a claim taken away in that gap
+//! is still landed on. The gap is only reachable on a filesystem that can
+//! neither link nor lock a file — with a link the publish is atomic and
+//! needs no claim, and with a lock the record below keeps a bound off the
+//! claim until the run opens the folder's cache.
+//!
 //! A directory copy is renamed onto its claim, and a rename cannot replace a
 //! directory on every platform, so the claim is dropped and the rename tried
 //! again. The claim is asked about **again** before it is dropped: dropping
@@ -34,6 +42,10 @@
 //! been dropped for. A name that is no longer this run's claim fails the
 //! publish rather than taking another run's copy away from under the run that
 //! is about to report it.
+//!
+//! **The ask and the removal are two calls as well**, and there is no
+//! portable call that removes a claim by what it is rather than by what it
+//! is called, so that gap cannot be closed either.
 //!
 //! The working name is scratch: it goes once the copy is published. A
 //! removal that fails leaves it behind and the run warns about it — the copy
@@ -732,6 +744,13 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// something at the name — and fails loudly when it does not: landing the
 /// copy on a name this run no longer holds would publish it over whatever
 /// holds it now, which is the one thing the claim exists to prevent.
+///
+/// The check and the rename are two calls, and no portable rename is
+/// conditional on the name holding this run's claim, so the gap between them
+/// is one syscall wide: a claim taken away in it is still landed on. Only a
+/// filesystem that can neither link nor lock a file gets there — with a link
+/// the publish is atomic, and with a lock the record beside the name keeps a
+/// bound off the claim until the run opens the folder's cache.
 fn publish_copy(
     work: &Path,
     parent: &Path,
@@ -816,6 +835,14 @@ enum PublishError {
 /// claim is checked before the copy lands on it, so a claim that was taken
 /// away fails the publish rather than landing the copy on a name this run no
 /// longer holds.
+///
+/// The check and the rename are two calls, and no portable rename is
+/// conditional on the name holding this run's claim, so the gap between them
+/// is one syscall wide: a claim taken away in it is still landed on.
+///
+/// The rename has to be able to replace the claim for the copy to land at
+/// all, and a filesystem whose rename cannot is one where the copy can never
+/// be published.
 ///
 /// **A rename that does not land drops the claim.** The copy is not
 /// published, so the publish fails and the run reports the failure rather
@@ -970,6 +997,13 @@ fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
 /// on it either. Only an empty directory goes, so a copy another run has
 /// published with content in it is never dropped either.
 ///
+/// The ask and the removal are two calls, and there is no portable call that
+/// removes a claim by what it is rather than by what it is called, so a
+/// claim taken away in the gap is still removed. The gap is one syscall wide
+/// and cannot be closed; it is reachable only where the filesystem cannot
+/// lock a file, since a record a live run holds keeps a bound off the name
+/// until the run opens the folder's cache.
+///
 /// A claim that was taken away fails the publish, like every other claim
 /// that is no longer this run's: the copy is not landed on a name this run
 /// no longer holds.
@@ -1093,6 +1127,10 @@ fn identity_at(path: &Path) -> Option<Identity> {
 /// run's claim — is not ours, and the copy must not land on it: publishing
 /// over another run's copy would leave that run reporting a backup that is
 /// not on disk, which is the one thing the claim exists to prevent.
+///
+/// The answer is read at one moment, and the call that follows it is another
+/// call: a claim taken away in between is still in reach. Nothing portable
+/// makes the call that follows conditional on this answer.
 fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
     hardlink::info(cand).is_ok_and(|info| info.id == claim.id)
 }

@@ -933,10 +933,13 @@ name is created with the copy's bytes in it — there is no moment at which the
 name is there and empty — and the link fails if the name is taken, so two runs
 cannot publish onto one name. A filesystem that cannot link a file has no such
 publish: the copy is renamed onto a name it claims first, and the name is
-briefly empty until the rename lands. A directory copy — a legacy sled cache
-is a directory — cannot be linked either, so its name is claimed with an
-exclusive create and the copy is renamed onto the claim: the name is briefly
-an *empty directory* until the rename lands.
+briefly empty until the rename lands. The rename has to be able to replace
+the claim for the copy to land at all; where it cannot, the publish fails
+loudly and the run reports the failure rather than a backup that is not
+there. A directory copy — a legacy sled cache is a directory — cannot be
+linked either, so its name is claimed with an exclusive create and the copy
+is renamed onto the claim: the name is briefly an *empty directory* until the
+rename lands.
 
 The claim is what keeps two runs off one name, and a bound that meets one
 cannot tell it from a published copy, so on a filesystem that cannot lock a
@@ -948,6 +951,14 @@ something is at the name: if the claim was taken away and another run took the
 name and published there, the copy is not landed on it either, and that run's
 copy is left alone.
 
+That check and the rename that follows it are two calls, and there is no
+portable rename that is conditional on the name holding this run's claim, so
+a claim taken away between the two is still landed on: the gap is one
+syscall wide and it cannot be closed. It is only reachable on a filesystem
+that can neither link nor lock a file — with a link the publish is atomic,
+and with a lock the record below keeps a bound off the claim until the run
+opens the folder's cache.
+
 A directory copy is renamed onto its claim, and a rename cannot replace a
 directory on every platform, so the claim is dropped and the rename is tried
 again. Dropping it takes whatever is at the name with it, so the claim is
@@ -956,6 +967,15 @@ copy, and the publish fails loudly rather than dropping it. Only an empty
 directory goes, so the one published copy that was ever in reach is the copy
 of an empty legacy cache — an empty directory — and the check is what stops
 it.
+
+The ask and the removal are two calls as well, and no portable call removes a
+claim by what it is rather than by what it is called, so a claim taken away
+in between is still removed: that gap cannot be closed either. The same goes
+for the claim a file copy drops when its rename does not land — the name is
+asked about again first, so another run's published copy is left alone, and
+the gap between the ask and the removal is still there. Both gaps are only
+reachable on a filesystem that cannot lock a file, because the record below
+keeps a bound off the name until the run opens the folder's cache.
 
 A copy that is still being written is not one of the copies the bound ranges
 over: a run that merely opens a folder cannot remove the copy another run is

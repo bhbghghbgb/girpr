@@ -426,13 +426,16 @@ has to be preceded by a claim, and the claim leaves the name empty for as
 long as the rename takes, so the name would be a published name with no bytes
 in it. A filesystem that cannot link a file has no such publish, and the copy
 is renamed onto a name it claims first there — the name is briefly empty, and
-the copy lands on it either way. A directory copy cannot be linked at all, so
-its name is claimed with an exclusive create and the copy is renamed onto
-that claim: a POSIX rename onto an existing **empty** directory succeeds, so
-a rename on its own would let a second run publish onto a name the first run
-has and replace the copy that is there. The name is briefly an empty
-directory instead, which is the price of an exclusive claim on a filesystem
-whose rename replaces a directory.
+the copy lands on it either way, as long as the platform's rename can replace
+what is at a name. Where it cannot, the copy never lands: the publish fails
+loudly, the claim is dropped and the name left free, and the run reports the
+failure rather than a backup that is not on disk. A directory copy cannot be
+linked at all, so its name is claimed with an exclusive create and the copy
+is renamed onto that claim: a POSIX rename onto an existing **empty**
+directory succeeds, so a rename on its own would let a second run publish
+onto a name the first run has and replace the copy that is there. The name is
+briefly an empty directory instead, which is the price of an exclusive claim
+on a filesystem whose rename replaces a directory.
 
 **A claim that is taken away fails the publish.** A bound cannot tell a claim
 from a published copy — both are a name under a list's prefix — and on a
@@ -454,7 +457,17 @@ read from the **handle** the claim was created with, not from the name: a
 handle names the object it was opened on even after the name has gone, so the
 answer cannot be another run's file. A directory claim has no portable
 handle, and its identity is read from the name — which is enough, because the
-name is asked about **again** before the claim is dropped.
+name is asked about **again** before the claim is dropped, and the claim is
+dropped only while the name still holds it.
+
+**The check is a check-then-act, and the gap is one syscall wide.** The
+check and the rename that follows it are two calls, and a claim taken away
+between them is still landed on. There is no portable rename that is
+conditional on the name holding this run's claim, so the gap cannot be
+closed. It is reachable only where the filesystem can neither link nor lock
+a file: with a link the publish is atomic and needs no claim at all, and
+with a lock the record beside the name keeps a bound off the claim until the
+run opens the folder's cache.
 
 **A directory claim is dropped, and dropping it takes what is at the name
 with it.** A rename cannot replace a directory on every platform, so the
@@ -465,6 +478,18 @@ one shape a published copy could have been dropped for. So the claim is asked
 about before it goes, and a name that has been taken over fails the publish
 loudly rather than dropping that run's copy: the copy is the one its run is
 about to report, and it is not this run's to remove.
+
+**The ask is a check-then-act too.** The name is read, and the claim is
+removed in the next call, so a claim taken away in between is still removed.
+No portable call removes a claim by what it is rather than by what it is
+called — a directory claim has no portable handle at all, and the handle a
+file claim keeps does not name it for a removal — so this gap cannot be
+closed either. It is reachable only where the filesystem cannot lock a
+file, since a record a live run holds keeps a bound off the name until the
+run opens the folder's cache. The same goes for the claim a **file** copy
+drops when its rename does not land: the name is asked about again before
+the claim goes, so another run's published copy is left alone, and the gap
+between the ask and the removal is still there.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
