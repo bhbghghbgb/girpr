@@ -41,9 +41,12 @@ use super::link::{
 /// as it was.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
-/// paths a plan touches. The link-chain walk asks the disk directly: it is a
-/// walk of the tree rather than a question about the plan, and no plan-time
-/// decision is lost with it.
+/// paths a plan touches. The link questions are asked of the disk directly:
+/// the chain walk's `read_link`, `try_is_link` and `canonicalize`, the
+/// `canonicalize`, `try_is_link` and `read_dir` probes in
+/// [`plan::link`](super::link) (the listing is a Windows-only probe), and the
+/// link-ancestor lookup [`ensure_link_safe`] makes. A test that counts probes
+/// counts the seam's questions and not those.
 pub(crate) trait Probes {
     /// The canonical form of `path`, with every link resolved.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
