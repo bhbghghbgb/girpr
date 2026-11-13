@@ -1791,7 +1791,10 @@ fn run_sync_renames_a_case_only_directory_before_its_children() {
 
     let mut o = sync(src.clone(), dst.clone());
     o.common.test_cache = TestCacheBackend::Memory;
-    o.common.case_sensitive = false;
+    // The setter, not the field: the filter caches the options it matches with,
+    // and the case mode is one of them, so assigning the field alone would leave
+    // the filter matching under the old mode.
+    o.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     assert_eq!(entry_names(&dst), vec!["Dir".to_string()]);
