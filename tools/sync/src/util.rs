@@ -4,6 +4,9 @@ use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(windows)]
+use std::ffi::OsStr;
+
 use crate::cache::CACHE_PREFIX;
 
 /// Seconds since `t0`, for `elapsed_s` span fields.
@@ -123,6 +126,16 @@ pub fn path_within(child: &Path, parent: &Path) -> bool {
     true
 }
 
+/// Whether two path components name the same place on disk.
+///
+/// The **identity** rule, and it is not the path key's rule: the key asks which
+/// bucket of a run's map a path belongs to, this asks whether two spellings
+/// open the same file.
+///
+/// Case is folded on Windows, where the filesystem folds it, and only there.
+/// The fold the fallback uses is Unicode — deliberately *not* the ASCII-only
+/// fold of [`path_key`], which is the key every relative-path index uses. The
+/// two rules answer different questions and are meant to disagree.
 fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     #[cfg(windows)]
     {
@@ -138,12 +151,36 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
         {
             return a.eq_ignore_ascii_case(b);
         }
-        a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
+        identity_fold(a) == identity_fold(b)
     }
     #[cfg(not(windows))]
     {
         a == b
     }
+}
+
+/// The Unicode lowercase fold the **identity** rule uses for a name outside
+/// ASCII.
+///
+/// **This is deliberately not the path key's fold.** [`path_key`] folds ASCII
+/// case only and is the key every relative-path index uses; this one answers a
+/// different question — do two spellings name the same place on disk? — and on
+/// Windows the filesystem really does treat `Ärger` and `ärger` as one file.
+/// The two rules are allowed to disagree, and that is the point: the key keeps
+/// those two spellings apart, and this says they are one place. Unifying them
+/// would change what a run does — a Unicode key would merge spellings the disk
+/// keeps apart, and an ASCII identity rule would stop the overlap and
+/// containment checks from seeing a case difference Windows really has.
+///
+/// It is a *lowercase* mapping rather than a full case fold, and an
+/// approximation of the filesystem's own table rather than a copy of it: the
+/// lossy conversion also folds two distinct byte sequences that are not valid
+/// UTF-8 onto each other, since both become the replacement character. It is
+/// the approximation the identity rule has always made, and it is kept rather
+/// than guessed at.
+#[cfg(windows)]
+fn identity_fold(s: &OsStr) -> String {
+    s.to_string_lossy().to_lowercase()
 }
 
 /// The key a case-insensitive path comparison uses when two spellings may name
