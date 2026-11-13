@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: X1
+active_batch: X2
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -534,19 +534,19 @@ followups:
   - id: F19
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F20
     source: T11
     description: The lowest-index copy-failure case discriminates the two orders only because a 1 MiB copy is slower than the injected failure, so it can pass vacuously on a very fast host.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F21
     source: T12
     description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F22
@@ -689,19 +689,19 @@ followups:
   - id: F44
     source: F14
     description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F45
     source: F14
     description: README.md documents the fixed order of the digest-differs tag but not of the copy verify's failure message, so the algorithm a failed copy names is discoverable only from the design notes.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F46
     source: F14
     description: tools/sync/DESIGN-NOTES.md still ends without a trailing newline; pre-existing, but the file was appended to by this batch.
-    status: pending
+    status: in_progress
     batch: X2
     commits: []
   - id: F47
@@ -1136,6 +1136,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X2 started: F19, F20, F21, F44, F45 and F46
+  `pending` → `in_progress`; `active_batch: X1` → `X2`.
 - 2026-11-13 — review X1 `done`: F25, F26, F31, F51 and F64 all kept, no fix
   or revert commits; follow-ups F116–F120 appended, with F116 in Z1, F117,
   F118 and F120 in a new batch Z2 for the stale-tool-state wording, and F119
