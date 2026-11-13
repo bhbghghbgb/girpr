@@ -412,6 +412,12 @@ another run is making there, leaving that run reporting a backup that is not
 on disk. It also means the bound's count is a count of whole copies: it never
 keeps a half-written one in place of a good one.
 
+The one name in a list that can hold no copy at all is a **claim left
+behind**: dropping a claim is best-effort, so a removal that fails leaves an
+empty file — or an empty directory, for a directory copy — under a published
+prefix, and the bound reads that name as a published copy. It counts towards
+the bound, and it may be the one the bound keeps in place of a whole copy.
+
 **The working name is scratch, and it goes.** A file copy is linked into
 place, so the published name and the working name are two names for one copy,
 and the working one is removed once the copy is published. A removal that
@@ -429,18 +435,20 @@ is renamed onto a name it claims first there — the name is briefly empty, and
 the copy lands on it as long as the platform's rename can replace what is at
 a name. Where it cannot, the copy never lands there: the publish fails
 loudly, the claim is dropped and the name left free, and the run reports the
-failure rather than a backup that is not on disk. A **file** copy does not
-drop its claim and try again the way a directory copy does: a rename of a
-file replaces whatever is at the name, so a second try could put the copy
-over another run's published copy — and the only platform whose rename
-cannot replace anything at all is the one where the copy never lands, so
-there is nowhere a second try would be worth making. A directory copy
-cannot be linked at all, so its name is claimed with an exclusive create and
-the copy is renamed onto that claim: a POSIX rename onto an existing
-**empty** directory succeeds, so a rename on its own would let a second run
-publish onto a name the first run has and replace the copy that is there.
-The name is briefly an empty directory instead, which is the price of an
-exclusive claim on a filesystem whose rename replaces a directory.
+failure rather than a backup that is not on disk. The drop is best-effort:
+its error is ignored, so a removal that fails leaves the claim behind, and
+the name is then not free after all. A **file** copy does not drop its claim
+and try again the way a directory copy does: a rename of a file replaces
+whatever is at the name, so a second try could put the copy over another
+run's published copy — and the only platform whose rename cannot replace
+anything at all is the one where the copy never lands, so there is nowhere a
+second try would be worth making. A directory copy cannot be linked at all,
+so its name is claimed with an exclusive create and the copy is renamed onto
+that claim: a POSIX rename onto an existing **empty** directory succeeds, so
+a rename on its own would let a second run publish onto a name the first run
+has and replace the copy that is there. The name is briefly an empty
+directory instead, which is the price of an exclusive claim on a filesystem
+whose rename replaces a directory.
 
 **A claim that is taken away fails the publish.** A bound cannot tell a claim
 from a published copy — both are a name under a list's prefix — and on a
@@ -483,6 +491,12 @@ one shape a published copy could have been dropped for. So the claim is asked
 about before it goes, and a name that has been taken over fails the publish
 loudly rather than dropping that run's copy: the copy is the one its run is
 about to report, and it is not this run's to remove.
+
+The drop is best-effort here as it is everywhere else, so a removal that
+fails leaves the claim behind: the rename fails with it — the name is still
+taken — and the publish moves on to the next name. The leftover is an empty
+directory under a published prefix, and the bound reads that name as a
+published copy.
 
 **The ask is a check-then-act too.** The name is read, and the claim is
 removed in the next call, so a claim taken away in between is still removed.

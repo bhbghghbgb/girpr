@@ -951,6 +951,12 @@ something is at the name: if the claim was taken away and another run took the
 name and published there, the copy is not landed on it either, and that run's
 copy is left alone.
 
+Dropping a claim is **best-effort**: the error of the removal is ignored, so
+a removal that fails leaves the claim behind — an empty file under
+`girpr-cache-backup-<ts>`, or an empty directory for a legacy sled cache —
+and the name is one the bound reads as a published copy. It counts towards
+the bound, and it can be the one the bound keeps in place of a whole copy.
+
 That check and the rename that follows it are two calls, and there is no
 portable rename that is conditional on the name holding this run's claim, so
 a claim taken away between the two is still landed on: the gap is one
@@ -1080,6 +1086,12 @@ leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or
 `girpr-cache-hold-old-<ts>`. Unlike the working file, a record nothing holds
 says nothing: the next bound takes the copy like any other copy and reclaims
 the record with it.
+
+A publish that could not land its copy can leave the **claim** behind — an
+empty file under `girpr-cache-backup-<ts>`, or an empty directory for a
+legacy sled cache — because dropping a claim is best-effort and the removal
+can fail. It is tool state and is never mirrored as content, but nothing
+reclaims it: remove it by hand.
 
 ### `--dry-run`
 

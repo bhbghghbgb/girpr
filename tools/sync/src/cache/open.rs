@@ -43,6 +43,12 @@
 //! publish rather than taking another run's copy away from under the run that
 //! is about to report it.
 //!
+//! **The drop is best-effort.** The error of the removal is ignored, so a
+//! removal that fails leaves the claim behind — an empty name under a
+//! published prefix — and the bound reads that name as a published copy: it
+//! counts towards the bound, and it may be the one the bound keeps in place
+//! of a whole copy.
+//!
 //! **The ask and the removal are two calls as well**, and there is no
 //! portable call that removes a claim by what it is rather than by what it
 //! is called, so that gap cannot be closed either.
@@ -856,10 +862,15 @@ enum PublishError {
 ///
 /// **A rename that does not land drops the claim.** The copy is not
 /// published, so the publish fails and the run reports the failure rather
-/// than a backup that is not on disk. The claim goes with it, so the name is
-/// left free for the next run to take — and it goes only while the name
-/// still holds it: a name another run has taken over holds that run's copy,
-/// and that copy is not this run's to remove.
+/// than a backup that is not on disk. The claim is dropped with it, so the
+/// name is left free for the next run to take — and it is dropped only while
+/// the name still holds it: a name another run has taken over holds that
+/// run's copy, and that copy is not this run's to remove.
+///
+/// The drop is best-effort — its error is ignored — so a removal that fails
+/// leaves the claim behind, and the name is then not free after all. The
+/// leftover is an empty file under a published prefix, which the bound reads
+/// as a published copy.
 fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
     match link_file(work, cand) {
         Ok(()) => {
@@ -917,11 +928,13 @@ fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
             match rename_onto(work, cand) {
                 Ok(()) => Ok(()),
                 Err(e) => {
-                    // The copy did not land on the claim: the claim goes, so
-                    // the name is left free for the next run to take. It
-                    // goes only while the name still holds it — a name
-                    // another run has taken over holds that run's copy, and
-                    // that copy is not this run's to remove.
+                    // The copy did not land on the claim: the claim is
+                    // dropped, so the name is left free for the next run to
+                    // take. It is dropped only while the name still holds
+                    // it — a name another run has taken over holds that run's
+                    // copy, and that copy is not this run's to remove. The
+                    // drop is best-effort, so a removal that fails leaves the
+                    // claim behind.
                     drop_the_claim(cand, &claim);
                     Err(PublishError::Io(e))
                 }
@@ -1008,6 +1021,11 @@ fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
 ///
 /// A rename cannot replace a directory on every platform, so the claim is
 /// dropped and the rename is tried again.
+///
+/// The drop is best-effort, as it is everywhere else: its error is ignored,
+/// so a removal that fails leaves the claim behind, and the rename then
+/// fails with it — the name is still taken — and the publish moves on to the
+/// next name.
 ///
 /// **The drop and the rename are two calls.** The name is free between them,
 /// so another run can take it in that window: a name that holds content
@@ -1163,11 +1181,20 @@ fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
     hardlink::info(cand).is_ok_and(|info| info.id == claim.id)
 }
 
-/// Drop the claim at a published name, and say whether it was still there.
+/// Drop the claim at a published name, and say whether the name still held
+/// it.
 ///
 /// The name is asked about **again** before the claim goes: a name another
 /// run has taken over holds that run's copy, and that copy is not this run's
 /// to remove — the copy is the one its run is about to report.
+///
+/// **The removal is best-effort.** The answer is about the name and not
+/// about the removal: the error of the removal is ignored, and the claim is
+/// reported as dropped either way. A removal that fails therefore leaves
+/// the claim behind — an empty file under a published prefix for a file
+/// claim, an empty directory for a directory one — and the bound reads that
+/// name as a published copy: it counts towards the bound, and it may be the
+/// one the bound keeps in place of a whole copy.
 ///
 /// The ask and the removal are two calls, so a takeover in between is still
 /// in reach: a claim has no portable handle to be removed by identity, and a
@@ -2658,7 +2685,8 @@ mod tests {
     /// The copy did not land on the name, so there is no backup to report:
     /// the run fails rather than say it made one. The claim goes with it, so
     /// the name is left free for the next run and the folder is not left with
-    /// an empty name under a published prefix.
+    /// an empty name under a published prefix — the removal of the claim
+    /// succeeds here.
     #[test]
     fn a_publish_whose_rename_does_not_land_fails_the_run_and_frees_the_name() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "rename_fails");
