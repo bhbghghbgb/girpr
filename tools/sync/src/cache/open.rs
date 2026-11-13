@@ -104,8 +104,11 @@
 //!
 //! **The open is the boundary.** A run whose open failed did not cross it:
 //! the copies keep waiting, and the next run that opens the folder is the
-//! one that adopts them. The bound that failed run makes spares them all the
-//! same — they are the copies it published — but it does not adopt them.
+//! one that adopts them. The bound that failed run makes spares them all
+//! the same — the waiting list holds the copies this process published
+//! since the folder's cache was last opened, and the run cannot tell its
+//! own from an earlier run's in the same process — but it does not adopt
+//! them.
 
 use anyhow::{Context, Result, bail};
 use redb::ReadableDatabase;
@@ -1215,7 +1218,8 @@ struct FolderCopies {
     ///
     /// They are the copies the run that opened the folder's cache
     /// published. A run whose open did not happen spares the copies that are
-    /// waiting instead — they are its own — and leaves them waiting.
+    /// waiting instead — its own are among them, and it cannot tell them
+    /// from an earlier run's in the same process — and leaves them waiting.
     spared: Vec<PathBuf>,
 }
 
@@ -1324,10 +1328,14 @@ fn begin_run(folder: &Path) {
 ///
 /// The open is the boundary, and a run whose open failed did not cross it:
 /// the copies waiting for an open keep waiting, and the next run that opens
-/// this folder's cache adopts them. The bound this run makes spares them all
-/// the same — they are the copies the run published, and the run is about to
-/// report them — so a folder whose filesystem cannot lock a file still
-/// keeps them.
+/// this folder's cache adopts them.
+///
+/// The bound this run makes spares them all the same. The waiting list
+/// holds the copies this process published since the folder's cache was
+/// last opened, and this run cannot tell its own from an earlier run's in
+/// the same process — so it spares them all. The ones that are its own are
+/// the ones it is about to report, and the ones that are not are spared at
+/// the price of the folder holding more copies than its bound for a cycle.
 ///
 /// The copies of the run that last opened the folder's cache are ordinary
 /// again: that run is an earlier run in this process, and sparing its copy
@@ -3200,11 +3208,13 @@ mod tests {
 
     /// A run whose open failed still spares the copies that are waiting.
     ///
-    /// The copies waiting for an open are the copies the run published, and
-    /// the run is about to report them. A folder whose filesystem cannot
-    /// lock a file has no record to speak for them — nobody can be holding a
-    /// lock on a file the filesystem cannot lock — so the bound this run
-    /// makes is the only thing that keeps them.
+    /// The copies waiting for an open include the ones the run published,
+    /// and the run is about to report them; it cannot tell them from the
+    /// ones an earlier run in the same process published, so it spares them
+    /// all. A folder whose filesystem cannot lock a file has no record to
+    /// speak for them — nobody can be holding a lock on a file the
+    /// filesystem cannot lock — so the bound this run makes is the only
+    /// thing that keeps them.
     #[test]
     fn a_run_whose_open_failed_spares_the_copies_that_are_waiting() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "failed_open_spares");

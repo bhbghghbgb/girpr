@@ -585,8 +585,12 @@ next run that opens the folder adopts them. A run that adopted them would
 take them off the waiting list, and the run that opens the folder next would
 spare nothing — the copy that was waiting would be an ordinary copy again.
 The bound that run makes — a cache that does not open is bounded as well —
-spares them all the same, because they are the copies it published and it is
-about to report them.
+spares them all the same. The waiting list holds the copies this process
+published since the folder's cache was last opened, and this run cannot tell
+its own from an earlier run's in the same process, so it spares them all:
+the ones that are its own are the ones it is about to report, and the ones
+that are not are spared at the price of the folder holding more copies than
+its bound for a cycle.
 
 **A copy is published before the lock that would protect it is taken.** That
 gap is the one place where a live run's copy can be lost: the run that

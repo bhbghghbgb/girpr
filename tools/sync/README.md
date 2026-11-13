@@ -995,10 +995,12 @@ one command per process and the copies waiting live in the process, so this
 needs two runs in one process to happen.
 
 A run whose open **failed** is not that next run: the open is the boundary,
-and an open that failed did not cross it, so the copy keeps waiting for the
+and an open that failed did not cross it, so the copies keep waiting for the
 run that opens the folder. The bound that failed run makes — a cache that
-does not open is bounded as well — still spares it, because it is the copy
-that run published.
+does not open is bounded as well — still spares them: it cannot tell which
+of the waiting copies are its own from the ones an earlier run in the same
+process published, so it spares them all, and the folder can hold more
+copies than its bound for a cycle.
 
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
