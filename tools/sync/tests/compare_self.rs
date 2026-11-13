@@ -391,9 +391,16 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
         msg.contains("girsync update --dir"),
         "and the remedy is one command:\n{msg}"
     );
+    // The folder to run that remedy on is the parent of the record's path, so
+    // the message has to name the record *by* that path. A check that the
+    // folder's own path appears would be weaker than it looks: the record's
+    // path starts with the folder's, so it would hold for any message naming
+    // the record at all — including one that named no folder the user could
+    // run the command on.
+    let want = format!("\n  src: record {}\n", src.join(CACHE_PREFIX).display());
     assert!(
-        msg.contains(&src.display().to_string()),
-        "and the label resolves to the folder to run it on:\n{msg}"
+        msg.contains(&want),
+        "and the label names the record whose parent is the folder to run it on:\n{msg}"
     );
     // And the covered paths are counted, so the user can see this is 1 of N
     // rather than a whole broken record.
