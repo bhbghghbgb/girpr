@@ -377,11 +377,18 @@ reviews:
     head: 339c0957
     result: F132 kept (0fa1a663); F133 kept (c9a512e8); F134 kept (72d9e889); F136 kept (339c0957); no fix or revert commits; 572 passed, 1 skipped; the identity comparison verified byte-for-byte unchanged and the two case-fold rules still disagree
     followups: [F144, F145, F146]
-  - batch: M1
+  - batch: M9
     status: pending
-    tasks: [F6, F28, F29, F32, F124]
+    tasks: [F147, F148, F149, F150, F151]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M1
+    status: in_progress
+    tasks: [F6, F28, F29, F32, F124]
+    base: d597f80d
+    head: f841e1e8
     result: null
     followups: []
   - batch: M2
@@ -472,9 +479,9 @@ followups:
   - id: F6
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
-    status: in_progress
+    status: pending_review
     batch: M1
-    commits: []
+    commits: [27e6f74f]
   - id: F7
     source: T05
     description: A cache holding a meta row but no ENTRIES table still does not get one created, because the write path creates it inside a transaction it then drops uncommitted; the new entries_present guard only steers such a cache to the write path rather than repairing it.
@@ -625,15 +632,15 @@ followups:
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
-    status: in_progress
+    status: pending_review
     batch: M1
-    commits: []
+    commits: [f841e1e8]
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
-    status: in_progress
+    status: pending_review
     batch: M1
-    commits: []
+    commits: [e7264fba]
   - id: F30
     source: T17
     description: The conversion temporary is a sibling of the cache inside the destination root and carries no reserved prefix, so a hard-killed conversion leaves a file a later sync would treat as ordinary content rather than tool state.
@@ -651,9 +658,9 @@ followups:
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
-    status: in_progress
+    status: pending_review
     batch: M1
-    commits: []
+    commits: [601d7efe]
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
@@ -1170,9 +1177,9 @@ followups:
   - id: F124
     source: F44
     description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
-    status: in_progress
+    status: pending_review
     batch: M1
-    commits: []
+    commits: [746f94cb]
   - id: F125
     source: F19
     description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
@@ -1311,6 +1318,36 @@ followups:
     status: pending
     batch: M8
     commits: []
+  - id: F147
+    source: F29
+    description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
+    status: pending
+    batch: M9
+    commits: []
+  - id: F148
+    source: F29
+    description: The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it.
+    status: pending
+    batch: M9
+    commits: []
+  - id: F149
+    source: F28
+    description: The src/bin/sled2redb.rs binary has no row of its own in the source-layout table; it is named inside the convert.rs row.
+    status: pending
+    batch: M9
+    commits: []
+  - id: F150
+    source: F29
+    description: The stat-only row can get stuck limit has two different names, the design notes one and the README another, so the wording differs enough to read as two limits.
+    status: pending
+    batch: M9
+    commits: []
+  - id: F151
+    source: F28
+    description: The README source-layout table has no entry for src/hash/tests.rs or src/planner/fixtures.rs; the inline test modules are covered by the surrounding prose, so this is cosmetic.
+    status: pending
+    batch: M9
+    commits: []
 ```
 
 ## Human checklist
@@ -1342,6 +1379,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M1 review checkpoint opened: F6, F28, F29, F32
+  and F124 `in_progress` → `pending_review`, commits `27e6f74f`, `f841e1e8`,
+  `e7264fba`, `601d7efe`, `746f94cb`; review M1 `pending` → `in_progress`,
+  base `d597f80d`, head `f841e1e8`. Follow-ups F147–F151 appended with batch
+  `M9`, the second documentation-accuracy batch.
 - 2026-11-13 — follow-up batch M1 started: F6, F28, F29, F32 and F124 `pending`
   → `in_progress`; `active_batch: Z4` → `M1`.
 - 2026-11-13 — state repair: 15 follow-ups (F19, F20, F21, F22, F25, F26, F27,
