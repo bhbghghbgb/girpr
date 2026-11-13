@@ -392,10 +392,10 @@ reviews:
     result: F56 kept (a39d5550, a1a0a602, fb7dd522); F58 kept (62f7f950); F60 kept (c9d86e57); F61 kept (3b9a60e3); no fix or revert commits; 553 passed, 1 skipped; three mutation experiments confirmed each new case pins what it claims
     followups: [F73, F74, F75]
   - batch: B23
-    status: pending
+    status: in_progress
     tasks: [F65, F66, F68, F73, F74, F75]
-    base: null
-    head: null
+    base: c010f012
+    head: a8856942
     result: null
     followups: []
 followups:
@@ -799,15 +799,15 @@ followups:
   - id: F65
     source: F52
     description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [046b53d3]
   - id: F66
     source: F52
     description: publish_file warns and carries on when the working file cannot be removed after the link, so a girpr-cache-partial-<ts> can be left behind by a run that was never killed, while the README describes that name only as the result of a killed run.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [d8ea86be]
   - id: F67
     source: F54
     description: On the open-failure path the bound runs with no lock at all when the cache is a directory, so a live run's copies there rest on their records alone.
@@ -818,9 +818,9 @@ followups:
   - id: F68
     source: F54
     description: take_the_cache_lock opens the cache read+write, so a cache file that is not writable fails the open and the bound then runs without the lock, with a warning; the design notes spell out the directory case but not this one.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [4d764527]
   - id: F69
     source: F57
     description: A record that cannot be read or whose lock cannot be tested is never reclaimed, so girpr-cache-hold-* files left behind by an older build accumulate for good on a filesystem that cannot lock a file, even though the copy they spoke for is taken away.
@@ -831,21 +831,21 @@ followups:
   - id: F73
     source: F56
     description: The registry identifies the copy the run applying the bound published as the newest copy this process published in that list, so when the current run publishes nothing into that list, an earlier run's copy is still spared and the bound may keep an older copy in place of a newer one.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [777fe7b7]
   - id: F74
     source: F56
     description: newest_published picks the newest by full file name, so the _10 fallback suffix sorts before _9; the bound's own age order already assumes that lexicographic name order, so the two agree, but ten copies published inside one microsecond would be mis-ordered.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [cb1f80f6, c4ba99aa]
   - id: F75
     source: F61
     description: The new lock test asserts only that the second open fails, not that it failed on the lock; asserting the already-open error would say outright that the protection comes from the cache's exclusive lock.
-    status: in_progress
+    status: pending_review
     batch: B23
-    commits: []
+    commits: [08959674]
 ```
 
 ## Human checklist
@@ -877,6 +877,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B23 review checkpoint opened: F65, F66, F68,
+  F73, F74 and F75 `in_progress` → `pending_review`, commits `046b53d3`,
+  `d8ea86be`, `4d764527`, `777fe7b7`, `cb1f80f6`, `08959674`, `c4ba99aa`,
+  `a8856942`; review B23 `pending` → `in_progress`, base `c010f012`, head
+  `a8856942`.
 - 2026-11-13 — follow-up batch B23 started: F65, F66, F68, F73, F74 and F75
   `pending` → `in_progress`; `active_batch: B22` → `B23`.
 - 2026-11-13 — review B22 `done`: F56, F58, F60 and F61 kept, no fix or
