@@ -457,6 +457,14 @@ landed, and the bound would take it away from the run that had just made it.
 The working name carries the start, because it is scratch: nothing but the
 run making it ever reads it.
 
+The order is the order of **age**, read off the name: the stamp it carries,
+and — for a name that carries the fallback suffix — the number after it. The
+suffix does not sort as a number (`_10` sorts before `_9`), so ten copies
+published inside one microsecond would be ordered wrongly by the name alone,
+and the bound would take the newest of them away. The number is therefore read
+as a number, and the two orders the bound uses — the one it walks the copies
+in and the one it picks the newest by — are the same one.
+
 The bound is applied **after** the cache is opened, and the open holds the
 cache file's exclusive lock until the run is done with the cache. redb takes
 that lock exclusively and does not wait for it, so at most one run is in its
@@ -562,7 +570,8 @@ itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 `a_publish_whose_claimed_name_was_taken_away_fails_loudly` for the claim
 that went away,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
-orders the copies by, `the_bound_keeps_the_copy_the_run_published` for the
+orders the copies by, and
+`the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself, `the_bound_keeps_the_copy_the_run_published` for the
 bound against the run's own copy,
 `a_second_bound_still_spares_the_copy_the_process_published` for a later bound
 in the same run,

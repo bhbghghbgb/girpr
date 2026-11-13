@@ -503,10 +503,10 @@ fn open_for_the_lock(db_path: &Path) -> std::io::Result<File> {
 
 /// The folder's entries, read once and ordered by name.
 ///
-/// The names carry a timestamp that sorts lexicographically, so ordering by
-/// name is ordering by age, and the newest copies are the ones at the end.
 /// One reading serves both lists and the records: the bound is a statement
-/// about the folder as it is now.
+/// about the folder as it is now. The order is by name, which is very nearly
+/// the order by age: the bound orders the copies it ranges over by age
+/// proper (see [`published_age`]).
 fn read_folder(parent: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf)>> {
     let mut entries: Vec<(std::ffi::OsString, PathBuf)> = std::fs::read_dir(parent)
         .with_context(|| format!("read dir {}", parent.display()))?
@@ -515,6 +515,32 @@ fn read_folder(parent: &Path) -> Result<Vec<(std::ffi::OsString, PathBuf)>> {
         .collect();
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(entries)
+}
+
+/// When a published copy became whole: the stamp its name carries and, when
+/// the name carries the fallback suffix, the number after it.
+///
+/// The stamp sorts lexicographically, so comparing the stamps compares the
+/// times. The fallback suffix does not: `_10` sorts before `_9`, so a folder
+/// holding ten copies published inside one microsecond would order them
+/// wrongly by name alone. The number is therefore read as a number and
+/// compared as one, and the two together are the age of a copy.
+///
+/// The plain name has no suffix and is the first of its microsecond, so it
+/// counts as zero.
+fn published_age(path: &Path, prefix: &str) -> (String, u32) {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tail = name.strip_prefix(prefix).unwrap_or(&name);
+    match tail.rsplit_once('_') {
+        Some((stamp, n)) => match n.parse::<u32>() {
+            Ok(n) => (stamp.to_string(), n),
+            Err(_) => (tail.to_string(), 0),
+        },
+        None => (tail.to_string(), 0),
+    }
 }
 
 /// Copy `db_path` beside itself as `<prefix><ts>`. A directory (a legacy sled
@@ -1491,11 +1517,11 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
 
 /// Keep only the newest `keep` siblings of `prefix` in `parent`.
 ///
-/// The sibling names carry a timestamp that sorts lexicographically, so
-/// sorting by name is sorting by age, and the newest `keep` are the ones at
-/// the end. Everything older is removed — a directory recursively, a file
-/// outright — because the user asked for a bound and a bound that does not
-/// remove anything is not a bound.
+/// The sibling names carry a timestamp that sorts lexicographically, so the
+/// age of a copy is read from its name (see [`published_age`]), and the
+/// newest `keep` are the ones that are left. Everything older is removed — a
+/// directory recursively, a file outright — because the user asked for a
+/// bound and a bound that does not remove anything is not a bound.
 ///
 /// Only siblings carrying **this** prefix are considered: the tool's own
 /// namespace. A file of the user's that happens to sit in the same directory
@@ -1521,9 +1547,9 @@ fn newest_published<'a>(published: &'a [PathBuf], prefix: &str) -> Option<&'a Pa
             p.file_name()
                 .is_some_and(|n| n.to_string_lossy().starts_with(prefix))
         })
-        // The names carry a timestamp that sorts lexicographically, so the
-        // newest copy is the last one by name.
-        .max_by(|a, b| a.file_name().cmp(&b.file_name()))
+        // The stamp says when the copy became whole, and the fallback suffix
+        // says which of the copies made in that microsecond it is.
+        .max_by(|a, b| published_age(a, prefix).cmp(&published_age(b, prefix)))
         .map(PathBuf::as_path)
 }
 
@@ -1536,10 +1562,14 @@ fn retain_siblings(
     keep: NonZeroUsize,
     published: &[PathBuf],
 ) -> Result<()> {
-    let siblings: Vec<&(std::ffi::OsString, PathBuf)> = folder
+    let mut siblings: Vec<&(std::ffi::OsString, PathBuf)> = folder
         .iter()
         .filter(|(name, _)| name.to_string_lossy().starts_with(prefix))
         .collect();
+    // The oldest first: the bound takes the oldest copies away, so the order
+    // it walks them in is the order of their age and not the order of their
+    // names — the fallback suffix does not sort as a number.
+    siblings.sort_by(|a, b| published_age(&a.1, prefix).cmp(&published_age(&b.1, prefix)));
     let keep = keep.get();
     if siblings.len() <= keep {
         return Ok(());
@@ -1776,6 +1806,41 @@ mod tests {
         assert!(
             newer.exists(),
             "the newest published copy is kept: a working copy is not one of the N"
+        );
+    }
+
+    /// The bound orders the copies by age, not by their names.
+    ///
+    /// The fallback suffix does not sort as a number: `_10` sorts before
+    /// `_9`, so ten copies published inside one microsecond would be ordered
+    /// wrongly by name alone. The bound takes the oldest away, so the order
+    /// it walks the copies in is the order they were published in.
+    #[test]
+    fn the_bound_orders_the_copies_by_age_and_not_by_name() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "age_order");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        // Ten copies published inside one microsecond: the plain name and
+        // the `_2` … `_10` fallbacks.
+        let names: Vec<String> = (1..=10)
+            .map(|n| candidate_name(BACKUP_PREFIX, STAMP, n))
+            .collect();
+        for name in &names {
+            std::fs::write(dir.join(name), b"a copy").unwrap();
+        }
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        assert!(
+            dir.join(&names[9]).exists(),
+            "the newest copy is kept: {}",
+            names[9]
+        );
+        assert!(
+            !dir.join(&names[8]).exists(),
+            "and the one published before it is gone: {}",
+            names[8]
         );
     }
 
