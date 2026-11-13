@@ -472,14 +472,14 @@ apart because only one of them needs the records. The alternate-case index
 reads the whole `entries` table's *keys*, to find a stale alternate-cased row
 for a path — the names are all it needs, and the row itself is read only when
 one is actually adopted, which is normally never. The index is built when a
-path misses exactly, so a run with no stale spelling to adopt never reads the
-keys for it at all. The prune that follows asks
-the same question of the keys — "which rows exist?" — and gets `load_keys`,
-which walks the table without decoding a single `FileRec`. In the default
-insensitive mode that is a full pass over the table's keys in one phase, and
-the alternate-case index is a second one for the run that has a stale spelling
-to adopt, so the distinction is the difference between rebuilding a hash map
-of rows per file and not.
+path misses exactly, so a scan in which every path is found in the cache
+under the spelling the disk uses never reads the keys for it at all. The
+prune that follows asks the same question of the keys — "which rows exist?" —
+and gets `load_keys`, which walks the table without decoding a single
+`FileRec`. In the default insensitive mode that is a full pass over the
+table's keys in one phase, and the alternate-case index is a second one for a
+scan that misses a path exactly, so the distinction is the difference between
+rebuilding a hash map of rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
 rather than copied out of it. It exists so the prune can ask "is this row still
