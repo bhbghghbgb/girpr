@@ -459,12 +459,12 @@ name is asked about **again** before the claim is dropped.
 **A directory claim is dropped, and dropping it takes what is at the name
 with it.** A rename cannot replace a directory on every platform, so the
 claim is dropped and the rename is tried again. Only an empty directory goes,
-so a copy another run has published *with content in it* is never dropped —
+so a copy another run has published *with content in it* was never in reach —
 but a copy of an empty legacy cache is an empty directory, and that is the
-one shape a published copy can be dropped for. So the claim is asked about
-before it goes, and a name that has been taken over fails the publish loudly
-rather than dropping that run's copy: the copy is the one its run is about to
-report, and it is not this run's to remove.
+one shape a published copy could have been dropped for. So the claim is asked
+about before it goes, and a name that has been taken over fails the publish
+loudly rather than dropping that run's copy: the copy is the one its run is
+about to report, and it is not this run's to remove.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
@@ -524,11 +524,12 @@ for does not spend the removal budget either: the bound walks on to the next
 copy in age order, and the count is made up from there — and that copy may be
 one of the newest ones, so the bound can take a copy that is among the newest
 it keeps and leave an older copy in its place. The copies a folder keeps are
-therefore not necessarily its newest. A folder whose oldest copies are all
-spoken for by live runs ends with more copies than the bound asks for. The
-copy is spared by every bound **that run** makes for that list, and not only
-by the first one; the copies an earlier run in this process published belong
-to earlier runs, and those are ordinary copies again.
+therefore not necessarily its newest, and a folder whose oldest copies are
+spoken for ends with more copies than the bound asks for as long as there are
+not enough copies the bound may remove to make the count up. The copy is
+spared by every bound **that run** makes for that list, and not only by the
+first one; the copies an earlier run in this process published belong to
+earlier runs, and those are ordinary copies again.
 
 **The run is the boundary, and the boundary is the open.** The copies a run
 published are the ones published since the folder's cache was last opened:

@@ -30,10 +30,10 @@
 //! again. The claim is asked about **again** before it is dropped: dropping
 //! it takes whatever is at the name with it, and a name another run has
 //! taken over holds that run's copy — a copy of an empty legacy cache is an
-//! empty directory, and that is the one shape a published copy can be
-//! dropped for. A name that is no longer this run's claim fails the publish
-//! rather than taking another run's copy away from under the run that is
-//! about to report it.
+//! empty directory, and that is the one shape a published copy could have
+//! been dropped for. A name that is no longer this run's claim fails the
+//! publish rather than taking another run's copy away from under the run that
+//! is about to report it.
 //!
 //! The working name is scratch: it goes once the copy is published. A
 //! removal that fails leaves it behind and the run warns about it — the copy
@@ -440,7 +440,7 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// leave an older copy in its place — the copies a folder keeps are not
 /// necessarily its newest. The folder holds the bound while there are enough
 /// copies the bound may remove to make the count up, and a folder whose
-/// oldest copies are all spoken for by live runs ends with more copies than
+/// oldest copies are spoken for by live runs can end with more copies than
 /// the bound asks for.
 ///
 /// **The copy the run published is spared as well**, and for the same reason,
@@ -1719,7 +1719,7 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
 /// can take a copy that is among the newest `keep` and leave an older copy
 /// in its place. The folder holds the bound while there are enough copies
 /// the bound may remove to make the count up, and a folder whose oldest
-/// copies are all spoken for ends with more copies than the bound asks for.
+/// copies are spoken for can end with more copies than the bound asks for.
 ///
 /// Only siblings carrying **this** prefix are considered: the tool's own
 /// namespace. A file of the user's that happens to sit in the same directory

@@ -953,8 +953,9 @@ directory on every platform, so the claim is dropped and the rename is tried
 again. Dropping it takes whatever is at the name with it, so the claim is
 asked about again first: a name another run has taken over holds that run's
 copy, and the publish fails loudly rather than dropping it. Only an empty
-directory goes, so a published copy with content in it is never dropped
-either — a copy of an empty legacy cache is the one shape that can be.
+directory goes, so the one published copy that was ever in reach is the copy
+of an empty legacy cache — an empty directory — and the check is what stops
+it.
 
 A copy that is still being written is not one of the copies the bound ranges
 over: a run that merely opens a folder cannot remove the copy another run is
