@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B22
+active_batch: B23
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -799,13 +799,13 @@ followups:
   - id: F65
     source: F52
     description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
   - id: F66
     source: F52
     description: publish_file warns and carries on when the working file cannot be removed after the link, so a girpr-cache-partial-<ts> can be left behind by a run that was never killed, while the README describes that name only as the result of a killed run.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
   - id: F67
@@ -818,7 +818,7 @@ followups:
   - id: F68
     source: F54
     description: take_the_cache_lock opens the cache read+write, so a cache file that is not writable fails the open and the bound then runs without the lock, with a warning; the design notes spell out the directory case but not this one.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
   - id: F69
@@ -831,19 +831,19 @@ followups:
   - id: F73
     source: F56
     description: The registry identifies the copy the run applying the bound published as the newest copy this process published in that list, so when the current run publishes nothing into that list, an earlier run's copy is still spared and the bound may keep an older copy in place of a newer one.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
   - id: F74
     source: F56
     description: newest_published picks the newest by full file name, so the _10 fallback suffix sorts before _9; the bound's own age order already assumes that lexicographic name order, so the two agree, but ten copies published inside one microsecond would be mis-ordered.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
   - id: F75
     source: F61
     description: The new lock test asserts only that the second open fails, not that it failed on the lock; asserting the already-open error would say outright that the protection comes from the cache's exclusive lock.
-    status: pending
+    status: in_progress
     batch: B23
     commits: []
 ```
@@ -877,6 +877,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B23 started: F65, F66, F68, F73, F74 and F75
+  `pending` → `in_progress`; `active_batch: B22` → `B23`.
 - 2026-11-13 — review B22 `done`: F56, F58, F60 and F61 kept, no fix or
   revert commits; follow-ups F73–F75 appended and merged into B23, which
   already held F65, F66 and F68, because all six are small items in the same
