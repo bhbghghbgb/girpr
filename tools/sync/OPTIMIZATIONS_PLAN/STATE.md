@@ -344,25 +344,25 @@ reviews:
     followups: []
   - batch: Z2
     status: pending
-    tasks: [F117, F118, F120]
+    tasks: [F117, F118, F120, F130]
     base: null
     head: null
     result: null
     followups: []
   - batch: Z3
     status: pending
-    tasks: [F121, F122]
+    tasks: [F121, F122, F125, F126, F127, F129]
     base: null
     head: null
     result: null
     followups: []
   - batch: X2
-    status: in_progress
+    status: done
     tasks: [F19, F20, F21, F44, F45, F46]
     base: 272effd3
     head: 4e90c67e
-    result: null
-    followups: []
+    result: F19 kept (927df439); F20 kept (0958cb81); F21 kept (6eb52866); F44 kept (eaf252c5); F45 kept (552e07d8, 4e90c67e); F46 kept (4c279930); no fix or revert commits; 569 passed, 1 skipped; the reviewer ran its own mutation checks, with the copy-phase mutation caught 25 of 25 runs
+    followups: [F125, F126, F127, F129, F130]
   - batch: X3
     status: pending
     tasks: [F22, F27, F47, F48]
@@ -1137,6 +1137,50 @@ followups:
     status: pending
     batch: X4
     commits: []
+  - id: F125
+    source: F19
+    description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F126
+    source: F20
+    description: The discrimination still rests on the removal tree outlasting a worker wake-up rather than on an explicit barrier, so a case that gated one copy on the other failure would remove the last ordering dependence.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F127
+    source: F20
+    description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F128
+    source: F21
+    description: CommonOpts::case_sensitive is still a public field, so nothing stops a future test from assigning it directly and re-introducing the field and filter disagreement the setter exists to prevent.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: making the field private is an API decision already weighed in the crate surface batch, and the setter plus the doc make the correct use discoverable
+  - id: F129
+    source: F44
+    description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
+    status: pending
+    batch: Z3
+    commits: []
+  - id: F130
+    source: F45
+    description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
+    status: pending
+    batch: Z2
+    commits: []
+  - id: F131
+    source: F46
+    description: Nothing enforces the trailing newline, so an editor that strips it can reopen the same gap.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: an editor convention rather than a defect, and the file now ends with one
 ```
 
 ## Human checklist
@@ -1168,6 +1212,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review X2 `done`: F19, F20, F21, F44, F45 and F46 all kept, no
+  fix or revert commits; follow-ups F125–F131 appended, with F125, F126,
+  F127 and F129 in Z3, F130 in Z2, and F128 and F131 recorded as `skipped`
+  with reasons. F19, F20, F21, F44, F45 and F46 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch X2 review checkpoint opened: F19, F20, F21,
   F44, F45 and F46 `in_progress` → `pending_review`, commits `927df439`,
   `0958cb81`, `6eb52866`, `eaf252c5`, `552e07d8`, `4e90c67e`, `4c279930`;
