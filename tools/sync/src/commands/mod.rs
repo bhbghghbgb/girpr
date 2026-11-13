@@ -20,8 +20,44 @@ use tracing::info;
 use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
+use crate::effective::Side;
 use crate::report::{Report, visit_verdict};
 use crate::util::elapsed_s;
+
+/// What a side is called, in a message and in a log field.
+///
+/// "record" or "folder" — the word a label is built from and the word a
+/// structured log field carries.
+pub(super) fn side_kind(side: &Side) -> &'static str {
+    match side {
+        Side::Record(_) => "record",
+        Side::Folder(_) => "folder",
+    }
+}
+
+/// How a side is named in a coverage error.
+///
+/// **One spelling for every command**, so the same side is never named two
+/// ways: a side is named by what it *is* — a record or a folder — and by its
+/// path.
+///
+/// The planner knows what a side *can do* but not what it *is*, so this is the
+/// caller's one chance to put that into the message, and "the dst side cannot
+/// supply…" is not something a user can act on where "the record
+/// `D:\game\old\girpr-cache` cannot supply…" is.
+///
+/// The path says the rest. A record's path is `<folder>/girpr-cache`, so the
+/// folder it describes is its parent, and the remedy the message ends with —
+/// `girsync update --dir <the folder this record describes>` — is where that
+/// folder belongs. A side is therefore named by its path and nothing else, and
+/// two commands reading the same record name it the same way.
+pub(super) fn side_label(side: &Side) -> String {
+    let path = match side {
+        Side::Record(p) => p,
+        Side::Folder(root) => root,
+    };
+    format!("{} {}", side_kind(side), path.display())
+}
 
 /// Emit every record a diff reports — one per difference plus the `SUMMARY` — and
 /// return the exit code: `0` when nothing differs, `4` when something does.

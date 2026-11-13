@@ -1593,7 +1593,8 @@ them; `--dry-run` costs the same again.
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
   it cannot compare content for that path. `girsync update --dir <the folder>` is
   the fix, or `--hash-any-of` if the record holds *some* of what you asked for; the
-  error names the folder, the count, the paths and the mode that failed.
+  error names the record (its path says which folder), the count, the paths and the
+  mode that failed.
 - **A size-changed cache row can get stuck.** Editing a file's length drops its digests
   (a stale row's are all suspect), and a size difference settles the pair for free — so
   nothing ever rehashes it and the row stays stat-only permanently, describing content

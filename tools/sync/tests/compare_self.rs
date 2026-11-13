@@ -5,10 +5,11 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    age, log, recs_of, strip_algo, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+    age, compare, log, recs_of, strip_algo, sync_mem, sync_mtime, temp_root, update, update_mem,
+    wfile,
 };
 use girsync::cache::CACHE_PREFIX;
-use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::{CommonOpts, CompareSelfOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 fn self_compare(dir: PathBuf) -> CompareSelfOpts {
     CompareSelfOpts {
@@ -405,6 +406,54 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
         cmd_compare_self(self_compare(src), &log()).unwrap(),
         0,
         "after update the record covers every undecided pair"
+    );
+}
+
+/// **The same side is named the same way by both commands.** A record side is
+/// `record <path>`, and the path says which folder it belongs to: it is
+/// `<folder>/girpr-cache`, so the folder is its parent, and the remedy the
+/// message ends with is where that folder belongs.
+///
+/// One spelling, not two, because a user reading two messages about one record
+/// has to recognise it as the same record — and a second spelling is a drift
+/// they have to notice rather than one they can ignore.
+#[test]
+fn a_record_side_is_named_the_same_way_by_both_commands() {
+    let t = temp_root("cs_label");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    // The row loses the digest the run asks for, so the record is short of it
+    // and the coverage error has a side to name.
+    strip_algo(&dir, "a.txt", "md5");
+
+    let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
+    let msg = format!("{err:#}");
+    let want = format!("\n  src: record {}\n", dir.join(CACHE_PREFIX).display());
+    assert!(
+        msg.contains(&want),
+        "compare-self names the record by its path and nothing else:\n{msg}"
+    );
+
+    // The same spelling from `compare`, whose record side is another folder's
+    // cache read as an input.
+    let rec_home = t.subdir("rec");
+    let live = t.subdir("live");
+    wfile(&rec_home, "a.txt", b"hello");
+    wfile(&live, "a.txt", b"hello");
+    sync_mtime(&rec_home.join("a.txt"), &live.join("a.txt"));
+    cmd_update(update(rec_home.clone()), &log()).unwrap();
+    strip_algo(&rec_home, "a.txt", "md5");
+
+    let err = cmd_compare(compare(rec_home.join(CACHE_PREFIX), live.clone()), &log()).unwrap_err();
+    let msg = format!("{err:#}");
+    let want = format!(
+        "\n  src: record {}\n",
+        rec_home.join(CACHE_PREFIX).display()
+    );
+    assert!(
+        msg.contains(&want),
+        "compare names the record the same way:\n{msg}"
     );
 }
 
