@@ -398,11 +398,18 @@ reviews:
     head: f841e1e8
     result: F6 kept (27e6f74f); F28 kept (f841e1e8); F29 kept (e7264fba); F32 kept (601d7efe); F124 kept (746f94cb); no fix or revert commits; 572 passed without the feature and 585 with it, 1 skipped; the count was verified against the tree at twelve, not the eleven the follow-up text said
     followups: [F152, F153, F154]
-  - batch: M2
+  - batch: M11
     status: pending
-    tasks: [F36, F37, F38, F39, F40]
+    tasks: [F156, F157, F158, F159]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M2
+    status: in_progress
+    tasks: [F36, F37, F38, F39, F40]
+    base: efdf4617
+    head: 0d49c077
     result: null
     followups: []
   - batch: M3
@@ -689,33 +696,33 @@ followups:
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
-    status: in_progress
+    status: pending_review
     batch: M2
-    commits: []
+    commits: [fb7fdc23]
   - id: F37
     source: F3
     description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
-    status: in_progress
+    status: pending_review
     batch: M2
-    commits: []
+    commits: [773d1c53]
   - id: F38
     source: F3
     description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
-    status: in_progress
+    status: pending_review
     batch: M2
-    commits: []
+    commits: [f398aa2a]
   - id: F39
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
-    status: in_progress
+    status: pending_review
     batch: M2
-    commits: []
+    commits: [779de219]
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
-    status: in_progress
+    status: pending_review
     batch: M2
-    commits: []
+    commits: [0d49c077]
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
@@ -1380,6 +1387,30 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F151, already scheduled in M9
+  - id: F156
+    source: F39
+    description: cache/db/backend.rs's SharedCache::reads doc and cachedb.rs's with_handle doc describe the same counter from the other side, and with_handle never says why the fresh counter is the cache's count for a file-backed cache.
+    status: pending
+    batch: M11
+    commits: []
+  - id: F157
+    source: F40
+    description: The preflight open also opens the entries table, a presence check with no rows read, outside begin_entries_read, so a reader of that function could ask whether that transaction is counted.
+    status: pending
+    batch: M11
+    commits: []
+  - id: F158
+    source: F37
+    description: plan/link.rs's module doc says the helpers are pure over the effective maps plus the link-resolution primitives, which reads as if they touch no disk, while on_disk_name, target_rel and spare_link_components all do.
+    status: pending
+    batch: M11
+    commits: []
+  - id: F159
+    source: F39
+    description: Seven pre-existing broken intra-doc links remain, for CacheDb twice, codec, Summary, super::super::apply::copy, AlgoSet and crate::effective::merge_row.
+    status: pending
+    batch: M11
+    commits: []
 ```
 
 ## Human checklist
@@ -1411,6 +1442,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M2 review checkpoint opened: F36, F37, F38, F39
+  and F40 `in_progress` → `pending_review`, commits `fb7fdc23`, `773d1c53`,
+  `f398aa2a`, `779de219`, `0d49c077`; review M2 `pending` → `in_progress`,
+  base `efdf4617`, head `0d49c077`. Follow-ups F156–F159 appended with batch
+  `M11`.
 - 2026-11-13 — follow-up batch M2 started: F36, F37, F38, F39 and F40 `pending`
   → `in_progress`; `active_batch: M1` → `M2`.
 - 2026-11-13 — review M1 `done`: F6, F28, F29, F32 and F124 all kept, no fix
