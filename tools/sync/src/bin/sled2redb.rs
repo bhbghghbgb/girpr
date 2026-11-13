@@ -5,6 +5,11 @@
 //! usage error is a failure too, so this binary has one code for every way it
 //! can fail.
 //!
+//! **The flags go on either side of the two paths.** `--force` and `--output`
+//! are accepted before the paths and after them, and `--output=json` is the
+//! same as `--output json`: the parser is `clap`'s, so its spelling is the
+//! spelling, and no narrower set of forms sits behind it.
+//!
 //! Reports through the same [`girsync::report`] writer as `girsync` itself, so
 //! `--output json` means the same thing in both binaries and there is one
 //! definition of a conversion record rather than a `println!` per tool.
