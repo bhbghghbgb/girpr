@@ -405,13 +405,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M12
+    status: pending
+    tasks: [F160, F161, F162, F163, F164, F165]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M2
-    status: in_progress
+    status: done
     tasks: [F36, F37, F38, F39, F40]
     base: efdf4617
     head: 0d49c077
-    result: null
-    followups: []
+    result: F36 kept (fb7fdc23); F37 kept (773d1c53); F38 kept (f398aa2a); F39 kept (779de219); F40 kept (0d49c077); no fix or revert commits; 572 passed, 1 skipped; the reviewer enumerated every direct filesystem call reachable from the guards and found the seam list complete
+    followups: [F160, F161, F162, F163, F164, F165]
   - batch: M3
     status: pending
     tasks: [F33, F34, F35, F41]
@@ -696,31 +703,31 @@ followups:
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
-    status: pending_review
+    status: completed
     batch: M2
     commits: [fb7fdc23]
   - id: F37
     source: F3
     description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
-    status: pending_review
+    status: completed
     batch: M2
     commits: [773d1c53]
   - id: F38
     source: F3
     description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
-    status: pending_review
+    status: completed
     batch: M2
     commits: [f398aa2a]
   - id: F39
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
-    status: pending_review
+    status: completed
     batch: M2
     commits: [779de219]
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
-    status: pending_review
+    status: completed
     batch: M2
     commits: [0d49c077]
   - id: F41
@@ -1411,6 +1418,42 @@ followups:
     status: pending
     batch: M11
     commits: []
+  - id: F160
+    source: F36
+    description: The clause that a refusal there does not leave dst as it was holds for a real run only, since a dry run performs no rename and changes nothing.
+    status: pending
+    batch: M12
+    commits: []
+  - id: F161
+    source: F37
+    description: The opener that the link questions are asked of the disk directly reads as universal, but the hard-link question goes through the seam, so a reader could conclude the hard-link guard bypasses it.
+    status: pending
+    batch: M12
+    commits: []
+  - id: F162
+    source: F37
+    description: plan/link.rs's own module doc still says only read_link and canonicalize probes, omitting the try_is_link and the Windows read_dir probes the safety doc now lists.
+    status: pending
+    batch: M12
+    commits: []
+  - id: F163
+    source: F37
+    description: The old rationale for the bypass, that no plan-time decision is lost with it, went with the sentence it belonged to, and a clause saying what a direct question costs the seam would say more than the new list does.
+    status: pending
+    batch: M12
+    commits: []
+  - id: F164
+    source: F38
+    description: The notes name the new case but never state the rule it pins, that the dst root is resolved at plan time, so a reader has to infer what the case enforces from the case itself.
+    status: pending
+    batch: M12
+    commits: []
+  - id: F165
+    source: F39
+    description: The headline that the count belongs to the cache and not to the handle is true only of the shared backend, so scoping it to that backend would keep the next sentence from reading as a correction.
+    status: pending
+    batch: M12
+    commits: []
 ```
 
 ## Human checklist
@@ -1442,6 +1485,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review M2 `done`: F36, F37, F38, F39 and F40 all kept, no fix
+  or revert commits; follow-ups F160–F165 appended with batch `M12`. F36,
+  F37, F38, F39 and F40 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch M2 review checkpoint opened: F36, F37, F38, F39
   and F40 `in_progress` → `pending_review`, commits `fb7fdc23`, `773d1c53`,
   `f398aa2a`, `779de219`, `0d49c077`; review M2 `pending` → `in_progress`,
