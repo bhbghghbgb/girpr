@@ -378,10 +378,10 @@ reviews:
     result: F87 fixed (c50748d3 drops the newest promise from the --backup-retain help summary, states the rule in BackupPolicy and fixes two stale test docs); F88 kept (7772be18); F89 kept (df7e2c36); 565 passed, 1 skipped; the 36 test names cited in the notes' Enforced by list were checked to exist
     followups: [F94, F95, F96, F97]
   - batch: Y2
-    status: pending
+    status: in_progress
     tasks: [F101, F102, F103]
-    base: null
-    head: null
+    base: 13d0adcd
+    head: 3dee6745
     result: null
     followups: []
   - batch: Y1
@@ -962,21 +962,50 @@ followups:
   - id: F101
     source: F94
     description: The directory retry's window between dropping the claim and the second rename is not stated, and publish_dir's doc claims that a name taken in the meantime makes that rename fail, which holds only for a name with content in it, since a POSIX rename replaces an empty directory.
-    status: in_progress
+    status: pending_review
     batch: Y2
-    commits: []
+    commits: [d52fdd47]
   - id: F102
     source: F91
     description: The file publish's no-retry rationale ends with "a name is only worth a second try on a platform whose rename cannot replace anything at all", naming as the only retry-safe platform the very one the same paragraph says the copy never lands on, so the sentence reads as an argument for a retry rather than against one.
-    status: in_progress
+    status: pending_review
     batch: Y2
-    commits: []
+    commits: [33faafce]
   - id: F103
     source: F95
     description: The claim drop is best-effort, since drop_the_claim ignores the removal error and still reports the claim as gone, while the notes and the code doc say unconditionally that the claim goes and the name is left free; a removal that fails leaves an empty file under a published prefix, which the bound reads as a published copy.
-    status: in_progress
+    status: pending_review
     batch: Y2
+    commits: [39706eae, 3dee6745]
+    note: implemented by ses_e2c943402ffewyKF0jAqEUsYJA; the claim drop is stated to be best-effort everywhere it is described, and the doc summary says it answers whether the name still held the claim rather than whether the claim is gone
+  - id: F104
+    source: F103
+    description: A failed claim removal is silent, since drop_the_claim swallows the error entirely and the run does not warn about the leftover, unlike the working-copy leftover which warns.
+    status: skipped
+    batch: null
     commits: []
+    note: skipped: the backup publish chain ends at this batch; a warning is new log output, a behaviour change, and the leftover is already documented
+  - id: F105
+    source: F103
+    description: The bound cannot tell a leftover claim from a whole copy: it counts it towards the bound and may keep it in place of a whole copy; the bound could prefer removing an empty name under a published prefix.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; preferring to remove an empty name is a change to the count rule, which is now documented
+  - id: F106
+    source: F101
+    description: The directory retry's window is closable in principle: re-claiming the name with an exclusive create after dropping it would put the copy back onto a claim this run owns, closing the drop-to-rename window rather than only documenting it.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; re-claiming changes the publish protocol, and the window is reachable only where the filesystem cannot lock a file
+  - id: F107
+    source: F101
+    description: publish_onto_the_claimed_name swallows the rename error when the name is gone, so it reads as a publish failure rather than the name having been taken; the two are not distinguished in the error the caller sees.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; distinguishing the two failures is a diagnostic nicety and the publish fails loudly either way
 ```
 
 ## Human checklist
@@ -1008,6 +1037,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Y2 review checkpoint opened: F101, F102 and
+  F103 `in_progress` → `pending_review`, commits `d52fdd47`, `33faafce`,
+  `39706eae`, `3dee6745`; review Y2 `pending` → `in_progress`, base
+  `13d0adcd`, head `3dee6745`.
 - 2026-11-13 — follow-up batch Y2 started: F101, F102 and F103 `pending` →
   `in_progress`; `active_batch: Y1` → `Y2`.
 - 2026-11-13 — review Y1 `done`: F90, F91, F94 and F95 kept; F96 fixed
