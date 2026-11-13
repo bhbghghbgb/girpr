@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: B24
+active_batch: X7
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -857,19 +857,19 @@ followups:
   - id: F87
     source: F82
     description: The bound's walk starts at the oldest copy and skips the spoken-for ones without spending the removal budget, so it can remove a copy that is among the newest N; the docs say the bound walks on to the next-oldest copy but never say that a newer copy can go.
-    status: pending
+    status: in_progress
     batch: X7
     commits: []
   - id: F88
     source: F79
     description: publish_dir's retry path removes the claim directory before renaming again, so another run's empty published directory copy, a copy of an empty legacy cache, can be removed in the window between the identity check and that removal; the notes' claim that the other run's copy is never overwritten holds for a copy that has content.
-    status: pending
+    status: in_progress
     batch: X7
     commits: []
   - id: F89
     source: F81
     description: A run whose cache open fails also adopts the waiting copies, because begin_run runs before the bound in that path, while the documents say the next run that opens it.
-    status: pending
+    status: in_progress
     batch: X7
     commits: []
 ```
@@ -903,6 +903,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X7 started: F87, F88 and F89 `pending` →
+  `in_progress`; `active_batch: B24` → `X7`.
 - 2026-11-13 — review B24 `done`: F79 kept (fe0e4c95), F81 kept (ca6ad054,
   7a04252e), F82 fixed (3341ec24); follow-ups F87–F89 appended with batch
   `X7`. F79, F81 and F82 `pending_review` → `completed`.
