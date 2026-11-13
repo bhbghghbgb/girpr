@@ -562,27 +562,31 @@ followups:
   - id: F19
     source: T11
     description: The walk_live files/dirs counters are unpinned by any test; the crate's --log-file JSON channel, already used by tests/output.rs, could assert the scan done event.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [927df439]
+    note: review X2 kept (927df439); the case pins the walk own counts with the excluded file counted, and separately asserts the run own record says files=2, the effective map
   - id: F20
     source: T11
     description: The lowest-index copy-failure case discriminates the two orders only because a 1 MiB copy is slower than the injected failure, so it can pass vacuously on a very fast host.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [0958cb81]
+    note: review X2 kept (0958cb81); no timing assertion was added, the 1 MiB copy is replaced by a fixed count of syscalls, and the reviewer saw the case fail 25 of 25 with the phase mutated
   - id: F21
     source: T12
     description: tests/sync.rs:1794 still writes o.common.case_sensitive = false directly instead of set_case_sensitive(false), which leaves the bundled filter's cached options on the old mode; harmless only because that run's filter has no patterns.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [6eb52866]
+    note: review X2 kept (6eb52866); a real fix, since the helper built the filter with case_sensitive true alongside the field
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
-    status: pending_review
+    status: completed
     batch: X3
     commits: [7279aee5]
+    note: review X3 kept (7279aee5); both commands name a record side through commands::side_label, the folder side label text is byte-identical in both, and the new case was mutation-checked
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
@@ -600,21 +604,24 @@ followups:
   - id: F25
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
-    status: pending_review
+    status: completed
     batch: X1
     commits: [d342a72f]
+    note: review X1 kept (d342a72f); verified against the built binary, a real conversion gave exit 0 and a byte-identical JSON record for the = and spaced spellings
   - id: F26
     source: T14
     description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
-    status: pending_review
+    status: completed
     batch: X1
     commits: [1f0b8edf]
+    note: review X1 kept (1f0b8edf); --version and -V exit 3 and --help exits 0, and the claim that #[command(version)] would exit 0 is right
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
-    status: pending_review
+    status: completed
     batch: X3
     commits: [9ea19b36]
+    note: review X3 kept (9ea19b36); the wording keeps the ASCII-case fold distinct from the Unicode identity fallback, so the two case-fold rules stay two rules in the text
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
@@ -637,9 +644,10 @@ followups:
   - id: F31
     source: T18
     description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
-    status: pending_review
+    status: completed
     batch: X1
     commits: [aca6f3ba]
+    note: review X1 kept (aca6f3ba); the script really runs the check with --features convert at 1.89 in a clean target dir, and the feature list cannot silently skip a feature, proved with a synthetic package
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
@@ -717,33 +725,38 @@ followups:
   - id: F44
     source: F14
     description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [eaf252c5]
+    note: review X2 kept (eaf252c5); the new case lets both digests disagree and spells the request the other way round, and the reviewer saw it fail when the verify named the last disagreeing algorithm
   - id: F45
     source: F14
     description: README.md documents the fixed order of the digest-differs tag but not of the copy verify's failure message, so the algorithm a failed copy names is discoverable only from the design notes.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [552e07d8, 4e90c67e]
+    note: review X2 kept (552e07d8, 4e90c67e); the README matches the code bail text and the same canonical order as the digest-differs tag
   - id: F46
     source: F14
     description: tools/sync/DESIGN-NOTES.md still ends without a trailing newline; pre-existing, but the file was appended to by this batch.
-    status: pending_review
+    status: completed
     batch: X2
     commits: [4c279930]
+    note: review X2 kept (4c279930); a one-line diff with no content change
   - id: F47
     source: F23
     description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
-    status: pending_review
+    status: completed
     batch: X3
     commits: [cb9c08a3]
+    note: review X3 kept (cb9c08a3); the re-export shadows nothing and mirrors the existing girpr_log precedent, and the new public_surface test fails to compile without it
   - id: F48
     source: F23
     description: The new root comment calls compile_patterns "the one way to build its patterns", but glob::Pattern::new is a second way for a caller that already depends on glob, so the wording could be narrowed to "the crate's own way".
-    status: pending_review
+    status: completed
     batch: X3
     commits: [d774d7ce]
+    note: review X3 kept (d774d7ce); the claim is narrowed correctly and the style matches the existing usage in the same file
   - id: F49
     source: F16
     description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
@@ -761,9 +774,10 @@ followups:
   - id: F51
     source: F30
     description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
-    status: pending_review
+    status: completed
     batch: X1
     commits: [0fdbf2c9]
+    note: review X1 kept (0fdbf2c9); the decision to document rather than reclaim is right and consistent with the crate no-age-and-no-lease rule, and retain_siblings filters by the two published prefixes only
   - id: F52
     source: F17
     description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
@@ -828,9 +842,10 @@ followups:
   - id: F64
     source: F21
     description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
-    status: pending_review
+    status: completed
     batch: X1
     commits: [218be752]
+    note: review X1 kept (218be752); the reasoning is recorded where a reader will find it, in the WORK_PREFIX doc and the README
   - id: F65
     source: F52
     description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
@@ -1327,6 +1342,14 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — state repair: 15 follow-ups (F19, F20, F21, F22, F25, F26, F27,
+  F31, F44, F45, F46, F47, F48, F51, F64) were left at `pending_review` with
+  no note, because the scripts that applied those review results only
+  rewrote an existing note line and never set the status, and their entries
+  had no note line to rewrite. All 15 are now `completed` with the review
+  note recorded and their commit lists already correct. No follow-up is left
+  at `pending_review`, and the 134 recorded follow-ups stand at 70 completed,
+  34 pending and 30 skipped.
 - 2026-11-13 — review Z4 `done`: F132, F133, F134 and F136 all kept, no fix or
   revert commits; follow-ups F144–F146 appended, and F143 recorded as
   `skipped` because it is the same item as F135. F132, F133, F134 and F136
