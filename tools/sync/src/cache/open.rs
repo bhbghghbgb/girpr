@@ -2376,6 +2376,10 @@ mod tests {
     /// that is what a released record leaves behind, and nothing in this
     /// process published it: the bound that would take it is the only thing
     /// that can save it.
+    ///
+    /// The refusal the second run gets is the cache's **exclusive lock**,
+    /// and the case says so: the lock is the whole of the protection here,
+    /// so a refusal for any other reason would not be this guarantee.
     #[test]
     fn a_copy_whose_record_is_released_is_kept_while_the_cache_is_open() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "released");
@@ -2403,18 +2407,30 @@ mod tests {
 
         // A run that comes along cannot open the cache, so it is not in its
         // run phase for the folder and it does not bound the folder.
+        //
+        // The failure is the cache's **exclusive lock**, and saying so is the
+        // point of the case: the lock is what protects a copy whose record
+        // has been released, so the refusal has to be the lock's and not
+        // something else that happened to go wrong.
+        let err = match open_db(
+            &db,
+            true,
+            CacheOpen::ReadWrite {
+                ignore_cache: false,
+                backup_first: false,
+                retain: NonZeroUsize::new(1),
+            },
+        ) {
+            Ok(_) => panic!("the cache is open, so it cannot be opened again"),
+            Err(e) => e,
+        };
         assert!(
-            open_db(
-                &db,
-                true,
-                CacheOpen::ReadWrite {
-                    ignore_cache: false,
-                    backup_first: false,
-                    retain: NonZeroUsize::new(1),
-                },
-            )
-            .is_err(),
-            "the cache is open, so it cannot be opened again"
+            err.chain().any(|cause| {
+                cause
+                    .downcast_ref::<redb::DatabaseError>()
+                    .is_some_and(|e| matches!(e, redb::DatabaseError::DatabaseAlreadyOpen))
+            }),
+            "the open failed on the cache's exclusive lock: {err:#}"
         );
 
         assert!(
