@@ -96,8 +96,8 @@ const _: () = {
         HashAlg::from_name("SHA256"),
         Some(HashAlg::Sha256)
     ));
-    assert!(matches!(HashAlg::from_name("blake3"), None));
-    assert!(matches!(HashAlg::from_name(""), None));
+    assert!(HashAlg::from_name("blake3").is_none());
+    assert!(HashAlg::from_name("").is_none());
 };
 
 /// **The resolver folds exactly as the ASCII-case comparison does.**
@@ -463,7 +463,7 @@ fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
         "the entry that was replaced holds the new digest"
     );
     assert_eq!(
-        d.foreign_iter().nth(0).map(|(_, digest)| digest),
+        d.foreign_iter().next().map(|(_, digest)| digest),
         Some(&b"\x01\x01\x01\x01"[..]),
         "and the other entry is untouched"
     );
