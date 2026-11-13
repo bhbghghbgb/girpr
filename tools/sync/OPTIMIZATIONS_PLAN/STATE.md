@@ -379,14 +379,7 @@ reviews:
     followups: [F144, F145, F146]
   - batch: M9
     status: pending
-    tasks: [F147, F148, F149, F150, F151]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: M10
-    status: pending
-    tasks: [F152, F153, F154]
+    tasks: [F147, F148, F149, F150, F151, F152, F153, F154]
     base: null
     head: null
     result: null
@@ -442,21 +435,27 @@ reviews:
     followups: [F172, F173, F174]
   - batch: M15
     status: pending
-    tasks: [F175, F176, F177, F178]
+    tasks: [F175, F176, F177, F178, F183]
     base: null
     head: null
     result: null
     followups: []
-  - batch: M4
-    status: in_progress
+  - batch: M16
+    status: pending
+    tasks: [F179, F180, F181]
+    base: null
+    head: null
+    result: null
+    followups: []  - batch: M4
+    status: done
     tasks: [F111, F112, F116, F130]
     base: 25c832ec
     head: 335cda4b
-    result: null
-    followups: []
+    result: F111 kept (335cda4b); F112 kept (1cac4f4b); F116 kept (839bcf84); F130 kept (0e73b57f); no fix or revert commits; 577 passed without the feature and 591 with it, 1 skipped; the reviewer drove the MSRV script with a stubbed cargo across five feature scenarios and found the fallback cannot hide a real failure
+    followups: [F179, F180, F181, F183]
   - batch: M5
     status: pending
-    tasks: [F117, F118, F120]
+    tasks: [F117, F118, F120, F140, F145, F146]
     base: null
     head: null
     result: null
@@ -471,13 +470,6 @@ reviews:
   - batch: M7
     status: pending
     tasks: [F138, F139, F141, F144, F133, F134]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: M8
-    status: pending
-    tasks: [F140, F145, F146, F132, F136]
     base: null
     head: null
     result: null
@@ -1136,13 +1128,13 @@ followups:
   - id: F111
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
-    status: pending_review
+    status: completed
     batch: M4
     commits: [335cda4b]
   - id: F112
     source: F25
     description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
-    status: pending_review
+    status: completed
     batch: M4
     commits: [1cac4f4b]
   - id: F113
@@ -1169,7 +1161,7 @@ followups:
   - id: F116
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
-    status: pending_review
+    status: completed
     batch: M4
     commits: [839bcf84]
   - id: F117
@@ -1256,7 +1248,7 @@ followups:
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
-    status: pending_review
+    status: completed
     batch: M4
     commits: [0e73b57f]
   - id: F131
@@ -1320,7 +1312,7 @@ followups:
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
     status: pending
-    batch: M8
+    batch: M5
     commits: []
   - id: F141
     source: F134
@@ -1352,13 +1344,13 @@ followups:
     source: F132
     description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
     status: pending
-    batch: M8
+    batch: M5
     commits: []
   - id: F146
     source: F133
     description: The rename-order test fixture cannot distinguish sorted by the folded key from sorted by the exact key, since all three src names start with an uppercase letter and both orders are the same; a fixture mixing cases would make the test pin the folded order it claims to be about.
     status: pending
-    batch: M8
+    batch: M5
     commits: []
   - id: F147
     source: F29
@@ -1394,19 +1386,19 @@ followups:
     source: F28
     description: The new link.rs row shares its basename with the commands/sync/plan/ row's link.rs; naming the src-relative path would remove the ambiguity for a reader scanning for link.rs.
     status: pending
-    batch: M10
+    batch: M9
     commits: []
   - id: F153
     source: F32
     description: The README Integration tests bullet omits tests/convert.rs, tests/symlink.rs and tests/migration_lock.rs, and never says the converter cases need the convert feature, which is the same gap this batch fixed in the design notes.
     status: pending
-    batch: M10
+    batch: M9
     commits: []
   - id: F154
     source: F29
     description: The known-limits preamble still says each is cache hygiene or a race, not a wrong answer, which describes neither the host-coverage limit nor the filesystem case table.
     status: pending
-    batch: M10
+    batch: M9
     commits: []
   - id: F155
     source: F28
@@ -1553,6 +1545,44 @@ followups:
     status: pending
     batch: M15
     commits: []
+  - id: F179
+    source: F111
+    description: The MSRV fallback cannot tell this feature needs another from this feature is broken alone, so for a member with two or more optional features whose group builds, a genuinely broken lone feature is reported as covered by the group.
+    status: pending
+    batch: M16
+    commits: []
+  - id: F180
+    source: F111
+    description: The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there.
+    status: pending
+    batch: M16
+    commits: []
+  - id: F181
+    source: F111
+    description: The MSRV script description calls the group the only one that builds such a member and the root README says the group's features enabled; both would be more accurate as every optional feature of the member enabled at once.
+    status: pending
+    batch: M16
+    commits: []
+  - id: F182
+    source: F112
+    description: The new argument-forms case lives in the convert-gated test target, so a plain cargo nextest run never builds or runs it; only a --features convert run exercises the pin.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the converter cases are feature-gated by design, so the pin runs where the converter runs
+  - id: F183
+    source: F116
+    description: The help case only asserts that --force, --output and the positional order appear, so nothing in the suite would fail if a doc comment were put back on Args and the note started printing in --help again.
+    status: pending
+    batch: M15
+    commits: []
+  - id: F184
+    source: F130
+    description: The README still carries both the log event string and the error text near each other, and a reader could still confuse the two.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F178, already scheduled in M15
 ```
 
 ## Human checklist
@@ -1585,6 +1615,12 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M4 `done`: F111, F112, F116 and F130 all kept, no fix
+  or revert commits; follow-ups F179–F184 appended, with F179, F180 and F181
+  in M16, F183 in M15, and F182 and F184 recorded as `skipped` (F182 because
+  the converter cases are feature-gated by design, F184 as the same item as
+  F178). M10 and M8 were merged into M9 and M5 respectively. F111, F112,
+  F116 and F130 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M4 review checkpoint opened: F111, F112, F116
   and F130 `in_progress` → `pending_review`, commits `839bcf84`, `1cac4f4b`,
   `0e73b57f`, `335cda4b`; review M4 `pending` → `in_progress`, base
