@@ -76,6 +76,68 @@ fn the_name_resolver_agrees_with_the_parser() {
     );
 }
 
+/// **The resolver cannot allocate, and the compiler says so.**
+///
+/// The resolver is a `const fn`, and a const fn may not allocate: the
+/// allocation-free property is the compiler's guarantee rather than a matter
+/// of reading the body. Calling it in a const context is what pins that — a
+/// resolver that stopped being `const` would not compile here.
+///
+/// The answers are checked in the same place, because a const context checks
+/// them without a runtime.
+const _: () = {
+    assert!(matches!(HashAlg::from_name("md5"), Some(HashAlg::Md5)));
+    assert!(matches!(HashAlg::from_name("MD5"), Some(HashAlg::Md5)));
+    assert!(matches!(
+        HashAlg::from_name("sha256"),
+        Some(HashAlg::Sha256)
+    ));
+    assert!(matches!(
+        HashAlg::from_name("SHA256"),
+        Some(HashAlg::Sha256)
+    ));
+    assert!(matches!(HashAlg::from_name("blake3"), None));
+    assert!(matches!(HashAlg::from_name(""), None));
+};
+
+/// **The resolver folds exactly as the ASCII-case comparison does.**
+///
+/// The resolver reaches its comparison through the *slice* form of
+/// `eq_ignore_ascii_case`, because that is the one a `const fn` may call.
+/// This case is the check that the slice form and the string form are the
+/// same rule: the names are the awkward ones — every ASCII case of a
+/// supported name, names nobody supports, the empty name, a name with a
+/// space in it, and the Kelvin-sign lookalike.
+#[test]
+fn the_resolver_folds_exactly_as_the_ascii_case_comparison_does() {
+    for name in [
+        "md5",
+        "MD5",
+        "Md5",
+        "mD5",
+        "sha256",
+        "SHA256",
+        "Sha256",
+        "sHA256",
+        "blake3",
+        "BLAKE3",
+        "Blake3",
+        "blake",
+        "",
+        "md5 ",
+        " md5",
+        "md-5",
+        "bla\u{212A}e3",
+        "MD5\u{212A}",
+        "\u{212A}md5",
+    ] {
+        let want = HashAlg::ALL
+            .into_iter()
+            .find(|a| a.as_str().eq_ignore_ascii_case(name));
+        assert_eq!(HashAlg::from_name(name), want, "the name {name:?}");
+    }
+}
+
 /// Folding is ASCII-only, the same rule the path key and `HashAlg`'s parser
 /// follow. Accepted spellings keep working, but a name containing a non-ASCII
 /// character is refused as typed: `\u{212A}` is the Kelvin sign, which

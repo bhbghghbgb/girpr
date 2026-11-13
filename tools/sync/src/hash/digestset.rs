@@ -113,10 +113,12 @@ impl DigestSet {
     /// the command line and the path key follow, and the same one
     /// [`HashAlg`]'s own parser applies.
     ///
-    /// The comparison allocates nothing. A **match** has no refusal to build,
-    /// and a name that names no algorithm matches nothing, so there is nothing
-    /// to keep either: the only spelling of a name that ever needs a copy is
-    /// the one a refusal has to name.
+    /// The comparison allocates nothing. It is the resolver's, and the
+    /// resolver is a `const fn`: a const fn may not allocate, so the
+    /// comparison cannot. A **match** has no refusal to build, and a name
+    /// that names no algorithm matches nothing, so there is nothing to keep
+    /// either: the only spelling of a name that ever needs a copy is the one
+    /// a refusal has to name.
     ///
     /// **First match wins.** More than one entry can resolve to the same
     /// algorithm — `MD5` and `md5`, both with an unexpected length — and the arm

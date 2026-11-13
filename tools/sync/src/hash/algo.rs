@@ -53,6 +53,14 @@ impl HashAlg {
     /// algorithm does this name mean, if any?" must not pay for the error
     /// path.
     ///
+    /// **A `const fn`, so the property is the compiler's.** A const fn may
+    /// not allocate, so this resolver cannot: the guarantee does not rest on
+    /// reading the body, and a caller that resolves a name for every row of a
+    /// tree can rely on it without measuring anything. The comparison is
+    /// therefore reached through the *slice* form of `eq_ignore_ascii_case`,
+    /// which is a const fn, rather than the string form, which is not — the
+    /// two are the same rule on the same bytes.
+    ///
     /// ASCII case only, which is all an algorithm name can be and the rule
     /// [`std::str::FromStr::from_str`] applies too. A Unicode fold would map
     /// the Kelvin sign `\u{212A}` onto `k` and rewrite a name this build does
@@ -62,10 +70,17 @@ impl HashAlg {
     /// `algo`) because [`super::DigestSet`]'s lookups resolve stored names
     /// through it, and because it is the one spelling of "which algorithm is
     /// this name" the crate has.
-    pub(super) fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|a| a.as_str().eq_ignore_ascii_case(name))
+    pub(super) const fn from_name(name: &str) -> Option<Self> {
+        let bytes = name.as_bytes();
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            let a = Self::ALL[i];
+            if a.as_str().as_bytes().eq_ignore_ascii_case(bytes) {
+                return Some(a);
+            }
+            i += 1;
+        }
+        None
     }
 
     /// Raw digest bytes — never hex. See `FileRec::hashes`.
