@@ -973,6 +973,12 @@ copy kept in place of a newer one, for one bound cycle. The command line runs
 one command per process and the copies waiting live in the process, so this
 needs two runs in one process to happen.
 
+A run whose open **failed** is not that next run: the open is the boundary,
+and an open that failed did not cross it, so the copy keeps waiting for the
+run that opens the folder. The bound that failed run makes — a cache that
+does not open is bounded as well — still spares it, because it is the copy
+that run published.
+
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
 a short window in which the cache's own lock does not yet speak for it, and a

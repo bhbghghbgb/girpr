@@ -553,6 +553,15 @@ left waiting is forgotten with the process that published it and is an ordinary
 copy again for the next run. The adoption is reachable only when two runs
 share a process.
 
+**A run whose open failed does not adopt them.** The boundary is the open,
+and an open that failed did not cross it: the copies keep waiting, and the
+next run that opens the folder adopts them. A run that adopted them would
+take them off the waiting list, and the run that opens the folder next would
+spare nothing — the copy that was waiting would be an ordinary copy again.
+The bound that run makes — a cache that does not open is bounded as well —
+spares them all the same, because they are the copies it published and it is
+about to report them.
+
 **A copy is published before the lock that would protect it is taken.** That
 gap is the one place where a live run's copy can be lost: the run that
 published it has not opened the folder's cache yet, so another run can be in
@@ -627,6 +636,9 @@ the same process published,
 run that published nothing into the list, and
 `a_copy_a_run_that_never_opened_the_cache_published_is_adopted_by_the_next_run`
 for the copy that was waiting for an open,
+`a_run_whose_open_failed_does_not_adopt_the_copies_that_are_waiting` and
+`a_run_whose_open_failed_spares_the_copies_that_are_waiting` for the run
+whose open did not happen,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
 same thing seen through a whole run,
 `the_folder_of_a_legacy_sled_cache_is_bounded`,
