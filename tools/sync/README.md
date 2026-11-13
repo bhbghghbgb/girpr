@@ -39,6 +39,7 @@ tests travel with the code they exercise).
 | `cache/db/` | `mod.rs` (the facade), `cachedb.rs` (`CacheDb`: the read/write-or-read-only handle), `handle.rs` (`Handle`: the type that says whether a handle can write), `backend.rs` (the page-cache size, the redb builder and the in-memory registry) |
 | `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
 | `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |
+| `convert.rs` | the one-shot `sled` → `redb` cache converter — the only module that still touches `sled`, behind the `convert` feature; the `sled2redb` binary under `bin/` is its command line |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
 | `effective/entry.rs` | the entries (`EffRec`, `SideEntry`, `SideScan`, `ScanStats`, `SideCapability`) and the cache write rule (`merge_row`) |
@@ -58,6 +59,8 @@ tests travel with the code they exercise).
 | `rw/limits.rs` | `RwLimits`/`RwSide`: the *shape* the `--rw-threads*` flags resolve to |
 | `rw/gate.rs` | `RwLimiter`/`RwPermit` and the counting gate: the counters, and the src-then-dst lock ordering |
 | `filter.rs` | the include/exclude globs, compiled once per run and matched with the run's case mode |
+| `link.rs` | what counts as a link (`try_is_link`), how to remove one without touching its target, and which ancestor of a path is one |
+| `hardlink.rs` | the hard-link metadata the copy guard asks for: the link count and the file identity (`nlink`/`dev`/`ino` on Unix, `GetFileInformationByHandle` on Windows) |
 | `hash/` | `algo.rs` (`HashAlg`), `set.rs` (`AlgoSet` and the flag parsers), `digestset.rs` (`DigestSet`: the digests one row carries), `stream.rs` (`Digests`, `hash_file`) |
 | `util.rs`, `logging.rs` | path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
 
