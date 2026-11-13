@@ -335,27 +335,6 @@ reviews:
     head: aca6f3ba
     result: F25 kept (d342a72f); F26 kept (1f0b8edf); F31 kept (aca6f3ba); F51 kept (0fdbf2c9); F64 kept (218be752); no fix or revert commits; 567 passed without the feature and 580 with it, 1 skipped; the MSRV script checked at 1.89 with the convert feature in a clean target dir
     followups: [F116, F117, F118, F120]
-  - batch: Z1
-    status: pending
-    tasks: [F111, F112, F116]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: Z2
-    status: pending
-    tasks: [F117, F118, F120, F130]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: Z3
-    status: pending
-    tasks: [F121, F122, F125, F126, F127, F129]
-    base: null
-    head: null
-    result: null
-    followups: []
   - batch: X2
     status: done
     tasks: [F19, F20, F21, F44, F45, F46]
@@ -363,20 +342,6 @@ reviews:
     head: 4e90c67e
     result: F19 kept (927df439); F20 kept (0958cb81); F21 kept (6eb52866); F44 kept (eaf252c5); F45 kept (552e07d8, 4e90c67e); F46 kept (4c279930); no fix or revert commits; 569 passed, 1 skipped; the reviewer ran its own mutation checks, with the copy-phase mutation caught 25 of 25 runs
     followups: [F125, F126, F127, F129, F130]
-  - batch: Z5
-    status: pending
-    tasks: [F138, F139, F140, F141]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: Z4
-    status: in_progress
-    tasks: [F132, F133, F134, F136]
-    base: e9914420
-    head: 339c0957
-    result: null
-    followups: []
   - batch: X3
     status: done
     tasks: [F22, F27, F47, F48]
@@ -384,27 +349,6 @@ reviews:
     head: d774d7ce
     result: F22 kept (7279aee5); F27 kept (9ea19b36); F47 kept (cb9c08a3); F48 kept (d774d7ce); no fix or revert commits; 572 passed, 1 skipped; both new pins were mutation-checked, and the public_surface target fails to compile without the re-export
     followups: [F136]
-  - batch: X4
-    status: pending
-    tasks: [F6, F28, F29, F32, F39, F40]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: X5
-    status: pending
-    tasks: [F36, F37, F38]
-    base: null
-    head: null
-    result: null
-    followups: []
-  - batch: X6
-    status: pending
-    tasks: [F33, F34, F35, F41]
-    base: null
-    head: null
-    result: null
-    followups: []
   - batch: X7
     status: done
     tasks: [F87, F88, F89]
@@ -426,6 +370,69 @@ reviews:
     head: 0d287806
     result: F90 kept (4a9178e7); F91 kept (4a9178e7, 6bd5912c); F94 kept (4a9178e7); F95 kept (58a86fcd); F96 fixed (0531886c corrects two places in open.rs that still gave the too-strong reason); F97 fixed (0d287806 corrects the doc count); 567 passed, 1 skipped; the design notes backticked identifiers were swept against the sources with 0 missing
     followups: [F101, F102, F103]
+  - batch: Z4
+    status: done
+    tasks: [F132, F133, F134, F136]
+    base: e9914420
+    head: 339c0957
+    result: F132 kept (0fa1a663); F133 kept (c9a512e8); F134 kept (72d9e889); F136 kept (339c0957); no fix or revert commits; 572 passed, 1 skipped; the identity comparison verified byte-for-byte unchanged and the two case-fold rules still disagree
+    followups: [F144, F145, F146]
+  - batch: M1
+    status: pending
+    tasks: [F6, F28, F29, F32, F124]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M2
+    status: pending
+    tasks: [F36, F37, F38, F39, F40]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M3
+    status: pending
+    tasks: [F33, F34, F35, F41]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M4
+    status: pending
+    tasks: [F111, F112, F116, F130]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M5
+    status: pending
+    tasks: [F117, F118, F120]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M6
+    status: pending
+    tasks: [F121, F122, F125, F126, F127, F129]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M7
+    status: pending
+    tasks: [F138, F139, F141, F144, F133, F134]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M8
+    status: pending
+    tasks: [F140, F145, F146, F132, F136]
+    base: null
+    head: null
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -466,7 +473,7 @@ followups:
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
     status: pending
-    batch: X4
+    batch: M1
     commits: []
   - id: F7
     source: T05
@@ -612,13 +619,13 @@ followups:
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
     status: pending
-    batch: X4
+    batch: M1
     commits: []
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
     status: pending
-    batch: X4
+    batch: M1
     commits: []
   - id: F30
     source: T17
@@ -637,61 +644,61 @@ followups:
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
     status: pending
-    batch: X4
+    batch: M1
     commits: []
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
     status: pending
-    batch: X6
+    batch: M3
     commits: []
   - id: F34
     source: F1
     description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
     status: pending
-    batch: X6
+    batch: M3
     commits: []
   - id: F35
     source: F2
     description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
     status: pending
-    batch: X6
+    batch: M3
     commits: []
   - id: F36
     source: F3
     description: The Probes doc says a failing probe is "a refusal at plan time, before the run has changed anything", which is true for the mkdir preflight but false for the three step-7 guards, since the rename is the run's first filesystem change; the wording also contradicts its own first paragraph.
     status: pending
-    batch: X5
+    batch: M2
     commits: []
   - id: F37
     source: F3
     description: The Probes doc names only the link-chain walk as outside the seam, while ensure_link_safe's link_ancestor_above and plan/link.rs's read_link/try_is_link/read_dir also ask the filesystem directly.
     status: pending
-    batch: X5
+    batch: M2
     commits: []
   - id: F38
     source: F3
     description: DESIGN-NOTES "A kept dst file link's target is its content, not an extra" lists the tests that enforce it, and the new an_unresolvable_dst_root_is_refused_at_plan_time is not among them.
     status: pending
-    batch: X5
+    batch: M2
     commits: []
   - id: F39
     source: F11
     description: CacheDb::entries_read_count's doc still says "this handle has served", while the shared test backend makes the figure a per-cache count; the wording should name the cache, not the handle.
     status: pending
-    batch: X4
+    batch: M2
     commits: []
   - id: F40
     source: F12
     description: begin_entries_read's doc says "Every read of the entries table goes through here", but the batch write handle's reads of the same table do not, so the count covers the read handle's reads only.
     status: pending
-    batch: X4
+    batch: M2
     commits: []
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
     status: pending
-    batch: X6
+    batch: M3
     commits: []
   - id: F42
     source: F10
@@ -1066,13 +1073,13 @@ followups:
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
     status: pending
-    batch: Z1
+    batch: M4
     commits: []
   - id: F112
     source: F25
     description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
     status: pending
-    batch: Z1
+    batch: M4
     commits: []
   - id: F113
     source: F26
@@ -1099,19 +1106,19 @@ followups:
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
     status: pending
-    batch: Z1
+    batch: M4
     commits: []
   - id: F117
     source: F51
     description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
     status: pending
-    batch: Z2
+    batch: M5
     commits: []
   - id: F118
     source: F51
     description: The recorded reasoning that a sweep could not tell a live temporary from a dead one does not address why the process id in the temporary's name is not used to test liveness, given pid reuse and cross-host containers.
     status: pending
-    batch: Z2
+    batch: M5
     commits: []
   - id: F119
     source: F31
@@ -1124,19 +1131,19 @@ followups:
     source: F64
     description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
     status: pending
-    batch: Z2
+    batch: M5
     commits: []
   - id: F121
     source: F20
     description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F122
     source: F19
     description: The walk's other counters, scan start and scan progress, and the effective-map counters are still unpinned; only scan done is now.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F123
     source: F20
@@ -1149,25 +1156,25 @@ followups:
     source: F44
     description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
     status: pending
-    batch: X4
+    batch: M1
     commits: []
   - id: F125
     source: F19
     description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F126
     source: F20
     description: The discrimination still rests on the removal tree outlasting a worker wake-up rather than on an explicit barrier, so a case that gated one copy on the other failure would remove the last ordering dependence.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F127
     source: F20
     description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F128
     source: F21
@@ -1180,13 +1187,13 @@ followups:
     source: F44
     description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
     status: pending
-    batch: Z3
+    batch: M6
     commits: []
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
     status: pending
-    batch: Z2
+    batch: M4
     commits: []
   - id: F131
     source: F46
@@ -1198,20 +1205,20 @@ followups:
   - id: F132
     source: F22
     description: commands/sync/mod.rs still builds its two folder labels inline instead of the shared side_label; identical text today, but a second spelling of the same rule.
-    status: pending_review
-    batch: Z4
+    status: completed
+    batch: M8
     commits: [0fa1a663]
   - id: F133
     source: F27
     description: The same lowercase versus ASCII-case fold wording survives elsewhere, in src/diff/mod.rs, src/commands/sync/rename.rs and src/planner/pairs.rs, which says "Pair by lowercase key".
-    status: pending_review
-    batch: Z4
+    status: completed
+    batch: M7
     commits: [c9a512e8]
   - id: F134
     source: F27
     description: src/util.rs still uses a raw to_lowercase() comparison for the identity fallback, which is worth a look for the same reason the wording was corrected.
-    status: pending_review
-    batch: Z4
+    status: completed
+    batch: M7
     commits: [72d9e889]
   - id: F135
     source: F27
@@ -1223,8 +1230,8 @@ followups:
   - id: F136
     source: F22
     description: The existing case assertion that the label resolves to the folder to run it on now holds only because the folder path is a prefix of the record path, so it is weaker than its comment claims.
-    status: pending_review
-    batch: Z4
+    status: completed
+    batch: M8
     commits: [339c0957]
   - id: F137
     source: F47
@@ -1237,25 +1244,25 @@ followups:
     source: F133
     description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
     status: pending
-    batch: Z5
+    batch: M7
     commits: []
   - id: F139
     source: F133
     description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
     status: pending
-    batch: Z5
+    batch: M7
     commits: []
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
     status: pending
-    batch: Z5
+    batch: M8
     commits: []
   - id: F141
     source: F134
     description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
     status: pending
-    batch: Z5
+    batch: M7
     commits: []
   - id: F142
     source: F134
@@ -1271,6 +1278,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F135, already recorded as skipped
+  - id: F144
+    source: F134
+    description: commands/sync/plan/link.rs:219 still folds the on-disk lookup with an inline to_string_lossy().to_lowercase(), so after the identity fold was named there is one named Unicode fold and one anonymous Unicode fold that answer different questions, the on-disk rule being the third rule the design notes describe.
+    status: pending
+    batch: M7
+    commits: []
+  - id: F145
+    source: F132
+    description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
+    status: pending
+    batch: M8
+    commits: []
+  - id: F146
+    source: F133
+    description: The rename-order test fixture cannot distinguish sorted by the folded key from sorted by the exact key, since all three src names start with an uppercase letter and both orders are the same; a fixture mixing cases would make the test pin the folded order it claims to be about.
+    status: pending
+    batch: M8
+    commits: []
 ```
 
 ## Human checklist
@@ -1302,6 +1327,18 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review Z4 `done`: F132, F133, F134 and F136 all kept, no fix or
+  revert commits; follow-ups F144–F146 appended, and F143 recorded as
+  `skipped` because it is the same item as F135. F132, F133, F134 and F136
+  `pending_review` → `completed`.
+- 2026-11-13 — the remaining small follow-up batches Z1–Z3, Z5, X4, X5 and
+  X6 were consolidated into eight batches M1–M8 by subsystem, since each held
+  only a few small items and each batch costs an implementing session and a
+  review session. M1 documentation accuracy, M2 the doc wordings in the plan
+  guards and the cache db, M3 the digest matching tests and the phase-A
+  index, M4 the converter CLI and CI, M5 the stale-tool-state documents, M6
+  more test pinning, M7 the case-fold wording and the third fold site, M8 the
+  coverage message and the side labels.
 - 2026-11-13 — follow-up batch Z4 review checkpoint opened: F132, F133, F134
   and F136 `in_progress` → `pending_review`, commits `0fa1a663`, `c9a512e8`,
   `72d9e889`, `339c0957`; review Z4 `pending` → `in_progress`, base
