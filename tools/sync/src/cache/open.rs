@@ -166,10 +166,9 @@ pub enum CacheOpen {
 /// cache lives in: the newest `retain` siblings of each prefix are kept
 /// beside it, and so is any copy a live run is still using — so the folder
 /// can hold more than `retain` while one is. The bound is about the folder
-/// rather than about the copy this
-/// open made, so it holds for a folder whose cache is absent and for an open
-/// that copies nothing aside — the copies already sitting beside a folder are
-/// the ones the bound is about.
+/// rather than about the copy this open made, so it holds for a folder whose
+/// cache is absent and for an open that copies nothing aside — the copies
+/// already sitting beside a folder are the ones the bound is about.
 ///
 /// The bound runs **after** the cache is open, and the open holds the cache
 /// file's exclusive lock until the run is done with it. That is what makes
