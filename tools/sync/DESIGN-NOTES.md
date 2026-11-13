@@ -530,6 +530,17 @@ adopted. It is process-wide because the copies are made in more than one
 place, and it is scoped to a run because the guarantee is about a run's copy
 and not about a process's.
 
+**A copy published by a run that never opens the folder's cache is adopted by
+the next run that opens it.** The boundary is the open, and a run that
+publishes a copy without opening the folder's cache leaves that copy waiting:
+the next run to open the folder adopts it and spares it, so an older copy is
+kept in place of a newer one for one bound cycle — after which it is an
+ordinary copy again, because the next open clears the list. The registry lives
+in the process, and the command line runs one command per process, so a copy
+left waiting is forgotten with the process that published it and is an ordinary
+copy again for the next run. The adoption is reachable only when two runs
+share a process.
+
 **A copy is published before the lock that would protect it is taken.** That
 gap is the one place where a live run's copy can be lost: the run that
 published it has not opened the folder's cache yet, so another run can be in
@@ -597,9 +608,11 @@ own copy,
 `a_second_bound_still_spares_the_copy_the_process_published` for a later bound
 in the same run,
 `an_earlier_runs_copy_is_an_ordinary_copy_again` for a copy an earlier run in
-the same process published, and
+the same process published,
 `an_earlier_runs_copy_is_not_spared_by_a_run_that_published_nothing` for the
-run that published nothing into the list,
+run that published nothing into the list, and
+`a_copy_a_run_that_never_opened_the_cache_published_is_adopted_by_the_next_run`
+for the copy that was waiting for an open,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
 same thing seen through a whole run,
 `the_folder_of_a_legacy_sled_cache_is_bounded`,

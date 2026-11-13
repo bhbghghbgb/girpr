@@ -1020,13 +1020,15 @@ fn name_is_taken(e: &std::io::Error) -> bool {
 ///
 /// The two lists are the two halves of that sentence. A copy is **pending**
 /// from the moment it is published until the folder's cache is opened: the
-/// run that opens the cache is the run that published it, and the copies
-/// waiting when the cache opens are that run's copies. They are **current**
-/// from then on, and the bounds that run makes spare them.
+/// copies waiting when the cache opens are the copies the opening run
+/// spares. They are **current** from then on, and the bounds that run makes
+/// spare them.
 ///
-/// A copy an earlier run in this process published is neither: it is an
-/// ordinary copy again, and sparing it would keep an older copy in place of
-/// a newer one.
+/// A copy an earlier run in this process published is neither — unless it is
+/// still waiting. A run that published a copy and never opened the folder's
+/// cache leaves it pending, and the next run to open that folder adopts it
+/// and spares it: an older copy kept in place of a newer one, for one bound
+/// cycle, and reachable only when two runs share a process.
 #[derive(Default)]
 struct FolderCopies {
     /// Published since the folder's cache was last opened.
@@ -1054,6 +1056,16 @@ struct FolderCopies {
 /// per list, so the newest is the copy that run reports. A copy an earlier
 /// run in this process published is not among them — it is an ordinary copy
 /// again — and nothing in the registry speaks for it.
+///
+/// **The boundary is the open, and the registry is process-wide.** The copies
+/// waiting for an open are the ones the next open adopts, whoever published
+/// them: a run that publishes a copy and never opens the folder's cache
+/// leaves it waiting, and the run that opens the folder next adopts it and
+/// spares it — an older copy kept in place of a newer one for one bound
+/// cycle. The command line runs one command per process and the registry
+/// lives in the process, so there the copies waiting are the previous
+/// process's, and they are ordinary copies again by the time the next run
+/// looks.
 fn published_registry() -> &'static Mutex<HashMap<PathBuf, FolderCopies>> {
     static PUBLISHED: OnceLock<Mutex<HashMap<PathBuf, FolderCopies>>> = OnceLock::new();
     PUBLISHED.get_or_init(|| Mutex::new(HashMap::new()))
@@ -1062,7 +1074,10 @@ fn published_registry() -> &'static Mutex<HashMap<PathBuf, FolderCopies>> {
 /// Record a published copy, so that the run that published it spares it.
 ///
 /// The copy is **pending**: it belongs to the run that opens the folder's
-/// cache next, and it becomes that run's copy when the cache is opened.
+/// cache next, and it becomes that run's copy when the cache is opened. That
+/// run is usually the run that published it; a run that publishes and never
+/// opens leaves the copy waiting, and the next run to open the folder adopts
+/// it.
 fn remember_published(path: &Path) {
     let mut published = published_registry()
         .lock()
@@ -1093,11 +1108,13 @@ fn published_under(folder: &Path) -> Vec<PathBuf> {
     spared
 }
 
-/// The run that opens this folder's cache is the run that published the
-/// copies waiting for it.
+/// The run that opens this folder's cache adopts the copies waiting for it.
 ///
 /// The copies published since the folder's cache was last opened are the
-/// ones this run published, and the ones its bound spares. The copies an
+/// ones its bound spares. They are usually this run's own: it published them
+/// before it opened the cache. A run that published a copy and never opened
+/// the folder's cache leaves it waiting, and this run adopts it — an older
+/// copy kept in place of a newer one, for one bound cycle. The copies an
 /// earlier run in this process published are ordinary copies again: sparing
 /// one of them would keep an older copy in place of a newer one.
 ///
@@ -2703,6 +2720,66 @@ mod tests {
         assert!(
             newer.exists(),
             "and the newer copy is the one the bound keeps"
+        );
+    }
+
+    /// A copy published by a run that never opened the folder's cache is
+    /// adopted by the next run that opens it.
+    ///
+    /// The registry's boundary is the open: the copies waiting for an open are
+    /// the ones the next open adopts. A run that publishes a copy and never
+    /// opens the folder's cache leaves that copy waiting, so the next run to
+    /// open the folder adopts it and spares it — an older copy kept in place
+    /// of a newer one, for one bound cycle.
+    #[test]
+    fn a_copy_a_run_that_never_opened_the_cache_published_is_adopted_by_the_next_run() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "pending_adopted");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        {
+            // A first open, so that the cache is a cache and not a copy of
+            // one.
+            let _first = open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: None,
+                },
+            )
+            .expect("the cache opens");
+        }
+
+        // A run publishes a copy and never opens the folder's cache.
+        let published = backup_db(&db).unwrap().expect("the cache was copied aside");
+
+        // Another run published a newer copy.
+        let newer = dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z"));
+        std::fs::write(&newer, b"newer").unwrap();
+
+        // The next run opens the folder's cache: the copy that was waiting is
+        // adopted, and the run's bound is the one that must not take it.
+        {
+            let _run = open_db(
+                &db,
+                true,
+                CacheOpen::ReadWrite {
+                    ignore_cache: false,
+                    backup_first: false,
+                    retain: NonZeroUsize::new(1),
+                },
+            )
+            .expect("the cache opens");
+        }
+
+        assert!(
+            published.exists(),
+            "the copy that was waiting for an open is spared by the run that opened it"
+        );
+        assert!(
+            !newer.exists(),
+            "and the newer copy is the one that goes: an older copy is kept in its place"
         );
     }
 

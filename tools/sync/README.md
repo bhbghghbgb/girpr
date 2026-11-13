@@ -952,6 +952,15 @@ copy the run itself made either — the run that reports a backup is the run
 that has to keep it — and the folder ends within its bound, because the count
 is made up from the next-oldest copy instead.
 
+**The copy a bound spares is the one the run that applies it made.** A copy
+another run published is an ordinary copy again, so the bound keeps the newest
+copies rather than an older one. The one exception is a run that published a
+copy and never opened the folder's cache: the copy waits for the next run
+that opens that folder, which adopts it and spares it too — an older copy
+kept in place of a newer one, for one bound cycle. The command line runs one
+command per process and the copies waiting live in the process, so this needs
+two runs in one process to happen.
+
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
 a short window in which the cache's own lock does not yet speak for it, and a
