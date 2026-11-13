@@ -38,8 +38,10 @@ path, since there is no digest to justify giving it up.
 
 **Enforced by:** `verify_digests` takes two maps and is unreachable with one;
 `a_disagreement_between_the_two_digests_is_a_failure` hands it two maps that
-disagree, and `a_digest_that_only_one_side_has_is_a_failure` covers the `Some !=
-None` case a loop over `src`'s keys would skip.
+disagree, `a_digest_that_only_one_side_has_is_a_failure` covers the `Some !=
+None` case a loop over `src`'s keys would skip, and
+`a_failed_copy_names_the_algorithm_in_canonical_order` pins the algorithm a
+failure names — the canonical one, not the request's.
 
 ### src → dst, always, for lock ordering
 
