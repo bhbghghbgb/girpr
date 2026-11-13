@@ -392,10 +392,17 @@ reviews:
     result: F56 kept (a39d5550, a1a0a602, fb7dd522); F58 kept (62f7f950); F60 kept (c9d86e57); F61 kept (3b9a60e3); no fix or revert commits; 553 passed, 1 skipped; three mutation experiments confirmed each new case pins what it claims
     followups: [F73, F74, F75]
   - batch: B23
-    status: in_progress
+    status: done
     tasks: [F65, F66, F68, F73, F74, F75]
     base: c010f012
-    head: a8856942
+    head: f07a728b
+    result: F65 kept (046b53d3); F66 kept (d8ea86be); F68 kept (4d764527); F73 fixed (f07a728b brings three doc paragraphs in line with the run-scoped registry); F74 fixed (04dab01f makes the sort use sort_by_cached_key, which is what its message described); F75 kept (08959674); 559 passed, 1 skipped
+    followups: [F79, F81, F82]
+  - batch: B24
+    status: pending
+    tasks: [F79, F81, F82]
+    base: null
+    head: null
     result: null
     followups: []
 followups:
@@ -799,13 +806,13 @@ followups:
   - id: F65
     source: F52
     description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
-    status: pending_review
+    status: completed
     batch: B23
     commits: [046b53d3]
   - id: F66
     source: F52
     description: publish_file warns and carries on when the working file cannot be removed after the link, so a girpr-cache-partial-<ts> can be left behind by a run that was never killed, while the README describes that name only as the result of a killed run.
-    status: pending_review
+    status: completed
     batch: B23
     commits: [d8ea86be]
   - id: F67
@@ -818,7 +825,7 @@ followups:
   - id: F68
     source: F54
     description: take_the_cache_lock opens the cache read+write, so a cache file that is not writable fails the open and the bound then runs without the lock, with a warning; the design notes spell out the directory case but not this one.
-    status: pending_review
+    status: completed
     batch: B23
     commits: [4d764527]
   - id: F69
@@ -831,21 +838,47 @@ followups:
   - id: F73
     source: F56
     description: The registry identifies the copy the run applying the bound published as the newest copy this process published in that list, so when the current run publishes nothing into that list, an earlier run's copy is still spared and the bound may keep an older copy in place of a newer one.
-    status: pending_review
+    status: completed
     batch: B23
-    commits: [777fe7b7]
+    commits: [777fe7b7, f07a728b]
   - id: F74
     source: F56
     description: newest_published picks the newest by full file name, so the _10 fallback suffix sorts before _9; the bound's own age order already assumes that lexicographic name order, so the two agree, but ten copies published inside one microsecond would be mis-ordered.
-    status: pending_review
+    status: completed
     batch: B23
-    commits: [cb1f80f6, c4ba99aa]
+    commits: [cb1f80f6, c4ba99aa, 04dab01f]
   - id: F75
     source: F61
     description: The new lock test asserts only that the second open fails, not that it failed on the lock; asserting the already-open error would say outright that the protection comes from the cache's exclusive lock.
-    status: pending_review
+    status: completed
     batch: B23
     commits: [08959674]
+    note: review B23 kept; the case now requires the already-open error, which a corrupt cache would not produce
+  - id: F79
+    source: F65
+    description: The claim check tests that something is at the name, not that the claim is still ours, so if a bound took the claim away and another run took the same name in that window the publish still lands over that run's copy; reachable only where the filesystem can neither link nor lock a file.
+    status: pending
+    batch: B24
+    commits: []
+  - id: F80
+    source: F68
+    description: An exclusive lock on a read-only handle is fine on Windows and on Linux, but is worth a check on the BSDs and macOS, where a refusal would degrade the folder back to bounded without its lock rather than weaken it.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: not verifiable on this Windows host, and the outcome is a bounded degradation rather than a weakening
+  - id: F81
+    source: F73
+    description: A copy published by a run that never opens the folder's cache stays pending and is adopted, and spared, by the next run that opens that folder, so an older copy is kept in place of a newer one for one bound cycle.
+    status: pending
+    batch: B24
+    commits: []
+  - id: F82
+    source: F74
+    description: The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case.
+    status: pending
+    batch: B24
+    commits: []
 ```
 
 ## Human checklist
@@ -877,6 +910,12 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B23 `done`: F65, F66, F68 and F75 kept; F73 and F74
+  fixed (f07a728b, 04dab01f); follow-ups F79, F81 and F82 appended with batch
+  `B24`, and F80 recorded as `skipped` because it cannot be checked on this
+  Windows host and its outcome is a bounded degradation rather than a
+  weakening. B24 closes the backup-publish chain. F65, F66, F68, F73, F74 and
+  F75 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch B23 review checkpoint opened: F65, F66, F68,
   F73, F74 and F75 `in_progress` → `pending_review`, commits `046b53d3`,
   `d8ea86be`, `4d764527`, `777fe7b7`, `cb1f80f6`, `08959674`, `c4ba99aa`,
