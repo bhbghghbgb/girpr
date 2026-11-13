@@ -423,13 +423,17 @@ impl CacheDb {
 
     /// Begin a read transaction over the entries table, and count it.
     ///
-    /// Every read of the entries table goes through here, so the count is
-    /// the number of transactions those reads cost — which is what tells a
-    /// batched read from a per-key one.
+    /// Every read of the entries table made through a read handle goes through
+    /// here, so the count is the number of transactions those reads cost —
+    /// which is what tells a batched read from a per-key one.
     ///
     /// A read of **another** table does not come here, and so does not move
     /// the count: the number says what the entries table cost, and nothing
     /// else can change it by accident.
+    ///
+    /// The batched write handle reads the same table without coming here —
+    /// its reads run in its own write transaction — so they are not counted.
+    /// The count is what the read handles cost.
     fn begin_entries_read(&self) -> Result<ReadTransaction> {
         #[cfg(test)]
         self.reads.fetch_add(1, Ordering::Relaxed);
