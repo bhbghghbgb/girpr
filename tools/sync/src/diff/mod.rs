@@ -221,9 +221,9 @@ fn classify_pair(
 
 /// Compare two effective maps.
 ///
-/// In insensitive mode keys are matched by lowercase, so a casing-only
-/// difference surfaces as `case_mismatch` instead of missing+extra. Dirs are
-/// compared by presence alone.
+/// In insensitive mode keys are matched by the ASCII-case fold, so a
+/// casing-only difference surfaces as `case_mismatch` instead of missing+extra.
+/// Dirs are compared by presence alone.
 ///
 /// `required` is the planner's per-path answer to "which algorithms settle this
 /// pair", keyed by **src** path. Passing it rather than an algorithm list is what
@@ -287,15 +287,15 @@ pub fn diff_maps(
             }
         }
     } else {
-        // The union of both sides' lowercase keys, walked as src's keys and then
+        // The union of both sides' folded keys, walked as src's keys and then
         // the dst keys src does not already cover. Two indices and one pass each
         // answer that; materialising the union as a third `HashSet<String>` would
-        // clone every lowercased key into it and then look each one up *again* to
+        // clone every folded key into it and then look each one up *again* to
         // discover which side holds it — a whole pass over the key set, for an
         // answer the pass already has.
         //
         // Mixed-case collisions within one side are already fatal (phase A), so
-        // each lowercase key maps to exactly one path per side and this join is
+        // each folded key maps to exactly one path per side and this join is
         // well defined.
         let slow = folded_keys(src);
         let dlow = folded_keys(dst);
@@ -415,7 +415,7 @@ mod tests {
     /// stated as the whole [`Diff`] rather than one bucket at a time.
     ///
     /// The branch is a *join* over the two sides, and each bucket is a different
-    /// answer to "which side(s) hold this lowercase key". A rewrite that walks one
+    /// answer to "which side(s) hold this folded key". A rewrite that walks one
     /// map and looks into the other has to reproduce all of them at once, so they
     /// are pinned together: src-only, dst-only, a case-only pair, a genuine
     /// change, a kind conflict, and a pair that came out equal.
@@ -472,7 +472,7 @@ mod tests {
         );
     }
 
-    /// The lowercase key folds ASCII case only, so a non-ASCII case variant is a
+    /// The folded key is the ASCII-case fold, so a non-ASCII case variant is a
     /// different path: each spelling is missing on one side and extra on the
     /// other, never a `CASE-MISMATCH`. The byte-identical non-ASCII path still
     /// pairs and compares equal, which is what tells "outside the fold" apart

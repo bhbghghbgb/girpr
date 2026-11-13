@@ -88,7 +88,8 @@ pub struct PairPlan {
 pub enum CasePairing {
     /// Pair by exact key — the paths must match character for character.
     Exact,
-    /// Pair by lowercase key — spelling is not part of a path's identity.
+    /// Pair by the ASCII-case-folded key — spelling is not part of a path's
+    /// identity.
     Lowercase,
 }
 
@@ -573,7 +574,7 @@ mod tests {
     /// case-only match as "already a difference" would plan nothing here, and the
     /// content disagreement would go unreported.
     #[test]
-    fn insensitive_mode_pairs_by_lowercase() {
+    fn insensitive_mode_pairs_by_the_folded_key() {
         let s = map(vec![("a.txt", file(10, 100))]);
         let d = map(vec![("A.txt", file(10, 100))]);
         let p = plan(&s, &d, false, false);
@@ -601,7 +602,7 @@ mod tests {
         assert_eq!(p.dst.pending(), vec!["A.txt", "same.txt"]);
     }
 
-    /// Lowercase pairing folds ASCII case only, matching `path_key` and
+    /// The folded key folds ASCII case only, matching `path_key` and
     /// `diff_maps`. A non-ASCII case variant is two paths, so neither spelling is
     /// paired and nothing is hashed for it; the byte-identical non-ASCII name
     /// beside it still pairs and needs a digest, which is what tells "outside the

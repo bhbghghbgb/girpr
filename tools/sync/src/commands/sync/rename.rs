@@ -51,25 +51,25 @@ fn test_fail_rename(rel: &str, stage: Stage) -> bool {
 ///
 /// The decision, with no filesystem or cache involved, so it can be stated as a
 /// set. **A dst path is renamed exactly when src holds the same path under
-/// different casing** — the pair whose lowercase key matches and whose exact key
+/// different casing** — the pair whose folded key matches and whose exact key
 /// does not.
 ///
-/// Both sides are indexed by lowercase key and every src key is looked up, rather
-/// than every src key scanning every dst key and lowercasing as it goes. The result
-/// is the same set, and it is the same set because a lowercase key maps to exactly
+/// Both sides are indexed by folded key and every src key is looked up, rather
+/// than every src key scanning every dst key and folding as it goes. The result
+/// is the same set, and it is the same set because a folded key maps to exactly
 /// one path per side: `check_mixed_case` has already made a mixed-case collision
 /// within one side fatal, and this pass runs only in the insensitive mode that check
 /// guards. Without that invariant the two forms could disagree on *which* of two
 /// colliding keys they pick, which is why this is not a free substitution.
 ///
-/// Ordered by lowercase src key, because these become `RENAME` records in report
+/// Ordered by folded src key, because these become `RENAME` records in report
 /// order and `HashMap` iteration is seeded per process — an unsorted pass would
 /// reshuffle between two runs over the same tree.
 fn case_renames<'a>(
     src: &'a HashMap<String, crate::effective::EffRec>,
     dm: &'a HashMap<String, crate::effective::EffRec>,
 ) -> Vec<(&'a String, &'a String)> {
-    // lower -> rel, per side.
+    // folded key -> rel, per side.
     let slow = folded_keys(src);
     let dlow = folded_keys(dm);
     let mut by_lower: Vec<(String, &String)> =
@@ -149,7 +149,7 @@ fn moved_prefix<'m>(
 /// Turn the rename pairs into steps in a parent-first order, rewriting each
 /// `from` through the directory renames already planned.
 ///
-/// `case_renames` sorts by lowercase src key, so a directory always precedes
+/// `case_renames` sorts by folded src key, so a directory always precedes
 /// everything beneath it. Renaming the parent moves its whole subtree, so a
 /// child whose only difference was the parent's casing is already correct when
 /// its turn comes: it is kept as a no-op step so its cache row and map key can
@@ -547,6 +547,7 @@ mod tests {
     use super::*;
     use crate::effective::EffRec;
     use crate::report::OutputFormat;
+    use crate::util::path_key;
 
     fn file_rec() -> EffRec {
         EffRec {
@@ -630,7 +631,7 @@ mod tests {
     }
 
     /// Zero renames is the common case and the one a lookup can get wrong: the
-    /// dst path *is* the src path, so the lowercase key matches and only the
+    /// dst path *is* the src path, so the folded key matches and only the
     /// exact-key check stands between the two and a spurious self-rename.
     #[test]
     fn a_tree_already_in_step_renames_nothing() {
@@ -670,16 +671,20 @@ mod tests {
         );
     }
 
-    /// The order is by lowercase src key, not `HashMap` order. These become
+    /// The order is by folded src key, not `HashMap` order. These become
     /// `RENAME` records in both modes, and the seed is per process, so unsorted
     /// order would reshuffle between two runs over the same tree.
+    ///
+    /// The expectation folds the key the way the pass does — with `path_key` —
+    /// rather than with a Unicode lowercase of its own, so the case states the
+    /// rule it is about.
     #[test]
-    fn the_rename_order_is_by_lowercase_key() {
+    fn the_rename_order_is_by_the_folded_key() {
         let s = side(&["Zeta.txt", "Alpha.txt", "Mid.txt"]);
         let d = side(&["zeta.txt", "alpha.txt", "mid.txt"]);
         let ordered: Vec<String> = case_renames(&s, &d)
             .into_iter()
-            .map(|(_, s)| s.to_lowercase())
+            .map(|(_, s)| path_key(s))
             .collect();
         assert_eq!(ordered, vec!["alpha.txt", "mid.txt", "zeta.txt"]);
     }
