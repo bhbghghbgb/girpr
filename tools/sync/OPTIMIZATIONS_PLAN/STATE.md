@@ -440,11 +440,18 @@ reviews:
     head: 929908a7
     result: F33 fixed (2bd29e74 corrects the design notes, which still justified the allocation-free comparison by reading the body); F34 kept (0d7f7646); F35 kept (4fb0741f); F41 fixed (929908a7 corrects the README cost claim, which named the wrong condition); 577 passed without the feature and 590 with it, 1 skipped; the const pin was verified to fail when the const is dropped and when the resolver allocates
     followups: [F172, F173, F174]
-  - batch: M4
+  - batch: M15
     status: pending
-    tasks: [F111, F112, F116, F130]
+    tasks: [F175, F176, F177, F178]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M4
+    status: in_progress
+    tasks: [F111, F112, F116, F130]
+    base: 25c832ec
+    head: 335cda4b
     result: null
     followups: []
   - batch: M5
@@ -1129,15 +1136,15 @@ followups:
   - id: F111
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
-    status: in_progress
+    status: pending_review
     batch: M4
-    commits: []
+    commits: [335cda4b]
   - id: F112
     source: F25
     description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
-    status: in_progress
+    status: pending_review
     batch: M4
-    commits: []
+    commits: [1cac4f4b]
   - id: F113
     source: F26
     description: The main girsync binary has no --version either, while gircap has one, so the workspace has no single convention.
@@ -1162,9 +1169,9 @@ followups:
   - id: F116
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
-    status: in_progress
+    status: pending_review
     batch: M4
-    commits: []
+    commits: [839bcf84]
   - id: F117
     source: F51
     description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
@@ -1249,9 +1256,9 @@ followups:
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
-    status: in_progress
+    status: pending_review
     batch: M4
-    commits: []
+    commits: [0e73b57f]
   - id: F131
     source: F46
     description: Nothing enforces the trailing newline, so an editor that strips it can reopen the same gap.
@@ -1522,6 +1529,30 @@ followups:
     status: pending
     batch: M14
     commits: []
+  - id: F175
+    source: F116
+    description: Nothing pins the converter help output, so a doc comment on Args could come back and print the source note again; the existing help case only asserts the flags are named.
+    status: pending
+    batch: M15
+    commits: []
+  - id: F176
+    source: F111
+    description: The MSRV gate still does not cover a combination whose parts each build alone, so a member whose features all build alone but whose combination needs a newer Rust is not checked.
+    status: pending
+    batch: M15
+    commits: []
+  - id: F177
+    source: F116
+    description: The converter refusal of --version, which exits 3, now lives only in the module doc; the README converter section does not mention it.
+    status: pending
+    batch: M15
+    commits: []
+  - id: F178
+    source: F130
+    description: The README still quotes verify hash mismatch, the log event message, near the failure-message shape verify hash(<algo>) <path>, the error text; two different strings, but a reader could confuse them.
+    status: pending
+    batch: M15
+    commits: []
 ```
 
 ## Human checklist
@@ -1554,6 +1585,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M4 review checkpoint opened: F111, F112, F116
+  and F130 `in_progress` → `pending_review`, commits `839bcf84`, `1cac4f4b`,
+  `0e73b57f`, `335cda4b`; review M4 `pending` → `in_progress`, base
+  `25c832ec`, head `335cda4b`. Follow-ups F175–F178 appended with batch
+  `M15`.
 - 2026-11-14 — the first M4 session died before doing anything, with a clean
   tree and no commits, so F111, F112, F116 and F130 were reset
   `in_progress` → `pending` for a retry.
