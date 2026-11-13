@@ -1717,32 +1717,53 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 /// copy to fail.
 ///
 /// Two copies fail here, and they are arranged so that the two orders are not
-/// the same order: `zzz.bin` fails before it opens anything, while `aaa.bin`
+/// the same order: `mmm.bin` fails before it opens anything, while `aaa.bin`
 /// is copied in full and fails at the flush. The first failure to *finish* is
-/// therefore `zzz.bin`, and the first copy *in the plan* is `aaa.bin`. A
-/// phase that reported the first failure to finish would name `zzz.bin`; the
+/// therefore `mmm.bin`, and the first copy *in the plan* is `aaa.bin`. A
+/// phase that reported the first failure to finish would name `mmm.bin`; the
 /// plan's order says `aaa.bin`, and that is what has to be reported.
 ///
+/// **The two failures have to be *recorded* in the opposite order to the plan's,
+/// or the case says nothing** — and that order must not be a race against the
+/// host's speed. A copy of a megabyte is a bandwidth question: on a fast host
+/// it can be over before the second worker has been handed its share of the
+/// work, and the case then passes whatever the phase reports. So `aaa.bin`'s
+/// delay is a **count of removals** instead: its destination is a directory
+/// holding a hundred-odd empty subdirectories, and the copy has to clear that
+/// tree before it can write there. One removal per entry is a syscall apiece,
+/// so it outlasts any wake-up a second worker needs — and `mmm.bin`, which
+/// fails the moment it is attempted, is recorded while that tree is still
+/// going.
+///
 /// The third file is the control: it succeeds, and it was still copied, so
-/// the failure did not cut the phase short.
+/// the failure did not cut the phase short. It sits *after* the failing copy
+/// in the plan on purpose: a control in front of it would pay a flush before
+/// the failure that has to be recorded first, and that is long enough to put
+/// the two orders back in step.
 #[test]
 fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     let t = temp_root("copy_fail_order");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    // Big enough that copying it takes longer than the failure that never
-    // opens the file, so the two failures are not over at the same moment.
-    let big = vec![7u8; 1024 * 1024];
-    wfile(&src, "aaa.bin", &big);
-    wfile(&src, "mmm.bin", b"middle");
-    wfile(&src, "zzz.bin", b"last");
+    wfile(&src, "aaa.bin", b"first in the plan");
+    wfile(&src, "mmm.bin", b"fails first");
+    wfile(&src, "zzz.bin", b"the control");
+    // `aaa.bin`'s destination is a directory the copy has to clear before it
+    // can write there. The subdirectories are empty on purpose: the delete
+    // pass takes dst-only *files*, so a tree of directories is what survives
+    // until the copy phase reaches it.
+    let blocking = dst.join("aaa.bin");
+    std::fs::create_dir_all(&blocking).unwrap();
+    for i in 0..128 {
+        std::fs::create_dir(blocking.join(format!("d{i:03}"))).unwrap();
+    }
 
     let out = run_binary_raw(
         &src,
         &dst,
         &["--rw-threads", "2"],
         &[
-            ("GIRSYNC_TEST_FAIL_COPY", "zzz.bin"),
+            ("GIRSYNC_TEST_FAIL_COPY", "mmm.bin"),
             ("GIRSYNC_TEST_FAIL_FLUSH", "aaa.bin"),
             // The workspace's nextest setup turns the flush off for speed; this
             // case is about the flush.
@@ -1761,7 +1782,7 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
         "the failure reported is the first copy in the plan: {stderr}"
     );
     assert!(
-        !stderr.contains("zzz.bin"),
+        !stderr.contains("mmm.bin"),
         "the copy that failed first is not the one reported: {stderr}"
     );
 
@@ -1770,10 +1791,10 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     let recs = parse_ndjson(&out.stdout);
     assert_eq!(
         paths(&recs, "copy"),
-        vec!["mmm.bin"],
+        vec!["zzz.bin"],
         "the successful copy was announced and the failed ones were not: {recs:?}"
     );
-    assert!(dst.join("mmm.bin").is_file(), "the successful copy landed");
+    assert!(dst.join("zzz.bin").is_file(), "the successful copy landed");
 }
 
 /// A case-only rename of a directory must move the subtree once, not try to
