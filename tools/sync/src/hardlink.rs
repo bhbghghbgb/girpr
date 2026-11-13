@@ -14,6 +14,7 @@
 //! it calls `GetFileInformationByHandle`, which is also the API those accessors
 //! are derived from there.
 
+use std::fs::File;
 use std::io;
 use std::path::Path;
 
@@ -38,7 +39,7 @@ pub struct LinkInfo {
     pub regular_file: bool,
 }
 
-/// The identity of a file, for comparing two paths.
+/// The identity of a file, for comparing two paths, or a path with a handle.
 ///
 /// Only equality is meaningful; the two words are the platform's own pair — the
 /// device and inode on Unix, the volume serial number and file index on Windows
@@ -154,6 +155,58 @@ pub fn info(_path: &Path) -> io::Result<LinkInfo> {
 /// disagree about a count.
 pub fn count(path: &Path) -> io::Result<u64> {
     info(path).map(|i| i.links)
+}
+
+/// The identity of the file a handle names.
+///
+/// The same pair [`info`] reads from a path, read from the handle instead: a
+/// handle names the file it was opened on even after the name has gone, so
+/// this is what lets a caller ask "is the thing at this path still the file
+/// this handle was opened on?".
+///
+/// The handle is what makes that answer exact. Reading the identity from the
+/// name instead leaves a window in which the name can be taken away and
+/// another file put in its place, and the two then answer the same question
+/// with two different files.
+#[cfg(unix)]
+pub fn identity_of(file: &File) -> io::Result<Identity> {
+    use std::os::unix::fs::MetadataExt;
+
+    let md = file.metadata()?;
+    Ok(Identity::new(md.dev(), md.ino()))
+}
+
+/// The identity of the file a handle names.
+///
+/// `GetFileInformationByHandle` on the handle itself, so the answer is the
+/// same pair [`info`] reads from a path — and the same on a volume whose
+/// directory entries the std accessors cannot name.
+#[cfg(windows)]
+#[allow(unsafe_code)] // the one FFI surface in the tools; each block below has its SAFETY note
+pub fn identity_of(file: &File) -> io::Result<Identity> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: the handle comes from an open `File` and is valid for the call,
+    // and `info` is a live, correctly typed out parameter for its duration.
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Identity::new(
+        info.dwVolumeSerialNumber as u64,
+        ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+    ))
+}
+
+/// No portable file metadata exists on this platform, so every file has the
+/// same identity.
+#[cfg(not(any(unix, windows)))]
+pub fn identity_of(_file: &File) -> io::Result<Identity> {
+    Ok(Identity::new(0, 0))
 }
 
 #[cfg(test)]

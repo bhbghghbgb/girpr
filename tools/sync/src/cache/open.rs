@@ -20,8 +20,10 @@
 //! claims first, and the name is briefly empty until the rename lands: an
 //! empty file, or an empty directory for a directory copy. The claim is what
 //! keeps two runs off one name, and a bound cannot tell a claim from a
-//! published copy, so the publish checks that its claim is still in place
-//! before the copy lands on it and fails loudly when it is not.
+//! published copy, so the publish checks that the name still holds *its own*
+//! claim before the copy lands on it and fails loudly when it does not: the
+//! claim can have been taken away and the name taken by another run, and
+//! landing the copy on it would publish it over that run's copy.
 //!
 //! The working name is scratch: it goes once the copy is published. A
 //! removal that fails leaves it behind and the run warns about it — the copy
@@ -66,6 +68,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use tracing::{info, trace, warn};
 
+use crate::hardlink::{self, Identity};
 use crate::util::{copy_dir_all, ts_now};
 
 use super::codec::decode_meta;
@@ -665,10 +668,11 @@ fn flush_copy(work: &Path, is_dir: bool) -> Result<()> {
 /// **A claim that is taken away fails the publish.** A bound cannot tell a
 /// claim from a published copy, and on a filesystem that cannot lock a file
 /// there is no record beside the name to say the name is being claimed, so
-/// the claim can go. The publish checks that its claim is still in place
-/// before the copy lands on it, and fails loudly when it is not: landing the
+/// the claim can go. The publish checks that the name still holds *its own*
+/// claim before the copy lands on it — the same object, and not merely
+/// something at the name — and fails loudly when it does not: landing the
 /// copy on a name this run no longer holds would publish it over whatever
-/// holds it now.
+/// holds it now, which is the one thing the claim exists to prevent.
 fn publish_copy(
     work: &Path,
     parent: &Path,
@@ -780,16 +784,30 @@ fn publish_file(work: &Path, cand: &Path) -> Result<(), PublishError> {
                 error = %e,
                 "the copy cannot be linked into place; it is renamed onto a claimed name"
             );
-            match claim_name(cand) {
-                Ok(()) => {}
+            // The name is claimed, and the claim is what the rename replaces.
+            let file = match claim_name(cand) {
+                Ok(file) => file,
                 Err(e) if name_is_taken(&e) => return Err(PublishError::Taken),
                 Err(e) => return Err(PublishError::Io(e)),
-            }
-            // The name is claimed, and the claim is what the rename replaces.
+            };
+            // The identity is read from the handle and not from the name: the
+            // handle names the claim this run created even if the name has
+            // been taken away since, so the answer cannot be another run's
+            // file.
+            let claim = match hardlink::identity_of(&file) {
+                Ok(id) => NameClaim {
+                    id,
+                    _file: Some(file),
+                },
+                Err(e) => return Err(PublishError::Io(e)),
+            };
+            // The publish is held still for a moment, so a test can look at
+            // the folder in the middle of one: the claim is there, empty,
+            // under a published name.
             #[cfg(test)]
             pause_publish();
             // The claim has to still be ours when the copy lands on it.
-            if !claim_is_in_place(cand) {
+            if !claim_is_in_place(cand, &claim) {
                 return Err(PublishError::Io(claim_taken_away()));
             }
             match std::fs::rename(work, cand) {
@@ -841,13 +859,23 @@ fn publish_dir(work: &Path, cand: &Path) -> Result<(), PublishError> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Err(PublishError::Taken),
         Err(e) => return Err(PublishError::Io(e)),
     }
+    // The identity of the claim, read from the name: a directory has no
+    // portable handle, and the name is what the copy is renamed onto. The
+    // claim is gone if the name cannot be read at all.
+    let Some(id) = identity_at(cand) else {
+        return Err(PublishError::Io(claim_taken_away()));
+    };
+    let claim = NameClaim {
+        id,
+        _file: std::fs::File::open(cand).ok(),
+    };
     // The publish is held still for a moment, so a test can look at the
     // folder in the middle of one: the claim is there, empty, under a
     // published name.
     #[cfg(test)]
     pause_publish();
     // The claim has to still be ours when the copy lands on it.
-    if !claim_is_in_place(cand) {
+    if !claim_is_in_place(cand, &claim) {
         return Err(PublishError::Io(claim_taken_away()));
     }
     match std::fs::rename(work, cand) {
@@ -897,12 +925,57 @@ fn pause_publish() {
 }
 
 /// Take a name for a published copy, so that no two runs publish onto one.
-fn claim_name(path: &Path) -> std::io::Result<()> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map(drop)
+///
+/// The handle is returned rather than dropped: it names the claim this run
+/// created, and the publish asks the name whether it still names that claim
+/// before the copy lands on it.
+fn claim_name(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().write(true).create_new(true).open(path)
+}
+
+/// The claim this run holds on a published name.
+///
+/// A claim is the name the run has taken for itself: an empty file for a file
+/// copy, an empty directory for a directory copy. The copy is renamed onto it,
+/// so the claim has to be **this run's** when the copy lands on it.
+///
+/// The identity is what says so. The name has to name the object this run
+/// created — not merely hold *something*, which is a weaker question with a
+/// weaker answer: a bound cannot tell a claim from a published copy, so on a
+/// filesystem that cannot lock a file the claim can be taken away, and
+/// another run can take the name and publish there.
+struct NameClaim {
+    /// The identity of the object the claim created.
+    id: Identity,
+    /// The handle on the claim, kept open while the publish is in flight.
+    ///
+    /// It names the object even after the name has gone, so the identity
+    /// cannot be freed and reused for another file while the publish decides
+    /// whether the claim is still in place. A directory claim has no portable
+    /// handle — `File::open` refuses a directory on Windows — and is named by
+    /// the path alone there.
+    _file: Option<File>,
+}
+
+/// The identity of the object at `path`, if the platform can name it.
+fn identity_at(path: &Path) -> Option<Identity> {
+    hardlink::info(path).ok().map(|info| info.id)
+}
+
+/// Whether the claim on a published name is still this run's.
+///
+/// The claim is ours if the name still names the object this run created. A
+/// name that holds something else — another run's published copy, or another
+/// run's claim — is not ours, and the copy must not land on it: publishing
+/// over another run's copy would leave that run reporting a backup that is
+/// not on disk, which is the one thing the claim exists to prevent.
+fn claim_is_in_place(cand: &Path, claim: &NameClaim) -> bool {
+    hardlink::info(cand).is_ok_and(|info| info.id == claim.id)
+}
+
+/// The error a publish fails with when its claim was taken away.
+fn claim_taken_away() -> std::io::Error {
+    std::io::Error::other("the claimed name was taken away before the copy landed on it")
 }
 
 /// Remove the working copy of a published copy.
@@ -917,24 +990,6 @@ fn remove_working_copy(work: &Path) -> std::io::Result<()> {
         return Err(std::io::Error::other("this file cannot be removed"));
     }
     std::fs::remove_file(work)
-}
-
-/// Whether the claim on a published name is still in place.
-///
-/// The claim is what keeps two runs off one name, and it has to be there when
-/// the copy lands on it. A bound that meets a claim cannot tell it from a
-/// published copy — it is an empty directory, or an empty file, under a
-/// published name — and on a filesystem that cannot lock a file there is no
-/// record beside the name to say that the name is being claimed. So the claim
-/// can be taken away, and a publish that finds it gone must not land the copy
-/// on the name: it would be publishing over whatever holds it now.
-fn claim_is_in_place(cand: &Path) -> bool {
-    cand.symlink_metadata().is_ok()
-}
-
-/// The error a publish fails with when its claim was taken away.
-fn claim_taken_away() -> std::io::Error {
-    std::io::Error::other("the claimed name was taken away before the copy landed on it")
 }
 
 /// Whether an error says the name was taken rather than that the copy failed.
@@ -2162,6 +2217,60 @@ mod tests {
         assert!(
             published_under(&dir).is_empty(),
             "and nothing was published under a name the run no longer held"
+        );
+    }
+
+    /// A publish whose claim was taken over by another run fails loudly, and
+    /// leaves that run's copy alone.
+    ///
+    /// The claim is what keeps two runs off one name, and the name it holds is
+    /// empty — the same shape a bound cannot tell from a published copy. So a
+    /// bound can take the claim away, and another run can take the name and
+    /// publish there. The publish has to notice that the name no longer holds
+    /// *its* claim: landing the copy on it would publish over that run's copy
+    /// and leave it reporting a backup that is not on disk.
+    ///
+    /// Only a filesystem that can neither link nor lock a file gets here: with
+    /// a link the publish is atomic, and with a lock the record beside the
+    /// name keeps a bound off the claim.
+    #[test]
+    fn a_publish_whose_claim_was_taken_over_by_another_run_fails_loudly() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "claim_taken_over");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+        std::fs::write(&db, b"the cache bytes").unwrap();
+
+        let handle = std::thread::spawn(move || {
+            LINKING_UNAVAILABLE.with(|f| f.set(true));
+            LOCKING_UNAVAILABLE.with(|f| f.set(true));
+            PUBLISH_PAUSED.with(|f| f.set(true));
+            backup_db(&db)
+        });
+
+        // The claim: an empty file under a published name.
+        let claim = wait_for_published(&dir);
+        assert!(claim.is_file(), "the claim is an empty file");
+        std::fs::remove_file(&claim).unwrap();
+
+        // Another run takes the name and publishes its copy there.
+        std::fs::write(&claim, b"another run's copy").unwrap();
+
+        let err = handle
+            .join()
+            .unwrap()
+            .expect_err("a publish whose claim was taken over fails");
+        assert!(
+            format!("{err:#}").contains("claimed name"),
+            "the failure says the claim was taken away: {err:#}"
+        );
+        assert_eq!(
+            std::fs::read(&claim).unwrap(),
+            b"another run's copy",
+            "and the copy of the run that took the name is left alone"
+        );
+        assert!(
+            published_under(&dir).is_empty(),
+            "and nothing of this run's was published under that name"
         );
     }
 

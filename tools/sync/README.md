@@ -927,17 +927,24 @@ publish: the copy is renamed onto a name it claims first, and the name is
 briefly empty until the rename lands. A directory copy — a legacy sled cache
 is a directory — cannot be linked either, so its name is claimed with an
 exclusive create and the copy is renamed onto the claim: the name is briefly
-an *empty directory* until the rename lands. The claim is what keeps two runs
-off one name, and a bound that meets one cannot tell it from a published copy,
-so on a filesystem that cannot lock a file the claim can be taken away; a
-publish that finds its claim gone fails the run loudly rather than landing the
-copy on a name it no longer holds. That also means a copy that is still
-being written is not one of the copies the bound ranges over: a run that
-merely opens a folder cannot remove the copy another run is making there,
-however often the bound is applied. The bound never removes the copy the run
-itself made either — the run that reports a backup is the run that has to keep
-it — and the folder still ends within its bound, because the count is made up
-from the next-oldest copy instead.
+an *empty directory* until the rename lands.
+
+The claim is what keeps two runs off one name, and a bound that meets one
+cannot tell it from a published copy, so on a filesystem that cannot lock a
+file the claim can be taken away; a publish that finds its claim gone fails the
+run loudly rather than landing the copy on a name it no longer holds. The claim
+has to be **this run's** for that check to mean anything, so the publish asks
+whether the name still holds the object it created, and not merely whether
+something is at the name: if the claim was taken away and another run took the
+name and published there, the copy is not landed on it either, and that run's
+copy is left alone.
+
+A copy that is still being written is not one of the copies the bound ranges
+over: a run that merely opens a folder cannot remove the copy another run is
+making there, however often the bound is applied. The bound never removes the
+copy the run itself made either — the run that reports a backup is the run
+that has to keep it — and the folder still ends within its bound, because the
+count is made up from the next-oldest copy instead.
 
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is

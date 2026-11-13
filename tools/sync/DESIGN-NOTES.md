@@ -438,10 +438,24 @@ whose rename replaces a directory.
 from a published copy — both are a name under a list's prefix — and on a
 filesystem that cannot lock a file there is no record beside the name to say
 the name is being claimed, so the bound can take the claim away. The publish
-checks that its claim is still in place before the copy lands on it, and
-fails loudly when it is not: landing the copy on a name this run no longer
-holds would publish it over whatever holds it now, which is the one thing
-the claim exists to prevent.
+checks that the name still holds **its own** claim before the copy lands on
+it — the same object the run created, and not merely *something* at the name —
+and fails loudly when it does not: landing the copy on a name this run no
+longer holds would publish it over whatever holds it now, which is the one
+thing the claim exists to prevent.
+
+The check is an identity check, and it has to be: the name is briefly empty,
+so *something* being at it says only that the name is taken, not that the
+claim is this run's. A bound that took the claim away leaves the name free,
+and another run can take it and publish there — the claim is exactly what
+keeps two runs off one name, so the run whose claim was taken away has to
+notice that the name is no longer its own. The identity of a file claim is
+read from the **handle** the claim was created with, not from the name: a
+handle names the object it was opened on even after the name has gone, so the
+answer cannot be another run's file. A directory claim has no portable
+handle, and its identity is read from the name — which is enough, because a
+rename cannot replace a directory that holds a published copy: it fails
+instead, and the other run's copy is never overwritten.
 
 **There is no age and no lease.** "Finished" and "in flight" are told apart by
 the name, and the name is the only thing the bound reads to make that
@@ -568,7 +582,9 @@ itself, `a_published_directory_name_is_claimed_and_the_copy_left_alone` and
 `a_directory_copy_is_published_whole` for the directory case,
 `a_publish_whose_claim_was_taken_away_fails_loudly` and
 `a_publish_whose_claimed_name_was_taken_away_fails_loudly` for the claim
-that went away,
+that went away, and
+`a_publish_whose_claim_was_taken_over_by_another_run_fails_loudly` for the
+claim that another run took over,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, and
 `the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself,
