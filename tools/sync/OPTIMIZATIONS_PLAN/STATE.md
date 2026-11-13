@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: X2
+active_batch: X3
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -559,7 +559,7 @@ followups:
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
-    status: pending
+    status: in_progress
     batch: X3
     commits: []
   - id: F23
@@ -591,7 +591,7 @@ followups:
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
-    status: pending
+    status: in_progress
     batch: X3
     commits: []
   - id: F28
@@ -714,13 +714,13 @@ followups:
   - id: F47
     source: F23
     description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
-    status: pending
+    status: in_progress
     batch: X3
     commits: []
   - id: F48
     source: F23
     description: The new root comment calls compile_patterns "the one way to build its patterns", but glob::Pattern::new is a second way for a caller that already depends on glob, so the wording could be narrowed to "the crate's own way".
-    status: pending
+    status: in_progress
     batch: X3
     commits: []
   - id: F49
@@ -1212,6 +1212,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X3 started: F22, F27, F47 and F48 `pending` →
+  `in_progress`; `active_batch: X2` → `X3`.
 - 2026-11-13 — review X2 `done`: F19, F20, F21, F44, F45 and F46 all kept, no
   fix or revert commits; follow-ups F125–F131 appended, with F125, F126,
   F127 and F129 in Z3, F130 in Z2, and F128 and F131 recorded as `skipped`
