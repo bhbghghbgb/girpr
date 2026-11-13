@@ -385,15 +385,15 @@ reviews:
     result: F52 kept (9eebcc83); F54 kept (ca4d5ae4); F55 kept (86467207); F57 kept (85d1a2d1, 980e7a3d); the review also fixed two stale code doc comments (086c4d2f, 6a7e78a5); 549 passed, 1 skipped; the live-record sparing was confirmed on this host with a standalone lock probe
     followups: [F65, F66, F68]
   - batch: B22
-    status: in_progress
+    status: done
     tasks: [F56, F58, F60, F61]
     base: 0dba9367
     head: fb7dd522
-    result: null
-    followups: []
+    result: F56 kept (a39d5550, a1a0a602, fb7dd522); F58 kept (62f7f950); F60 kept (c9d86e57); F61 kept (3b9a60e3); no fix or revert commits; 553 passed, 1 skipped; three mutation experiments confirmed each new case pins what it claims
+    followups: [F73, F74, F75]
   - batch: B23
     status: pending
-    tasks: [F65, F66, F68]
+    tasks: [F65, F66, F68, F73, F74, F75]
     base: null
     head: null
     result: null
@@ -756,7 +756,7 @@ followups:
   - id: F56
     source: F49
     description: The bound's "never take the run's own copy" record is process-wide and consumed by the first bound for that folder, so a second bound for the same folder in the same process no longer spares it; harmless today, but an assumption a new caller could break.
-    status: pending_review
+    status: completed
     batch: B22
     commits: [a39d5550, a1a0a602, fb7dd522]
   - id: F57
@@ -768,7 +768,7 @@ followups:
   - id: F58
     source: F53
     description: retain_copies is pub, but its safety rests entirely on the caller already holding the folder's cache exclusive lock, and nothing in the signature or doc says so.
-    status: pending_review
+    status: completed
     batch: B22
     commits: [62f7f950]
   - id: F59
@@ -781,13 +781,13 @@ followups:
   - id: F60
     source: F53
     description: The record's body (pid=, started=) is written but never read, so nothing reports or checks which run holds a record.
-    status: pending_review
+    status: completed
     batch: B22
     commits: [c9d86e57]
   - id: F61
     source: F53
     description: The copy's protection after the record is released rests on redb's exclusive file lock, which is redb's property rather than something the suite pins.
-    status: pending_review
+    status: completed
     batch: B22
     commits: [3b9a60e3]
   - id: F64
@@ -828,6 +828,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the same kind of follow-up as F57, and the copy is reclaimed; only the record file lingers, and only on a filesystem that cannot lock a file
+  - id: F73
+    source: F56
+    description: The registry identifies the copy the run applying the bound published as the newest copy this process published in that list, so when the current run publishes nothing into that list, an earlier run's copy is still spared and the bound may keep an older copy in place of a newer one.
+    status: pending
+    batch: B23
+    commits: []
+  - id: F74
+    source: F56
+    description: newest_published picks the newest by full file name, so the _10 fallback suffix sorts before _9; the bound's own age order already assumes that lexicographic name order, so the two agree, but ten copies published inside one microsecond would be mis-ordered.
+    status: pending
+    batch: B23
+    commits: []
+  - id: F75
+    source: F61
+    description: The new lock test asserts only that the second open fails, not that it failed on the lock; asserting the already-open error would say outright that the protection comes from the cache's exclusive lock.
+    status: pending
+    batch: B23
+    commits: []
 ```
 
 ## Human checklist
@@ -859,6 +877,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review B22 `done`: F56, F58, F60 and F61 kept, no fix or
+  revert commits; follow-ups F73–F75 appended and merged into B23, which
+  already held F65, F66 and F68, because all six are small items in the same
+  cache backup subsystem. F56, F58, F60 and F61 `pending_review` →
+  `completed`.
 - 2026-11-13 — follow-up batch B22 review checkpoint opened: F56, F58, F60 and
   F61 `in_progress` → `pending_review`, commits `a39d5550`, `62f7f950`,
   `c9d86e57`, `3b9a60e3`, `a1a0a602`, `fb7dd522`; review B22 `pending` →
