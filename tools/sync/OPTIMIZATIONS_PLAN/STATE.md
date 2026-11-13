@@ -329,15 +329,22 @@ reviews:
     result: F79 kept (fe0e4c95); F81 kept (ca6ad054, 7a04252e); F82 fixed (3341ec24 rewraps the paragraph the follow-up left broken, the claim itself was already true); 562 passed, 1 skipped; the identity comparison was checked to hold on both arms
     followups: [F87, F88, F89]
   - batch: X1
-    status: in_progress
+    status: done
     tasks: [F25, F26, F31, F51, F64]
     base: 7e3e1a02
     head: aca6f3ba
-    result: null
-    followups: []
+    result: F25 kept (d342a72f); F26 kept (1f0b8edf); F31 kept (aca6f3ba); F51 kept (0fdbf2c9); F64 kept (218be752); no fix or revert commits; 567 passed without the feature and 580 with it, 1 skipped; the MSRV script checked at 1.89 with the convert feature in a clean target dir
+    followups: [F116, F117, F118, F120]
   - batch: Z1
     status: pending
-    tasks: [F111, F112]
+    tasks: [F111, F112, F116]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: Z2
+    status: pending
+    tasks: [F117, F118, F120]
     base: null
     head: null
     result: null
@@ -1067,6 +1074,37 @@ followups:
     batch: null
     commits: []
     note: skipped: the same kind as the backup hold records, and F51 deliberately chose to document rather than reclaim
+  - id: F116
+    source: F26
+    description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
+    status: pending
+    batch: Z1
+    commits: []
+  - id: F117
+    source: F51
+    description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
+    status: pending
+    batch: Z2
+    commits: []
+  - id: F118
+    source: F51
+    description: The recorded reasoning that a sweep could not tell a live temporary from a dead one does not address why the process id in the temporary's name is not used to test liveness, given pid reuse and cross-host containers.
+    status: pending
+    batch: Z2
+    commits: []
+  - id: F119
+    source: F31
+    description: The per-feature check enables each declared feature alone, so a member that ever declares two features that only compile together would not be covered by the MSRV gate.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same defect as F111, which is already scheduled in Z1
+  - id: F120
+    source: F64
+    description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
+    status: pending
+    batch: Z2
+    commits: []
 ```
 
 ## Human checklist
@@ -1098,6 +1136,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review X1 `done`: F25, F26, F31, F51 and F64 all kept, no fix
+  or revert commits; follow-ups F116–F120 appended, with F116 in Z1, F117,
+  F118 and F120 in a new batch Z2 for the stale-tool-state wording, and F119
+  recorded as `skipped` because it is the same defect as F111. F25, F26, F31,
+  F51 and F64 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch X1 review checkpoint opened: F25, F26, F31,
   F51 and F64 `in_progress` → `pending_review`, commits `d342a72f`,
   `1f0b8edf`, `0fdbf2c9`, `218be752`, `aca6f3ba`; review X1 `pending` →
