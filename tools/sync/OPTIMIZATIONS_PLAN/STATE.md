@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: Z4
+active_batch: M1
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -472,7 +472,7 @@ followups:
   - id: F6
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
-    status: pending
+    status: in_progress
     batch: M1
     commits: []
   - id: F7
@@ -625,13 +625,13 @@ followups:
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
-    status: pending
+    status: in_progress
     batch: M1
     commits: []
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
-    status: pending
+    status: in_progress
     batch: M1
     commits: []
   - id: F30
@@ -651,7 +651,7 @@ followups:
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
-    status: pending
+    status: in_progress
     batch: M1
     commits: []
   - id: F33
@@ -1170,7 +1170,7 @@ followups:
   - id: F124
     source: F44
     description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
-    status: pending
+    status: in_progress
     batch: M1
     commits: []
   - id: F125
@@ -1342,6 +1342,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M1 started: F6, F28, F29, F32 and F124 `pending`
+  → `in_progress`; `active_batch: Z4` → `M1`.
 - 2026-11-13 — state repair: 15 follow-ups (F19, F20, F21, F22, F25, F26, F27,
   F31, F44, F45, F46, F47, F48, F51, F64) were left at `pending_review` with
   no note, because the scripts that applied those review results only
