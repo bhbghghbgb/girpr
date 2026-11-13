@@ -1569,7 +1569,11 @@ fn retain_siblings(
     // The oldest first: the bound takes the oldest copies away, so the order
     // it walks them in is the order of their age and not the order of their
     // names — the fallback suffix does not sort as a number.
-    siblings.sort_by_key(|s| published_age(&s.1, prefix));
+    //
+    // The key is built once per sibling rather than once per comparison: an
+    // age is a string and a number, and building it again for every
+    // comparison built it again for every comparison.
+    siblings.sort_by_cached_key(|s| published_age(&s.1, prefix));
     let keep = keep.get();
     if siblings.len() <= keep {
         return Ok(());
