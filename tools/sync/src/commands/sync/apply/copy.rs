@@ -680,6 +680,46 @@ mod tests {
         assert!(msg.contains("dst/file.bin"), "names the path: {msg}");
     }
 
+    /// **The algorithm a failed copy names is the canonical one, not the
+    /// request's.**
+    ///
+    /// The case above lets one digest disagree, so it says nothing about *which*
+    /// algorithm a failure names when two disagree: with only one disagreement
+    /// there is only one name to give. This one lets both disagree, and pins the
+    /// answer to the order the crate uses everywhere else — `md5` before
+    /// `sha256`, the order [`AlgoSet::iter`] yields and the order the diff's
+    /// `digest-differs` tag names them in.
+    ///
+    /// The request is spelled the **other** way round, on purpose. The set the
+    /// verify judges carries no order of its own, so the order the user typed is
+    /// not available to it; a set that kept the order it was built in — or a
+    /// verify that read the request instead of the set — would name `sha256` here
+    /// and fail this case.
+    #[test]
+    fn a_failed_copy_names_the_algorithm_in_canonical_order() {
+        let path = Path::new("dst/file.bin");
+        let algos = aset(&["sha256", "md5"]);
+        // Both digests differ, each in the slot its own algorithm owns.
+        let mut src = DigestSet::default();
+        src.insert_named("md5", &[1u8; 16]);
+        src.insert_named("sha256", &[1u8; 32]);
+        let mut dst = DigestSet::default();
+        dst.insert_named("md5", &[2u8; 16]);
+        dst.insert_named("sha256", &[2u8; 32]);
+
+        let err = verify_digests(path, &algos, &src, &dst)
+            .expect_err("two digests that disagree are not a verified copy");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("verify hash(md5)"),
+            "names the first algorithm in canonical order: {msg}"
+        );
+        assert!(
+            !msg.contains("sha256"),
+            "and not the one the request happened to spell first: {msg}"
+        );
+    }
+
     /// The other half of the pair, and the reason test 1 above is trustworthy:
     /// it fails for the disagreement it names rather than for anything about the
     /// maps, and it would fail identically if the comparison were inverted.
