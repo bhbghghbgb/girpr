@@ -378,12 +378,12 @@ reviews:
     result: F87 fixed (c50748d3 drops the newest promise from the --backup-retain help summary, states the rule in BackupPolicy and fixes two stale test docs); F88 kept (7772be18); F89 kept (df7e2c36); 565 passed, 1 skipped; the 36 test names cited in the notes' Enforced by list were checked to exist
     followups: [F94, F95, F96, F97]
   - batch: Y2
-    status: in_progress
+    status: done
     tasks: [F101, F102, F103]
     base: 13d0adcd
-    head: 3dee6745
-    result: null
-    followups: []
+    head: 5a4bec0e
+    result: F101 fixed (f0033492 corrects the outcome sentence, since the drop-and-retry path is the one a platform takes when its rename cannot replace a directory at all); F102 kept (33faafce); F103 fixed (5a4bec0e removes a README claim that nothing reclaims a leftover claim, which the code contradicts); 567 passed, 1 skipped; a comment-stripped compare confirmed no behaviour changed
+    followups: [F108, F109, F110]
   - batch: Y1
     status: done
     tasks: [F90, F91, F94, F95, F96, F97]
@@ -962,22 +962,22 @@ followups:
   - id: F101
     source: F94
     description: The directory retry's window between dropping the claim and the second rename is not stated, and publish_dir's doc claims that a name taken in the meantime makes that rename fail, which holds only for a name with content in it, since a POSIX rename replaces an empty directory.
-    status: pending_review
+    status: completed
     batch: Y2
-    commits: [d52fdd47]
+    commits: [d52fdd47, f0033492]
   - id: F102
     source: F91
     description: The file publish's no-retry rationale ends with "a name is only worth a second try on a platform whose rename cannot replace anything at all", naming as the only retry-safe platform the very one the same paragraph says the copy never lands on, so the sentence reads as an argument for a retry rather than against one.
-    status: pending_review
+    status: completed
     batch: Y2
     commits: [33faafce]
   - id: F103
     source: F95
     description: The claim drop is best-effort, since drop_the_claim ignores the removal error and still reports the claim as gone, while the notes and the code doc say unconditionally that the claim goes and the name is left free; a removal that fails leaves an empty file under a published prefix, which the bound reads as a published copy.
-    status: pending_review
+    status: completed
     batch: Y2
-    commits: [39706eae, 3dee6745]
-    note: implemented by ses_e2c943402ffewyKF0jAqEUsYJA; the claim drop is stated to be best-effort everywhere it is described, and the doc summary says it answers whether the name still held the claim rather than whether the claim is gone
+    commits: [39706eae, 3dee6745, 5a4bec0e]
+    note: review Y2 fixed (5a4bec0e removes the README claim that nothing reclaims a leftover claim, which the code contradicts); 39706eae stated the best-effort behaviour correctly everywhere
   - id: F104
     source: F103
     description: A failed claim removal is silent, since drop_the_claim swallows the error entirely and the run does not warn about the leftover, unlike the working-copy leftover which warns.
@@ -1006,6 +1006,27 @@ followups:
     batch: null
     commits: []
     note: skipped: the backup publish chain ends at this batch; distinguishing the two failures is a diagnostic nicety and the publish fails loudly either way
+  - id: F108
+    source: F101
+    description: The notes headline that the bound can only ever select a whole copy does not name the leftover-claim exception that the paragraph under it now gives.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; a wording consistency item in the same documents
+  - id: F109
+    source: F101
+    description: The module doc and the function docs order the three claim gaps differently from the notes, so the same three gaps are met in two orders.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; an ordering choice between two documents, not a defect
+  - id: F110
+    source: F103
+    description: The README best-effort and leftover-claim paragraphs name only girpr-cache-backup-<ts>, where a leftover claim can also sit under girpr-cache-old-<ts>.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the backup publish chain ends at this batch; a wording completeness item in the same documents
 ```
 
 ## Human checklist
@@ -1037,6 +1058,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review Y2 `done`: F101 fixed (f0033492), F102 kept (33faafce),
+  F103 fixed (5a4bec0e); follow-ups F108–F110 appended and recorded as
+  `skipped` with reasons, since the backup publish chain ends here. F101, F102
+  and F103 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch Y2 review checkpoint opened: F101, F102 and
   F103 `in_progress` → `pending_review`, commits `d52fdd47`, `33faafce`,
   `39706eae`, `3dee6745`; review Y2 `pending` → `in_progress`, base
