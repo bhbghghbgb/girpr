@@ -713,9 +713,9 @@ digest, and the tag says which. The list is always in a **fixed order** (`md5` b
 `sha256`), not the order the flags were typed, so `--hash-all-of sha256 md5` reports
 `digest-differs:md5+sha256`. That makes the tag a function of the disagreement rather
 than of how two flags were ordered, which is what lets a parser switch on it. A failed
-copy's `verify hash(<algo>)` message names its algorithm in the same fixed order — see
-[What a copy costs](#what-a-copy-costs). A parser splits on the first `:`; the JSON
-form is a flat string
+copy's verify message names its algorithm in the same fixed order, and its shape is
+spelled out in [What a copy costs](#what-a-copy-costs). A parser splits on the first
+`:`; the JSON form is a flat string
 (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
 
 **Default off, and it changes nothing but the text** — not the exit code, not the
