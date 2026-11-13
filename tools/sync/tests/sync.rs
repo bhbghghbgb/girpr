@@ -2036,9 +2036,9 @@ fn run_sync_with_no_backup_leaves_no_copy() {
 /// run is still using is left alone and does not spend the removal budget,
 /// so the bound walks on to the next copy in age order and can take one that
 /// is among the newest N. None is spoken for here, so the oldest of each
-/// list goes and what is left is the newest of the three. That is what this
-/// case shows, not what the bound promises: the copies a folder keeps are
-/// not necessarily its newest.
+/// list goes and what is left is the two newest of the three. That is what
+/// this case shows, not what the bound promises: the copies a folder keeps
+/// are not necessarily its newest.
 #[test]
 fn run_sync_backup_retain_bounds_each_prefix() {
     let t = temp_root("retain");
