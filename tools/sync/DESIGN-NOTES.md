@@ -16,7 +16,7 @@ and not here.
 ## Load-bearing invariants, and what enforces them
 
 The dangerous edits in this crate are the ones that break an invariant nothing
-fails loudly about. Seven of them.
+fails loudly about. Twelve of them.
 
 ### The verify needs two independent reads
 
@@ -749,7 +749,7 @@ plus `tests/rw_threads/limiter.rs`); leave them alone.
 **Do not convert `FileRec.kind` to an enum.** It is the obvious companion to
 `HashAlg`, and it is the wrong direction: `kind` is a closed registry *in the
 codec* by design, so that a third kind breaks old binaries loudly instead of
-quietly. See the fifth invariant for why algorithms are not the same case.
+quietly. See the sixth invariant for why algorithms are not the same case.
 
 **Do not add `bitflags` (or any dependency) for `AlgoSet`.** `bitflags` is already
 in `Cargo.lock` transitively, so it would cost nothing to compile — which is
