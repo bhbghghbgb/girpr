@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: X3
+active_batch: Z4
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1191,19 +1191,19 @@ followups:
   - id: F132
     source: F22
     description: commands/sync/mod.rs still builds its two folder labels inline instead of the shared side_label; identical text today, but a second spelling of the same rule.
-    status: pending
+    status: in_progress
     batch: Z4
     commits: []
   - id: F133
     source: F27
     description: The same lowercase versus ASCII-case fold wording survives elsewhere, in src/diff/mod.rs, src/commands/sync/rename.rs and src/planner/pairs.rs, which says "Pair by lowercase key".
-    status: pending
+    status: in_progress
     batch: Z4
     commits: []
   - id: F134
     source: F27
     description: src/util.rs still uses a raw to_lowercase() comparison for the identity fallback, which is worth a look for the same reason the wording was corrected.
-    status: pending
+    status: in_progress
     batch: Z4
     commits: []
   - id: F135
@@ -1216,7 +1216,7 @@ followups:
   - id: F136
     source: F22
     description: The existing case assertion that the label resolves to the folder to run it on now holds only because the folder path is a prefix of the record path, so it is weaker than its comment claims.
-    status: pending
+    status: in_progress
     batch: Z4
     commits: []
   - id: F137
@@ -1257,6 +1257,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Z4 started: F132, F133, F134 and F136 `pending`
+  → `in_progress`; `active_batch: X3` → `Z4`.
 - 2026-11-13 — review X3 `done`: F22, F27, F47 and F48 all kept, no fix or
   revert commits; follow-up F136 added to Z4 and F137 recorded as `skipped`
   because it mirrors the existing girpr_log re-export precedent. F22, F27,
