@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M3
+active_batch: M4
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1129,13 +1129,13 @@ followups:
   - id: F111
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F112
     source: F25
     description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F113
@@ -1162,7 +1162,7 @@ followups:
   - id: F116
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F117
@@ -1249,7 +1249,7 @@ followups:
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F131
@@ -1553,6 +1553,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-14 — follow-up batch M4 started: F111, F112, F116 and F130 `pending` →
+  `in_progress`; `active_batch: M3` → `M4`.
 - 2026-11-13 — review M3 `done`: F33 fixed (2bd29e74), F34 kept (0d7f7646),
   F35 kept (4fb0741f), F41 fixed (929908a7); follow-ups F172–F174 appended
   with batch `M14`. F33, F34, F35 and F41 `pending_review` → `completed`.
