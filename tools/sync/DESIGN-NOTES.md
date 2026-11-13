@@ -488,9 +488,21 @@ runs without one there.
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy, and the folder still ends within its bound,
 because the count is made up from the next-oldest copy instead. The copy is
-spared by every bound the process makes for that list, and not only by the
-first one; the copies the process published before it belong to earlier runs,
-and those are ordinary copies again.
+spared by every bound **that run** makes for that list, and not only by the
+first one; the copies an earlier run in this process published belong to
+earlier runs, and those are ordinary copies again.
+
+**The run is the boundary, and the boundary is the open.** The copies a run
+published are the ones published since the folder's cache was last opened:
+the run that opens the cache is the run that published them, and the run
+before it published the ones before that. A run that publishes nothing into a
+list has nothing of its own to spare there — so the copy the run before it
+published is an ordinary copy again, and sparing it would keep an older copy
+in place of a newer one. The registry that says this holds two lists per
+folder: the copies waiting for the next open, and the copies the last open
+adopted. It is process-wide because the copies are made in more than one
+place, and it is scoped to a run because the guarantee is about a run's copy
+and not about a process's.
 
 **A copy is published before the lock that would protect it is taken.** That
 gap is the one place where a live run's copy can be lost: the run that
@@ -555,7 +567,9 @@ bound against the run's own copy,
 `a_second_bound_still_spares_the_copy_the_process_published` for a later bound
 in the same run,
 `an_earlier_runs_copy_is_an_ordinary_copy_again` for a copy an earlier run in
-the same process published,
+the same process published, and
+`an_earlier_runs_copy_is_not_spared_by_a_run_that_published_nothing` for the
+run that published nothing into the list,
 `a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone` for the
 same thing seen through a whole run,
 `the_folder_of_a_legacy_sled_cache_is_bounded`,
