@@ -113,7 +113,7 @@ fn read_row(
 /// handles do not conflict with each other.
 pub struct CacheDb {
     pub(super) db: Handle,
-    /// Entries-table reads this handle has served.
+    /// Entries-table reads this cache has served.
     ///
     /// A test seam, and the reason the handle carries it rather than the
     /// caller: what a test needs to know is whether a read was **batched**,
@@ -436,7 +436,13 @@ impl CacheDb {
         self.db.begin_read().context("begin read")
     }
 
-    /// How many entries-table reads this handle has served.
+    /// How many entries-table reads this cache has served.
+    ///
+    /// The count belongs to the **cache**, not to the handle that reads
+    /// through it: the shared in-memory backend hands every handle on one
+    /// path the same counter, so a handle opened after a run can say what
+    /// that run's handle did. The handles on a cache file share no counter,
+    /// so there the count a handle reports is the reads that handle made.
     ///
     /// A test seam, for the reason the counter exists at all: a read that
     /// costs one transaction whatever its length is a different thing from a
