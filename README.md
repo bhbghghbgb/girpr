@@ -330,10 +330,12 @@ any missing toolchain through rustup, and runs
 `cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
 so tests and benches are held to the same floor. A member's optional features
 are checked as well — the same command with `--features <feature>` — so the
-code that only builds when a feature is on is held to the same floor too. It needs
-rustup and network access on the first run; after that the declared
-toolchains and the shared target directory make a run a few minutes of
-incremental builds. The `msrv` workflow runs the same script.
+code that only builds when a feature is on is held to the same floor too. A
+feature that does not build on its own is checked with the group's features
+enabled instead, so a member whose features only build together is covered
+rather than failed. It needs rustup and network access on the first run;
+after that the declared toolchains and the shared target directory make a run
+a few minutes of incremental builds. The `msrv` workflow runs the same script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working

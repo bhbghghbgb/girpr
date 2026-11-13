@@ -23,7 +23,14 @@ default, and code behind a feature that is off by default is not in it — so a
 dependency or a syntax that only the optional code needs would raise the
 member's floor without anything here noticing. The feature list comes from
 `cargo metadata` too, so it follows the manifests rather than a second list
-kept here. The same check runs in the `msrv` workflow.
+kept here.
+
+A feature that does not build on its own is not a failure straight away: it
+may be a feature that only builds in combination with another, and a member
+with one is checked with the group of its optional features instead — the
+group is the configuration that holds every optional feature at once, and it
+is the only one that builds such a member. The same check runs in the `msrv`
+workflow.
 
 Run it from anywhere; it works from the repository root:
 
@@ -117,17 +124,46 @@ try {
         # The code behind an optional feature is not in the check above, so it
         # is checked on its own: a member's floor is the floor of every code it
         # ships, and an optional feature is code the member ships when it is
-        # asked for. Each feature is checked alone, so a member whose features
-        # are mutually exclusive still checks.
-        foreach ($feature in (Get-OptionalFeatures $pkg)) {
+        # asked for.
+        #
+        # A feature is checked alone, so a member whose features are mutually
+        # exclusive still checks. A feature that does not build alone may be
+        # one that only builds in combination with another, and a member with
+        # one is checked with the group of its optional features instead: the
+        # group is the configuration that holds every optional feature at once,
+        # and it is the only one that builds such a member. The group is
+        # checked once per member, and only once a feature has failed alone.
+        $optional = @(Get-OptionalFeatures $pkg)
+        $group = $optional -join ','
+        # $null until the group has been checked. A member with one optional
+        # feature has no group to enable, so a feature that does not build
+        # alone is a failure of its own.
+        $groupExit = $null
+        foreach ($feature in $optional) {
             & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $feature
             $featureExit = $LASTEXITCODE
-            if ($featureExit -ne 0) {
-                Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $feature (exit code $featureExit)"
-                $failed += "$($pkg.name) ($ver, --features $feature, exit code $featureExit)"
-            } else {
+            if ($featureExit -eq 0) {
                 Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $feature"
+                continue
             }
+            # The feature does not build on its own. It may be one that only
+            # builds in combination with another, so the group is checked
+            # before the member is failed.
+            if ($null -eq $groupExit -and $optional.Count -gt 1) {
+                & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $group
+                $groupExit = $LASTEXITCODE
+                if ($groupExit -eq 0) {
+                    Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $group"
+                } else {
+                    Write-Host "    the group --features $group does not build either (exit code $groupExit)"
+                }
+            }
+            if ($groupExit -eq 0) {
+                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $group, which holds $feature"
+                continue
+            }
+            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $feature (exit code $featureExit)"
+            $failed += "$($pkg.name) ($ver, --features $feature, exit code $featureExit)"
         }
     }
 
