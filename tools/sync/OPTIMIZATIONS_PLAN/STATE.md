@@ -377,13 +377,20 @@ reviews:
     head: c50748d3
     result: F87 fixed (c50748d3 drops the newest promise from the --backup-retain help summary, states the rule in BackupPolicy and fixes two stale test docs); F88 kept (7772be18); F89 kept (df7e2c36); 565 passed, 1 skipped; the 36 test names cited in the notes' Enforced by list were checked to exist
     followups: [F94, F95, F96, F97]
-  - batch: Y1
-    status: in_progress
-    tasks: [F90, F91, F94, F95, F96, F97]
-    base: ef56b02c
-    head: 71912478
+  - batch: Y2
+    status: pending
+    tasks: [F101, F102, F103]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: Y1
+    status: done
+    tasks: [F90, F91, F94, F95, F96, F97]
+    base: ef56b02c
+    head: 0d287806
+    result: F90 kept (4a9178e7); F91 kept (4a9178e7, 6bd5912c); F94 kept (4a9178e7); F95 kept (58a86fcd); F96 fixed (0531886c corrects two places in open.rs that still gave the too-strong reason); F97 fixed (0d287806 corrects the doc count); 567 passed, 1 skipped; the design notes backticked identifiers were swept against the sources with 0 missing
+    followups: [F101, F102, F103]
 followups:
   - id: F1
     source: T01
@@ -883,15 +890,15 @@ followups:
   - id: F90
     source: F88
     description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
-    status: pending_review
+    status: completed
     batch: Y1
-    commits: [4a9178e7, 71912478]
+    commits: [4a9178e7, 6bd5912c]
   - id: F91
     source: F88
     description: publish_file's fallback removes the claim and reports the error rather than retrying the rename, so on a platform whose rename cannot replace a file that publish can never succeed; practically unreachable, since Windows can link and POSIX replaces.
-    status: pending_review
+    status: completed
     batch: Y1
-    commits: [6bd5912c]
+    commits: [4a9178e7, 6bd5912c]
   - id: F92
     source: F87
     description: The bound's "keep the newest N" reading could be a behaviour choice instead of a documented one, keeping the newest N plus the spoken-for copies at the cost of the folder exceeding N; a policy decision, not a defect.
@@ -909,28 +916,28 @@ followups:
   - id: F94
     source: F88
     description: The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity.
-    status: pending_review
+    status: completed
     batch: Y1
     commits: [4a9178e7]
   - id: F95
     source: F88
     description: publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal.
-    status: pending_review
+    status: completed
     batch: Y1
     commits: [58a86fcd, 4a9178e7]
   - id: F96
     source: F89
     description: The documents say the failed run's bound spares the waiting copies because they are the copies it published, but the waiting list can also hold an earlier run's copy in the same process, so the stated reason is too strong.
-    status: pending_review
+    status: completed
     batch: Y1
-    commits: [5ee6d57f]
+    commits: [5ee6d57f, 0531886c]
   - id: F97
     source: F87
     description: The end-to-end test run_sync_backup_retain_keeps_the_newest_of_each_prefix still says it keeps the newest N siblings of each prefix, which is true for the case it exercises but carries the naive reading in its name and doc.
-    status: pending_review
+    status: completed
     batch: Y1
-    commits: [8c13c181]
-    note: implemented by ses_e2cb488bfffekPDx3Ika96d307; the test was renamed after what it checks and its doc now says what the bound takes
+    commits: [8c13c181, 0d287806]
+    note: review Y1 fixed (0d287806 corrects the doc last count, which said one copy where it is two); 8c13c181 renamed the test after what it checks
   - id: F98
     source: F95
     description: The file publish's first rename still replaces unconditionally on a filesystem that can link but whose link failed for another reason, such as EPERM on an overlay or FUSE mount, so the copy lands over whatever is at the name; a branch that refuses the fallback when the link failed for a reason other than the name being taken would close it.
@@ -952,6 +959,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the over-sparing is conservative, it spares more than needed and cannot lose a backup
+  - id: F101
+    source: F94
+    description: The directory retry's window between dropping the claim and the second rename is not stated, and publish_dir's doc claims that a name taken in the meantime makes that rename fail, which holds only for a name with content in it, since a POSIX rename replaces an empty directory.
+    status: pending
+    batch: Y2
+    commits: []
+  - id: F102
+    source: F91
+    description: The file publish's no-retry rationale ends with "a name is only worth a second try on a platform whose rename cannot replace anything at all", naming as the only retry-safe platform the very one the same paragraph says the copy never lands on, so the sentence reads as an argument for a retry rather than against one.
+    status: pending
+    batch: Y2
+    commits: []
+  - id: F103
+    source: F95
+    description: The claim drop is best-effort, since drop_the_claim ignores the removal error and still reports the claim as gone, while the notes and the code doc say unconditionally that the claim goes and the name is left free; a removal that fails leaves an empty file under a published prefix, which the bound reads as a published copy.
+    status: pending
+    batch: Y2
+    commits: []
 ```
 
 ## Human checklist
@@ -983,6 +1008,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review Y1 `done`: F90, F91, F94 and F95 kept; F96 fixed
+  (0531886c) and F97 fixed (0d287806); follow-ups F101–F103 appended with batch
+  `Y2`. Those three are documentation corrections to sentences that state
+  something false or read backwards, so they get one final batch rather than
+  being skipped; the state records that Y2 ends the backup publish chain and
+  that anything further of the same kind is to be skipped with the reason.
+  F90, F91, F94, F95, F96 and F97 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch Y1 review checkpoint opened: F90, F91, F94,
   F95, F96 and F97 `in_progress` → `pending_review`, commits `58a86fcd`,
   `4a9178e7`, `5ee6d57f`, `8c13c181`, `6bd5912c`, `71912478`; review Y1
