@@ -987,7 +987,7 @@ claim by what it is rather than by what it is called, so a claim taken away
 in between is still removed: that gap cannot be closed either. The same goes
 for the claim a file copy drops when its rename does not land — the name is
 asked about again first, so another run's published copy is left alone, and
-the gap between the ask and the removal is still there. All three gaps are
+the gap between the ask and the removal is still there. All of these gaps are
 only reachable on a filesystem that cannot lock a file, because the record
 below keeps a bound — and another publisher — off the name until the run
 opens the folder's cache.
