@@ -1129,13 +1129,13 @@ followups:
   - id: F111
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F112
     source: F25
     description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F113
@@ -1162,7 +1162,7 @@ followups:
   - id: F116
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F117
@@ -1249,7 +1249,7 @@ followups:
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
-    status: pending
+    status: in_progress
     batch: M4
     commits: []
   - id: F131
@@ -1553,6 +1553,7 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
 - 2026-11-14 — the first M4 session died before doing anything, with a clean
   tree and no commits, so F111, F112, F116 and F130 were reset
   `in_progress` → `pending` for a retry.
