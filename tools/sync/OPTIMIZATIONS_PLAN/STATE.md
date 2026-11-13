@@ -365,18 +365,18 @@ reviews:
     followups: [F125, F126, F127, F129, F130]
   - batch: Z4
     status: pending
-    tasks: [F132, F133, F134]
+    tasks: [F132, F133, F134, F136]
     base: null
     head: null
     result: null
     followups: []
   - batch: X3
-    status: in_progress
+    status: done
     tasks: [F22, F27, F47, F48]
     base: 90c57c19
     head: d774d7ce
-    result: null
-    followups: []
+    result: F22 kept (7279aee5); F27 kept (9ea19b36); F47 kept (cb9c08a3); F48 kept (d774d7ce); no fix or revert commits; 572 passed, 1 skipped; both new pins were mutation-checked, and the public_surface target fails to compile without the re-export
+    followups: [F136]
   - batch: X4
     status: pending
     tasks: [F6, F28, F29, F32, F39, F40]
@@ -1213,6 +1213,19 @@ followups:
     batch: null
     commits: []
     note: skipped: renaming a public variant for no user-visible gain, and the design notes name the rule
+  - id: F136
+    source: F22
+    description: The existing case assertion that the label resolves to the folder to run it on now holds only because the folder path is a prefix of the record path, so it is weaker than its comment claims.
+    status: pending
+    batch: Z4
+    commits: []
+  - id: F137
+    source: F47
+    description: The crate root now re-exports the whole glob crate rather than only glob::Pattern, which is wider than the type the public signatures actually name; the same shape as the existing girpr_log re-export, so a choice rather than a defect.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: it mirrors the existing girpr_log re-export precedent, and narrowing the re-export to one type would be a second convention in the same block
 ```
 
 ## Human checklist
@@ -1244,6 +1257,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review X3 `done`: F22, F27, F47 and F48 all kept, no fix or
+  revert commits; follow-up F136 added to Z4 and F137 recorded as `skipped`
+  because it mirrors the existing girpr_log re-export precedent. F22, F27,
+  F47 and F48 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch X3 review checkpoint opened: F22, F27, F47 and
   F48 `in_progress` → `pending_review`, commits `7279aee5`, `9ea19b36`,
   `cb9c08a3`, `d774d7ce`; review X3 `pending` → `in_progress`, base
