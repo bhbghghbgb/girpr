@@ -1088,8 +1088,9 @@ the record with it.
 A publish that could not land its copy can leave the **claim** behind — an
 empty file under `girpr-cache-backup-<ts>`, or an empty directory for a
 legacy sled cache — because dropping a claim is best-effort and the removal
-can fail. It is tool state and is never mirrored as content, but nothing
-reclaims it: remove it by hand.
+can fail. It is tool state and is never mirrored as content. The bound reads
+the name as a published copy, so it counts towards the bound and the bound
+reclaims it like any other copy once the folder is over its bound.
 
 ### `--dry-run`
 
