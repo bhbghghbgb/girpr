@@ -200,8 +200,12 @@ pub struct BackupPolicy {
     /// `--backup-retain N`: bound each prefix to N copies.
     ///
     /// The oldest copies are removed until the folder holds N of them. A
-    /// copy another run is still using is kept as well, so a folder can
-    /// hold more than N while one is there.
+    /// copy another run is still using is kept as well, and it does not
+    /// spend the removal budget: the bound walks on to the next copy in age
+    /// order, and that one may be among the newest. The copies a folder
+    /// keeps are therefore not necessarily its newest, and a folder holds
+    /// more than N while there are not enough copies the bound may remove
+    /// to make the count up.
     ///
     /// `None` keeps them all, which is the default.
     pub retain: Option<NonZeroUsize>,

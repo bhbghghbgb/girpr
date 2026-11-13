@@ -2760,7 +2760,7 @@ mod tests {
     /// That run is the one reporting the copy, so a bound that removed it
     /// would leave the run reporting a backup that is not on disk. The
     /// folder still ends within its bound: the count is made up from the
-    /// next-oldest copy instead.
+    /// next copy in age order instead.
     #[test]
     fn the_bound_keeps_the_copy_the_run_published() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "spared");
@@ -2816,11 +2816,11 @@ mod tests {
     /// A copy an earlier run published is not spared by a later run that
     /// published nothing.
     ///
-    /// The bound keeps the newest copies, so sparing an older one would keep
-    /// an older copy in place of a newer one. The run that applies the bound
-    /// published nothing into this list, so it has nothing of its own to
-    /// spare — and the copy the earlier run published is an ordinary copy
-    /// again.
+    /// The bound takes the oldest copies it may take, so sparing an older one
+    /// would keep an older copy in place of a newer one. The run that applies
+    /// the bound published nothing into this list, so it has nothing of its
+    /// own to spare — and the copy the earlier run published is an ordinary
+    /// copy again.
     #[test]
     fn an_earlier_runs_copy_is_not_spared_by_a_run_that_published_nothing() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "earlier_not_spared");
