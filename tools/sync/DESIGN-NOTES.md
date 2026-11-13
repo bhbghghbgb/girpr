@@ -624,6 +624,10 @@ that went away,
 claim that another run took over, and
 `a_publish_does_not_drop_the_copy_of_another_run` for the copy that is at the
 name when the claim is dropped,
+`a_publish_that_does_not_land_does_not_drop_the_copy_of_another_run` for the
+copy that is at the name when a rename that did not land drops the claim, and
+`a_publish_whose_rename_does_not_land_fails_the_run_and_frees_the_name` for
+the publish that fails when the rename does not land,
 `a_published_copy_is_named_after_it_became_whole` for the name the bound
 orders the copies by, and
 `the_bound_orders_the_copies_by_age_and_not_by_name` for the order itself,
