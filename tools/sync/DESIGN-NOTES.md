@@ -432,8 +432,9 @@ loudly, the claim is dropped and the name left free, and the run reports the
 failure rather than a backup that is not on disk. A **file** copy does not
 drop its claim and try again the way a directory copy does: a rename of a
 file replaces whatever is at the name, so a second try could put the copy
-over another run's published copy — and a name is only worth a second try
-on a platform whose rename cannot replace anything at all. A directory copy
+over another run's published copy — and the only platform whose rename
+cannot replace anything at all is the one where the copy never lands, so
+there is nowhere a second try would be worth making. A directory copy
 cannot be linked at all, so its name is claimed with an exclusive create and
 the copy is renamed onto that claim: a POSIX rename onto an existing
 **empty** directory succeeds, so a rename on its own would let a second run

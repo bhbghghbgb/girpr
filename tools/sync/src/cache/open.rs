@@ -850,8 +850,9 @@ enum PublishError {
 /// be published. The claim is dropped and the publish fails there, rather
 /// than dropped and tried again: a rename of a file replaces whatever is at
 /// the name, so a second try could put the copy over another run's published
-/// copy — and a name is only worth a second try on a platform whose rename
-/// cannot replace anything at all.
+/// copy — and the only platform whose rename cannot replace anything at all
+/// is the one where the copy never lands, so there is nowhere a second try
+/// would be worth making.
 ///
 /// **A rename that does not land drops the claim.** The copy is not
 /// published, so the publish fails and the run reports the failure rather
