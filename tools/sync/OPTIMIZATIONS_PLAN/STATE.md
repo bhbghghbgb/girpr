@@ -384,13 +384,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M10
+    status: pending
+    tasks: [F152, F153, F154]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M1
-    status: in_progress
+    status: done
     tasks: [F6, F28, F29, F32, F124]
     base: d597f80d
     head: f841e1e8
-    result: null
-    followups: []
+    result: F6 kept (27e6f74f); F28 kept (f841e1e8); F29 kept (e7264fba); F32 kept (601d7efe); F124 kept (746f94cb); no fix or revert commits; 572 passed without the feature and 585 with it, 1 skipped; the count was verified against the tree at twelve, not the eleven the follow-up text said
+    followups: [F152, F153, F154]
   - batch: M2
     status: pending
     tasks: [F36, F37, F38, F39, F40]
@@ -479,7 +486,7 @@ followups:
   - id: F6
     source: T03
     description: DESIGN-NOTES.md still says "Seven of them" about the load-bearing invariants, but there are now eleven such sections; the count was already stale before this task.
-    status: pending_review
+    status: completed
     batch: M1
     commits: [27e6f74f]
   - id: F7
@@ -632,13 +639,13 @@ followups:
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
-    status: pending_review
+    status: completed
     batch: M1
     commits: [f841e1e8]
   - id: F29
     source: T16
     description: The design notes claim every known limit is stated in README.md, but "neither fold is the filesystem's own case table" is only in the design notes.
-    status: pending_review
+    status: completed
     batch: M1
     commits: [e7264fba]
   - id: F30
@@ -658,7 +665,7 @@ followups:
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
-    status: pending_review
+    status: completed
     batch: M1
     commits: [601d7efe]
   - id: F33
@@ -1177,7 +1184,7 @@ followups:
   - id: F124
     source: F44
     description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
-    status: pending_review
+    status: completed
     batch: M1
     commits: [746f94cb]
   - id: F125
@@ -1348,6 +1355,31 @@ followups:
     status: pending
     batch: M9
     commits: []
+  - id: F152
+    source: F28
+    description: The new link.rs row shares its basename with the commands/sync/plan/ row's link.rs; naming the src-relative path would remove the ambiguity for a reader scanning for link.rs.
+    status: pending
+    batch: M10
+    commits: []
+  - id: F153
+    source: F32
+    description: The README Integration tests bullet omits tests/convert.rs, tests/symlink.rs and tests/migration_lock.rs, and never says the converter cases need the convert feature, which is the same gap this batch fixed in the design notes.
+    status: pending
+    batch: M10
+    commits: []
+  - id: F154
+    source: F29
+    description: The known-limits preamble still says each is cache hygiene or a race, not a wrong answer, which describes neither the host-coverage limit nor the filesystem case table.
+    status: pending
+    batch: M10
+    commits: []
+  - id: F155
+    source: F28
+    description: The source-layout table still omits src/rw/fixtures.rs and src/hash/tests.rs, even though it lists the sibling planner/fixtures.rs.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F151, already scheduled in M9
 ```
 
 ## Human checklist
@@ -1379,6 +1411,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review M1 `done`: F6, F28, F29, F32 and F124 all kept, no fix
+  or revert commits; follow-ups F152–F154 appended with batch `M10` and F155
+  recorded as `skipped` because it is the same item as F151. F6, F28, F29,
+  F32 and F124 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch M1 review checkpoint opened: F6, F28, F29, F32
   and F124 `in_progress` → `pending_review`, commits `27e6f74f`, `f841e1e8`,
   `e7264fba`, `601d7efe`, `746f94cb`; review M1 `pending` → `in_progress`,
