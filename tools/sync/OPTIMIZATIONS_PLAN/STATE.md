@@ -329,8 +329,15 @@ reviews:
     result: F79 kept (fe0e4c95); F81 kept (ca6ad054, 7a04252e); F82 fixed (3341ec24 rewraps the paragraph the follow-up left broken, the claim itself was already true); 562 passed, 1 skipped; the identity comparison was checked to hold on both arms
     followups: [F87, F88, F89]
   - batch: X1
-    status: pending
+    status: in_progress
     tasks: [F25, F26, F31, F51, F64]
+    base: 7e3e1a02
+    head: aca6f3ba
+    result: null
+    followups: []
+  - batch: Z1
+    status: pending
+    tasks: [F111, F112]
     base: null
     head: null
     result: null
@@ -558,15 +565,15 @@ followups:
   - id: F25
     source: T14
     description: --output=json and flags placed before the positionals are now accepted where the hand-rolled parser rejected them; a harmless widening, but nothing in the tree records it.
-    status: in_progress
+    status: pending_review
     batch: X1
-    commits: []
+    commits: [d342a72f]
   - id: F26
     source: T14
     description: If the converter ever needs --version, it needs #[command(version)]; today --version is an unknown flag and exits 3.
-    status: in_progress
+    status: pending_review
     batch: X1
-    commits: []
+    commits: [1f0b8edf]
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
@@ -595,9 +602,9 @@ followups:
   - id: F31
     source: T18
     description: The MSRV job runs cargo check -p girsync --all-targets --locked without features, so sled and the converter are no longer MSRV-checked now that the dependency is optional; they do still build on 1.89 today. The script is tests/scripts/check-msrv.ps1.
-    status: in_progress
+    status: pending_review
     batch: X1
-    commits: []
+    commits: [aca6f3ba]
   - id: F32
     source: T18
     description: The DESIGN-NOTES pointer that cites tests/convert.rs for the blake3 cases does not say the file now only runs under the convert feature.
@@ -719,9 +726,9 @@ followups:
   - id: F51
     source: F30
     description: The conversion temporary sits inside the reserved namespace, so it is never cleaned up by the retention bound and accumulates in a destination root; the old name had the same fate, so this is not a regression, but nothing removes a stale girpr-cache-convert-*.redb.
-    status: in_progress
+    status: pending_review
     batch: X1
-    commits: []
+    commits: [0fdbf2c9]
   - id: F52
     source: F17
     description: A published name exists empty for the microseconds between the create_new claim and the rename, so it is briefly a published name with no bytes; closing the window would need a hard link or a no-replace rename rather than a portable rename.
@@ -786,9 +793,9 @@ followups:
   - id: F64
     source: F21
     description: The girpr-cache-partial-* working name is never reclaimed by any bound, so a killed run leaves it in the folder; the same stale-tool-state story as the conversion temporary.
-    status: in_progress
+    status: pending_review
     batch: X1
-    commits: []
+    commits: [218be752]
   - id: F65
     source: F52
     description: The published directory name is still briefly an empty directory between the exclusive create and the rename, and the README's "A copy appears whole, or not at all" paragraph does not repeat it; on a filesystem that cannot lock a file a bound can also remove that empty claim and make the publish fail loudly.
@@ -1027,6 +1034,39 @@ followups:
     batch: null
     commits: []
     note: skipped: the backup publish chain ends at this batch; a wording completeness item in the same documents
+  - id: F111
+    source: F31
+    description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
+    status: pending
+    batch: Z1
+    commits: []
+  - id: F112
+    source: F25
+    description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
+    status: pending
+    batch: Z1
+    commits: []
+  - id: F113
+    source: F26
+    description: The main girsync binary has no --version either, while gircap has one, so the workspace has no single convention.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a workspace-wide convention decision, outside this crate
+  - id: F114
+    source: F26
+    description: The DisplayVersion arm in sled2redb error path stays unreachable until a version is declared.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the documented consequence of not declaring a version, which F26 deliberately kept
+  - id: F115
+    source: F51
+    description: A safe reclaim of a stale conversion temporary would need a liveness marker beside the name, a lock like the hold records; without one, any sweep can take a live conversion file.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same kind as the backup hold records, and F51 deliberately chose to document rather than reclaim
 ```
 
 ## Human checklist
@@ -1058,6 +1098,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X1 review checkpoint opened: F25, F26, F31,
+  F51 and F64 `in_progress` → `pending_review`, commits `d342a72f`,
+  `1f0b8edf`, `0fdbf2c9`, `218be752`, `aca6f3ba`; review X1 `pending` →
+  `in_progress`, base `7e3e1a02`, head `aca6f3ba`.
 - 2026-11-13 — follow-up batch X1 started: F25, F26, F31, F51 and F64 `pending`
   → `in_progress`; `active_batch: Y2` → `X1`.
 - 2026-11-13 — review Y2 `done`: F101 fixed (f0033492), F102 kept (33faafce),
