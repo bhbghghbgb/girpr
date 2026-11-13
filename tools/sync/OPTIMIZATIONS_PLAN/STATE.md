@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M4
+active_batch: M5
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1167,13 +1167,13 @@ followups:
   - id: F117
     source: F51
     description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F118
     source: F51
     description: The recorded reasoning that a sweep could not tell a live temporary from a dead one does not address why the process id in the temporary's name is not used to test liveness, given pid reuse and cross-host containers.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F119
@@ -1186,7 +1186,7 @@ followups:
   - id: F120
     source: F64
     description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F121
@@ -1311,7 +1311,7 @@ followups:
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F141
@@ -1343,13 +1343,13 @@ followups:
   - id: F145
     source: F132
     description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F146
     source: F133
     description: The rename-order test fixture cannot distinguish sorted by the folded key from sorted by the exact key, since all three src names start with an uppercase letter and both orders are the same; a fixture mixing cases would make the test pin the folded order it claims to be about.
-    status: pending
+    status: in_progress
     batch: M5
     commits: []
   - id: F147
@@ -1615,6 +1615,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M5 started: F117, F118, F120, F140, F145 and F146
+  `pending` → `in_progress`; `active_batch: M4` → `M5`.
 - 2026-11-14 — review M4 `done`: F111, F112, F116 and F130 all kept, no fix
   or revert commits; follow-ups F179–F184 appended, with F179, F180 and F181
   in M16, F183 in M15, and F182 and F184 recorded as `skipped` (F182 because
