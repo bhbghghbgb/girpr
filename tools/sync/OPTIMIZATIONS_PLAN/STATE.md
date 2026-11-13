@@ -363,11 +363,18 @@ reviews:
     head: 4e90c67e
     result: F19 kept (927df439); F20 kept (0958cb81); F21 kept (6eb52866); F44 kept (eaf252c5); F45 kept (552e07d8, 4e90c67e); F46 kept (4c279930); no fix or revert commits; 569 passed, 1 skipped; the reviewer ran its own mutation checks, with the copy-phase mutation caught 25 of 25 runs
     followups: [F125, F126, F127, F129, F130]
-  - batch: X3
+  - batch: Z4
     status: pending
-    tasks: [F22, F27, F47, F48]
+    tasks: [F132, F133, F134]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: X3
+    status: in_progress
+    tasks: [F22, F27, F47, F48]
+    base: 90c57c19
+    head: d774d7ce
     result: null
     followups: []
   - batch: X4
@@ -559,9 +566,9 @@ followups:
   - id: F22
     source: T12
     description: compare labels a record side "record <path>" while compare-self labels it "record <path> (for <folder>)", so the same side is named two ways.
-    status: in_progress
+    status: pending_review
     batch: X3
-    commits: []
+    commits: [7279aee5]
   - id: F23
     source: T12
     description: Filter is reachable only as girsync::filter::Filter while CommonOpts is re-exported at the crate root, so a hand-built CommonOpts literal must name a second module path for its new field's type.
@@ -591,9 +598,9 @@ followups:
   - id: F27
     source: T15
     description: The cmd_sync module doc and the call-site comment still say the planner pairs "by lowercase" while CasePairing::Lowercase folds ASCII case only; the README now says "ASCII-case fold".
-    status: in_progress
+    status: pending_review
     batch: X3
-    commits: []
+    commits: [9ea19b36]
   - id: F28
     source: T16
     description: The README source-layout table still omits src/convert.rs, src/hardlink.rs and src/link.rs.
@@ -714,15 +721,15 @@ followups:
   - id: F47
     source: F23
     description: glob::Pattern is still not reachable from the crate root, so a caller that wants to hold a compiled pattern or read Filter::includes()/excludes() still needs a direct glob dependency; a root pub use glob, the way girpr_log is already re-exported, would close that.
-    status: in_progress
+    status: pending_review
     batch: X3
-    commits: []
+    commits: [cb9c08a3]
   - id: F48
     source: F23
     description: The new root comment calls compile_patterns "the one way to build its patterns", but glob::Pattern::new is a second way for a caller that already depends on glob, so the wording could be narrowed to "the crate's own way".
-    status: in_progress
+    status: pending_review
     batch: X3
-    commits: []
+    commits: [d774d7ce]
   - id: F49
     source: F16
     description: The backup bound is now applied on every cache open rather than only after a copy, so a folder with an idle cache is pruned by any run that merely opens it, which widens the window of the already-tracked retention race.
@@ -1181,6 +1188,31 @@ followups:
     batch: null
     commits: []
     note: skipped: an editor convention rather than a defect, and the file now ends with one
+  - id: F132
+    source: F22
+    description: commands/sync/mod.rs still builds its two folder labels inline instead of the shared side_label; identical text today, but a second spelling of the same rule.
+    status: pending
+    batch: Z4
+    commits: []
+  - id: F133
+    source: F27
+    description: The same lowercase versus ASCII-case fold wording survives elsewhere, in src/diff/mod.rs, src/commands/sync/rename.rs and src/planner/pairs.rs, which says "Pair by lowercase key".
+    status: pending
+    batch: Z4
+    commits: []
+  - id: F134
+    source: F27
+    description: src/util.rs still uses a raw to_lowercase() comparison for the identity fallback, which is worth a look for the same reason the wording was corrected.
+    status: pending
+    batch: Z4
+    commits: []
+  - id: F135
+    source: F27
+    description: The variant name CasePairing::Lowercase itself says lowercase although it folds ASCII case only; renaming it would touch every call site and the design notes.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: renaming a public variant for no user-visible gain, and the design notes name the rule
 ```
 
 ## Human checklist
@@ -1212,6 +1244,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch X3 review checkpoint opened: F22, F27, F47 and
+  F48 `in_progress` → `pending_review`, commits `7279aee5`, `9ea19b36`,
+  `cb9c08a3`, `d774d7ce`; review X3 `pending` → `in_progress`, base
+  `90c57c19`, head `d774d7ce`.
 - 2026-11-13 — follow-up batch X3 started: F22, F27, F47 and F48 `pending` →
   `in_progress`; `active_batch: X2` → `X3`.
 - 2026-11-13 — review X2 `done`: F19, F20, F21, F44, F45 and F46 all kept, no
