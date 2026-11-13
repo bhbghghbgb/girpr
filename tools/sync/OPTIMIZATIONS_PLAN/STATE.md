@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M2
+active_batch: M3
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -685,19 +685,19 @@ followups:
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
-    status: pending
+    status: in_progress
     batch: M3
     commits: []
   - id: F34
     source: F1
     description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
-    status: pending
+    status: in_progress
     batch: M3
     commits: []
   - id: F35
     source: F2
     description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
-    status: pending
+    status: in_progress
     batch: M3
     commits: []
   - id: F36
@@ -733,7 +733,7 @@ followups:
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
-    status: pending
+    status: in_progress
     batch: M3
     commits: []
   - id: F42
@@ -1485,6 +1485,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch M3 started: F33, F34, F35 and F41 `pending` →
+  `in_progress`; `active_batch: M2` → `M3`.
 - 2026-11-13 — review M2 `done`: F36, F37, F38, F39 and F40 all kept, no fix
   or revert commits; follow-ups F160–F165 appended with batch `M12`. F36,
   F37, F38, F39 and F40 `pending_review` → `completed`.
