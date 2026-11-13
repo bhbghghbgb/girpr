@@ -371,15 +371,15 @@ reviews:
     result: null
     followups: []
   - batch: X7
-    status: in_progress
+    status: done
     tasks: [F87, F88, F89]
     base: 757e2bf0
-    head: 91533514
-    result: null
-    followups: []
+    head: c50748d3
+    result: F87 fixed (c50748d3 drops the newest promise from the --backup-retain help summary, states the rule in BackupPolicy and fixes two stale test docs); F88 kept (7772be18); F89 kept (df7e2c36); 565 passed, 1 skipped; the 36 test names cited in the notes' Enforced by list were checked to exist
+    followups: [F94, F95, F96, F97]
   - batch: Y1
     status: pending
-    tasks: [F90, F91]
+    tasks: [F90, F91, F94, F95, F96, F97]
     base: null
     head: null
     result: null
@@ -864,22 +864,22 @@ followups:
   - id: F87
     source: F82
     description: The bound's walk starts at the oldest copy and skips the spoken-for ones without spending the removal budget, so it can remove a copy that is among the newest N; the docs say the bound walks on to the next-oldest copy but never say that a newer copy can go.
-    status: pending_review
+    status: completed
     batch: X7
-    commits: [6da18401, 91533514]
+    commits: [6da18401, 91533514, c50748d3]
   - id: F88
     source: F79
     description: publish_dir's retry path removes the claim directory before renaming again, so another run's empty published directory copy, a copy of an empty legacy cache, can be removed in the window between the identity check and that removal; the notes' claim that the other run's copy is never overwritten holds for a copy that has content.
-    status: pending_review
+    status: completed
     batch: X7
     commits: [7772be18]
   - id: F89
     source: F81
     description: A run whose cache open fails also adopts the waiting copies, because begin_run runs before the bound in that path, while the documents say the next run that opens it.
-    status: pending_review
+    status: completed
     batch: X7
     commits: [df7e2c36]
-    note: implemented by ses_e2cd843b7ffeYkc4yqlDZgOUdG; a failed open now spares the waiting copies for that run bound but leaves them waiting, so the next run that opens the folder is the one that adopts them
+    note: review X7 kept (df7e2c36); a failed open copies the pending list into the spared list instead of taking it, so the copies keep waiting for the next run that opens the folder
   - id: F90
     source: F88
     description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
@@ -906,6 +906,30 @@ followups:
     batch: null
     commits: []
     note: skipped: a design question with a behaviour cost, not a defect
+  - id: F94
+    source: F88
+    description: The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity.
+    status: pending
+    batch: Y1
+    commits: []
+  - id: F95
+    source: F88
+    description: publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal.
+    status: pending
+    batch: Y1
+    commits: []
+  - id: F96
+    source: F89
+    description: The documents say the failed run's bound spares the waiting copies because they are the copies it published, but the waiting list can also hold an earlier run's copy in the same process, so the stated reason is too strong.
+    status: pending
+    batch: Y1
+    commits: []
+  - id: F97
+    source: F87
+    description: The end-to-end test run_sync_backup_retain_keeps_the_newest_of_each_prefix still says it keeps the newest N siblings of each prefix, which is true for the case it exercises but carries the naive reading in its name and doc.
+    status: pending
+    batch: Y1
+    commits: []
 ```
 
 ## Human checklist
@@ -937,6 +961,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review X7 `done`: F87 fixed (c50748d3), F88 kept (7772be18),
+  F89 kept (df7e2c36); follow-ups F94–F97 appended and merged into Y1, which
+  already held F90 and F91, because all six are the backup publish fallback
+  windows and the last two doc wordings about them. The state records that Y1
+  closes the backup publish chain: any further follow-up of the same kind is
+  to be recorded as `skipped` with the reason. F87, F88 and F89
+  `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch X7 review checkpoint opened: F87, F88 and F89
   `in_progress` → `pending_review`, commits `6da18401`, `7772be18`,
   `df7e2c36`, `91533514`; review X7 `pending` → `in_progress`, base
