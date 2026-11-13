@@ -158,6 +158,14 @@ const OLD_PREFIX: &str = "girpr-cache-old-";
 ///
 /// The name is in the tool's own namespace (`girpr-cache*`), so a working
 /// copy is tool state and is never mirrored as content.
+///
+/// **No bound reclaims a working name.** The bound ranges over the published
+/// copies, and a working name is not one of them: a working name is a copy
+/// that is still being made, and a bound that could select it could take the
+/// copy another run is making there — the one thing the publish exists to
+/// prevent. So a working name left behind — a run killed mid-copy, or a
+/// removal that failed after the copy was published — stays in the folder
+/// until it is removed by hand.
 const WORK_PREFIX: &str = "girpr-cache-partial-";
 
 /// The prefix every name of the tool's own state carries.
