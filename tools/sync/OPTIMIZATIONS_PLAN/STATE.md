@@ -399,10 +399,10 @@ reviews:
     result: F65 kept (046b53d3); F66 kept (d8ea86be); F68 kept (4d764527); F73 fixed (f07a728b brings three doc paragraphs in line with the run-scoped registry); F74 fixed (04dab01f makes the sort use sort_by_cached_key, which is what its message described); F75 kept (08959674); 559 passed, 1 skipped
     followups: [F79, F81, F82]
   - batch: B24
-    status: pending
+    status: in_progress
     tasks: [F79, F81, F82]
-    base: null
-    head: null
+    base: 6ea86b57
+    head: 7a04252e
     result: null
     followups: []
 followups:
@@ -857,9 +857,10 @@ followups:
   - id: F79
     source: F65
     description: The claim check tests that something is at the name, not that the claim is still ours, so if a bound took the claim away and another run took the same name in that window the publish still lands over that run's copy; reachable only where the filesystem can neither link nor lock a file.
-    status: in_progress
+    status: pending_review
     batch: B24
-    commits: []
+    commits: [fe0e4c95]
+    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the claim check now compares the identity of the object at the published name with the identity of the object the run created, so a file belonging to another run can never answer it
   - id: F80
     source: F68
     description: An exclusive lock on a read-only handle is fine on Windows and on Linux, but is worth a check on the BSDs and macOS, where a refusal would degrade the folder back to bounded without its lock rather than weaken it.
@@ -870,15 +871,17 @@ followups:
   - id: F81
     source: F73
     description: A copy published by a run that never opens the folder's cache stays pending and is adopted, and spared, by the next run that opens that folder, so an older copy is kept in place of a newer one for one bound cycle.
-    status: in_progress
+    status: pending_review
     batch: B24
-    commits: []
+    commits: [ca6ad054, 7a04252e]
+    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the claim was softened, because the registry is process-wide and the boundary is the open, so the command line never meets the case
   - id: F82
     source: F74
     description: The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case.
-    status: in_progress
+    status: pending_review
     batch: B24
-    commits: []
+    commits: [0aeaa4a7]
+    note: implemented by ses_e2d094859ffePMno9X3rx2T1pY; the code is right and the claim was softened, so the notes and the README now say when the bound holds a folder to its count
 ```
 
 ## Human checklist
@@ -910,6 +913,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch B24 review checkpoint opened: F79, F81 and F82
+  `in_progress` → `pending_review`, commits `fe0e4c95`, `0aeaa4a7`,
+  `ca6ad054`, `7a04252e`; review B24 `pending` → `in_progress`, base
+  `6ea86b57`, head `7a04252e`.
 - 2026-11-13 — follow-up batch B24 started: F79, F81 and F82 `pending` →
   `in_progress`; `active_batch: B23` → `B24`. B15 was merged into B14 (five
   doc wordings in one batch) and recorded as such.
