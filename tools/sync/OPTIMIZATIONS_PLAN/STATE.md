@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: X7
+active_batch: Y1
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -883,13 +883,13 @@ followups:
   - id: F90
     source: F88
     description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
   - id: F91
     source: F88
     description: publish_file's fallback removes the claim and reports the error rather than retrying the rename, so on a platform whose rename cannot replace a file that publish can never succeed; practically unreachable, since Windows can link and POSIX replaces.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
   - id: F92
@@ -909,25 +909,25 @@ followups:
   - id: F94
     source: F88
     description: The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
   - id: F95
     source: F88
     description: publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
   - id: F96
     source: F89
     description: The documents say the failed run's bound spares the waiting copies because they are the copies it published, but the waiting list can also hold an earlier run's copy in the same process, so the stated reason is too strong.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
   - id: F97
     source: F87
     description: The end-to-end test run_sync_backup_retain_keeps_the_newest_of_each_prefix still says it keeps the newest N siblings of each prefix, which is true for the case it exercises but carries the naive reading in its name and doc.
-    status: pending
+    status: in_progress
     batch: Y1
     commits: []
 ```
@@ -961,6 +961,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Y1 started: F90, F91, F94, F95, F96 and F97
+  `pending` → `in_progress`; `active_batch: X7` → `Y1`.
 - 2026-11-13 — review X7 `done`: F87 fixed (c50748d3), F88 kept (7772be18),
   F89 kept (df7e2c36); follow-ups F94–F97 appended and merged into Y1, which
   already held F90 and F91, because all six are the backup publish fallback
