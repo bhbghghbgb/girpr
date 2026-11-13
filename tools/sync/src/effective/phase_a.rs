@@ -14,6 +14,23 @@ use crate::util::{elapsed_s, path_key};
 
 use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_matches};
 
+/// The alternate-case index over the cached keys: a folded spelling → the
+/// cached spellings under it.
+///
+/// One entry per cached key, and one folded spelling per entry, so building
+/// it costs a copy of every key in the cache. The scan builds it only when a
+/// lookup needs it — see the index's own note in [`scan_stat_only`].
+///
+/// A folded key can hold *several* stale spellings, and the lookup asks how
+/// many there are, so this is not the key-shaped [`util::folded_keys`] one.
+fn fold_alternates(keys: Vec<String>) -> HashMap<String, Vec<String>> {
+    let mut index: HashMap<String, Vec<String>> = HashMap::new();
+    for key in keys {
+        index.entry(path_key(&key)).or_default().push(key);
+    }
+    index
+}
+
 /// **Phase A.** Walk `root`, consult the cache, and report what it knows about
 /// every path — without reading a single file's bytes.
 ///
@@ -110,22 +127,25 @@ pub fn scan_stat_only(
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
     let total_live = live.len();
+    // The alternate-case index, built when a lookup first needs it.
+    //
     // Only the keys decide whether a path has an alternate; the row is read
-    // when a stale alternate is actually adopted, which is normally rare. Read
-    // once up front, because the scan's batch handle starts from the same
-    // committed state.
-    let alt_keys = if case_sensitive {
-        Vec::new()
-    } else {
-        cache.load_keys()?
-    };
+    // when a stale alternate is actually adopted, which is normally rare. So
+    // the index is built on first use rather than up front: a scan whose
+    // cached keys all match the spelling the disk uses never asks for an
+    // alternate, and building the index for it costs a folded spelling per
+    // cached row — a price paid for nothing on the common path.
+    //
+    // The keys are the committed ones, read through the cache handle: the
+    // scan's batch handle starts from the same committed state, and the rows
+    // this run writes are keyed by live paths, which the mixed-case guard
+    // keeps out of every other path's folded group — so the two views agree
+    // about the group a lookup asks about.
+    //
     // A folded key here can hold *several* stale spellings, and the lookup asks
     // how many there are, so this index is not the key-shaped `util::folded_keys`
     // one.
-    let mut alt_index: HashMap<String, Vec<String>> = HashMap::new();
-    for key in alt_keys {
-        alt_index.entry(path_key(&key)).or_default().push(key);
-    }
+    let mut alt_index: Option<HashMap<String, Vec<String>>> = None;
     // An adopted key is renamed to the disk casing and removed, so it must not
     // also be counted as stale when the prune set is read below.
     let mut adopted_keys: HashSet<String> = HashSet::new();
@@ -169,7 +189,15 @@ pub fn scan_stat_only(
                 // Exact-case miss in insensitive mode: adopt the single stale
                 // alternate-cased entry as the cache candidate (disk name wins).
                 None if !case_sensitive => {
-                    match alt_index.get(&path_key(&e.rel)) {
+                    // The index is built here, on the first miss: a scan that
+                    // never misses never pays for it.
+                    if alt_index.is_none() {
+                        alt_index = Some(fold_alternates(cache.load_keys()?));
+                    }
+                    let alts = alt_index
+                        .as_ref()
+                        .and_then(|index| index.get(&path_key(&e.rel)));
+                    match alts {
                         Some(alts) => {
                             let others: Vec<&String> =
                                 alts.iter().filter(|k| *k != &e.rel).collect();
@@ -353,7 +381,7 @@ pub fn scan_stat_only(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cache::TestCacheBackend;
+    use crate::cache::{FileRec, TestCacheBackend};
     use crate::filter::{Filter, compile_patterns};
     use crate::planner::{HashMode, StatTrust};
     use crate::rw::RwLimits;
@@ -389,6 +417,15 @@ mod tests {
             test_cache: TestCacheBackend::default(),
             backup: crate::config::BackupPolicy::default(),
         }
+    }
+
+    /// The same options, in insensitive mode.
+    ///
+    /// The case mode is the one thing the alternate-case index turns on, so a
+    /// case about it needs the other mode.
+    fn insensitive(mut o: CommonOpts) -> CommonOpts {
+        o.case_sensitive = false;
+        o
     }
 
     /// The map's keys, sorted.
@@ -649,6 +686,83 @@ mod tests {
                 narrow.stats.pruned
             ),
             (8, 3, 2, 3)
+        );
+    }
+
+    /// **The alternate-case index is built when a lookup needs it.**
+    ///
+    /// The index costs a folded spelling per cached row, and a scan whose
+    /// cached keys all match the spelling the disk uses never asks for one.
+    /// The count of entries-table reads says whether the scan paid for it:
+    /// the index is one read of the key set, and a scan that never misses
+    /// must make none.
+    #[test]
+    fn the_alternate_index_is_built_only_when_a_lookup_needs_it() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index");
+        tree(&root, &[("a.txt", b"a")]);
+        let db = CacheDb::open_temp(false).unwrap();
+        let common = insensitive(opts(&[], &[]));
+
+        // Nothing is cached, so the path misses exactly and the index is
+        // built.
+        let before = db.entries_read_count();
+        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            db.entries_read_count() - before,
+            1,
+            "the miss cost one read of the key set: the index"
+        );
+
+        // The cache now holds the key under the spelling the disk uses, so
+        // the second scan finds it exactly and never asks for an alternate.
+        let before = db.entries_read_count();
+        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            db.entries_read_count() - before,
+            0,
+            "no miss, no index, and no read of the key set either"
+        );
+    }
+
+    /// **A stale alternate is still adopted when the index is built on
+    /// demand.**
+    ///
+    /// The index is built on the first miss, so the adoption it decides has
+    /// to answer the same as an index built up front would: the one stale
+    /// spelling is taken over, and the row it holds is carried under the
+    /// disk's spelling — digests and all.
+    #[test]
+    fn a_stale_alternate_is_adopted_when_the_index_is_built_on_demand() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_adopt");
+        tree(&root, &[("a.txt", b"a")]);
+        let db = CacheDb::open_temp(false).unwrap();
+        let common = insensitive(opts(&[], &[]));
+
+        // A row the cache holds under the other spelling, with a digest in it
+        // and the file's own stat, so it is carried whole.
+        let meta = std::fs::metadata(root.join("a.txt")).unwrap();
+        let mut hashes = DigestSet::default();
+        hashes.insert_named("md5", &[7u8; 16]);
+        db.put(
+            "A.txt",
+            &FileRec {
+                kind: "file".into(),
+                size: meta.len(),
+                mtime_ns: crate::util::mtime_ns_of(&meta),
+                hashes,
+            },
+        )
+        .unwrap();
+
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            scan.map["a.txt"].cached.get_named("md5"),
+            Some(&[7u8; 16][..]),
+            "the adopted row's digest is carried under the disk's spelling"
+        );
+        assert!(
+            scan.map["a.txt"].fresh,
+            "and the stat still matches, so the row was carried whole"
         );
     }
 }
