@@ -238,11 +238,11 @@ pub enum CacheOpen {
 /// whatever the file can be opened for, so a cache that is not writable is
 /// locked too; only a cache that cannot be opened at all has no lock to take.
 ///
-/// That bound spares the copies that are waiting for an open — they are the
-/// copies this run published, and it is about to report them — but the run
-/// does not **adopt** them: the open is the boundary, and an open that
-/// failed did not cross it, so the next run that opens this folder's cache is
-/// the one that adopts them.
+/// That bound spares the copies that are waiting for an open — its own are
+/// among them, and it cannot tell them from an earlier run's in the same
+/// process, so it spares them all — but the run does not **adopt** them: the
+/// open is the boundary, and an open that failed did not cross it, so the next
+/// run that opens this folder's cache is the one that adopts them.
 ///
 /// A copy is published **before** that lock is taken, so there is a gap in
 /// which the lock does not yet speak for it: another run can be in its run
@@ -288,9 +288,11 @@ pub fn open_db(db_path: &Path, case_sensitive: bool, mode: CacheOpen) -> Result<
                     // The open is the boundary, and this one did not happen:
                     // the copies waiting for an open keep waiting, and the
                     // next run that opens this folder's cache adopts them.
-                    // The bound below spares them all the same — they are the
-                    // copies this run published, and the run is about to
-                    // report them.
+                    // The bound below spares them all the same: the waiting
+                    // list holds the copies this process published since the
+                    // folder's cache was last opened, and this run cannot
+                    // tell its own from an earlier run's in the same
+                    // process, so it spares them all.
                     begin_after_a_failed_open(folder_of(db_path));
                     if let Some(keep) = retain
                         && let Err(bound) = bound_after_failed_open(db_path, keep)
