@@ -1622,7 +1622,8 @@ them; `--dry-run` costs the same again.
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
   `sync.rs`, `output.rs` (the stdout contract: `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
-  narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
+  narrates on stderr), `public_surface.rs` (what a caller reaches without a
+  dependency of its own), with shared fixtures in `tests/common/mod.rs`. They run
   against the public API, so anything they touch must stay `pub`.
 
   The six largest are **directories**: each is a test target at

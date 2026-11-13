@@ -70,6 +70,13 @@ pub mod util;
 // crate's public surface.
 pub use girpr_log;
 
+// The glob crate, re-exported for the same reason: [`Filter::includes`] and
+// [`Filter::excludes`] hand back `glob::Pattern`, so the type is part of this
+// crate's public surface, and a caller that wants to hold a compiled pattern
+// needs no dependency of its own. A caller that wants to build one rather than
+// read it reaches [`glob::Pattern::new`] here too.
+pub use glob;
+
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
