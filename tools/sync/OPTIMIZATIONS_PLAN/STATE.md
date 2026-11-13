@@ -426,13 +426,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M3
-    status: in_progress
-    tasks: [F33, F34, F35, F41]
-    base: a5bc410d
-    head: 1f66fcc7
+  - batch: M14
+    status: pending
+    tasks: [F172, F173, F174]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M3
+    status: done
+    tasks: [F33, F34, F35, F41]
+    base: a5bc410d
+    head: 929908a7
+    result: F33 fixed (2bd29e74 corrects the design notes, which still justified the allocation-free comparison by reading the body); F34 kept (0d7f7646); F35 kept (4fb0741f); F41 fixed (929908a7 corrects the README cost claim, which named the wrong condition); 577 passed without the feature and 590 with it, 1 skipped; the const pin was verified to fail when the const is dropped and when the resolver allocates
+    followups: [F172, F173, F174]
   - batch: M4
     status: pending
     tasks: [F111, F112, F116, F130]
@@ -692,19 +699,19 @@ followups:
   - id: F33
     source: F1
     description: The allocation-free property has no test to pin it, because the crate has no allocator-counting harness and the guidelines bar timing assertions; the property currently rests on reading from_name.
-    status: pending_review
+    status: completed
     batch: M3
-    commits: [643ebcb2]
+    commits: [643ebcb2, 822254ab, 2bd29e74]
   - id: F34
     source: F1
     description: DigestSet::insert_named replaces a foreign entry only on an exact spelling match, so one row can hold the same algorithm twice under two spellings and the earlier one answers; pre-existing and documented as "first match wins", so it needs a test pinning it rather than a behaviour change.
-    status: pending_review
+    status: completed
     batch: M3
     commits: [0d7f7646]
   - id: F35
     source: F2
     description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
-    status: pending_review
+    status: completed
     batch: M3
     commits: [4fb0741f, 822254ab]
   - id: F36
@@ -740,9 +747,9 @@ followups:
   - id: F41
     source: F10
     description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
-    status: pending_review
+    status: completed
     batch: M3
-    commits: [dfa16d0b, 1f66fcc7]
+    commits: [dfa16d0b, 1f66fcc7, 929908a7]
   - id: F42
     source: F10
     description: ExcludeMemo::is_excluded takes &'a str tied to the filter's lifetime, so a caller whose paths are not borrowed for that lifetime has to work around the public type.
@@ -1497,6 +1504,24 @@ followups:
     status: pending
     batch: M13
     commits: []
+  - id: F172
+    source: F33
+    description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
+    status: pending
+    batch: M14
+    commits: []
+  - id: F173
+    source: F34
+    description: DigestSet::merge applies the same exact-name replacement rule as insert_named, but no case holds a row with two spellings of one algorithm across a merge, so the rule is pinned on the insert path only.
+    status: pending
+    batch: M14
+    commits: []
+  - id: F174
+    source: F41
+    description: The comment above the index in phase_a.rs still phrases the saving as a scan whose cached keys all match the spelling the disk uses never asking for an alternate, leaving out the run that only adds a file and still pays for the index.
+    status: pending
+    batch: M14
+    commits: []
 ```
 
 ## Human checklist
@@ -1528,6 +1553,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — review M3 `done`: F33 fixed (2bd29e74), F34 kept (0d7f7646),
+  F35 kept (4fb0741f), F41 fixed (929908a7); follow-ups F172–F174 appended
+  with batch `M14`. F33, F34, F35 and F41 `pending_review` → `completed`.
 - 2026-11-13 — follow-up batch M3 review checkpoint opened: F33, F34, F35 and
   F41 `in_progress` → `pending_review`, commits `643ebcb2`, `0d7f7646`,
   `4fb0741f`, `822254ab`, `dfa16d0b`, `1f66fcc7`; review M3 `pending` →
