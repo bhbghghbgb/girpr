@@ -878,7 +878,7 @@ What a run leaves behind is therefore a **policy**, not a fixed step:
 | --- | --- |
 | default | src: `girpr-cache-backup-<ts>`; dst: `girpr-cache-old-<ts>` (dst's pre-sync state) |
 | `--no-backup` | nothing — no copy, no snapshot |
-| `--backup-retain N` | the same, but only the newest N siblings of each prefix are kept |
+| `--backup-retain N` | the same, but the newest N siblings of each prefix are kept — and so is any copy a live run is still using |
 
 `update` and `compare` copy the cache they open — `girpr-cache-backup-<ts>`
 beside that folder's cache — and `sync` adds dst's `old-*` snapshot on top.
@@ -893,6 +893,12 @@ folder used as a source and as a destination is bounded on its copies and on
 its snapshots alike. `N` must be at least 1 — `--backup-retain 0` is refused
 with exit `3`, and `--no-backup` is how you ask for no copies at all. Without
 the flag the copies accumulate and are cleaned by hand.
+
+The bound holds a folder to `N` copies while no copy in it is spoken for by a
+live run. A copy that is spoken for is left alone and does not spend the
+removal budget — the bound walks on to the next-oldest copy instead — so a
+folder whose oldest copies are all spoken for can hold more than `N` for as
+long as they are.
 
 The bound is about the **folder**, not about the run: it is applied whether or
 not this run copied anything aside. A folder whose cache is absent, and a
@@ -943,8 +949,8 @@ A copy that is still being written is not one of the copies the bound ranges
 over: a run that merely opens a folder cannot remove the copy another run is
 making there, however often the bound is applied. The bound never removes the
 copy the run itself made either — the run that reports a backup is the run
-that has to keep it — and the folder still ends within its bound, because the
-count is made up from the next-oldest copy instead.
+that has to keep it — and the folder ends within its bound, because the count
+is made up from the next-oldest copy instead.
 
 **A copy another run has published is spared while that run is still using
 it.** A copy is published before the run opens the folder's cache, so there is
@@ -959,7 +965,9 @@ unlocked takes the copy like any other, because the lock is released when the
 run ends and when the run is killed, and a record that nothing holds says
 nothing. A record that cannot be read, or whose lock the filesystem cannot
 test, says nothing either: nobody can be holding a lock on a file that cannot
-be locked, so it does not spare the copy for good. The name a copy is
+be locked, so it does not spare the copy for good. A spared copy does not
+spend the removal budget either, so a folder can hold more than `N` copies
+while one of them is spoken for. The name a copy is
 published under still says when that copy became whole, so the newest copies
 are the ones a bound keeps — a copy that took a while to make is not treated
 as an old one the moment it lands.

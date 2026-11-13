@@ -163,8 +163,10 @@ pub enum CacheOpen {
 /// `--ignore-cache`.
 ///
 /// A read/write open applies the **bound** it was given to the folder the
-/// cache lives in: only the newest `retain` siblings of each prefix are kept
-/// beside it. The bound is about the folder rather than about the copy this
+/// cache lives in: the newest `retain` siblings of each prefix are kept
+/// beside it, and so is any copy a live run is still using — so the folder
+/// can hold more than `retain` while one is. The bound is about the folder
+/// rather than about the copy this
 /// open made, so it holds for a folder whose cache is absent and for an open
 /// that copies nothing aside — the copies already sitting beside a folder are
 /// the ones the bound is about.
@@ -353,7 +355,8 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
     copy_aside(db_path, OLD_PREFIX, "snapshot-old", ts_now)
 }
 
-/// Keep only the newest `keep` copies the tool keeps beside a cache.
+/// Keep the newest `keep` copies the tool keeps beside a cache, and the ones
+/// that are spoken for.
 ///
 /// **The bound is about the folder, not about a copy.** The copies a folder
 /// accumulates are bounded by what the user asked for whether or not this run
@@ -381,8 +384,15 @@ pub fn snapshot_old(db_path: &Path) -> Result<Option<PathBuf>> {
 /// lock on that record until it opens the folder's cache. A bound that meets
 /// a locked record leaves the copy alone: the run that published it is the
 /// run that reports it, and a bound that took it back would leave that run
-/// reporting a backup that is not on disk. The bound still holds the folder
-/// to its bound: the count is made up from the next-oldest copy instead.
+/// reporting a backup that is not on disk.
+///
+/// **The folder ends within its bound only while no copy in it is spoken
+/// for.** A copy that is spoken for does not spend the removal budget either:
+/// the bound walks on to the next-oldest copy instead, and the count is made
+/// up from there. So the folder holds the bound while there are enough copies
+/// the bound may remove to make the count up, and a folder whose oldest
+/// copies are all spoken for by live runs ends with more copies than the
+/// bound asks for.
 ///
 /// **The copy the run published is spared as well**, and for the same reason,
 /// whether or not the copy could be given a record at all: a folder whose
@@ -1572,13 +1582,20 @@ fn candidate_name(prefix: &str, stamp: &str, n: u32) -> String {
     }
 }
 
-/// Keep only the newest `keep` siblings of `prefix` in `parent`.
+/// Keep the newest `keep` siblings of `prefix` in `parent`, and the ones that
+/// are spoken for.
 ///
 /// The sibling names carry a timestamp that sorts lexicographically, so the
 /// age of a copy is read from its name (see [`published_age`]), and the
 /// newest `keep` are the ones that are left. Everything older is removed — a
 /// directory recursively, a file outright — because the user asked for a
-/// bound and a bound that does not remove anything is not a bound.
+/// bound and a bound that does not remove anything is not a bound. A copy
+/// that is spoken for by a live run is not removed at all, and it does not
+/// spend the removal budget either: the bound walks on to the next-oldest
+/// copy, and the count is made up from there. So the folder holds the bound
+/// while there are enough copies the bound may remove to make the count up,
+/// and a folder whose oldest copies are all spoken for ends with more copies
+/// than the bound asks for.
 ///
 /// Only siblings carrying **this** prefix are considered: the tool's own
 /// namespace. A file of the user's that happens to sit in the same directory
@@ -2924,6 +2941,63 @@ mod tests {
             "and the folder still ends within its bound"
         );
         assert!(record.exists(), "the record of a copy in use is left alone");
+    }
+
+    /// A folder of copies that live runs are using can hold more than its
+    /// bound.
+    ///
+    /// The bound removes the oldest copies until the folder holds the bound.
+    /// A copy a live run is using is not the bound's to remove, and it does
+    /// not spend the removal budget either: the bound walks on to the
+    /// next-oldest copy. So a folder whose oldest copies are all spoken for
+    /// by live runs ends with more copies than the bound asks for — the
+    /// exactly-N holds only while no copy in the folder is spoken for.
+    #[test]
+    fn a_folder_of_copies_a_live_run_is_using_can_hold_more_than_its_bound() {
+        let t = girpr_tempdir::TempDir::new("girsync_cache", "bound_spoken_for");
+        let dir = t.subdir("w");
+        let db = dir.join("girpr-cache");
+
+        // Two copies, each spoken for by a live run: each carries a record of
+        // its own, and each record is locked.
+        let mut held = Vec::new();
+        for stamp in ["20240101T000000.000000Z", "20240102T000000.000000Z"] {
+            let name = format!("{BACKUP_PREFIX}{stamp}");
+            std::fs::write(dir.join(&name), b"a copy").unwrap();
+            let record = dir.join(hold_name(&name).expect("the record is named after the copy"));
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&record)
+                .expect("the record is created");
+            file.try_lock().expect("the other run holds the record");
+            held.push(file);
+        }
+        // A third copy, which nothing holds.
+        std::fs::write(
+            dir.join(format!("{BACKUP_PREFIX}29991231T235959.999999Z")),
+            b"newest",
+        )
+        .unwrap();
+
+        retain_copies(&db, NonZeroUsize::new(1).unwrap()).unwrap();
+
+        let copies: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(BACKUP_PREFIX))
+            .collect();
+        assert_eq!(
+            copies.len(),
+            2,
+            "the folder holds more copies than its bound: {copies:?}"
+        );
+        assert!(
+            held.iter().all(|h| h.try_lock().is_err()),
+            "and the copies a live run is using are still there"
+        );
     }
 
     /// A record whose run is gone does not stop the bound.
