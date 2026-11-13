@@ -378,10 +378,10 @@ reviews:
     result: F87 fixed (c50748d3 drops the newest promise from the --backup-retain help summary, states the rule in BackupPolicy and fixes two stale test docs); F88 kept (7772be18); F89 kept (df7e2c36); 565 passed, 1 skipped; the 36 test names cited in the notes' Enforced by list were checked to exist
     followups: [F94, F95, F96, F97]
   - batch: Y1
-    status: pending
+    status: in_progress
     tasks: [F90, F91, F94, F95, F96, F97]
-    base: null
-    head: null
+    base: ef56b02c
+    head: 71912478
     result: null
     followups: []
 followups:
@@ -883,15 +883,15 @@ followups:
   - id: F90
     source: F88
     description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
-    status: in_progress
+    status: pending_review
     batch: Y1
-    commits: []
+    commits: [4a9178e7, 71912478]
   - id: F91
     source: F88
     description: publish_file's fallback removes the claim and reports the error rather than retrying the rename, so on a platform whose rename cannot replace a file that publish can never succeed; practically unreachable, since Windows can link and POSIX replaces.
-    status: in_progress
+    status: pending_review
     batch: Y1
-    commits: []
+    commits: [6bd5912c]
   - id: F92
     source: F87
     description: The bound's "keep the newest N" reading could be a behaviour choice instead of a documented one, keeping the newest N plus the spoken-for copies at the cost of the folder exceeding N; a policy decision, not a defect.
@@ -909,27 +909,49 @@ followups:
   - id: F94
     source: F88
     description: The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity.
-    status: in_progress
+    status: pending_review
     batch: Y1
-    commits: []
+    commits: [4a9178e7]
   - id: F95
     source: F88
     description: publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal.
-    status: in_progress
+    status: pending_review
     batch: Y1
-    commits: []
+    commits: [58a86fcd, 4a9178e7]
   - id: F96
     source: F89
     description: The documents say the failed run's bound spares the waiting copies because they are the copies it published, but the waiting list can also hold an earlier run's copy in the same process, so the stated reason is too strong.
-    status: in_progress
+    status: pending_review
     batch: Y1
-    commits: []
+    commits: [5ee6d57f]
   - id: F97
     source: F87
     description: The end-to-end test run_sync_backup_retain_keeps_the_newest_of_each_prefix still says it keeps the newest N siblings of each prefix, which is true for the case it exercises but carries the naive reading in its name and doc.
-    status: in_progress
+    status: pending_review
     batch: Y1
+    commits: [8c13c181]
+    note: implemented by ses_e2cb488bfffekPDx3Ika96d307; the test was renamed after what it checks and its doc now says what the bound takes
+  - id: F98
+    source: F95
+    description: The file publish's first rename still replaces unconditionally on a filesystem that can link but whose link failed for another reason, such as EPERM on an overlay or FUSE mount, so the copy lands over whatever is at the name; a branch that refuses the fallback when the link failed for a reason other than the name being taken would close it.
+    status: skipped
+    batch: null
     commits: []
+    note: skipped: the same kind as F90 and F95, and reachable only on an exotic filesystem; the limit is now documented
+  - id: F99
+    source: F95
+    description: drop_the_claim could take the removal call as a parameter instead of the NameClaim.is_dir flag, which would let the two claim kinds share one path without a new field.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: a code-shape preference with no behaviour cost
+  - id: F100
+    source: F96
+    description: The bound's spare logic could distinguish the failed run's own copies from an earlier run's in the same process, which the registry knows, instead of sparing the whole waiting list, so a failed run does not over-spare an earlier run's copy.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the over-sparing is conservative, it spares more than needed and cannot lose a backup
 ```
 
 ## Human checklist
@@ -961,6 +983,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-13 — follow-up batch Y1 review checkpoint opened: F90, F91, F94,
+  F95, F96 and F97 `in_progress` → `pending_review`, commits `58a86fcd`,
+  `4a9178e7`, `5ee6d57f`, `8c13c181`, `6bd5912c`, `71912478`; review Y1
+  `pending` → `in_progress`, base `ef56b02c`, head `71912478`.
 - 2026-11-13 — follow-up batch Y1 started: F90, F91, F94, F95, F96 and F97
   `pending` → `in_progress`; `active_batch: X7` → `Y1`.
 - 2026-11-13 — review X7 `done`: F87 fixed (c50748d3), F88 kept (7772be18),
