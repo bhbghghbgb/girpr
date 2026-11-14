@@ -1777,9 +1777,16 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
         "two copies failed, so the run failed; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The colour is taken out first: the console writes the level and the
+    // target in their own colours, and the escape sequences land between the
+    // text a check is looking at.
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    // The reported copy is named as the path inside the mirror, and the name
+    // is the whole of it: a check for a bare `aaa.bin` would accept a longer
+    // path that starts with it, and the plan's first copy is the one the
+    // report has to name.
     assert!(
-        stderr.contains("copy aaa.bin"),
+        stderr.contains(r#"error="copy aaa.bin: "#),
         "the failure reported is the first copy in the plan: {stderr}"
     );
     assert!(

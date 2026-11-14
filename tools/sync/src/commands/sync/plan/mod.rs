@@ -25,8 +25,9 @@ mod safety;
 mod tests;
 
 pub(super) use self::build::{DirPrefixes, Plan, build_plan};
-// Nothing outside `plan` names these today, but they are part of the `plan::*`
-// surface this split preserves, so the re-export stays.
+// The copy item and the bucket that caused it. The apply phase's own case
+// names them, and they are part of the `plan::*` surface this split
+// preserves, so the re-export stays.
 #[allow(unused_imports)]
 pub(super) use self::build::{CopyBecause, CopyItem};
 pub(super) use self::records::{dry_run_records, summary_record};

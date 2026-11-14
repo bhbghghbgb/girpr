@@ -268,7 +268,7 @@ impl<'a> Applier<'a> {
         // whichever worker happened to lose. The `COPY` lines were already emitted
         // above, as each copy completed, and the rows were already written.
         if let Some((idx, e)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
-            return Err(e).with_context(|| format!("copy {}", plan.copy[idx].rel));
+            return Err(e).with_context(|| format!("copy {}", copy_at(plan, idx)));
         }
         let copied = copied.load(std::sync::atomic::Ordering::SeqCst);
         info!(copied, total = copy_total, "copy done");
@@ -596,7 +596,8 @@ fn is_relative_path(path: &str) -> bool {
 /// with the winning index is the error that came with it.
 ///
 /// The slot is `Option<(usize, anyhow::Error)>`: the plan index of the copy
-/// that failed, and the error it failed with.
+/// that failed, and the error it failed with. The index becomes the path the
+/// report names through [`copy_at`], and only there.
 fn keep_lowest_index(
     slot: &mut Option<(usize, anyhow::Error)>,
     index: usize,
@@ -605,6 +606,19 @@ fn keep_lowest_index(
     if slot.as_ref().is_none_or(|(kept, _)| index < *kept) {
         *slot = Some((index, error));
     }
+}
+
+/// The copy a plan index names.
+///
+/// The failure the phase reports is a plan **index**, and the report names a
+/// **path**, so the two are joined here: the copy at index *n* is the *n*-th
+/// entry of the plan's copy list. The plan's order is the order the report
+/// speaks in, so the join is a rule of its own and not a detail of a lookup —
+/// stated in one place, and pinned by a case of its own, so a plan whose order
+/// is not the order a reader would guess cannot make the report name a copy
+/// that did not fail.
+fn copy_at(plan: &Plan, index: usize) -> &str {
+    &plan.copy[index].rel
 }
 
 /// Refuse a removal whose target's directory resolves inside `src`.
@@ -674,6 +688,7 @@ fn remove_dir_all(p: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::sync::plan::{CopyBecause, CopyItem};
 
     /// **The rule that picks the failure a run reports, on its own.**
     ///
@@ -727,6 +742,58 @@ mod tests {
         let (index, error) = failure.expect("a failure was recorded");
         assert_eq!(index, 1);
         assert_eq!(error.to_string(), "the first copy");
+    }
+
+    /// **The path the report names is the copy the plan lists at that index.**
+    ///
+    /// The failure is recorded as a plan **index** and reported as a **path**,
+    /// and the join between them is a rule of its own: the copy at index *n* is
+    /// the *n*-th entry of the plan's copy list. The rule that picks the
+    /// failure is pinned by
+    /// [`the_reported_failure_is_the_lowest_plan_index_one`]; this pins the
+    /// join, so a plan whose order is not the order a reader would guess
+    /// cannot make the report name a copy that did not fail.
+    ///
+    /// The plan is built by hand rather than by a run, so the case says what
+    /// the join is rather than what a fixture happened to produce.
+    #[test]
+    fn the_reported_failure_names_the_copy_the_plan_lists_at_that_index() {
+        let plan = Plan {
+            copy: vec![
+                CopyItem {
+                    rel: "aaa.bin".into(),
+                    because: CopyBecause::Missing,
+                },
+                CopyItem {
+                    rel: "mmm.bin".into(),
+                    because: CopyBecause::Changed,
+                },
+                CopyItem {
+                    rel: "zzz.bin".into(),
+                    because: CopyBecause::Missing,
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Every index names its own copy, and nothing else.
+        assert_eq!(copy_at(&plan, 0), "aaa.bin");
+        assert_eq!(copy_at(&plan, 1), "mmm.bin");
+        assert_eq!(copy_at(&plan, 2), "zzz.bin");
+
+        // The failures arrive in the opposite order to the plan's, so the
+        // report names the plan's first of them rather than the first to
+        // arrive.
+        let mut failure: Option<(usize, anyhow::Error)> = None;
+        keep_lowest_index(&mut failure, 2, anyhow!("the third copy"));
+        keep_lowest_index(&mut failure, 1, anyhow!("the second copy"));
+        let (index, error) = failure.expect("a failure was recorded");
+        assert_eq!(
+            copy_at(&plan, index),
+            "mmm.bin",
+            "the report names the copy the plan lists first"
+        );
+        assert_eq!(error.to_string(), "the second copy", "and why it failed");
     }
 
     /// The removal guard compares the target's **resolved** directory with the
