@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M11
+active_batch: M12
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1504,37 +1504,37 @@ followups:
   - id: F160
     source: F36
     description: The clause that a refusal there does not leave dst as it was holds for a real run only, since a dry run performs no rename and changes nothing.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F161
     source: F37
     description: The opener that the link questions are asked of the disk directly reads as universal, but the hard-link question goes through the seam, so a reader could conclude the hard-link guard bypasses it.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F162
     source: F37
     description: plan/link.rs's own module doc still says only read_link and canonicalize probes, omitting the try_is_link and the Windows read_dir probes the safety doc now lists.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F163
     source: F37
     description: The old rationale for the bypass, that no plan-time decision is lost with it, went with the sentence it belonged to, and a clause saying what a direct question costs the seam would say more than the new list does.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F164
     source: F38
     description: The notes name the new case but never state the rule it pins, that the dst root is resolved at plan time, so a reader has to infer what the case enforces from the case itself.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F165
     source: F39
     description: The headline that the count belongs to the cache and not to the handle is true only of the shared backend, so scoping it to that backend would keep the next sentence from reading as a correction.
-    status: pending
+    status: in_progress
     batch: M12
     commits: []
   - id: F166
@@ -1908,6 +1908,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M12 started: F160, F161, F162, F163, F164 and F165
+  `pending` → `in_progress`; `active_batch: M11` → `M12`.
 - 2026-11-14 — review M11 `done`: F156, F157, F158 and F159 all kept, no fix
   or revert commits; follow-ups F218–F221 appended with batch `M26`. F156,
   F157, F158 and F159 `pending_review` → `completed`.
