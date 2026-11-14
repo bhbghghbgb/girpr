@@ -50,6 +50,11 @@ use super::link::{
 /// not one of them — it asks how many names a file has, not what a link
 /// resolves to — and it goes through the seam like the other plan questions.
 /// A test that counts probes counts the seam's questions and not those.
+///
+/// What the bypass costs the seam is its reach: a question asked directly is
+/// neither counted nor failed on demand. Nothing else is lost with it — the
+/// answer still reaches the guard that asked it, and a failure the guard
+/// cannot read as an answer is still a refusal at plan time.
 pub(crate) trait Probes {
     /// The canonical form of `path`, with every link resolved.
     fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
