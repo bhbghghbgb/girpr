@@ -161,9 +161,10 @@ impl AltIndex {
 /// is durable before the expensive phase begins.
 ///
 /// In insensitive mode the on-disk name governs: cached keys are indexed by
-/// lowercase so a disk/cached casing difference is fixed to the disk name first,
-/// carrying the cached hashes when stat matches, instead of erroring. Multiple
-/// stale alternates are pruned, not treated as a conflict.
+/// the folded key — the path key's ASCII-case fold — so a disk/cached casing
+/// difference is fixed to the disk name first, carrying the cached hashes when
+/// stat matches, instead of erroring. Multiple stale alternates are pruned,
+/// not treated as a conflict.
 pub fn scan_stat_only(
     root: &Path,
     cache: &CacheDb,
