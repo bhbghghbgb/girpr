@@ -297,9 +297,9 @@ pub fn diff_maps(
         // Mixed-case collisions within one side are already fatal (phase A), so
         // each folded key maps to exactly one path per side and this join is
         // well defined.
-        let slow = folded_keys(src);
-        let dlow = folded_keys(dst);
-        let classify = |lk: &str, d: &mut Diff| match (slow.get(lk), dlow.get(lk)) {
+        let src_folded = folded_keys(src);
+        let dst_folded = folded_keys(dst);
+        let classify = |lk: &str, d: &mut Diff| match (src_folded.get(lk), dst_folded.get(lk)) {
             (Some(&(srel, _)), None) => d.missing.push(srel.clone()),
             (None, Some(&(trel, _))) => d.extra.push(trel.clone()),
             (Some(&(srel, s)), Some(&(trel, t))) => {
@@ -310,13 +310,13 @@ pub fn diff_maps(
             }
             (None, None) => {}
         };
-        for lk in slow.keys() {
+        for lk in src_folded.keys() {
             classify(lk, &mut d);
         }
         // dst-only keys. One src already covered was classified above, under the
         // *src* spelling, which is the spelling every bucket is keyed by.
-        for lk in dlow.keys() {
-            if !slow.contains_key(lk) {
+        for lk in dst_folded.keys() {
+            if !src_folded.contains_key(lk) {
                 classify(lk, &mut d);
             }
         }

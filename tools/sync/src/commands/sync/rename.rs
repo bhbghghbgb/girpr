@@ -70,16 +70,20 @@ fn case_renames<'a>(
     dm: &'a HashMap<String, crate::effective::EffRec>,
 ) -> Vec<(&'a String, &'a String)> {
     // folded key -> rel, per side.
-    let slow = folded_keys(src);
-    let dlow = folded_keys(dm);
-    let mut by_lower: Vec<(String, &String)> =
-        slow.into_iter().map(|(lk, (srel, _))| (lk, srel)).collect();
-    by_lower.sort();
+    let src_folded = folded_keys(src);
+    let dst_folded = folded_keys(dm);
+    let mut by_folded_key: Vec<(String, &String)> = src_folded
+        .into_iter()
+        .map(|(lk, (srel, _))| (lk, srel))
+        .collect();
+    by_folded_key.sort();
     let mut out: Vec<(&String, &String)> = Vec::new();
-    for (lk, srel) in &by_lower {
-        // The same path on both sides is not a rename: it is already correct.
-        if let Some(drel) = dlow.get(lk).map(|&(drel, _)| drel).filter(|d| *d != *srel) {
-            out.push((drel, srel));
+    for (lk, srel) in &by_folded_key {
+        if let Some(drel) = dst_folded.get(lk).map(|&(drel, _)| drel) {
+            // The same path on both sides is not a rename: it is already correct.
+            if drel != *srel {
+                out.push((drel, srel));
+            }
         }
     }
     out
