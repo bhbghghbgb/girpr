@@ -402,7 +402,9 @@ answering one question, and
 resolver folding as the ASCII-case rule says it folds, against that rule
 written out rather than against `std`; the resolver's `const`
 context for the comparison's allocation-freedom: a resolver that stopped
-being `const` would not compile there;
+being `const` would not compile there, and the context is in the crate
+rather than in its tests, so a build that does not build the tests holds
+it too;
 `a_foreign_entry_is_replaced_only_under_its_own_spelling` for the arm
 holding one entry per spelling, and
 `the_first_of_two_entries_that_name_one_algorithm_answers` for the first
