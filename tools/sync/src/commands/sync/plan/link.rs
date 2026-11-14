@@ -240,6 +240,10 @@ fn on_disk_fold(s: &OsStr) -> String {
 #[cfg(windows)]
 pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
     let mut folded = None;
+    // The wanted name's fold, folded once: the name does not change while the
+    // listing is read, so folding it again per entry would buy the same
+    // answer with an allocation per entry.
+    let wanted = on_disk_fold(name);
     let entries =
         std::fs::read_dir(parent).with_context(|| format!("list {}", parent.display()))?;
     for entry in entries {
@@ -248,7 +252,7 @@ pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsStrin
         if candidate == name {
             return Ok(Some(candidate));
         }
-        if on_disk_fold(&candidate) == on_disk_fold(name) {
+        if on_disk_fold(&candidate) == wanted {
             // A directory can be case-sensitive per directory on Windows; two
             // case-only names then make "the" entry ambiguous, and the name the
             // OS would open is the exact one that is not there.
