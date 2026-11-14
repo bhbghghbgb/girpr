@@ -1598,11 +1598,13 @@ never absolute. The copy and flush hooks name the path the plan copies — with
 src's casing — and the rename hooks name the **dst** path as it is on disk
 before the rename, since that is the path the pass moves.
 
-**The gate's value is split on the first colon**, which is unambiguous for a
-relative path: a colon is the drive separator's character and is illegal in a
-name, so a relative path cannot hold one. The two halves are therefore two
-paths and nothing else, and a value that is not two relative paths — an empty
-half, an absolute one, or a second colon — asks for no gate at all.
+**The gate's value is split on the first colon**, and the two halves are
+relative paths inside the mirror — the `<rel>` shape above. A colon is the
+drive separator's character and is illegal in a name on Windows, so a relative
+path holds none there; and the rule is checked where the value is read on
+every host, so a half that carries one anyway is not a path. A value that is
+not two relative paths — an empty half, an absolute one, or a second colon —
+asks for no gate at all.
 
 Each switch is read where it belongs, and the answer cannot change under a
 run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the

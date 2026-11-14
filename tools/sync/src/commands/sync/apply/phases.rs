@@ -457,9 +457,9 @@ const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// that is off in production and says nothing a user can meet.
 ///
 /// **Both names are relative paths inside the mirror**, and that is what makes
-/// the colon split unambiguous: a colon is the drive separator's character and
-/// is illegal in a name, so a relative path cannot hold one. A value that is
-/// not two such paths asks for no gate — see [`CopyGate::from_env`].
+/// the colon split unambiguous: the rule is checked where the value is read,
+/// so a half that holds a colon of its own is not a path. A value that is not
+/// two such paths asks for no gate — see [`CopyGate::from_env`].
 ///
 /// The release happens when the failure has been **recorded**, so a copy
 /// waiting on it is released only once the failure it waits for is already
@@ -491,11 +491,10 @@ impl CopyGate {
     ///
     /// **The value is two relative paths, split on the first colon.** Both
     /// halves name a path inside the mirror — relative to the root,
-    /// `/`-separated, never absolute — and the split is unambiguous because a
-    /// relative path cannot contain a colon: the colon is the drive
-    /// separator's character and is illegal in a name. So a half that is
-    /// empty, that is absolute, or that holds a colon of its own is not a
-    /// path this run can copy, and the whole specification asks for no gate.
+    /// `/`-separated, never absolute — and the split is unambiguous because
+    /// the rule is checked here: a half that is empty, that is absolute, or
+    /// that holds a colon of its own is not a path this run can copy, and the
+    /// whole specification asks for no gate.
     ///
     /// That is worth being strict about, because a specification that names a
     /// copy no run can produce is not inert: the waiting copy would sit on
@@ -553,8 +552,9 @@ impl CopyGate {
 /// The two paths a gate specification names, or `None` when it names none.
 ///
 /// The specification is `<wait>:<on>`, split on the **first** colon, and the
-/// two halves are the two paths — a relative path holds no colon of its own,
-/// so there is never a second one for the split to be ambiguous about.
+/// two halves are the two paths — a half that holds a colon of its own is
+/// refused, so there is never a second one for the split to be ambiguous
+/// about.
 ///
 /// A half that is empty, that is absolute, or that carries a colon of its own
 /// is not a path a run can copy, so the whole specification asks for no gate.
@@ -572,9 +572,8 @@ fn gate_paths(spec: &str) -> Option<(&str, &str)> {
 /// The gate names copies by the path the plan spells — relative to the root,
 /// `/`-separated — so a half that is not such a path names no copy at all.
 /// The colon is excluded for the reason the split relies on: it is the
-/// separator the specification is split on, and a relative path cannot hold
-/// one, so a half that carries a second colon is not a path but the tail of a
-/// longer specification.
+/// separator the specification is split on, so a half that carries a second
+/// colon is not a path but the tail of a longer specification.
 fn is_relative_path(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(':')
@@ -760,10 +759,9 @@ mod tests {
     /// **The gate's specification is two relative paths, and anything else
     /// asks for no gate.**
     ///
-    /// The value is split on the first colon, and the split is only
-    /// unambiguous because a relative path cannot hold a colon: the colon is
-    /// the drive separator's character and is illegal in a name. So a
-    /// specification whose halves are not relative paths names no copy a run
+    /// The value is split on the first colon, and the split is unambiguous
+    /// because the rule is checked on the parsing: a half that is empty, that
+    /// is absolute, or that carries a colon of its own names no copy a run
     /// can produce — and the copy waiting on it would sit on the guard until
     /// it timed out, rather than learn at once that it waits for nothing.
     ///
