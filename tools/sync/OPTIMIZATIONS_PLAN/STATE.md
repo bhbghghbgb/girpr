@@ -510,13 +510,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M15
-    status: in_progress
-    tasks: [F175, F176, F177, F178, F183]
-    base: 49e768cc
-    head: b0081392
+  - batch: M34
+    status: pending
+    tasks: [F247, F248, F249]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M15
+    status: done
+    tasks: [F175, F176, F177, F178, F183]
+    base: 49e768cc
+    head: e86a40aa
+    result: F175 kept (b1610c1e); F176 fixed (e86a40aa states the rule in the script and the root README, since the old note said the opposite of what the new check does); F177 kept (493fce5b); F178 kept (b0081392); 588 passed without the feature and 603 with it, 1 skipped; the help pin was verified to fail when a doc comment is put back on Args
+    followups: [F247, F248, F249]
   - batch: M16
     status: pending
     tasks: [F179, F180, F181]
@@ -1643,25 +1650,25 @@ followups:
   - id: F175
     source: F116
     description: Nothing pins the converter help output, so a doc comment on Args could come back and print the source note again; the existing help case only asserts the flags are named.
-    status: pending_review
+    status: completed
     batch: M15
     commits: [b1610c1e]
   - id: F176
     source: F111
     description: The MSRV gate still does not cover a combination whose parts each build alone, so a member whose features all build alone but whose combination needs a newer Rust is not checked.
-    status: pending_review
+    status: completed
     batch: M15
-    commits: [45c4649e]
+    commits: [45c4649e, e86a40aa]
   - id: F177
     source: F116
     description: The converter refusal of --version, which exits 3, now lives only in the module doc; the README converter section does not mention it.
-    status: pending_review
+    status: completed
     batch: M15
     commits: [493fce5b]
   - id: F178
     source: F130
     description: The README still quotes verify hash mismatch, the log event message, near the failure-message shape verify hash(<algo>) <path>, the error text; two different strings, but a reader could confuse them.
-    status: pending_review
+    status: completed
     batch: M15
     commits: [b0081392]
   - id: F179
@@ -1692,7 +1699,7 @@ followups:
   - id: F183
     source: F116
     description: The help case only asserts that --force, --output and the positional order appear, so nothing in the suite would fail if a doc comment were put back on Args and the note started printing in --help again.
-    status: pending_review
+    status: completed
     batch: M15
     commits: [b1610c1e]
   - id: F184
@@ -2083,6 +2090,31 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F180, already scheduled in M16
+  - id: F247
+    source: F175
+    description: The pinned help text also carries clap own boilerplate, the possible-values line, the default marker and the print-help wording, so a deliberate clap bump will need the golden text updated by hand.
+    status: pending
+    batch: M34
+    commits: []
+  - id: F248
+    source: F176
+    description: The number of cargo invocations grows as two to the n minus one for a member with n optional features, so a member with many features would make the gate slow.
+    status: pending
+    batch: M34
+    commits: []
+  - id: F249
+    source: F176
+    description: No member in the workspace has two optional features today, girsync has one, so the combination branch is never exercised by a real run of the script.
+    status: pending
+    batch: M34
+    commits: []
+  - id: F250
+    source: F177
+    description: The converter refusal of --version is stated in two documents but no case pins the exit code 3, so adding the version attribute later would not fail anything.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F243, already scheduled in M33
 ```
 
 ## Human checklist
@@ -2115,6 +2147,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M15 `done`: F175 kept (b1610c1e), F176 fixed (e86a40aa),
+  F177 kept (493fce5b), F178 kept (b0081392); follow-ups F247–F249 appended
+  with batch `M34` and F250 recorded as `skipped` as the same item as F243.
+  F175–F183 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M15 review checkpoint opened: F175, F176, F177,
   F178 and F183 `in_progress` → `pending_review`, commits `b1610c1e`,
   `45c4649e`, `493fce5b`, `b0081392`; review M15 `pending` → `in_progress`,
