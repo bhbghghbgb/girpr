@@ -1117,15 +1117,14 @@ published. A run that was *not* killed can leave it behind too: once the copy
 is published the working file is scratch and is removed, and that removal can
 fail, which the run warns about. The copy itself is published and whole
 either way, so the run does not fail over the leftover. It is tool state and
-is never mirrored as content, but nothing reclaims it: remove it by hand.
-
-**The bound never ranges over a working name.** It ranges over the published
-copies — the `girpr-cache-backup-*` copies and the `girpr-cache-old-*`
-snapshots — and a working name is a copy that is still being made, so a bound
-that could select it could take away the copy another run is making there.
-That is the same answer the converter's temporary gets, and for the same
-reason: a name a live run is writing is not the tool's to sweep away — see
-[Commands](#commands).
+is never mirrored as content, and **the bound never ranges over a working
+name**: the bound ranges over the published copies — the `girpr-cache-backup-*`
+copies and the `girpr-cache-old-*` snapshots — and a working name is a copy
+that is still being made, so a bound that could select it could take away the
+copy another run is making there. Nothing reclaims a working name, so remove
+it by hand. That is the same answer the converter's temporary gets, and for the
+same reason: a name a live run is writing is not the tool's to sweep away —
+see [Commands](#commands).
 
 A run killed between publishing a copy and opening the folder's cache can also
 leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or
