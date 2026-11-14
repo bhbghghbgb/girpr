@@ -412,13 +412,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M26
+    status: pending
+    tasks: [F218, F219, F220, F221]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M11
-    status: in_progress
+    status: done
     tasks: [F156, F157, F158, F159]
     base: 8cd72166
     head: 2ce5c4cc
-    result: null
-    followups: []
+    result: F156 kept (6fc49e88); F157 kept (6603ecaf); F158 kept (dbc64313); F159 kept (880b1319, 2ce5c4cc); no fix or revert commits; 584 passed, 1 skipped; the private-items doc warnings went from 8 to 1, the one left being out of this batch scope
+    followups: [F218, F219, F220, F221]
   - batch: M12
     status: pending
     tasks: [F160, F161, F162, F163, F164, F165]
@@ -1473,25 +1480,25 @@ followups:
   - id: F156
     source: F39
     description: cache/db/backend.rs's SharedCache::reads doc and cachedb.rs's with_handle doc describe the same counter from the other side, and with_handle never says why the fresh counter is the cache's count for a file-backed cache.
-    status: pending_review
+    status: completed
     batch: M11
     commits: [6fc49e88]
   - id: F157
     source: F40
     description: The preflight open also opens the entries table, a presence check with no rows read, outside begin_entries_read, so a reader of that function could ask whether that transaction is counted.
-    status: pending_review
+    status: completed
     batch: M11
     commits: [6603ecaf]
   - id: F158
     source: F37
     description: plan/link.rs's module doc says the helpers are pure over the effective maps plus the link-resolution primitives, which reads as if they touch no disk, while on_disk_name, target_rel and spare_link_components all do.
-    status: pending_review
+    status: completed
     batch: M11
     commits: [dbc64313]
   - id: F159
     source: F39
     description: Seven pre-existing broken intra-doc links remain, for CacheDb twice, codec, Summary, super::super::apply::copy, AlgoSet and crate::effective::merge_row.
-    status: pending_review
+    status: completed
     batch: M11
     commits: [880b1319, 2ce5c4cc]
   - id: F160
@@ -1845,6 +1852,30 @@ followups:
     status: pending
     batch: M25
     commits: []
+  - id: F218
+    source: F156
+    description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
+    status: pending
+    batch: M26
+    commits: []
+  - id: F219
+    source: F156
+    description: redb skips its file lock entirely on a filesystem that cannot lock a file, so the exclusion the counter story rests on does not hold there; the crate acknowledges such filesystems elsewhere.
+    status: pending
+    batch: M26
+    commits: []
+  - id: F220
+    source: F157
+    description: The preflight new sentence calls the counted reads the ones that fetch rows, but entry_count and load_keys are counted too and fetch none, so begin_entries_read should stay the stated definition.
+    status: pending
+    batch: M26
+    commits: []
+  - id: F221
+    source: F158
+    description: The claim that three of the link helpers ask the disk counts on_disk_name, whose non-Windows version asks nothing at all.
+    status: pending
+    batch: M26
+    commits: []
 ```
 
 ## Human checklist
@@ -1877,6 +1908,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M11 `done`: F156, F157, F158 and F159 all kept, no fix
+  or revert commits; follow-ups F218–F221 appended with batch `M26`. F156,
+  F157, F158 and F159 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M11 review checkpoint opened: F156, F157, F158 and
   F159 `in_progress` → `pending_review`, commits `6fc49e88`, `6603ecaf`,
   `dbc64313`, `880b1319`, `2ce5c4cc`; review M11 `pending` → `in_progress`,
