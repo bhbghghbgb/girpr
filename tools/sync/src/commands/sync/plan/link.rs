@@ -10,10 +10,10 @@
 //! [`try_is_link`]).
 //!
 //! They are plan-time only: no filesystem write happens here, only those
-//! `read_dir`/`canonicalize`/`try_is_link` probes, and they are asked to
-//! learn which paths a kept dst file link depends on. The probes are made
-//! directly rather than through the guard seam — see
-//! [`Probes`](super::safety::Probes).
+//! `canonicalize`, `try_is_link` and `read_dir` (a Windows-only listing)
+//! probes, and they are asked to learn which paths a kept dst file link
+//! depends on. The probes are made directly rather than through the guard
+//! seam — see [`Probes`](super::safety::Probes).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
