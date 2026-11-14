@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M21
+active_batch: M22
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1951,19 +1951,19 @@ followups:
   - id: F206
     source: F141
     description: has_cache_prefix's doc names ascii_case_eq without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
-    status: pending
+    status: in_progress
     batch: M22
     commits: []
   - id: F207
     source: F138
     description: The new locals are src_folded and dst_folded although they hold folded-key indexes; names ending in _keys would say what they hold more exactly.
-    status: pending
+    status: in_progress
     batch: M22
     commits: []
   - id: F208
     source: F144
     description: on_disk_fold and util::identity_fold are now byte-identical Unicode-lowercase helpers in two modules; both docs warn against unifying them, but the duplication is visible to a reader.
-    status: pending
+    status: in_progress
     batch: M22
     commits: []
   - id: F209
@@ -2522,6 +2522,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M22 started: F206, F207 and F208 `pending` →
+  `in_progress`; `active_batch: M21` → `M22`.
 - 2026-11-14 — review M21 `done`: F200, F201, F202, F203 and F204 all kept,
   no fix or revert commits; follow-ups F291 and F292 appended with batches
   `M49` and `M50`, and F293 recorded as `skipped` as the same item as F288.
