@@ -861,6 +861,48 @@ fn an_unsupported_name_is_refused_with_the_supported_list() {
     );
 }
 
+/// **The refusal names a flag this crate has.** `--hash` is not one of them:
+/// the two are `--hash-all-of` and `--hash-any-of`, and a refusal naming a
+/// third sends the user after a flag that does not exist. The stat-only
+/// spelling is `--hash-all-of none`, so that is what the refusal has to say.
+///
+/// This is user-visible text, so it is pinned here: the spelling is the point,
+/// and a drift back to a flag that is not there would not fail anything else.
+#[test]
+fn the_none_refusal_names_the_flag_that_takes_none() {
+    let err = parse_hash_list(&["md5".to_string(), "none".to_string()]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "--hash-all-of none cannot be combined with other algorithms"
+    );
+    assert!(
+        !err.to_string().contains("--hash none"),
+        "and never the flag that does not exist: {err}"
+    );
+}
+
+/// **`none` is not a value under `--hash-any-of`**, and the refusal says so
+/// rather than inheriting the all-of rule: a user who typed `--hash-any-of`
+/// must not be told that `none` cannot be *combined*, because under this flag
+/// it is not accepted at all.
+#[test]
+fn the_any_of_refusal_names_the_any_of_flag() {
+    let err = parse_any_of(&["none".to_string()]).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("--hash-any-of"), "names the flag used: {msg}");
+    assert!(
+        msg.contains("--hash-all-of none"),
+        "and points at the spelling that does it: {msg}"
+    );
+    // Beside another algorithm it is refused the same way: the rule is about
+    // the value, not about how many values there are.
+    let err = parse_any_of(&["none".to_string(), "md5".to_string()]).unwrap_err();
+    assert!(
+        err.to_string().contains("--hash-any-of"),
+        "still the flag used: {err}"
+    );
+}
+
 /// **The property the whole split rests on.** `copy_and_digest` folds the
 /// digest into the copy loop and `hash_file` keeps its own; if those two
 /// ever disagreed, every copy in a real sync would fail its verify — or,

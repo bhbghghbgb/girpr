@@ -115,7 +115,7 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
     v.retain(|s| !s.is_empty());
     if v.iter().any(|s| s == "none") {
         if v.len() != 1 {
-            bail!("--hash none cannot be combined with other algorithms");
+            bail!("--hash-all-of none cannot be combined with other algorithms");
         }
         return Ok(vec![]);
     }
@@ -155,7 +155,20 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
 /// request — it is no request — and `--hash-all-of none` is the flag that says so.
 /// Accepting it would give a stat-only audit a name claiming a digest was optional
 /// but not required, which is the ambiguity all-of exists to remove.
+///
+/// The refusal is made **here** rather than left to the delegate: the delegate's
+/// own `none` rule belongs to `--hash-all-of`, and a refusal naming that flag
+/// would point a user who typed `--hash-any-of` at a flag they did not.
 pub fn parse_any_of(input: &[String]) -> Result<Vec<HashAlg>> {
+    // ASCII case only, as everywhere else a name is read: `NONE` is the same
+    // value as `none`, and it is refused the same way.
+    if input.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+        bail!(
+            "--hash-any-of does not accept none: it asks for one of the algorithms \
+             named, and none is not an algorithm; for a stat-only audit use \
+             --hash-all-of none"
+        );
+    }
     let algos = parse_hash_list(input)?;
     if algos.is_empty() {
         bail!(
