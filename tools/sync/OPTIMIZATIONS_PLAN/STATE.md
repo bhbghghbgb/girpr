@@ -565,13 +565,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M17
-    status: in_progress
-    tasks: [F185, F186, F187, F188, F190, F191]
-    base: 5c2e29fc
-    head: 94a17885
+  - batch: M39
+    status: pending
+    tasks: [F263, F264, F265]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M17
+    status: done
+    tasks: [F185, F186, F187, F188, F190, F191]
+    base: 5c2e29fc
+    head: 6c23cb4b
+    result: F185 kept (f0cd71f7); F186 kept (a2bb2324); F187 kept (4c48b5cb); F188 kept (4d91eca7); F190 fixed (6c23cb4b corrects the two docs that still asserted the removed rule); F191 kept (4d91eca7); 594 passed without the feature and 609 with it, 1 skipped
+    followups: [F263, F264, F265]
   - batch: M18
     status: pending
     tasks: [F189, F192]
@@ -1740,25 +1747,25 @@ followups:
   - id: F185
     source: F145
     description: Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message.
-    status: pending_review
+    status: completed
     batch: M17
     commits: [f0cd71f7]
   - id: F186
     source: F146
     description: tests/sync.rs run_sync_case_rename_steps_over_occupied_temporaries asserts a rename order from two src names that both start uppercase, so like the fixture just fixed it cannot tell the folded order from the exact one.
-    status: pending_review
+    status: completed
     batch: M17
     commits: [a2bb2324]
   - id: F187
     source: F140
     description: side_folder returns a dot for a record named on its own, and that edge case has no test.
-    status: pending_review
+    status: completed
     batch: M17
     commits: [4c48b5cb]
   - id: F188
     source: F140
     description: Coverage::folder is an Option, so a caller that forgets it silently loses the remedy bullet rather than failing.
-    status: pending_review
+    status: completed
     batch: M17
     commits: [4d91eca7]
   - id: F189
@@ -1770,13 +1777,13 @@ followups:
   - id: F190
     source: F140
     description: side_folder takes a record's parent, so a record whose name is not literally girpr-cache, such as girpr-cache-backup-1 which is_record_path also classifies as a record, gets a remedy that repopulates the folder's girpr-cache rather than the file that failed.
-    status: pending_review
+    status: completed
     batch: M17
-    commits: [4c48b5cb, 94a17885]
+    commits: [4c48b5cb, 94a17885, 6c23cb4b]
   - id: F191
     source: F140
     description: side_folder is public but has no caller outside the crate yet, so the surface is justified only by the same one-spelling argument as side_label.
-    status: pending_review
+    status: completed
     batch: M17
     commits: [4d91eca7]
   - id: F192
@@ -2216,6 +2223,24 @@ followups:
     status: pending
     batch: M38
     commits: []
+  - id: F263
+    source: F190
+    description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
+    status: pending
+    batch: M39
+    commits: []
+  - id: F264
+    source: F186
+    description: The added assertion in the rename fixture sorts a vector the test itself builds, so it states the fixture property rather than the program one and can only fail if the fixture is edited.
+    status: pending
+    batch: M39
+    commits: []
+  - id: F265
+    source: F190
+    description: The README Gotchas bullet still says the error names the folder to run that fix on, which now holds only for a record that is a folder own cache, while the new paragraph above states the exception.
+    status: pending
+    batch: M39
+    commits: []
 ```
 
 ## Human checklist
@@ -2248,6 +2273,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M17 `done`: F185 kept (f0cd71f7), F186 kept (a2bb2324),
+  F187 kept (4c48b5cb), F188 kept (4d91eca7), F190 fixed (6c23cb4b), F191 kept
+  (4d91eca7); follow-ups F263–F265 appended with batch `M39`. F185–F191
+  `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M17 review checkpoint opened: F185, F186, F187,
   F188, F190 and F191 `in_progress` → `pending_review`, commits `f0cd71f7`,
   `a2bb2324`, `4d91eca7`, `4c48b5cb`, `94a17885`; review M17 `pending` →
