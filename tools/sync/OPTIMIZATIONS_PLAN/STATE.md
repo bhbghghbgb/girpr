@@ -475,11 +475,18 @@ reviews:
     head: 6236f9fa
     result: F166 fixed (82fd8a95 corrects a doc that still called the arm a slice); F167 kept (6955810c); F168 kept (a095f412, 34293501); F169 kept (515bfa49); F170 kept (95a2d302, 4db5ab6a); F171 fixed (6236f9fa corrects the index doc); 585 passed without the feature and 599 with it, 1 skipped
     followups: [F232, F234]
-  - batch: M14
+  - batch: M31
     status: pending
-    tasks: [F172, F173, F174]
+    tasks: [F236]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M14
+    status: in_progress
+    tasks: [F172, F173, F174]
+    base: 78244080
+    head: 2d6014e6
     result: null
     followups: []
   - batch: M3
@@ -1604,21 +1611,21 @@ followups:
   - id: F172
     source: F33
     description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
-    status: in_progress
+    status: pending_review
     batch: M14
-    commits: []
+    commits: [0f9e7d33, a747499a]
   - id: F173
     source: F34
     description: DigestSet::merge applies the same exact-name replacement rule as insert_named, but no case holds a row with two spellings of one algorithm across a merge, so the rule is pinned on the insert path only.
-    status: in_progress
+    status: pending_review
     batch: M14
-    commits: []
+    commits: [0fe48358]
   - id: F174
     source: F41
     description: The comment above the index in phase_a.rs still phrases the saving as a scan whose cached keys all match the spelling the disk uses never asking for an alternate, leaving out the run that only adds a file and still pays for the index.
-    status: in_progress
+    status: pending_review
     batch: M14
-    commits: []
+    commits: [3a65ca7f, 41656cb5, 2d6014e6]
   - id: F175
     source: F116
     description: Nothing pins the converter help output, so a doc comment on Args could come back and print the source note again; the existing help case only asserts the flags are named.
@@ -1991,6 +1998,33 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F229, already scheduled in M29
+  - id: F236
+    source: F173
+    description: DigestSet::merge clones the other side's foreign entries, name and digest, into the arm; a merge that replaces an entry in place reuses the digest buffer, but an added entry allocates a fresh String and Vec, the same allocation the vector itself removed.
+    status: pending
+    batch: M31
+    commits: []
+  - id: F237
+    source: F168
+    description: The prune still walks the whole key set every scan even when the index was built, because the filter over it is a full pass; the index could answer whether a row is live per key.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F228, already scheduled in M29
+  - id: F238
+    source: F174
+    description: phase_a.rs's AltIndex builds a folded String per cached key on first miss; a fold into the index's own arena, or a hash of the folded bytes, would avoid the per-key allocation on large caches.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F234, already scheduled in M30
+  - id: F239
+    source: F169
+    description: The same_spelling helper in digestset.rs is now a one-line equality; it survives as the single place the rule is written, but it could be inlined with a comment if the crate prefers fewer indirections.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F230, already scheduled in M29
 ```
 
 ## Human checklist
@@ -2023,6 +2057,12 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M14 review checkpoint opened: F172, F173 and F174
+  `in_progress` → `pending_review`, commits `0f9e7d33`, `a747499a`,
+  `0fe48358`, `3a65ca7f`, `41656cb5`, `2d6014e6`; review M14 `pending` →
+  `in_progress`, base `78244080`, head `2d6014e6`. Follow-up F236 appended
+  with batch `M31`; F237, F238 and F239 recorded as `skipped` as the same
+  items as F228, F234 and F230.
 - 2026-11-14 — follow-up batch M14 started: F172, F173 and F174 `pending` →
   `in_progress`; `active_batch: M13` → `M14`.
 - 2026-11-14 — review M13 `done`: F166 fixed (82fd8a95), F167 kept, F168 kept,
