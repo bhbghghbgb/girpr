@@ -199,21 +199,26 @@ pub fn scan_stat_only(
                         .and_then(|index| index.get(&path_key(&e.rel)));
                     match alts {
                         Some(alts) => {
-                            let others: Vec<&String> =
-                                alts.iter().filter(|k| *k != &e.rel).collect();
-                            if others.len() == 1 {
-                                let old = others[0];
-                                let rec = match batch.as_mut() {
-                                    Some(w) => w.get(old)?,
-                                    None => cache.get(old)?,
-                                };
-                                if let Some(w) = batch.as_mut() {
-                                    w.remove(old)?; // old casing dropped; new one upserted below
+                            // The alternates other than the disk's own
+                            // spelling, counted where they stand: the group
+                            // is adopted only when exactly one of them is
+                            // left, so the count is all the lookup needs and
+                            // nothing is collected to make it.
+                            let mut others = alts.iter().filter(|k| *k != &e.rel);
+                            match (others.next(), others.next()) {
+                                (Some(old), None) => {
+                                    let rec = match batch.as_mut() {
+                                        Some(w) => w.get(old)?,
+                                        None => cache.get(old)?,
+                                    };
+                                    if let Some(w) = batch.as_mut() {
+                                        w.remove(old)?; // old casing dropped; new one upserted below
+                                    }
+                                    adopted_keys.insert(old.clone());
+                                    (rec, true)
                                 }
-                                adopted_keys.insert(old.clone());
-                                (rec, true)
-                            } else {
-                                (None, false) // zero (truly new) or several stale: prune handles leftovers
+                                // zero (truly new) or several stale: prune handles leftovers
+                                _ => (None, false),
                             }
                         }
                         None => (None, false),
