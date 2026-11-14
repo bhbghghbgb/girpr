@@ -14,6 +14,26 @@ use crate::util::{elapsed_s, path_key};
 
 use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_matches};
 
+/// The cached spellings under one folded key.
+///
+/// The lookup asks two things of a group: how many spellings it holds, and
+/// the spelling it may adopt when it holds exactly one. A group of two needs
+/// both of its spellings — the disk's own spelling may be one of them, and
+/// the other is the stale one — and a group of three or more is never
+/// adopted, so it needs nothing but its count.
+///
+/// A group holds **where** its spellings are rather than copies of them, so a
+/// folded key costs no allocation of its own: the index holds the keys it was
+/// built from, and a group names up to two places in them.
+struct Group {
+    /// How many cached spellings fold to this key.
+    count: usize,
+    /// Where the group's first spelling is in the key set.
+    first: usize,
+    /// Where the group's second spelling is, when the group holds two.
+    second: Option<usize>,
+}
+
 /// The alternate-case index over the cached keys: a folded spelling → the
 /// cached spellings under it.
 ///
@@ -21,14 +41,79 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 /// it costs a copy of every key in the cache. The scan builds it only when a
 /// lookup needs it — see the index's own note in [`scan_stat_only`].
 ///
+/// The key set is **kept**, and not only folded: the prune asks the cache the
+/// same question — "which rows exist?" — so the scan reads the table's keys
+/// once and both passes answer from it.
+///
 /// A folded key can hold *several* stale spellings, and the lookup asks how
 /// many there are, so this is not the key-shaped [`util::folded_keys`] one.
-fn fold_alternates(keys: Vec<String>) -> HashMap<String, Vec<String>> {
-    let mut index: HashMap<String, Vec<String>> = HashMap::new();
-    for key in keys {
-        index.entry(path_key(&key)).or_default().push(key);
+struct AltIndex {
+    /// Every cached key, as read.
+    keys: Vec<String>,
+    /// Folded spelling → the cached spellings under it.
+    groups: HashMap<String, Group>,
+}
+
+/// The alternate-case index over the given keys.
+///
+/// The groups hold **where** their spellings are rather than copies of them:
+/// a group is a count and up to two places in the key set. A folded key
+/// therefore costs a folded spelling and nothing else — where the index used
+/// to allocate a vector of spellings for every folded key it met, and a
+/// group with several stale spellings was the shape it met most.
+fn fold_alternates(keys: Vec<String>) -> AltIndex {
+    let mut groups: HashMap<String, Group> = HashMap::new();
+    for (at, key) in keys.iter().enumerate() {
+        let folded = path_key(key);
+        match groups.get_mut(&folded) {
+            None => {
+                groups.insert(
+                    folded,
+                    Group {
+                        count: 1,
+                        first: at,
+                        second: None,
+                    },
+                );
+            }
+            Some(group) => {
+                group.count += 1;
+                if group.count == 2 {
+                    group.second = Some(at);
+                }
+            }
+        }
     }
-    index
+    AltIndex { keys, groups }
+}
+
+impl AltIndex {
+    /// The stale spelling under `folded`, if the group holds exactly one
+    /// spelling that is not the disk's own.
+    ///
+    /// The disk's own spelling is the one the walk found, so a group that
+    /// holds it holds no stale spelling at all, and a group that holds it
+    /// beside another spelling offers that other one.
+    fn adoptable(&self, folded: &str, disk: &str) -> Option<&str> {
+        let group = self.groups.get(folded)?;
+        let first = self.keys[group.first].as_str();
+        match group.count {
+            1 => (first != disk).then_some(first),
+            2 => {
+                let second = self.keys[group.second?].as_str();
+                if first == disk {
+                    Some(second)
+                } else if second == disk {
+                    Some(first)
+                } else {
+                    None
+                }
+            }
+            // Three or more: at least two of them are stale, and a group
+            // with two stale spellings is not adopted.
+            _ => None,
+        }
+    }
 }
 
 /// **Phase A.** Walk `root`, consult the cache, and report what it knows about
@@ -145,7 +230,7 @@ pub fn scan_stat_only(
     // A folded key here can hold *several* stale spellings, and the lookup asks
     // how many there are, so this index is not the key-shaped `util::folded_keys`
     // one.
-    let mut alt_index: Option<HashMap<String, Vec<String>>> = None;
+    let mut alt_index: Option<AltIndex> = None;
     // An adopted key is renamed to the disk casing and removed, so it must not
     // also be counted as stale when the prune set is read below.
     let mut adopted_keys: HashSet<String> = HashSet::new();
@@ -194,33 +279,26 @@ pub fn scan_stat_only(
                     if alt_index.is_none() {
                         alt_index = Some(fold_alternates(cache.load_keys()?));
                     }
-                    let alts = alt_index
+                    // The one stale spelling this group offers, if it offers
+                    // exactly one: the group is adopted only when a single
+                    // spelling other than the disk's own is left, so nothing
+                    // is collected to make the count.
+                    let stale = alt_index
                         .as_ref()
-                        .and_then(|index| index.get(&path_key(&e.rel)));
-                    match alts {
-                        Some(alts) => {
-                            // The alternates other than the disk's own
-                            // spelling, counted where they stand: the group
-                            // is adopted only when exactly one of them is
-                            // left, so the count is all the lookup needs and
-                            // nothing is collected to make it.
-                            let mut others = alts.iter().filter(|k| *k != &e.rel);
-                            match (others.next(), others.next()) {
-                                (Some(old), None) => {
-                                    let rec = match batch.as_mut() {
-                                        Some(w) => w.get(old)?,
-                                        None => cache.get(old)?,
-                                    };
-                                    if let Some(w) = batch.as_mut() {
-                                        w.remove(old)?; // old casing dropped; new one upserted below
-                                    }
-                                    adopted_keys.insert(old.clone());
-                                    (rec, true)
-                                }
-                                // zero (truly new) or several stale: prune handles leftovers
-                                _ => (None, false),
+                        .and_then(|index| index.adoptable(&path_key(&e.rel), &e.rel));
+                    match stale {
+                        Some(old) => {
+                            let rec = match batch.as_mut() {
+                                Some(w) => w.get(old)?,
+                                None => cache.get(old)?,
+                            };
+                            if let Some(w) = batch.as_mut() {
+                                w.remove(old)?; // old casing dropped; new one upserted below
                             }
+                            adopted_keys.insert(old.to_string());
+                            (rec, true)
                         }
+                        // zero (truly new) or several stale: prune handles leftovers
                         None => (None, false),
                     }
                 }
