@@ -651,18 +651,25 @@ reviews:
     followups: []
   - batch: M47
     status: pending
-    tasks: [F280, F281]
+    tasks: [F280, F281, F282]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M48
+    status: pending
+    tasks: [F283, F284, F285]
     base: null
     head: null
     result: null
     followups: []
   - batch: M20
-    status: in_progress
+    status: done
     tasks: [F195, F196, F197, F199]
     base: fe3db912
     head: 858fa92e
-    result: null
-    followups: []
+    result: F195 kept (14f77fa3); F196 kept (30b37539); F197 kept (fa35b7d8); F199 kept (858fa92e); no fix or revert commits; 596 passed, 1 skipped; a workspace-wide search found nothing that branches on the renamed event strings
+    followups: [F282, F283, F284, F285]
   - batch: M6
     status: done
     tasks: [F121, F122, F125, F126, F127, F129]
@@ -1863,19 +1870,19 @@ followups:
   - id: F195
     source: F122
     description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
-    status: pending_review
+    status: completed
     batch: M20
     commits: [14f77fa3]
   - id: F196
     source: F121
     description: The copy phase's selection rule is pinned by a unit test on the comparison, but the mapping from a plan index to the path the report names is only covered end-to-end.
-    status: pending_review
+    status: completed
     batch: M20
     commits: [30b37539]
   - id: F197
     source: F122
     description: The effective done event is logged once per phase and the two are told apart only by the presence of the stat_only field; a message that named the phase would remove that subtlety.
-    status: pending_review
+    status: completed
     batch: M20
     commits: [fa35b7d8]
   - id: F198
@@ -1887,7 +1894,7 @@ followups:
   - id: F199
     source: F122
     description: The two phases' progress totals are asserted as the set of two values, so the case does not say which phase reports the walk's count and which the map's.
-    status: pending_review
+    status: completed
     batch: M20
     commits: [858fa92e]
   - id: F200
@@ -2394,6 +2401,37 @@ followups:
     status: pending
     batch: M47
     commits: []
+  - id: F282
+    source: F196
+    description: The new unit case hand-builds a plan whose copies are listed in alphabetical order, so it cannot tell the plan's order from the sorted order, and a fixture whose plan order was not alphabetical would make the pin sharper.
+    status: pending
+    batch: M47
+    commits: []
+  - id: F283
+    source: F197
+    description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
+    status: pending
+    batch: M48
+    commits: []
+  - id: F284
+    source: F199
+    description: The hashing phase's total is the planner's pending count rather than the map's size, so the case's wording that it counts only what the map kept holds only because the fixture's cache is cold.
+    status: pending
+    batch: M48
+    commits: []
+  - id: F285
+    source: F195
+    description: The heartbeat constant is now public API purely so the integration test can read the same constant, and nothing else in the crate needs it public.
+    status: pending
+    batch: M48
+    commits: []
+  - id: F286
+    source: F197
+    description: The walk's heartbeat keeps the bare progress name while the phases now name their phase, so a grep for that name still matches three events and only the fields separate them.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F278, already scheduled in M46
 ```
 
 ## Human checklist
@@ -2426,6 +2464,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M20 `done`: F195, F196, F197 and F199 all kept, no fix
+  or revert commits; follow-ups F282–F285 appended with batches `M47` and
+  `M48`, and F286 recorded as `skipped` as the same item as F278. F195–F199
+  `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M20 review checkpoint opened: F195, F196, F197
   and F199 `in_progress` → `pending_review`, commits `14f77fa3`, `30b37539`,
   `fa35b7d8`, `858fa92e`; review M20 `pending` → `in_progress`, base
