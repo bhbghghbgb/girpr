@@ -195,6 +195,14 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   policy names log files after the *project*, and the converter is part of
   this one. It is a one-shot migration, and a migration that fails should
   leave a record of how far it got.
+- **The effective map's events name their phase.** A side's map is built in
+  two phases — one that walks the tree and consults the cache, one that hashes
+  what the plan asked for — and each of them says which it is:
+  `effective done: phase a` and `effective done: phase c`, with the progress
+  they report under `scan progress: phase a` and `scan progress: phase c`. The
+  old names are prefixes of the new ones, so a grep for `effective done` still
+  finds them both; the phase is what tells the two apart. The walk's own
+  heartbeat is the `scan progress` that counts the entries it has pushed.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).

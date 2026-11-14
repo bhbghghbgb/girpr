@@ -345,6 +345,11 @@ pub fn scan_stat_only(
                 }
             }
             n_done += 1;
+            // The message names the phase. Two phases report progress under
+            // one name, and the fields do not tell them apart: this one reads
+            // no bytes, so it reports `hashed = 0` for the whole run, and a
+            // reader (or a parser) that cannot say which phase an event came
+            // from cannot say anything about it. The name says.
             if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
                 info!(
                     root = %root.display(),
@@ -353,7 +358,7 @@ pub fn scan_stat_only(
                     hashed = 0,
                     cache_hit = 0,
                     elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "scan progress"
+                    "scan progress: phase a"
                 );
                 last_prog = std::time::Instant::now();
             }
@@ -473,6 +478,10 @@ pub fn scan_stat_only(
         stat_only: 0,
         pruned,
     };
+    // The message names the phase. The map is finished in two phases and each
+    // of them says so, because the fields do not: only the phase that hashes
+    // reports the stat-only count, so an event without that field is this
+    // phase's — a thing a reader has to know to read the log at all.
     info!(
         root = %root.display(),
         files = stats.files,
@@ -481,7 +490,7 @@ pub fn scan_stat_only(
         cache_hit = 0,
         pruned = stats.pruned,
         elapsed_s = elapsed_s(t_eff),
-        "effective done"
+        "effective done: phase a"
     );
     Ok(SideScan { map, stats })
 }

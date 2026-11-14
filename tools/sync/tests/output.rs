@@ -895,7 +895,7 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
 
     // The walk's heartbeat. It carries the entries it has pushed, which is
     // what tells it apart from the phases' own progress events — those count
-    // the work they have done, not the tree.
+    // the work they have done, not the tree, and they name their phase.
     let heartbeats: Vec<&Value> = logged
         .iter()
         .filter(|e| {
@@ -915,21 +915,21 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
          included"
     );
 
-    // The phases report their progress under the same name, and they count
-    // the work they have done rather than the tree: the first phase's total
-    // is every entry the walk saw, and the second's is only what the map
-    // kept — the second phase never touches a path the filter hid.
-    let phase_progress: Vec<&Value> = logged
-        .iter()
-        .filter(|e| e["fields"]["message"] == "scan progress" && e["fields"].get("done").is_some())
-        .collect();
+    // The phases report their progress, and they count the work they have
+    // done rather than the tree: the first phase's total is every entry the
+    // walk saw, and the second's is only what the map kept — the second phase
+    // never touches a path the filter hid. Each event names its phase, so
+    // the two are told apart by the message rather than by a field.
+    let phase_a_progress = events_with(&logged, "scan progress: phase a");
+    let phase_c_progress = events_with(&logged, "scan progress: phase c");
     assert!(
-        !phase_progress.is_empty(),
+        !phase_a_progress.is_empty() && !phase_c_progress.is_empty(),
         "the phases report their progress: {}",
         serde_json::to_string(&logged).unwrap()
     );
-    let totals: std::collections::BTreeSet<u64> = phase_progress
+    let totals: std::collections::BTreeSet<u64> = phase_a_progress
         .iter()
+        .chain(phase_c_progress.iter())
         .filter_map(|e| e["fields"]["total"].as_u64())
         .collect();
     assert_eq!(
@@ -955,44 +955,53 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         "the map starts from every entry the walk saw"
     );
 
-    // The map's own counts, one event per phase. The second phase is the one
-    // that says how many rows it found stat-only, so the two are told apart by
-    // that field rather than by the order they happen to be written in.
-    let done = events_with(&logged, "effective done");
+    // The map's own counts, one event per phase, and each event names the
+    // phase it came from: the phase that reads no bytes and the phase that
+    // hashes are told apart by the message rather than by a field or by the
+    // order they happen to be written in.
+    let phase_a = events_with(&logged, "effective done: phase a");
     assert_eq!(
-        done.len(),
-        2,
-        "two phases, two effective-done events: {}",
+        phase_a.len(),
+        1,
+        "one phase A, one effective-done event: {}",
         serde_json::to_string(&logged).unwrap()
     );
-    let phase_a = done
-        .iter()
-        .find(|e| e["fields"].get("stat_only").is_none())
-        .expect("the phase that reads no bytes reports without the stat-only count");
-    let phase_c = done
-        .iter()
-        .find(|e| e["fields"].get("stat_only").is_some())
-        .expect("the phase that hashes reports with the stat-only count");
+    let phase_c = events_with(&logged, "effective done: phase c");
     assert_eq!(
-        phase_a["fields"]["files"], 1999,
+        phase_c.len(),
+        1,
+        "one phase C, one effective-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        phase_a[0]["fields"]["files"],
+        HEARTBEAT_ENTRIES - 1,
         "the map leaves the excluded file out"
     );
-    assert_eq!(phase_a["fields"]["dirs"], 0);
+    assert_eq!(phase_a[0]["fields"]["dirs"], 0);
     assert_eq!(
-        phase_a["fields"]["hashed"], 0,
+        phase_a[0]["fields"]["hashed"], 0,
         "the first phase reads no bytes, so it hashes nothing"
     );
-    assert_eq!(phase_a["fields"]["cache_hit"], 0);
-    assert_eq!(phase_a["fields"]["pruned"], 0);
-    assert_eq!(phase_c["fields"]["files"], 1999, "the map is the same map");
-    assert_eq!(phase_c["fields"]["dirs"], 0);
+    assert_eq!(phase_a[0]["fields"]["cache_hit"], 0);
+    assert_eq!(phase_a[0]["fields"]["pruned"], 0);
     assert_eq!(
-        phase_c["fields"]["hashed"], 1999,
+        phase_c[0]["fields"]["files"],
+        HEARTBEAT_ENTRIES - 1,
+        "the map is the same map"
+    );
+    assert_eq!(phase_c[0]["fields"]["dirs"], 0);
+    assert_eq!(
+        phase_c[0]["fields"]["hashed"],
+        HEARTBEAT_ENTRIES - 1,
         "the second phase hashed what the map held"
     );
-    assert_eq!(phase_c["fields"]["cache_hit"], 0, "and the cache was cold");
     assert_eq!(
-        phase_c["fields"]["pruned"], 0,
+        phase_c[0]["fields"]["cache_hit"], 0,
+        "and the cache was cold"
+    );
+    assert_eq!(
+        phase_c[0]["fields"]["pruned"], 0,
         "and there was nothing to prune"
     );
 }
@@ -1057,14 +1066,16 @@ fn a_pruned_cache_subtree_is_in_no_count() {
     assert_eq!(scans[0]["fields"]["dirs"], 1);
 
     // The map's count: the same tree, minus the pruned subtree.
-    let done = events_with(&logged, "effective done");
-    let phase_a = done
-        .iter()
-        .find(|e| e["fields"].get("stat_only").is_none())
-        .expect("the phase that reads no bytes reports without the stat-only count");
-    assert_eq!(phase_a["fields"]["files"], 2, "the map holds two files");
+    let phase_a = events_with(&logged, "effective done: phase a");
     assert_eq!(
-        phase_a["fields"]["dirs"], 1,
+        phase_a.len(),
+        1,
+        "one phase A, one effective-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(phase_a[0]["fields"]["files"], 2, "the map holds two files");
+    assert_eq!(
+        phase_a[0]["fields"]["dirs"], 1,
         "and the directory between them"
     );
 

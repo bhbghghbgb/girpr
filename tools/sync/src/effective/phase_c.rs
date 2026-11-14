@@ -162,6 +162,12 @@ pub fn resolve_folder(
             sink.hashed += 1;
             // Logged under the lock so the `done` counts appear in the order they
             // were reached rather than the order workers got scheduled to log.
+            //
+            // The message names the phase. Two phases report progress under one
+            // name, and the fields do not tell them apart: the phase that reads
+            // no bytes reports `hashed = 0` for the whole run, so a reader (or a
+            // parser) that cannot say which phase an event came from cannot say
+            // anything about it. The name says.
             if sink.hashed.is_multiple_of(100)
                 || sink.hashed == total
                 || sink.last_prog.elapsed().as_secs() >= 5
@@ -173,7 +179,7 @@ pub fn resolve_folder(
                     hashed = sink.hashed,
                     cache_hit = 0,
                     elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "scan progress"
+                    "scan progress: phase c"
                 );
                 sink.last_prog = std::time::Instant::now();
             }
@@ -238,6 +244,10 @@ pub fn resolve_folder(
         pruned: phase_a.stats.pruned,
         live: phase_a.stats.live,
     };
+    // The message names the phase. The map is finished in two phases and each
+    // of them says so, because the fields do not: only the phase that hashes
+    // reports the stat-only count, so an event without that field is the other
+    // phase's — a thing a reader has to know to read the log at all.
     info!(
         root = %root.display(),
         files = phase_a.stats.files,
@@ -247,7 +257,7 @@ pub fn resolve_folder(
         stat_only = stats.stat_only,
         pruned = phase_a.stats.pruned,
         elapsed_s = elapsed_s(t_eff),
-        "effective done"
+        "effective done: phase c"
     );
     Ok(SideScan { map, stats })
 }
