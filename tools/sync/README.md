@@ -132,6 +132,16 @@ file a live conversion is writing, and a sweep that could not tell a live one
 from a dead one would take the copy a running conversion is making. The name
 carries the process id, so a leftover says which run left it.
 
+That process id is for **you**, not for the tool: it cannot answer "is a
+conversion still writing this?". A process id is **reused**, so the number in
+the name may belong to an unrelated process by now — the check would either
+keep a stale temporary forever or take a live one away. And the folder can be
+**shared between hosts** (a network folder, a container mount, a synced
+directory), where the number was minted in a process table this machine cannot
+ask about at all; a container has the same problem inside one host, because
+its process ids belong to its own namespace. So the id names the run for a
+reader, and a leftover is yours to remove.
+
 Replacing a **legacy sled directory** is the one step that is not atomic: the
 directory has to be removed before the new file can take its name, so a
 failure in that window leaves no cache at all. The error says so when it

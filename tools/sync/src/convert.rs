@@ -19,7 +19,10 @@
 //! up after itself therefore leaves tool state behind, not a file the next
 //! run would treat as ordinary content. Nothing reclaims it, and it stays in
 //! the folder until it is removed by hand: a temporary is the file a live
-//! conversion is writing, so no sweep may take one.
+//! conversion is writing, so no sweep may take one. The process id its name
+//! carries says which run left it, and is there for the reader — it cannot
+//! answer "is a conversion still writing this?", because a process id is
+//! reused and a folder can be shared between hosts.
 //!
 //! Used by the `sled2redb` binary and covered by `tests/convert.rs`. This is
 //! the only module that still touches `sled`.
@@ -57,6 +60,26 @@ const OLD_META_KEY: &str = "\0meta";
 /// sweep that could not tell a live one from a dead one would take the copy a
 /// running conversion is making. The name carries the process id, so a
 /// leftover says which run left it.
+///
+/// **The process id is for the reader, not for the tool.** It names the run
+/// that made the file, and it is not an oracle for "is a conversion still
+/// writing this?". Two things stop it from being one:
+///
+/// - **A process id is reused.** The number in the name is the one the
+///   conversion had; a later process on the same host can be handed the same
+///   number. So "that process is alive" does not mean "the conversion that
+///   made this file is alive" — it would keep a stale temporary forever, and
+///   a live conversion's temporary could be judged dead by a different
+///   process wearing the same number.
+/// - **The folder can be shared between hosts.** A network folder, a
+///   container mount, a synced directory: the number was minted in another
+///   host's process table, where this host cannot ask about it at all. A
+///   container has the same problem inside one host, because its process ids
+///   belong to its own namespace.
+///
+/// So the only question a sweep could ask safely is whether a conversion is
+/// running *now*, and the id in the name cannot answer it. The tool does not
+/// sweep this name at all: a leftover is the reader's to remove.
 pub const CONVERT_TEMP_PREFIX: &str = "girpr-cache-convert-";
 
 /// How many candidate names a claim tries before it gives up.
