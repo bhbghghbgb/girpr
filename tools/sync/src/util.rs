@@ -94,6 +94,29 @@ pub fn is_record_path(p: &Path) -> bool {
         .is_some_and(has_cache_prefix)
 }
 
+/// True when the final path component is the cache's own name, `girpr-cache`.
+///
+/// A record *is* a cache, and a folder's cache is named exactly `girpr-cache`;
+/// a `girpr-cache-backup-*` copy or an `old-` snapshot is a copy of one and not
+/// one. This is the exact-name counterpart of [`is_record_path`], which
+/// reserves the whole prefix.
+///
+/// The same spelling rule as that one: case is folded on Windows only, where
+/// the filesystem cannot tell `GIRPR-CACHE` from `girpr-cache`, and the two are
+/// different names elsewhere.
+pub fn is_cache_name(p: &Path) -> bool {
+    p.file_name().and_then(|s| s.to_str()).is_some_and(|name| {
+        #[cfg(windows)]
+        {
+            ascii_case_eq(name, CACHE_PREFIX)
+        }
+        #[cfg(not(windows))]
+        {
+            name == CACHE_PREFIX
+        }
+    })
+}
+
 /// True for any relative path with a `girpr-cache*` component: the live DB,
 /// its backups, and its `old-*` snapshots. These are never part of a mirror.
 ///

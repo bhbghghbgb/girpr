@@ -24,7 +24,7 @@ use crate::diff::Diff;
 use crate::effective::Side;
 use crate::planner::Repopulate;
 use crate::report::{Report, visit_verdict};
-use crate::util::elapsed_s;
+use crate::util::{elapsed_s, is_cache_name};
 
 /// What a side is called, in a message and in a log field.
 ///
@@ -71,10 +71,15 @@ pub fn side_label(side: &Side) -> String {
 
 /// The folder a side's cache lives in, when it has one to repopulate.
 ///
-/// A record's path is `<folder>/girpr-cache`, so the folder it describes is
-/// its parent — and that folder is what `girsync update --dir` takes, so a
-/// coverage failure can end with a command the user can paste instead of a
-/// placeholder.
+/// A record that *is* a folder's `girpr-cache` lives in that folder, and that
+/// folder is what `girsync update --dir` takes — so a coverage failure can
+/// end with a command the user can paste instead of a placeholder.
+///
+/// **A record that is not a folder's cache has none.** A `girpr-cache-backup-*`
+/// copy is a record as far as the tool is concerned — a comparison may be
+/// pointed at one — but it is not any folder's `girpr-cache`, so no
+/// repopulation would rebuild it, and naming the folder it happens to sit in
+/// would send the user to rebuild a *different* file.
 ///
 /// [`Repopulate::Nothing`] for a folder side: a folder can always answer for
 /// itself, so it is never the short side, and it has no record of its own to
@@ -84,12 +89,12 @@ pub fn side_label(side: &Side) -> String {
 /// crate names a side the way the commands do, or it keeps a second spelling.
 pub fn side_folder(side: &Side) -> Repopulate {
     match side {
-        Side::Record(p) => Repopulate::Folder(match p.parent() {
+        Side::Record(p) if is_cache_name(p) => Repopulate::Folder(match p.parent() {
             Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
             // A record named on its own lives in the working directory.
             _ => PathBuf::from("."),
         }),
-        Side::Folder(_) => Repopulate::Nothing,
+        _ => Repopulate::Nothing,
     }
 }
 
@@ -212,5 +217,63 @@ pub fn run(cli: Cli, plan: &girpr_log::LogPlan) -> Result<i32> {
             },
             &log,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::side_folder;
+    use crate::effective::Side;
+    use crate::planner::Repopulate;
+
+    /// A record's folder is the one its cache lives in: the parent of
+    /// `<folder>/girpr-cache`.
+    #[test]
+    fn a_record_names_the_folder_its_cache_lives_in() {
+        let side = Side::Record(Path::new("game").join("old").join("girpr-cache"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Folder(Path::new("game").join("old"))
+        );
+    }
+
+    /// **A record named on its own lives in the working directory.**
+    ///
+    /// The edge case: a record path with no parent at all, so there is no
+    /// folder to name — and the working directory is where it lives.
+    #[test]
+    fn a_record_named_on_its_own_lives_in_the_working_directory() {
+        let side = Side::Record(PathBuf::from("girpr-cache"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Folder(PathBuf::from(".")),
+            "a record with no parent sits in the working directory"
+        );
+    }
+
+    /// **A copy of a cache is not a cache.** A `girpr-cache-backup-*` file is a
+    /// record as far as the tool is concerned — a comparison may be pointed at
+    /// one — but it is not any folder's `girpr-cache`, so no repopulation would
+    /// rebuild it. Naming the folder it happens to sit in would send the user
+    /// to rebuild a *different* file, so no folder is named at all.
+    #[test]
+    fn a_record_that_is_not_a_folder_cache_has_no_folder() {
+        let side = Side::Record(Path::new("game").join("old").join("girpr-cache-backup-1"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Nothing,
+            "no folder's cache is this file, so there is nothing to repopulate"
+        );
+    }
+
+    /// A folder side is never short of coverage — it can always read the file —
+    /// so it is never the side a remedy is about, and it has no record of its
+    /// own to repopulate.
+    #[test]
+    fn a_folder_side_has_no_folder_to_repopulate() {
+        let side = Side::Folder(PathBuf::from("game"));
+        assert_eq!(side_folder(&side), Repopulate::Nothing);
     }
 }

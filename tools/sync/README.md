@@ -609,6 +609,13 @@ one you can paste as it stands), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
 `--hash-all-of none` for a stat-only audit.
 
+**A record that is not a folder's cache has no such command.** A
+`girpr-cache-backup-*` copy is a record as far as the tool is concerned — a
+comparison may be pointed at one — but no folder's `girpr-cache` is it, so
+nothing the tool can run would rebuild it, and the error does not offer a
+repopulation that would rebuild a *different* file. The other two ways out are
+still named.
+
 **`--hash-any-of` is the fourth, and the one that needs no new work on the tree.**
 Where the record holds *some* of what you asked for, it reads one algorithm instead
 of refusing:
