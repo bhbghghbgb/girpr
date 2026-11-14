@@ -27,8 +27,8 @@ fn same_spelling(a: &str, b: &str) -> bool {
 ///
 /// The map version was five allocations per row — the table, two `String` keys, two
 /// `Vec<u8>` digests — and a row is allocated once per file in phase A and held twice
-/// during phase C. This is **72 bytes and zero allocations** for a normal row: two
-/// fixed-size optional arrays, plus a boxed slice that is empty and allocates nothing
+/// during phase C. This is **80 bytes and zero allocations** for a normal row: two
+/// fixed-size optional arrays, plus a vector that is empty and allocates nothing
 /// unless something needs carrying. `size_of` is asserted in this module's tests.
 ///
 /// ## The foreign arm is not optional
@@ -50,15 +50,21 @@ pub struct DigestSet {
     pub(super) sha256: Option<[u8; 32]>,
     /// Algorithms this build does not know, carried verbatim. Empty in practice.
     /// See the type's docs.
-    pub(super) foreign: Box<[(Box<str>, Vec<u8>)]>,
+    ///
+    /// A **vector**, so an entry is changed where it stands: a digest that
+    /// arrives under a name the arm already holds replaces that entry, and
+    /// the arm is not rebuilt around it. The boxed slice this replaced could
+    /// only be written by rebuilding it, so every insert — a replacement as
+    /// much as an addition — copied the whole arm and allocated a new one.
+    pub(super) foreign: Vec<(Box<str>, Vec<u8>)>,
 }
 
 impl DigestSet {
     /// How many digests this holds, foreign ones included.
     ///
-    /// Not `const`, unlike [`super::AlgoSet::len`]: counting `foreign` means dereferencing a
-    /// boxed slice, and a count that silently ignored the foreign arm would be wrong
-    /// for exactly the rows forward compatibility exists to preserve.
+    /// Not `const`, unlike [`super::AlgoSet::len`]: counting `foreign` means reading
+    /// the arm, and a count that silently ignored it would be wrong for exactly the
+    /// rows forward compatibility exists to preserve.
     pub fn len(&self) -> usize {
         self.md5.is_some() as usize + self.sha256.is_some() as usize + self.foreign.len()
     }
@@ -114,7 +120,7 @@ impl DigestSet {
         // An unknown name is exact, and only ever the spelling it was given.
         self.foreign
             .iter()
-            .find(|(n, _)| same_spelling(&**n, name))
+            .find(|(n, _)| same_spelling(n, name))
             .map(|(_, d)| d.as_slice())
     }
 
@@ -135,8 +141,8 @@ impl DigestSet {
     ///
     /// **First match wins.** More than one entry can resolve to the same
     /// algorithm — `MD5` and `md5`, both with an unexpected length — and the arm
-    /// is a slice, so the answer is a property of the row rather than of an
-    /// iteration order. Both lookups go through here, so they cannot disagree
+    /// is an ordered list, so the answer is a property of the row rather than of
+    /// an iteration order. Both lookups go through here, so they cannot disagree
     /// about which entry that is.
     fn foreign_known(&self, a: HashAlg) -> Option<&[u8]> {
         self.foreign
@@ -181,22 +187,22 @@ impl DigestSet {
             self.sha256 = Some(d);
             return;
         }
-        let mut entries = std::mem::take(&mut self.foreign).into_vec();
-        // An explicit loop rather than `find`: the tuple destructuring is what makes
-        // `&**n` a `&str` here, and it reads as "replace the entry with this name"
-        // rather than "find a slot and poke at it".
-        let mut replaced = false;
-        for (n, d) in entries.iter_mut() {
-            if same_spelling(&**n, name) {
-                *d = digest.to_vec();
-                replaced = true;
-                break;
+        // The arm is a vector, so the entry is changed where it stands: a
+        // repeat of a spelling replaces that entry, and a spelling that is
+        // not there yet is appended. Nothing is copied around it.
+        match self
+            .foreign
+            .iter_mut()
+            .find(|(n, _)| same_spelling(n, name))
+        {
+            Some((_, d)) => {
+                // The digest's own buffer is reused when it is big enough, so
+                // replacing a digest allocates nothing.
+                d.clear();
+                d.extend_from_slice(digest);
             }
+            None => self.foreign.push((name.into(), digest.to_vec())),
         }
-        if !replaced {
-            entries.push((name.into(), digest.to_vec()));
-        }
-        self.foreign = entries.into_boxed_slice();
     }
 
     /// Fold `other` in, with **`other` winning** on every name both hold.
@@ -214,26 +220,27 @@ impl DigestSet {
             self.sha256 = Some(d);
         }
         if other.foreign.is_empty() {
-            // The common case, and the only one that has to allocate nothing: a row
-            // with no foreign entry is the overwhelmingly normal shape, and reaching
-            // the loop below would rebuild the boxed slice on every merge.
+            // The common case, and the only one that has to do nothing at all:
+            // a row with no foreign entry is the overwhelmingly normal shape,
+            // and the loop below would walk the arm for nothing.
             return;
         }
-        let mut entries = std::mem::take(&mut self.foreign).into_vec();
+        // The arm is a vector, so each entry of `other` is written where it
+        // belongs: over the entry of the same name when the arm holds one,
+        // and at the end when it does not.
         for (name, digest) in &other.foreign {
-            let mut replaced = false;
-            for (n, d) in entries.iter_mut() {
-                if same_spelling(&**n, name) {
-                    *d = digest.clone();
-                    replaced = true;
-                    break;
+            match self
+                .foreign
+                .iter_mut()
+                .find(|(n, _)| same_spelling(n, name))
+            {
+                Some((_, d)) => {
+                    d.clear();
+                    d.extend_from_slice(digest);
                 }
-            }
-            if !replaced {
-                entries.push((name.clone(), digest.clone()));
+                None => self.foreign.push((name.clone(), digest.clone())),
             }
         }
-        self.foreign = entries.into_boxed_slice();
     }
 }
 

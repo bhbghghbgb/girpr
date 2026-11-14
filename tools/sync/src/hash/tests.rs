@@ -284,18 +284,19 @@ fn display_pads_to_the_width_in_the_format_spec() {
 }
 
 /// **The memory claim, as an assertion.** This pins the replacement's size so a
-/// later edit that adds a `HashMap` or a `Vec` field fails here rather than
-/// quietly costing 25–50 MB on a 200k-file tree.
+/// later edit that adds a `HashMap` field — or grows the foreign arm into one
+/// — fails here rather than quietly costing 25–50 MB on a 200k-file tree.
 ///
-/// Derived, not guessed: a `Box<[T]>` fat pointer (16), plus `Option<[u8; 16]>` at
-/// 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche to
-/// spare, so it costs a discriminant byte. Alignment rounds the total up to 72.
+/// Derived, not guessed: the foreign arm is a `Vec` (24), plus `Option<[u8; 16]>`
+/// at 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche
+/// to spare, so it costs a discriminant byte. The vector's own alignment rounds
+/// the total up to 80.
 #[test]
-fn a_digest_set_is_seventy_two_bytes_and_allocates_nothing() {
-    assert_eq!(std::mem::size_of::<DigestSet>(), 72);
+fn a_digest_set_is_eighty_bytes_and_allocates_nothing() {
+    assert_eq!(std::mem::size_of::<DigestSet>(), 80);
     assert!(
         DigestSet::default().foreign.is_empty(),
-        "the foreign slice is empty and points nowhere"
+        "the foreign arm is empty and holds nothing"
     );
 }
 
