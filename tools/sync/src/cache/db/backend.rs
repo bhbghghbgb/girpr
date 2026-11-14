@@ -99,6 +99,14 @@ pub(in crate::cache) struct SharedCache {
     ///
     /// Test-only: the count answers "how many reads did this cache serve?",
     /// which is a question a test asks and a production caller does not.
+    ///
+    /// **One counter, shared by every handle on this path.** That is what
+    /// makes the figure the *cache's* count: a handle opened after a run can
+    /// say what that run's handle did. A file-backed cache reaches the same
+    /// answer without sharing anything — redb locks a writable database
+    /// exclusively, so the read/write handle on a cache file excludes every
+    /// other handle on that file, and that handle's own fresh counter is
+    /// already the cache's count.
     #[cfg(test)]
     pub reads: Arc<AtomicU64>,
 }

@@ -129,7 +129,20 @@ pub struct CacheDb {
 }
 
 impl CacheDb {
-    /// Wrap a handle, with the counters a fresh handle starts at.
+    /// Wrap a handle, with the read counter a fresh handle starts at.
+    ///
+    /// **A fresh counter is the cache's count for a file-backed cache.**
+    /// redb locks a writable database exclusively, so the read/write handle
+    /// on a cache file excludes every other handle on that file — no
+    /// read-only observer can be opened beside it — and the count that
+    /// handle keeps is therefore the count for the cache: there is no second
+    /// reader whose reads it could be missing. Read-only handles are the
+    /// other case: they share the file with each other, so each of those
+    /// keeps its own count and reports only its own reads.
+    ///
+    /// The shared (test) backend is the one case where several handles are
+    /// alive on one cache at once, and it hands them one counter between
+    /// them rather than one each — see `with_shared_reads`.
     fn with_handle(db: Handle) -> Self {
         Self {
             db,
@@ -144,6 +157,11 @@ impl CacheDb {
     /// counter, so the count is a property of the **cache** rather than of
     /// the handle that happens to be holding it — and a handle opened after
     /// a run can say what that run's handle did.
+    ///
+    /// A file-backed cache needs none of that: redb locks a writable
+    /// database exclusively, so the read/write handle on a cache file is the
+    /// only handle on it, and that handle's own fresh counter is already the
+    /// cache's count (see `with_handle`).
     #[cfg(test)]
     fn with_shared_reads(db: Handle, reads: Arc<AtomicU64>) -> Self {
         Self { db, reads }
@@ -445,8 +463,12 @@ impl CacheDb {
     /// The count belongs to the **cache**, not to the handle that reads
     /// through it: the shared in-memory backend hands every handle on one
     /// path the same counter, so a handle opened after a run can say what
-    /// that run's handle did. The handles on a cache file share no counter,
-    /// so there the count a handle reports is the reads that handle made.
+    /// that run's handle did. A file-backed cache reaches the same answer
+    /// without sharing anything — redb locks a writable database
+    /// exclusively, so the read/write handle on a cache file excludes every
+    /// other handle on that file and its own count is the cache's count.
+    /// The read-only handles on a file share the file with each other, so
+    /// each of those reports only its own reads.
     ///
     /// A test seam, for the reason the counter exists at all: a read that
     /// costs one transaction whatever its length is a different thing from a
