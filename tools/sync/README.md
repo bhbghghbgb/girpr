@@ -403,8 +403,8 @@ computes and judges a *set* of algorithms, and a set carries no order, so
 the `digest-differs` tag uses, so a parser can switch on the algorithm named in
 either place.
 
-Under `--hash none` there is no digest to fold into the loop, so the copy is left
-to `std::io::copy` and whatever fast path that has between two files.
+Under `--hash-all-of none` there is no digest to fold into the loop, so the copy
+is left to `std::io::copy` and whatever fast path that has between two files.
 
 ### What this never changes
 
