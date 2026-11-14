@@ -37,9 +37,9 @@ struct Group {
 /// The alternate-case index over the cached keys: a folded spelling → the
 /// cached spellings under it.
 ///
-/// One entry per cached key, and one folded spelling per entry, so building
-/// it costs a copy of every key in the cache. The scan builds it only when a
-/// lookup needs it — see the index's own note in [`scan_stat_only`].
+/// Every cached key contributes one folded spelling, so building it costs a
+/// copy of every key in the cache. The scan builds it only when a lookup
+/// needs it — see the index's own note in [`scan_stat_only`].
 ///
 /// The key set is **kept**, and not only folded: the prune asks the cache the
 /// same question — "which rows exist?" — so the scan reads the table's keys
