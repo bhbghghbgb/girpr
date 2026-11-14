@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M22
+active_batch: M23
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -2004,19 +2004,19 @@ followups:
   - id: F209
     source: F147
     description: The nonexistent --hash none still names a flag in source rather than in documents, in src/hash/set.rs module doc, parse_hash_list doc and the user-facing refusal, src/hash/algo.rs, src/effective, src/planner, src/commands/update.rs, src/commands/sync/apply/copy.rs and several test files; the set.rs refusal is user-visible text and the sharpest instance.
-    status: pending
+    status: in_progress
     batch: M23
     commits: []
   - id: F210
     source: F147
     description: src/hash/set.rs module doc still says the --hash and --hash-any-of parsers, stale in the same way.
-    status: pending
+    status: in_progress
     batch: M23
     commits: []
   - id: F211
     source: F151
     description: The README source table still has no row for src/commands/sync/plan/tests.rs, an inline test module; cosmetic, and the surrounding prose covers inline test modules.
-    status: pending
+    status: in_progress
     batch: M23
     commits: []
   - id: F212
@@ -2617,6 +2617,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M23 started: F209, F210 and F211 `pending` →
+  `in_progress`; `active_batch: M22` → `M23`.
 - 2026-11-14 — review M22 `done`: F206, F207 and F208 all kept, no fix or
   revert commits; follow-ups F298–F303 appended with batches `M53`, `M54` and
   `M55`. F206–F208 `pending_review` → `completed`.
