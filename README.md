@@ -331,16 +331,18 @@ any missing toolchain through rustup, and runs
 so tests and benches are held to the same floor. A member's optional features
 are checked as well — the same command with `--features <feature>` — so the
 code that only builds when a feature is on is held to the same floor too. A
-feature that does not build on its own is checked with the group's features
-enabled instead, so a member whose features only build together is covered
-rather than failed. The features are checked in combination as well — every
-combination of them — so a combination that needs a newer Rust is caught even
-when each of its features builds on its own. A combination that cannot be
-enabled together fails the member — cargo allows it, so it is a configuration
-a user can ask for — and the failure names the combination that does not
-build. It needs rustup and network access on the first run; after that the
-declared toolchains and the shared target directory make a run a few minutes of
-incremental builds. The `msrv` workflow runs the same script.
+feature that does not build on its own is checked with each of the other
+features instead — the feature together with one other, which is a
+configuration that has to build on its own — so a member whose features only
+build together is covered rather than failed. The features are checked in
+combination as well — every combination of them — so a combination that needs a
+newer Rust is caught even when each of its features builds on its own. A
+combination that cannot be enabled together fails the member — cargo allows
+it, so it is a configuration a user can ask for — and the failure names the
+combination that does not build. It needs rustup and network access on the
+first run; after that the declared toolchains and the shared target directory
+make a run a few minutes of incremental builds. The `msrv` workflow runs the
+same script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working

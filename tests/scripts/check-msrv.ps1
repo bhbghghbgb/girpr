@@ -26,11 +26,12 @@ member's floor without anything here noticing. The feature list comes from
 kept here.
 
 A feature that does not build on its own is not a failure straight away: it
-may be a feature that only builds in combination with another, and a member
-with one is checked with the group of its optional features instead — the
-group is the configuration that holds every optional feature at once, and it
-is the only one that builds such a member. The same check runs in the `msrv`
-workflow.
+may be a feature that only builds in combination with another, and it is
+checked with each of the other features before the member is failed — the
+feature together with one other is a configuration that has to build on its
+own, and one that does build is the partner the feature needs. A feature that
+builds with no one other feature is broken on its own and fails the member.
+The same check runs in the `msrv` workflow.
 
 The combinations of those features are checked too — every subset of two or
 more of them, with the same command and `--features <a,b>`. Cargo adds
@@ -83,8 +84,8 @@ function Get-OptionalFeatures($pkg) {
 # Cargo adds features up, so a user can ask for any combination of a member's
 # features, and each combination is a configuration that has to build. The
 # subsets are named in the order the features are declared, so the same
-# combination always has the same name — and the name of the whole set is the
-# group's, which the fallback below looks up.
+# combination always has the same name — and the pairs are named the same way,
+# which is how the fallback below finds the pair that holds a feature.
 function Get-FeatureCombinations($features) {
     $features = @($features)
     $combinations = @()
@@ -100,6 +101,24 @@ function Get-FeatureCombinations($features) {
         }
     }
     return $combinations
+}
+
+# The pairs that hold a feature: the feature together with one other optional
+# feature, in the order the features are declared.
+#
+# A pair is a combination of two features, so its result is one of the results
+# the combination check records.
+function Get-FeaturePairs($features, $feature) {
+    $features = @($features)
+    $pairs = @()
+    for ($i = 0; $i -lt $features.Count; $i++) {
+        for ($j = $i + 1; $j -lt $features.Count; $j++) {
+            if ($features[$i] -eq $feature -or $features[$j] -eq $feature) {
+                $pairs += ,(@($features[$i], $features[$j]) -join ',')
+            }
+        }
+    }
+    return $pairs
 }
 
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -154,10 +173,8 @@ try {
             Write-Host "ok: $($pkg.name) builds with Rust $ver"
         }
 
-        # The optional features of this member, and the name of the group: the
-        # configuration that holds every one of them at once.
+        # The optional features of this member.
         $optional = @(Get-OptionalFeatures $pkg)
-        $group = $optional -join ','
 
         # The combinations of the optional features.
         #
@@ -192,18 +209,20 @@ try {
         # floor on its own. A member whose features cannot be enabled together
         # is failed by the combination check above, which names the
         # combination; what this check adds is the feature that cannot be
-        # enabled on its own. A feature that does not build alone may be
-        # one that only builds in combination with another, and a member with
-        # one is checked with the group of its optional features instead: the
-        # group is the configuration that holds every optional feature at once,
-        # and it is the only one that builds such a member. The group is one
-        # of the combinations checked above, so its result is looked up there
-        # rather than checked twice. The group is looked up once per member,
-        # and only once a feature has failed alone.
-        # $null until the group has been looked up. A member with one optional
-        # feature has no group to enable, so a feature that does not build
-        # alone is a failure of its own.
-        $groupExit = $null
+        # enabled on its own. A feature that does not build alone may be one
+        # that only builds in combination with another, and it is checked with
+        # each of the other features before the member is failed: the feature
+        # together with one other is a configuration that has to build on its
+        # own, and one that does build is the partner the feature needs.
+        #
+        # The pairs holding the feature are among the combinations checked
+        # above, so their results are looked up there rather than checked
+        # twice. A feature that builds with no one other feature is broken on
+        # its own: the whole optional set building says nothing about it,
+        # because every optional feature at once is a configuration of its own
+        # and not a partner the feature can be shown to need. A member with
+        # one optional feature has no pair at all, so a feature that does not
+        # build alone is a failure of its own.
         foreach ($feature in $optional) {
             & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $feature
             $featureExit = $LASTEXITCODE
@@ -212,19 +231,22 @@ try {
                 continue
             }
             # The feature does not build on its own. It may be one that only
-            # builds in combination with another, so the group is checked
-            # before the member is failed.
-            if ($null -eq $groupExit -and $optional.Count -gt 1) {
-                $groupExit = $combinationExit[$group]
-                if ($groupExit -eq 0) {
-                    Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $group"
-                } else {
-                    Write-Host "    the group --features $group does not build either (exit code $groupExit)"
+            # builds in combination with another, so the pairs holding it are
+            # looked at before the member is failed.
+            $pairs = @(Get-FeaturePairs $optional $feature)
+            $holding = $null
+            foreach ($pair in $pairs) {
+                if ($combinationExit[$pair] -eq 0) {
+                    $holding = $pair
+                    break
                 }
             }
-            if ($groupExit -eq 0) {
-                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $group, which holds $feature"
+            if ($null -ne $holding) {
+                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $holding, which holds $feature"
                 continue
+            }
+            if ($pairs.Count -gt 0) {
+                Write-Host "    $feature does not build with any one other feature either"
             }
             Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $feature (exit code $featureExit)"
             $failed += "$($pkg.name) ($ver, --features $feature, exit code $featureExit)"
