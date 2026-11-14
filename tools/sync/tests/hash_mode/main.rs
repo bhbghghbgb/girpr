@@ -48,11 +48,12 @@ use std::path::Path;
 
 use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
 use girsync::effective::{
-    EffRec, SideCapability, SideEntry, classify, ensure_distinct_sides, load_record_side_from,
-    open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
+    EffRec, Side, SideCapability, SideEntry, classify, ensure_distinct_sides,
+    load_record_side_from, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
 };
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::planner::{
@@ -206,8 +207,10 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
     let mode = ScanMode::new(false, false);
     let mut so = open_side(&s, common, mode).unwrap();
     let mut do_ = open_side(&d, common, mode).unwrap();
-    let s_label = format!("src {}", s.cache_path().display());
-    let d_label = format!("dst {}", d.cache_path().display());
+    // The labels come from the same helper the commands use, so a test cannot
+    // keep a second spelling of how a side is named.
+    let s_label = side_label(&s);
+    let d_label = side_label(&d);
     let plans = plan_pairs(
         SideRequest {
             entries: &so.phase_a.map,
@@ -245,8 +248,10 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
     let rec = load_record_side_from(&record, common, "record").unwrap();
     let cold = CacheDb::open_temp(common.case_sensitive).unwrap();
     let disk_a = scan_stat_only(dir, &cold, common, mode).unwrap();
-    let rec_label = format!("record {}", dir.join(CACHE_PREFIX).display());
-    let disk_label = format!("folder {}", dir.display());
+    // The labels come from the same helper the commands use, so a test cannot
+    // keep a second spelling of how a side is named.
+    let rec_label = side_label(&Side::Record(dir.join(CACHE_PREFIX)));
+    let disk_label = side_label(&Side::Folder(dir.to_path_buf()));
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,

@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{

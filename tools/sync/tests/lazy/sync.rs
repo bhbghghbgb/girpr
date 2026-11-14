@@ -25,8 +25,11 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
     //
     // Both sides are folders, so coverage cannot fail here — which is the point
     // of `sync` sharing the check rather than skipping it.
-    let s_label = format!("folder {}", src.display());
-    let d_label = format!("folder {}", dst.display());
+    //
+    // The labels come from the same helper the commands use, so a test cannot
+    // keep a second spelling of how a side is named.
+    let s_label = side_label(&Side::Folder(src.to_path_buf()));
+    let d_label = side_label(&Side::Folder(dst.to_path_buf()));
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,

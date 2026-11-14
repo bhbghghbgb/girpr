@@ -73,8 +73,11 @@ fn self_audit(dir: &Path) -> Run {
     let disk_a = scan_stat_only(dir, &cold, &common, mode).unwrap();
     // Labels only so a coverage error can name a side. Every audited folder here
     // is `update`d with the algorithms the audit asks for, so coverage holds.
-    let rec_label = format!("record {}", dir.join(CACHE_PREFIX).display());
-    let disk_label = format!("folder {}", dir.display());
+    //
+    // The labels come from the same helper the commands use, so a test cannot
+    // keep a second spelling of how a side is named.
+    let rec_label = side_label(&Side::Record(dir.join(CACHE_PREFIX)));
+    let disk_label = side_label(&Side::Folder(dir.to_path_buf()));
     let plans = plan_pairs(
         SideRequest {
             entries: &rec.map,
