@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M7
+active_batch: M9
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1397,49 +1397,49 @@ followups:
   - id: F147
     source: F29
     description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F148
     source: F29
     description: The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F149
     source: F28
     description: The src/bin/sled2redb.rs binary has no row of its own in the source-layout table; it is named inside the convert.rs row.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F150
     source: F29
     description: The stat-only row can get stuck limit has two different names, the design notes one and the README another, so the wording differs enough to read as two limits.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F151
     source: F28
     description: The README source-layout table has no entry for src/hash/tests.rs or src/planner/fixtures.rs; the inline test modules are covered by the surrounding prose, so this is cosmetic.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F152
     source: F28
     description: The new link.rs row shares its basename with the commands/sync/plan/ row's link.rs; naming the src-relative path would remove the ambiguity for a reader scanning for link.rs.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F153
     source: F32
     description: The README Integration tests bullet omits tests/convert.rs, tests/symlink.rs and tests/migration_lock.rs, and never says the converter cases need the convert feature, which is the same gap this batch fixed in the design notes.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F154
     source: F29
     description: The known-limits preamble still says each is cache hygiene or a race, not a wrong answer, which describes neither the host-coverage limit nor the filesystem case table.
-    status: pending
+    status: in_progress
     batch: M9
     commits: []
   - id: F155
@@ -1802,6 +1802,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M9 started: F147, F148, F149, F150, F151, F152,
+  F153 and F154 `pending` → `in_progress`; `active_batch: M7` → `M9`.
 - 2026-11-14 — review M7 `done`: F138 kept (8e5f5bd0), F139 fixed
   (10ec5297), F141 kept (0d360416), F144 kept (5777bf8c); follow-ups
   F206–F208 appended with batch `M22` and F205 recorded as `skipped` because
