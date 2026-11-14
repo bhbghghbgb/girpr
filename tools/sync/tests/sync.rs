@@ -665,9 +665,16 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     let t = temp_root("case_tmp_collision");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    wfile(&src, "Data.txt", b"payload");
-    wfile(&dst, "data.txt", b"payload");
-    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+    // **The two src names mix case on purpose.** The rename pass orders its
+    // steps by the *folded* src key, and the folded keys are `data.txt` and
+    // `dir` — so the file moves first. Sorted by the exact key the order would
+    // be the other way round, because `Dir` sorts before `data.txt` byte-wise.
+    // A fixture whose names all started with the same case would have one
+    // order under both rules, and the assertion below would pass whichever of
+    // the two the pass used.
+    wfile(&src, "data.txt", b"payload");
+    wfile(&dst, "Data.txt", b"payload");
+    sync_mtime(&src.join("data.txt"), &dst.join("Data.txt"));
     // The directory form takes the other claim branch (create_dir, not
     // create_new), so the same candidates are exercised twice, in sequence.
     wfile(&src, "Dir/nested.txt", b"nested");
@@ -692,8 +699,14 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
         .filter(|r| r["event"] == "rename")
         .map(|r| r["from"].as_str().expect("a rename names its source"))
         .collect();
-    assert_eq!(renames, ["data.txt", "dir"], "{recs:?}");
-    assert_eq!(rfile(&dst, "Data.txt"), b"payload", "the rename happened");
+    assert_eq!(renames, ["Data.txt", "dir"], "{recs:?}");
+    // The exact order, which is a different one: a pass that sorted on the
+    // exact src key would have moved the directory first, and the assertion
+    // above would not have held.
+    let mut exact = vec!["data.txt", "Dir"];
+    exact.sort();
+    assert_eq!(exact, vec!["Dir", "data.txt"]);
+    assert_eq!(rfile(&dst, "data.txt"), b"payload", "the rename happened");
     assert_eq!(rfile(&dst, "Dir/nested.txt"), b"nested");
     // The filesystem is case-insensitive here, so `dst.join("dir").exists()`
     // cannot tell the two spellings apart; the directory entries can.
