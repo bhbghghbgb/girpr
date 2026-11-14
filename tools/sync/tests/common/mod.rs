@@ -8,6 +8,7 @@
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
+use girsync::commands::side_label;
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
@@ -708,8 +709,11 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
     let mut d = open_side(&dst, &common, ScanMode::new(trust.no_trust_dst, false)).unwrap();
     // The labels exist only so a coverage error can name a side; a fixture that
     // reaches one is a test failure, not something to read.
-    let s_label = format!("src {}", src.cache_path().display());
-    let d_label = format!("dst {}", dst.cache_path().display());
+    //
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&src);
+    let d_label = side_label(&dst);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,

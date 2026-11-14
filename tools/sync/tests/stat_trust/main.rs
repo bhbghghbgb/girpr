@@ -51,6 +51,7 @@ use common::{
     TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update_mem, wfile,
 };
 use girsync::cache::TestCacheBackend;
+use girsync::commands::side_label;
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -179,8 +180,8 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
     let mode = ScanMode::new(false, false);
     let mut s = open_side(&s_side, common, mode).unwrap();
     let mut d = open_side(&d_side, common, mode).unwrap();
-    let s_label = format!("src {}", s_side.cache_path().display());
-    let d_label = format!("dst {}", d_side.cache_path().display());
+    let s_label = side_label(&s_side);
+    let d_label = side_label(&d_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,

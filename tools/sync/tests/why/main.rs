@@ -65,6 +65,7 @@ use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::TestCacheBackend;
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
@@ -164,13 +165,17 @@ fn resolved(
         open_side(&s_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
     let mut d =
         open_side(&d_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&s_side);
+    let d_label = side_label(&d_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
             algos: &common.algos,
             no_trust: false,
             cap: s.cap,
-            label: &format!("src {}", s_side.cache_path().display()),
+            label: &s_label,
             folder: None,
         },
         SideRequest {
@@ -178,7 +183,7 @@ fn resolved(
             algos: &common.algos,
             no_trust: false,
             cap: d.cap,
-            label: &format!("dst {}", d_side.cache_path().display()),
+            label: &d_label,
             folder: None,
         },
         CasePairing::from(common.case_sensitive),

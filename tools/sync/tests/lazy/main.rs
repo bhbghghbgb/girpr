@@ -103,8 +103,11 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
 
     // Labels only so a coverage error can name a side. Every case here is two
     // folders, so coverage cannot fail and the labels are never read.
-    let s_label = format!("src {}", s_side.cache_path().display());
-    let d_label = format!("dst {}", d_side.cache_path().display());
+    //
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&s_side);
+    let d_label = side_label(&d_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
