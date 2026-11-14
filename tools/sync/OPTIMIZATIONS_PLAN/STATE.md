@@ -531,13 +531,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M36
+    status: pending
+    tasks: [F254, F255, F256, F257]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M16
-    status: in_progress
+    status: done
     tasks: [F179, F180, F181]
     base: 23a5974d
     head: 673b99b1
-    result: null
-    followups: []  - batch: M4
+    result: F179 kept (c0348f54); F180 kept (c0348f54); F181 kept (673b99b1); no fix or revert commits; 588 passed, 1 skipped; the reviewer drove eight synthetic workspaces and saw the broken lone feature now fail where the old script reported it covered
+    followups: [F254, F255, F256, F257]  - batch: M4
     status: done
     tasks: [F111, F112, F116, F130]
     base: 25c832ec
@@ -1681,19 +1688,19 @@ followups:
   - id: F179
     source: F111
     description: The MSRV fallback cannot tell this feature needs another from this feature is broken alone, so for a member with two or more optional features whose group builds, a genuinely broken lone feature is reported as covered by the group.
-    status: pending_review
+    status: completed
     batch: M16
     commits: [c0348f54]
   - id: F180
     source: F111
     description: The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there.
-    status: pending_review
+    status: completed
     batch: M16
     commits: [c0348f54]
   - id: F181
     source: F111
     description: The MSRV script description calls the group the only one that builds such a member and the root README says the group's features enabled; both would be more accurate as every optional feature of the member enabled at once.
-    status: pending_review
+    status: completed
     batch: M16
     commits: [673b99b1]
   - id: F182
@@ -2141,6 +2148,30 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F248, already scheduled in M34
+  - id: F254
+    source: F179
+    description: The new rule needs exactly one partner, so a feature that compiles only with two partners together is failed by the feature check as well, and the description broken on its own does not name that case.
+    status: pending
+    batch: M36
+    commits: []
+  - id: F255
+    source: F179
+    description: Get-FeaturePairs re-derives the combination name with its own join instead of taking it from Get-FeatureCombinations, and an absent key is read as did not build, so the lookup silently depends on the combination check naming staying byte-identical.
+    status: pending
+    batch: M36
+    commits: []
+  - id: F256
+    source: F179
+    description: The MSRV fallback rule has no committed regression test, since the synthetic workspaces that exercise it live outside the tree, so a later edit to the fallback would only be caught by hand.
+    status: pending
+    batch: M36
+    commits: []
+  - id: F257
+    source: F180
+    description: A member whose optional features include a mutually exclusive pair is still failed by the combination check, which predates this batch; the failure list now names the combinations alone.
+    status: pending
+    batch: M36
+    commits: []
 ```
 
 ## Human checklist
@@ -2173,6 +2204,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M16 `done`: F179, F180 and F181 all kept, no fix or
+  revert commits; follow-ups F254–F257 appended with batch `M36`. F179–F181
+  `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M16 review checkpoint opened: F179, F180 and F181
   `in_progress` → `pending_review`, commits `c0348f54`, `673b99b1`; review M16
   `pending` → `in_progress`, base `23a5974d`, head `673b99b1`. Follow-ups
