@@ -456,6 +456,11 @@ const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// waits, and an unset variable names no gate at all — so this is a switch
 /// that is off in production and says nothing a user can meet.
 ///
+/// **Both names are relative paths inside the mirror**, and that is what makes
+/// the colon split unambiguous: a colon is the drive separator's character and
+/// is illegal in a name, so a relative path cannot hold one. A value that is
+/// not two such paths asks for no gate — see [`CopyGate::from_env`].
+///
 /// The release happens when the failure has been **recorded**, so a copy
 /// waiting on it is released only once the failure it waits for is already
 /// the one the phase would report. That is what makes the wait an *ordering*
@@ -483,14 +488,24 @@ impl CopyGate {
     /// Read once per process, like the other test-only switches: the answer
     /// cannot change under a run. A malformed specification asks for no gate,
     /// which is the same as not asking for one.
+    ///
+    /// **The value is two relative paths, split on the first colon.** Both
+    /// halves name a path inside the mirror — relative to the root,
+    /// `/`-separated, never absolute — and the split is unambiguous because a
+    /// relative path cannot contain a colon: the colon is the drive
+    /// separator's character and is illegal in a name. So a half that is
+    /// empty, that is absolute, or that holds a colon of its own is not a
+    /// path this run can copy, and the whole specification asks for no gate.
+    ///
+    /// That is worth being strict about, because a specification that names a
+    /// copy no run can produce is not inert: the waiting copy would sit on
+    /// the guard until it timed out, and then fail for a reason the
+    /// specification never stated.
     fn from_env() -> Option<Arc<Self>> {
         static GATE: std::sync::OnceLock<Option<Arc<CopyGate>>> = std::sync::OnceLock::new();
         GATE.get_or_init(|| {
             let spec = std::env::var("GIRSYNC_TEST_GATE_COPY").ok()?;
-            let (wait, on) = spec.split_once(':')?;
-            if wait.is_empty() || on.is_empty() {
-                return None;
-            }
+            let (wait, on) = gate_paths(&spec)?;
             Some(Arc::new(CopyGate {
                 wait: wait.to_string(),
                 on: on.to_string(),
@@ -533,6 +548,38 @@ impl CopyGate {
         *released = true;
         self.signal.notify_all();
     }
+}
+
+/// The two paths a gate specification names, or `None` when it names none.
+///
+/// The specification is `<wait>:<on>`, split on the **first** colon, and the
+/// two halves are the two paths — a relative path holds no colon of its own,
+/// so there is never a second one for the split to be ambiguous about.
+///
+/// A half that is empty, that is absolute, or that carries a colon of its own
+/// is not a path a run can copy, so the whole specification asks for no gate.
+fn gate_paths(spec: &str) -> Option<(&str, &str)> {
+    let (wait, on) = spec.split_once(':')?;
+    if !is_relative_path(wait) || !is_relative_path(on) {
+        return None;
+    }
+    Some((wait, on))
+}
+
+/// Whether `path` is a relative path inside the mirror, as each half of the
+/// gate's specification has to be.
+///
+/// The gate names copies by the path the plan spells — relative to the root,
+/// `/`-separated — so a half that is not such a path names no copy at all.
+/// The colon is excluded for the reason the split relies on: it is the
+/// separator the specification is split on, and a relative path cannot hold
+/// one, so a half that carries a second colon is not a path but the tail of a
+/// longer specification.
+fn is_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && !path.contains(':')
+        && !path.starts_with('/')
+        && !Path::new(path).is_absolute()
 }
 
 /// Keep the failure with the **lowest plan index**.
@@ -708,5 +755,52 @@ mod tests {
             .expect("an ordinary dst path is not inside src");
         guard_removal_outside_src(&src_canonical, &dst, "gone/x")
             .expect("a missing parent is nothing to remove");
+    }
+
+    /// **The gate's specification is two relative paths, and anything else
+    /// asks for no gate.**
+    ///
+    /// The value is split on the first colon, and the split is only
+    /// unambiguous because a relative path cannot hold a colon: the colon is
+    /// the drive separator's character and is illegal in a name. So a
+    /// specification whose halves are not relative paths names no copy a run
+    /// can produce — and the copy waiting on it would sit on the guard until
+    /// it timed out, rather than learn at once that it waits for nothing.
+    ///
+    /// The rule is pinned on the parsing, so the case says what a
+    /// specification means rather than how it is read.
+    #[test]
+    fn the_gate_specification_is_two_relative_paths() {
+        assert_eq!(
+            gate_paths("aaa.bin:mmm.bin"),
+            Some(("aaa.bin", "mmm.bin")),
+            "two relative paths are two paths"
+        );
+        assert_eq!(
+            gate_paths("dir/aaa.bin:mmm.bin"),
+            Some(("dir/aaa.bin", "mmm.bin")),
+            "a path inside a directory is a relative path too"
+        );
+
+        // No colon at all: there is no second path to name.
+        assert_eq!(gate_paths("aaa.bin"), None, "one path is not a gate");
+
+        // An empty half names no copy.
+        assert_eq!(gate_paths("aaa.bin:"), None, "an empty half names no copy");
+        assert_eq!(gate_paths(":mmm.bin"), None, "an empty half names no copy");
+
+        // A second colon means the value is not two paths.
+        assert_eq!(
+            gate_paths("aaa.bin:mmm.bin:zzz.bin"),
+            None,
+            "three parts are not two paths"
+        );
+
+        // An absolute path is not the relative path the plan spells.
+        assert_eq!(
+            gate_paths("/aaa.bin:mmm.bin"),
+            None,
+            "an absolute path names no copy"
+        );
     }
 }
