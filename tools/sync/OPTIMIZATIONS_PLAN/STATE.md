@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M17
+active_batch: M18
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1771,7 +1771,7 @@ followups:
   - id: F189
     source: F140
     description: The README example block spells three commands the CLI rejects, girsync update src, girsync sync src dst and girsync compare-self src, while the prose directly beneath spells the same remedy correctly.
-    status: pending
+    status: in_progress
     batch: M18
     commits: []
   - id: F190
@@ -1789,7 +1789,7 @@ followups:
   - id: F192
     source: F117
     description: The design notes and the README name the conversion temporary only as girpr-cache-convert-<pid>-<ts>.redb, omitting the underscore-n retry spellings claim_temp_sibling can also produce.
-    status: pending
+    status: in_progress
     batch: M18
     commits: []
   - id: F193
@@ -2273,6 +2273,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M18 started: F189 and F192 `pending` →
+  `in_progress`; `active_batch: M17` → `M18`.
 - 2026-11-14 — review M17 `done`: F185 kept (f0cd71f7), F186 kept (a2bb2324),
   F187 kept (4c48b5cb), F188 kept (4d91eca7), F190 fixed (6c23cb4b), F191 kept
   (4d91eca7); follow-ups F263–F265 appended with batch `M39`. F185–F191
