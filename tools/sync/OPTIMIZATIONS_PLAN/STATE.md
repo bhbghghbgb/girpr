@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M19
+active_batch: M20
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1849,19 +1849,19 @@ followups:
   - id: F195
     source: F122
     description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
-    status: pending
+    status: in_progress
     batch: M20
     commits: []
   - id: F196
     source: F121
     description: The copy phase's selection rule is pinned by a unit test on the comparison, but the mapping from a plan index to the path the report names is only covered end-to-end.
-    status: pending
+    status: in_progress
     batch: M20
     commits: []
   - id: F197
     source: F122
     description: The effective done event is logged once per phase and the two are told apart only by the presence of the stat_only field; a message that named the phase would remove that subtlety.
-    status: pending
+    status: in_progress
     batch: M20
     commits: []
   - id: F198
@@ -1873,7 +1873,7 @@ followups:
   - id: F199
     source: F122
     description: The two phases' progress totals are asserted as the set of two values, so the case does not say which phase reports the walk's count and which the map's.
-    status: pending
+    status: in_progress
     batch: M20
     commits: []
   - id: F200
@@ -2388,6 +2388,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M20 started: F195, F196, F197 and F199 `pending` →
+  `in_progress`; `active_batch: M19` → `M20`.
 - 2026-11-14 — review M19 `done`: F193 fixed (7e12b998), F194 fixed
   (0f243257), F198 kept (a3bff56e); follow-ups F276 and F277 appended with
   batch `M45`. F193, F194 and F198 `pending_review` → `completed`.
