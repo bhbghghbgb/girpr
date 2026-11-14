@@ -94,6 +94,10 @@ impl AltIndex {
     /// The disk's own spelling is the one the walk found, so a group that
     /// holds it holds no stale spelling at all, and a group that holds it
     /// beside another spelling offers that other one.
+    ///
+    /// A lookup does not normally reach a group that holds the disk's own
+    /// spelling — the exact lookup missed, so the cache holds no row under
+    /// it — but the rule does not lean on that.
     fn adoptable(&self, folded: &str, disk: &str) -> Option<&str> {
         let group = self.groups.get(folded)?;
         let first = self.keys[group.first].as_str();
@@ -863,5 +867,46 @@ mod tests {
             scan.map["a.txt"].fresh,
             "and the stat still matches, so the row was carried whole"
         );
+    }
+
+    /// **The group is adopted only when exactly one of its spellings is
+    /// stale.**
+    ///
+    /// A group is the spellings the cache holds under one folded key, and
+    /// the lookup wants the one it may adopt: exactly one spelling other
+    /// than the disk's own. The shapes are the ones a group can have — one
+    /// spelling, two, three — and the disk's own spelling may be one of
+    /// them or none of them.
+    #[test]
+    fn a_group_is_adopted_only_when_exactly_one_spelling_is_stale() {
+        let index = fold_alternates(
+            [
+                "A.txt", "B.txt", "c.txt", "C.txt", "e.txt", "f.txt", "F.txt", "f.TXT",
+            ]
+            .map(str::to_string)
+            .to_vec(),
+        );
+
+        // One spelling in the group, and it is not the disk's own: it is the
+        // stale one, and it is offered.
+        assert_eq!(index.adoptable("a.txt", "a.txt"), Some("A.txt"));
+        assert_eq!(index.adoptable("b.txt", "b.txt"), Some("B.txt"));
+
+        // The disk's own spelling is the only one in the group: nothing is
+        // stale, so nothing is offered.
+        assert_eq!(index.adoptable("e.txt", "e.txt"), None);
+
+        // Two spellings in the group, and the disk's own is one of them: the
+        // other is the stale one.
+        assert_eq!(index.adoptable("c.txt", "c.txt"), Some("C.txt"));
+        assert_eq!(index.adoptable("c.txt", "C.txt"), Some("c.txt"));
+
+        // Two spellings in the group, and the disk's own is neither: both are
+        // stale, and a group with two stale spellings is not adopted.
+        assert_eq!(index.adoptable("c.txt", "z.txt"), None);
+
+        // Three spellings in the group: at least two are stale, so none of
+        // them is offered.
+        assert_eq!(index.adoptable("f.txt", "f.txt"), None);
     }
 }
