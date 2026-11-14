@@ -377,11 +377,18 @@ reviews:
     head: 339c0957
     result: F132 kept (0fa1a663); F133 kept (c9a512e8); F134 kept (72d9e889); F136 kept (339c0957); no fix or revert commits; 572 passed, 1 skipped; the identity comparison verified byte-for-byte unchanged and the two case-fold rules still disagree
     followups: [F144, F145, F146]
-  - batch: M9
+  - batch: M23
     status: pending
-    tasks: [F147, F148, F149, F150, F151, F152, F153, F154]
+    tasks: [F209, F210, F211]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M9
+    status: in_progress
+    tasks: [F147, F148, F149, F150, F151, F152, F153, F154]
+    base: c2295439
+    head: 4a2acaea
     result: null
     followups: []
   - batch: M1
@@ -1397,51 +1404,51 @@ followups:
   - id: F147
     source: F29
     description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [91d626b5]
   - id: F148
     source: F29
     description: The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [1f493787, 4a2acaea]
   - id: F149
     source: F28
     description: The src/bin/sled2redb.rs binary has no row of its own in the source-layout table; it is named inside the convert.rs row.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [dfaecf32]
   - id: F150
     source: F29
     description: The stat-only row can get stuck limit has two different names, the design notes one and the README another, so the wording differs enough to read as two limits.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [8bbba952]
   - id: F151
     source: F28
     description: The README source-layout table has no entry for src/hash/tests.rs or src/planner/fixtures.rs; the inline test modules are covered by the surrounding prose, so this is cosmetic.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [dfaecf32]
   - id: F152
     source: F28
     description: The new link.rs row shares its basename with the commands/sync/plan/ row's link.rs; naming the src-relative path would remove the ambiguity for a reader scanning for link.rs.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [dfaecf32]
   - id: F153
     source: F32
     description: The README Integration tests bullet omits tests/convert.rs, tests/symlink.rs and tests/migration_lock.rs, and never says the converter cases need the convert feature, which is the same gap this batch fixed in the design notes.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [ccf14a43]
   - id: F154
     source: F29
     description: The known-limits preamble still says each is cache hygiene or a race, not a wrong answer, which describes neither the host-coverage limit nor the filesystem case table.
-    status: in_progress
+    status: pending_review
     batch: M9
-    commits: []
+    commits: [1f493787, 4a2acaea]
   - id: F155
     source: F28
     description: The source-layout table still omits src/rw/fixtures.rs and src/hash/tests.rs, even though it lists the sibling planner/fixtures.rs.
@@ -1770,6 +1777,24 @@ followups:
     status: pending
     batch: M22
     commits: []
+  - id: F209
+    source: F147
+    description: The nonexistent --hash none still names a flag in source rather than in documents, in src/hash/set.rs module doc, parse_hash_list doc and the user-facing refusal, src/hash/algo.rs, src/effective, src/planner, src/commands/update.rs, src/commands/sync/apply/copy.rs and several test files; the set.rs refusal is user-visible text and the sharpest instance.
+    status: pending
+    batch: M23
+    commits: []
+  - id: F210
+    source: F147
+    description: src/hash/set.rs module doc still says the --hash and --hash-any-of parsers, stale in the same way.
+    status: pending
+    batch: M23
+    commits: []
+  - id: F211
+    source: F151
+    description: The README source table still has no row for src/commands/sync/plan/tests.rs, an inline test module; cosmetic, and the surrounding prose covers inline test modules.
+    status: pending
+    batch: M23
+    commits: []
 ```
 
 ## Human checklist
@@ -1802,6 +1827,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M9 review checkpoint opened: F147, F148, F149,
+  F150, F151, F152, F153 and F154 `in_progress` → `pending_review`, commits
+  `91d626b5`, `1f493787`, `dfaecf32`, `8bbba952`, `ccf14a43`, `4a2acaea`;
+  review M9 `pending` → `in_progress`, base `c2295439`, head `4a2acaea`.
+  Follow-ups F209–F211 appended with batch `M23`.
 - 2026-11-14 — follow-up batch M9 started: F147, F148, F149, F150, F151, F152,
   F153 and F154 `pending` → `in_progress`; `active_batch: M7` → `M9`.
 - 2026-11-14 — review M7 `done`: F138 kept (8e5f5bd0), F139 fixed
