@@ -460,6 +460,105 @@ mod tests {
     use super::*;
     use crate::hash::HashAlg;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::prelude::*;
+
+    /// One captured event: its fields, as name/value pairs.
+    type CapturedFields = Vec<(String, String)>;
+
+    /// The events a case captured, with their fields.
+    ///
+    /// A `tracing` event carries its payload as **named fields**, and the log
+    /// file a run writes is exactly those fields in JSON. So a parser reading
+    /// the log reads the field — `algo` — and not the rendered line, which
+    /// means a case that pins the message alone leaves the other channel
+    /// unpinned. This collects both.
+    ///
+    /// The events are keyed by their **message**: that is the field the
+    /// console renders and the one the log file carries, so it is what a
+    /// reader looks at. The event's own name is the callsite it came from.
+    #[derive(Clone, Default)]
+    struct CapturedEvents(Arc<Mutex<Vec<CapturedFields>>>);
+
+    impl CapturedEvents {
+        /// How many events with this message were captured.
+        fn count(&self, message: &str) -> usize {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|fields| fields.iter().any(|(k, v)| k == "message" && v == message))
+                .count()
+        }
+
+        /// The value one field of the event with this message carried, if it
+        /// carried one.
+        fn field(&self, message: &str, field: &str) -> Option<String> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .find(|fields| fields.iter().any(|(k, v)| k == "message" && v == message))
+                .and_then(|fields| fields.iter().find(|(k, _)| k == field))
+                .map(|(_, value)| value.clone())
+        }
+    }
+
+    /// A visitor that keeps every field as a name/value pair.
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            // A `Display` field (`%value`) arrives here as its text and a
+            // `Debug` field (`?value`) as its quoted form. The quotes belong to
+            // the rendering and not to the value, so they are trimmed: what a
+            // reader of the log sees is the name, not the name in quotes.
+            let text = format!("{value:?}");
+            let text = text
+                .strip_prefix('"')
+                .and_then(|t| t.strip_suffix('"'))
+                .unwrap_or(&text);
+            self.0.push((field.name().to_string(), text.to_string()));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>>
+        tracing_subscriber::Layer<S> for CapturedEvents
+    {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            event.record(&mut visitor);
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(visitor.0);
+        }
+    }
+
+    /// Run `f` with a subscriber that collects the events it emits.
+    ///
+    /// The interest cache is rebuilt first: a callsite that another test in
+    /// this process already triggered was registered against the subscriber
+    /// that was installed then, and a cached "never" would swallow the event
+    /// here. Rebuilding re-registers every known callsite against the
+    /// subscriber this closure installs.
+    fn capture_events<T>(f: impl FnOnce() -> T) -> (T, CapturedEvents) {
+        let events = CapturedEvents::default();
+        let subscriber = tracing_subscriber::registry().with(events.clone());
+        let out = tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
+        (out, events)
+    }
 
     /// The algorithms a copy computes and judges, as the set the caller hands
     /// it. There is no list beside it: the set is the whole request, so there
@@ -717,6 +816,53 @@ mod tests {
         assert!(
             !msg.contains("sha256"),
             "and not the one the request happened to spell first: {msg}"
+        );
+    }
+
+    /// **The algorithm a failed verify names is in the log event too.**
+    ///
+    /// The bail message is one channel and the error event is the other, and a
+    /// parser reading the log file reads the **fields** — not the rendered
+    /// line. So the message and the event have to agree, and a change that
+    /// kept the message while dropping or renaming the field would leave the
+    /// message's case passing with the other channel broken.
+    ///
+    /// The event is named for what happened (`verify hash mismatch`) and
+    /// carries the algorithm as a field. The algorithm is the **canonical**
+    /// one, the same the message names: the set carries no order of its own, so
+    /// the first disagreement in canonical order is the one reported.
+    #[test]
+    fn a_failed_verify_names_the_algorithm_in_the_error_event() {
+        let path = Path::new("dst/file.bin");
+        let algos = aset(&["sha256", "md5"]);
+        let mut src = DigestSet::default();
+        src.insert_named("md5", &[1u8; 16]);
+        src.insert_named("sha256", &[1u8; 32]);
+        let mut dst = DigestSet::default();
+        dst.insert_named("md5", &[2u8; 16]);
+        dst.insert_named("sha256", &[2u8; 32]);
+
+        let (result, events) = capture_events(|| verify_digests(path, &algos, &src, &dst));
+
+        assert!(
+            result.is_err(),
+            "two digests that disagree are not a verified copy"
+        );
+        assert_eq!(
+            events.count("verify hash mismatch"),
+            1,
+            "the failure is logged once"
+        );
+        assert_eq!(
+            events.field("verify hash mismatch", "algo").as_deref(),
+            Some("md5"),
+            "the event names the same algorithm the message names: the canonical \
+             one, not the request's"
+        );
+        assert_eq!(
+            events.field("verify hash mismatch", "path").as_deref(),
+            Some("dst/file.bin"),
+            "and the event names the path it is about"
         );
     }
 
