@@ -1665,8 +1665,12 @@ them; `--dry-run` costs the same again.
   `sync.rs`, `output.rs` (the stdout contract: `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
   narrates on stderr), `public_surface.rs` (what a caller reaches without a
-  dependency of its own), with shared fixtures in `tests/common/mod.rs`. They run
-  against the public API, so anything they touch must stay `pub`.
+  dependency of its own), `symlink.rs` (links in the walk, in the copy and in
+  the deletion plan), `migration_lock.rs` (a backend-agnostic behaviour lock for
+  the cache layer), `convert.rs` (the converter's cases — behind the `convert`
+  feature, so a default run does not build that target at all), with shared
+  fixtures in `tests/common/mod.rs`. They run against the public API, so
+  anything they touch must stay `pub`.
 
   The six largest are **directories**: each is a test target at
   `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`
