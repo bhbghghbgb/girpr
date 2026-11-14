@@ -495,11 +495,18 @@ reviews:
     head: 5b6fdf3b
     result: F121 kept (50e81f06); F122 kept (2115d14e, 5a5cb7a2); F125 kept (c4f93a7f); F126 kept (6c16cf00); F127 kept (20b42517); F129 kept (a5b3b2c1, 9c327065); no fix or revert commits; 584 passed, 1 skipped, and the whole workspace at 2069 passed, 13 skipped; four mutation probes confirmed the new cases discriminate, and a mis-set gate was probed and failed that one copy loudly
     followups: [F198, F199]
-  - batch: M7
+  - batch: M21
     status: pending
-    tasks: [F138, F139, F141, F144, F133, F134]
+    tasks: [F200, F201, F202, F203, F204]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M7
+    status: in_progress
+    tasks: [F138, F139, F141, F144]
+    base: 0013d040
+    head: 1148ad43
     result: null
     followups: []
 followups:
@@ -1327,15 +1334,15 @@ followups:
   - id: F138
     source: F133
     description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
-    status: in_progress
+    status: pending_review
     batch: M7
-    commits: []
+    commits: [8e5f5bd0]
   - id: F139
     source: F133
     description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
-    status: in_progress
+    status: pending_review
     batch: M7
-    commits: []
+    commits: [4dd86821, 1148ad43]
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
@@ -1345,9 +1352,9 @@ followups:
   - id: F141
     source: F134
     description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
-    status: in_progress
+    status: pending_review
     batch: M7
-    commits: []
+    commits: [0d360416]
   - id: F142
     source: F134
     description: util::identity_fold's lossy conversion folds two distinct invalid-UTF-8 byte sequences onto the replacement character, so two different non-UTF-8 names can compare equal; documented in the code, not fixed.
@@ -1365,9 +1372,9 @@ followups:
   - id: F144
     source: F134
     description: commands/sync/plan/link.rs:219 still folds the on-disk lookup with an inline to_string_lossy().to_lowercase(), so after the identity fold was named there is one named Unicode fold and one anonymous Unicode fold that answer different questions, the on-disk rule being the third rule the design notes describe.
-    status: in_progress
+    status: pending_review
     batch: M7
-    commits: []
+    commits: [5777bf8c]
   - id: F145
     source: F132
     description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
@@ -1701,6 +1708,36 @@ followups:
     status: pending
     batch: M20
     commits: []
+  - id: F200
+    source: F138
+    description: src/planner/pairs.rs still has the same src-lowered abbreviation F138 fixed in the other two files.
+    status: pending
+    batch: M21
+    commits: []
+  - id: F201
+    source: F138
+    description: The lk and lkey locals in diff/mod.rs, commands/sync/rename.rs and planner/pairs.rs still abbreviate lowercase key.
+    status: pending
+    batch: M21
+    commits: []
+  - id: F202
+    source: F139
+    description: src/effective/phase_a.rs still says the cached keys are indexed by lowercase, which is the ASCII-only fold wording in a file F139 did not list, though the index there is built with path_key.
+    status: pending
+    batch: M21
+    commits: []
+  - id: F203
+    source: F141
+    description: The design notes three-questions section names the path key, the identity rule and the disk spelling, but the now-named cache reservation is a fourth fold site the section does not mention.
+    status: pending
+    batch: M21
+    commits: []
+  - id: F204
+    source: F144
+    description: on_disk_name recomputes the on-disk fold for every directory entry, one allocation per entry, and it could be hoisted out of the loop.
+    status: pending
+    batch: M21
+    commits: []
 ```
 
 ## Human checklist
@@ -1733,6 +1770,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M7 review checkpoint opened: F138, F139, F141
+  and F144 `in_progress` → `pending_review`, commits `8e5f5bd0`, `4dd86821`,
+  `0d360416`, `5777bf8c`, `1148ad43`; review M7 `pending` → `in_progress`,
+  base `0013d040`, head `1148ad43`. Follow-ups F200–F204 appended with batch
+  `M21`.
 - 2026-11-14 — follow-up batch M7 started: F138, F139, F141 and F144 `pending` →
   `in_progress`; `active_batch: M6` → `M7`.
 - 2026-11-14 — review M6 `done`: F121, F122, F125, F126, F127 and F129 all kept,
