@@ -95,7 +95,7 @@ impl HashAlg {
         }
     }
 
-    /// The bit this algorithm occupies in an [`AlgoSet`].
+    /// The bit this algorithm occupies in an [`super::AlgoSet`].
     ///
     /// Private because it is an encoding detail: `AlgoSet` is the only thing that
     /// should be manipulating a bitfield, and a public `bit()` would invite a

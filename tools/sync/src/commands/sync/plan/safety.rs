@@ -459,7 +459,7 @@ pub(crate) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// Refuse, in both modes, a planned copy whose destination would still be
 /// hard-linked when the copy phase truncates it.
 ///
-/// [`copy_one`](super::super::apply::copy) refuses a destination with more than one name, but
+/// `copy_one` refuses a destination with more than one name, but
 /// that check lives in the apply phase. This is the plan-time counterpart,
 /// reading the same disk state both modes read, so the two agree before either
 /// prints an action.

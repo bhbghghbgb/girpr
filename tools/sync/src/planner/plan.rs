@@ -100,7 +100,7 @@ impl HashPlan {
     ///
     /// `no_trust` overrides the subtraction: distrusting the cache is a refusal
     /// to *reuse* a digest, never an instruction to forget it — see
-    /// [`crate::effective::merge_row`], which stores the same row either way —
+    /// `crate::effective::merge_row`, which stores the same row either way —
     /// so the plan asks again while phase A keeps reporting the old value.
     ///
     /// Held is decided by **name**, not by slot: a row whose `md5` is stored with an

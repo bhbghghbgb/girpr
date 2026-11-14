@@ -17,7 +17,10 @@ use super::build::Plan;
 /// *result*, not the plan, so a dry run reports what it would reach; the numbers
 /// agree whenever a real run completes, since a failed copy aborts before the
 /// summary is reached at all.
-struct Summary {
+///
+/// Visible to the `plan` module so its module map can name it; it stays the
+/// private shape of this file otherwise.
+pub(super) struct Summary {
     renamed: usize,
     mkdir: usize,
     copied: usize,
