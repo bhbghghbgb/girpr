@@ -628,13 +628,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M19
-    status: in_progress
-    tasks: [F193, F194, F198]
-    base: 7831eb0c
-    head: a3bff56e
+  - batch: M45
+    status: pending
+    tasks: [F276, F277]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M19
+    status: done
+    tasks: [F193, F194, F198]
+    base: 7831eb0c
+    head: 7e12b998
+    result: F193 fixed (7e12b998, the step-1 rename hook row claimed a placeholder that only a file claim leaves); F194 fixed (0f243257 gives the rule a reason that holds everywhere, since the old reason was a Windows fact); F198 kept (a3bff56e); 595 passed, 1 skipped; the rule itself was kept, because it enforces the precondition the split relies on and preserves every valid spec
+    followups: [F276, F277]
   - batch: M20
     status: pending
     tasks: [F195, F196, F197, F199]
@@ -1830,15 +1837,15 @@ followups:
   - id: F193
     source: F126
     description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
-    status: pending_review
+    status: completed
     batch: M19
-    commits: [1b0c1f92]
+    commits: [1b0c1f92, 7e12b998]
   - id: F194
     source: F126
     description: GIRSYNC_TEST_GATE_COPY splits on a colon, harmless for relative paths, but the constraint is stated only in the hook doc comment.
-    status: pending_review
+    status: completed
     batch: M19
-    commits: [140b2db4]
+    commits: [140b2db4, 0f243257]
   - id: F195
     source: F122
     description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
@@ -1860,7 +1867,7 @@ followups:
   - id: F198
     source: F129
     description: The design notes Enforced by list for the verify names the canonical-order case but not the new error-event case, so the second channel's case is unlisted, the same gap F124 closed for the first one.
-    status: pending_review
+    status: completed
     batch: M19
     commits: [a3bff56e]
   - id: F199
@@ -2337,6 +2344,18 @@ followups:
     status: pending
     batch: M44
     commits: []
+  - id: F276
+    source: F194
+    description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
+    status: pending
+    batch: M45
+    commits: []
+  - id: F277
+    source: F194
+    description: The relative-path check accepts shapes that were never spelled out, a Windows rooted path, a parent component and a trailing separator, and those name no copy and are therefore inert, so the check could name the shape it wants rather than only the ones it excludes.
+    status: pending
+    batch: M45
+    commits: []
 ```
 
 ## Human checklist
@@ -2369,6 +2388,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M19 `done`: F193 fixed (7e12b998), F194 fixed
+  (0f243257), F198 kept (a3bff56e); follow-ups F276 and F277 appended with
+  batch `M45`. F193, F194 and F198 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M19 review checkpoint opened: F193, F194 and F198
   `in_progress` → `pending_review`, commits `1b0c1f92`, `140b2db4`,
   `a3bff56e`; review M19 `pending` → `in_progress`, base `7831eb0c`, head
