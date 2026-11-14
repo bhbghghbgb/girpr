@@ -989,6 +989,156 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     );
 }
 
+/// **A `girpr-cache*` subtree is in no count.**
+///
+/// The tool's own namespace is not mirror content. The walk prunes it, and
+/// nothing under a cache directory is even visited — so a cache subtree is in
+/// none of the counts: not the walk's, not the map's, and not the run's own
+/// record.
+///
+/// The fixture puts one there on purpose. A run makes its own backup beside
+/// the cache before it walks, so this shape is in every run's way; what the
+/// case pins is that the tool's own state never shows up as content.
+#[test]
+fn a_pruned_cache_subtree_is_in_no_count() {
+    let t = temp_root("out_cache_pruned");
+    let dir = t.subdir("tree");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    // The tool's own namespace: a published copy of a cache, and a snapshot of
+    // one, with content under both.
+    wfile(&dir, "girpr-cache-backup-1/inner.bin", b"tool state");
+    wfile(&dir, "girpr-cache-old-2/deep/inner.bin", b"tool state");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    // The walk's own count: the two files and the directory between them, and
+    // nothing of the cache subtrees.
+    let scans = events_with(&logged, "scan done");
+    assert_eq!(
+        scans.len(),
+        1,
+        "one walk, one scan-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        scans[0]["fields"]["entries"], 3,
+        "the pruned subtree is not walked"
+    );
+    assert_eq!(scans[0]["fields"]["files"], 2);
+    assert_eq!(scans[0]["fields"]["dirs"], 1);
+
+    // The map's count: the same tree, minus the pruned subtree.
+    let done = events_with(&logged, "effective done");
+    let phase_a = done
+        .iter()
+        .find(|e| e["fields"].get("stat_only").is_none())
+        .expect("the phase that reads no bytes reports without the stat-only count");
+    assert_eq!(phase_a["fields"]["files"], 2, "the map holds two files");
+    assert_eq!(
+        phase_a["fields"]["dirs"], 1,
+        "and the directory between them"
+    );
+
+    // And the run's own record, which counts the map.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(recs[0]["files"], 2, "the record counts the map");
+    assert_eq!(recs[0]["dirs"], 1);
+}
+
+/// **A sync run counts each side on its own.**
+///
+/// A sync run walks **two** trees, and each walk reports its own counts: the
+/// src's are the src's and the dst's are the dst's. A run that added them
+/// together, or reported one side's count for both, would be a run whose
+/// counters describe a tree that does not exist.
+///
+/// The dst's counts are the counts of the tree as it was **before** the run
+/// copied into it: both sides are walked before the plan, so the dst's walk
+/// sees the dst as it was, and the copy that follows is in neither count.
+#[test]
+fn a_sync_run_counts_each_side_separately() {
+    let t = temp_root("out_sync_counts");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"hello");
+    wfile(&src, "sub/b.txt", b"world");
+    wfile(&dst, "a.txt", b"hello");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "sync",
+            "--src",
+            src.to_str().unwrap(),
+            "--dst",
+            dst.to_str().unwrap(),
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "sync failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    let scans = events_with(&logged, "scan done");
+    assert_eq!(
+        scans.len(),
+        2,
+        "a sync run walks both sides, once each: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+
+    // The src's counts: two files and the directory between them.
+    let src_scan = scans
+        .iter()
+        .find(|e| e["fields"]["root"] == src.display().to_string())
+        .expect("the src's walk reports its own counts");
+    assert_eq!(src_scan["fields"]["entries"], 3);
+    assert_eq!(src_scan["fields"]["files"], 2);
+    assert_eq!(src_scan["fields"]["dirs"], 1);
+
+    // The dst's counts: the one file it held before the run copied into it.
+    let dst_scan = scans
+        .iter()
+        .find(|e| e["fields"]["root"] == dst.display().to_string())
+        .expect("the dst's walk reports its own counts");
+    assert_eq!(
+        dst_scan["fields"]["entries"], 1,
+        "the dst is counted as it was before the copy"
+    );
+    assert_eq!(dst_scan["fields"]["files"], 1);
+    assert_eq!(dst_scan["fields"]["dirs"], 0);
+}
+
 /// The directory the executable is in — where the default log file lands.
 fn exe_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_BIN_EXE_girsync"))
