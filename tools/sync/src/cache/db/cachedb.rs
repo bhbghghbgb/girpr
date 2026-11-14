@@ -59,10 +59,9 @@ struct Preflight {
 ///
 /// **The entries-table open here is not one of the counted reads.** It opens
 /// the table to learn whether it is there and reads no row, and it runs on a
-/// raw [`Database`] before any [`CacheDb`] handle exists — the counter
-/// belongs to the handle, so there is nothing here for it to move. The
-/// counted reads are the ones that fetch rows, and every one of them goes
-/// through `begin_entries_read`.
+/// raw [`Database`] before any [`CacheDb`] handle exists — so there is no
+/// counter here for it to move. The counted reads are the ones that fetch
+/// rows, and every one of them goes through `begin_entries_read`.
 fn preflight(db: &Database) -> Result<Preflight> {
     let txn = db.begin_read().context("begin read (meta)")?;
     let entries_present = match txn.open_table(ENTRIES) {
@@ -467,13 +466,13 @@ impl CacheDb {
         self.db.begin_read().context("begin read")
     }
 
-    /// How many entries-table reads this cache has served.
+    /// How many entries-table reads this handle has counted.
     ///
-    /// The count belongs to the **cache**, not to the handle that reads
-    /// through it: the shared in-memory backend hands every handle on one
-    /// path the same counter, so a handle opened after a run can say what
-    /// that run's handle did. A file-backed cache reaches the same answer
-    /// without sharing anything — redb locks a writable database
+    /// **On the shared (test) backend the count belongs to the cache, not to
+    /// the handle that reads through it**: the shared in-memory backend hands
+    /// every handle on one path the same counter, so a handle opened after a
+    /// run can say what that run's handle did. A file-backed cache reaches the
+    /// same answer without sharing anything — redb locks a writable database
     /// exclusively, so the read/write handle on a cache file excludes every
     /// other handle on that file and its own count is the cache's count.
     /// The read-only handles on a file share the file with each other, so
