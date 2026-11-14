@@ -74,12 +74,12 @@ fn case_renames<'a>(
     let dst_folded = folded_keys(dm);
     let mut by_folded_key: Vec<(String, &String)> = src_folded
         .into_iter()
-        .map(|(lk, (srel, _))| (lk, srel))
+        .map(|(folded_key, (srel, _))| (folded_key, srel))
         .collect();
     by_folded_key.sort();
     let mut out: Vec<(&String, &String)> = Vec::new();
-    for (lk, srel) in &by_folded_key {
-        if let Some(drel) = dst_folded.get(lk).map(|&(drel, _)| drel) {
+    for (folded_key, srel) in &by_folded_key {
+        if let Some(drel) = dst_folded.get(folded_key).map(|&(drel, _)| drel) {
             // The same path on both sides is not a rename: it is already correct.
             if drel != *srel {
                 out.push((drel, srel));

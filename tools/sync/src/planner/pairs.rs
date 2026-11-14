@@ -143,8 +143,8 @@ fn shared_pairs<'a>(
             // The src side is the index and dst is what is looked up, so dst's
             // own folded key is computed per path rather than indexed.
             let src_folded = folded_keys(src);
-            for (lkey, drel) in dst.keys().map(|k| (path_key(k), k)) {
-                if let Some(&(srel, _)) = src_folded.get(&lkey) {
+            for (folded_key, drel) in dst.keys().map(|k| (path_key(k), k)) {
+                if let Some(&(srel, _)) = src_folded.get(&folded_key) {
                     out.push((srel, drel));
                 }
             }
