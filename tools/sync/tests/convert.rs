@@ -625,3 +625,71 @@ fn the_help_exits_zero_and_documents_the_flags() {
         .expect("the help names the redb file");
     assert!(sled < redb, "the sled dir comes first: {stdout}");
 }
+
+/// The help output, pinned whole.
+///
+/// `clap` reads a doc comment on the argument struct as the command's
+/// `long_about`, and `--help` prints it **verbatim** — the `**` markers and
+/// the `#[command(version)]` attribute in it included, because `clap` does not
+/// render markdown. A note written for a source reader would then tell a user
+/// about an attribute they cannot type, so the struct carries no doc comment
+/// and this case is what holds it there.
+///
+/// The pin is the whole text rather than a few names in it, so anything that
+/// reaches the help shows up as a difference: a paragraph of prose, a flag, a
+/// changed wording. The names the case above looks for would survive all of
+/// them.
+///
+/// Two things are normalized before the comparison, and neither is what the
+/// pin is about: the program name, which carries the host's executable suffix
+/// (`sled2redb.exe` on Windows, `sled2redb` elsewhere), and the trailing
+/// spaces `clap` leaves on the blank line inside the possible values.
+#[test]
+fn the_help_output_is_pinned() {
+    let (code, stdout, stderr) = run_converter(["--help"]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let text = stdout
+        .replace("sled2redb.exe", "sled2redb")
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        text, EXPECTED_HELP,
+        "the help output is pinned: a doc comment on the argument struct would \
+         print here"
+    );
+}
+
+/// The help output of the converter, as `--help` prints it.
+///
+/// The program name is the host's spelling without the executable suffix, and
+/// the trailing spaces are gone: the case above normalizes both before it
+/// compares.
+const EXPECTED_HELP: &str = "\
+Convert a legacy sled cache directory into a redb cache file
+
+Usage: sled2redb [OPTIONS] <SLED_DIR> <REDB_PATH>
+
+Arguments:
+  <SLED_DIR>
+          Legacy sled cache directory
+
+  <REDB_PATH>
+          Destination redb file
+
+Options:
+      --force
+          Replace an existing destination
+
+      --output <OUTPUT>
+          How the conversion record is rendered
+
+          Possible values:
+          - text: One human-readable line per record: `MISSING a.txt`, `COPY a.txt`, `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the README's examples are written in
+          - json: One JSON object per line (NDJSON), same records, same order: `{\"event\":\"missing\",\"path\":\"a.txt\"}`
+
+          [default: text]
+
+  -h, --help
+          Print help (see a summary with '-h')";
