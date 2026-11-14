@@ -100,12 +100,32 @@ const _: () = {
     assert!(HashAlg::from_name("").is_none());
 };
 
+/// The ASCII-case fold, written out rather than borrowed from `std`.
+///
+/// The oracle for a case about the resolver's fold has to be **independent**
+/// of the comparison the resolver itself reaches for: an oracle built from
+/// `eq_ignore_ascii_case` would agree with the resolver by construction, so
+/// a change in `std`'s rule would change the oracle along with it and the
+/// case would follow `std` instead of catching it.
+///
+/// This is the rule the resolver is meant to implement: fold the ASCII case
+/// of each byte, compare every other byte exactly. Folding ASCII case does
+/// not change a string's length, so the lengths are compared first.
+fn ascii_case_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+}
+
 /// **The resolver folds exactly as the ASCII-case comparison does.**
 ///
 /// The resolver reaches its comparison through the *slice* form of
 /// `eq_ignore_ascii_case`, because that is the one a `const fn` may call.
-/// This case is the check that the slice form and the string form are the
-/// same rule: the names are the awkward ones — every ASCII case of a
+/// This case is the check that the resolver's fold is the rule it is meant
+/// to be, and the oracle is that rule written out — so a `std` that grew a
+/// Unicode case mapping shows up here instead of being followed by both
+/// sides at once. The names are the awkward ones — every ASCII case of a
 /// supported name, names nobody supports, the empty name, a name with a
 /// space in it, and the Kelvin-sign lookalike.
 #[test]
@@ -133,7 +153,7 @@ fn the_resolver_folds_exactly_as_the_ascii_case_comparison_does() {
     ] {
         let want = HashAlg::ALL
             .into_iter()
-            .find(|a| a.as_str().eq_ignore_ascii_case(name));
+            .find(|a| ascii_case_eq(a.as_str(), name));
         assert_eq!(HashAlg::from_name(name), want, "the name {name:?}");
     }
 }

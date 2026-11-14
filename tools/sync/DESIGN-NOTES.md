@@ -399,7 +399,8 @@ because the row genuinely does hold a digest under that name.
 `the_name_resolver_agrees_with_the_parser` for the resolver and the parser
 answering one question, and
 `the_resolver_folds_exactly_as_the_ascii_case_comparison_does` for the
-resolver folding as the string comparison folds; the resolver's `const`
+resolver folding as the ASCII-case rule says it folds, against that rule
+written out rather than against `std`; the resolver's `const`
 context for the comparison's allocation-freedom: a resolver that stopped
 being `const` would not compile there;
 `a_foreign_entry_is_replaced_only_under_its_own_spelling` for the arm
