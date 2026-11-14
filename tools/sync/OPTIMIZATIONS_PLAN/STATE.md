@@ -642,11 +642,25 @@ reviews:
     head: 7e12b998
     result: F193 fixed (7e12b998, the step-1 rename hook row claimed a placeholder that only a file claim leaves); F194 fixed (0f243257 gives the rule a reason that holds everywhere, since the old reason was a Windows fact); F198 kept (a3bff56e); 595 passed, 1 skipped; the rule itself was kept, because it enforces the precondition the split relies on and preserves every valid spec
     followups: [F276, F277]
-  - batch: M20
+  - batch: M46
     status: pending
-    tasks: [F195, F196, F197, F199]
+    tasks: [F278, F279]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M47
+    status: pending
+    tasks: [F280, F281]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M20
+    status: in_progress
+    tasks: [F195, F196, F197, F199]
+    base: fe3db912
+    head: 858fa92e
     result: null
     followups: []
   - batch: M6
@@ -1849,21 +1863,21 @@ followups:
   - id: F195
     source: F122
     description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
-    status: in_progress
+    status: pending_review
     batch: M20
-    commits: []
+    commits: [14f77fa3]
   - id: F196
     source: F121
     description: The copy phase's selection rule is pinned by a unit test on the comparison, but the mapping from a plan index to the path the report names is only covered end-to-end.
-    status: in_progress
+    status: pending_review
     batch: M20
-    commits: []
+    commits: [30b37539]
   - id: F197
     source: F122
     description: The effective done event is logged once per phase and the two are told apart only by the presence of the stat_only field; a message that named the phase would remove that subtlety.
-    status: in_progress
+    status: pending_review
     batch: M20
-    commits: []
+    commits: [fa35b7d8]
   - id: F198
     source: F129
     description: The design notes Enforced by list for the verify names the canonical-order case but not the new error-event case, so the second channel's case is unlisted, the same gap F124 closed for the first one.
@@ -1873,9 +1887,9 @@ followups:
   - id: F199
     source: F122
     description: The two phases' progress totals are asserted as the set of two values, so the case does not say which phase reports the walk's count and which the map's.
-    status: in_progress
+    status: pending_review
     batch: M20
-    commits: []
+    commits: [858fa92e]
   - id: F200
     source: F138
     description: src/planner/pairs.rs still has the same src-lowered abbreviation F138 fixed in the other two files.
@@ -2356,6 +2370,30 @@ followups:
     status: pending
     batch: M45
     commits: []
+  - id: F278
+    source: F197
+    description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
+    status: pending
+    batch: M46
+    commits: []
+  - id: F279
+    source: F197
+    description: The start events name their phase by operation while the done and the progress events now name it by letter, so the family uses two spellings.
+    status: pending
+    batch: M46
+    commits: []
+  - id: F280
+    source: F196
+    description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
+    status: pending
+    batch: M47
+    commits: []
+  - id: F281
+    source: F196
+    description: The helper that names the copy for a plan index indexes the plan's copy list and would panic on an out-of-range index, which cannot happen today, while a borrowing form would fail loudly instead.
+    status: pending
+    batch: M47
+    commits: []
 ```
 
 ## Human checklist
@@ -2388,6 +2426,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M20 review checkpoint opened: F195, F196, F197
+  and F199 `in_progress` → `pending_review`, commits `14f77fa3`, `30b37539`,
+  `fa35b7d8`, `858fa92e`; review M20 `pending` → `in_progress`, base
+  `fe3db912`, head `858fa92e`. Follow-ups F278–F281 appended with batches
+  `M46` and `M47`.
 - 2026-11-14 — follow-up batch M20 started: F195, F196, F197 and F199 `pending` →
   `in_progress`; `active_batch: M19` → `M20`.
 - 2026-11-14 — review M19 `done`: F193 fixed (7e12b998), F194 fixed
