@@ -189,7 +189,10 @@ pub fn path_within(child: &Path, parent: &Path) -> bool {
 /// Case is folded on Windows, where the filesystem folds it, and only there.
 /// The fold the fallback uses is Unicode — deliberately *not* the ASCII-only
 /// fold of [`path_key`], which is the key every relative-path index uses. The
-/// two rules answer different questions and are meant to disagree.
+/// two rules answer different questions and are meant to disagree. The mapping
+/// the fallback compares with is `unicode_lowercase`, which the on-disk
+/// spelling lookup compares with too: one implementation for two questions,
+/// not one rule.
 fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     #[cfg(windows)]
     {
@@ -205,7 +208,7 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
         {
             return a.eq_ignore_ascii_case(b);
         }
-        identity_fold(a) == identity_fold(b)
+        unicode_lowercase(a) == unicode_lowercase(b)
     }
     #[cfg(not(windows))]
     {
@@ -213,18 +216,27 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
     }
 }
 
-/// The Unicode lowercase fold the **identity** rule uses for a name outside
-/// ASCII.
+/// The Unicode lowercase mapping the **identity** rule's fallback and the
+/// **on-disk spelling** lookup's comparison share.
 ///
-/// **This is deliberately not the path key's fold.** [`path_key`] folds ASCII
-/// case only and is the key every relative-path index uses; this one answers a
-/// different question — do two spellings name the same place on disk? — and on
-/// Windows the filesystem really does treat `Ärger` and `ärger` as one file.
-/// The two rules are allowed to disagree, and that is the point: the key keeps
-/// those two spellings apart, and this says they are one place. Unifying them
-/// would change what a run does — a Unicode key would merge spellings the disk
-/// keeps apart, and an ASCII identity rule would stop the overlap and
-/// containment checks from seeing a case difference Windows really has.
+/// **A shared implementation, not a shared rule.** The two sites ask different
+/// questions, and each keeps its own statement of which: the identity rule
+/// asks whether two spellings name the same place on disk, and the on-disk
+/// lookup asks which directory entry the operating system would open. What
+/// they share is the mapping they compare with, so the mapping is written once
+/// here rather than twice in two modules — two copies of the same value can
+/// drift apart, and nothing would say so.
+///
+/// **It is deliberately not the path key's fold.** [`path_key`] folds ASCII
+/// case only and is the key every relative-path index uses; this mapping
+/// answers a different question — do two spellings name the same place on
+/// disk? — and on Windows the filesystem really does treat `Ärger` and `ärger`
+/// as one file. The two rules are allowed to disagree, and that is the point:
+/// the key keeps those two spellings apart, and this says they are one place.
+/// Unifying them would change what a run does — a Unicode key would merge
+/// spellings the disk keeps apart, and an ASCII identity rule would stop the
+/// overlap and containment checks from seeing a case difference Windows really
+/// has.
 ///
 /// It is a *lowercase* mapping rather than a full case fold, and an
 /// approximation of the filesystem's own table rather than a copy of it: the
@@ -232,8 +244,11 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
 /// UTF-8 onto each other, since both become the replacement character. It is
 /// the approximation the identity rule has always made, and it is kept rather
 /// than guessed at.
+///
+/// Windows only, because neither site folds case anywhere else: on POSIX the
+/// two spellings are distinct entries.
 #[cfg(windows)]
-fn identity_fold(s: &OsStr) -> String {
+pub(crate) fn unicode_lowercase(s: &OsStr) -> String {
     s.to_string_lossy().to_lowercase()
 }
 

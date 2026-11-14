@@ -131,6 +131,15 @@ not about how a run keys its map, and it follows neither rule above. The same
 file holds both — the on-disk lookup and the key, side by side, answering two
 different questions.
 
+**One mapping, two questions.** The Unicode lowercase mapping the on-disk
+lookup compares with is the one the identity rule's fallback compares with
+(`util::unicode_lowercase`), so the value is written once rather than twice in
+two modules. What is shared is the mapping, not the question: the identity
+rule is an equality relation between two spellings, and the lookup is a choice
+among the entries of one directory — an exact match wins, and two entries that
+fold together are ambiguous rather than equal. Each site says which question
+it asks, and the ASCII-only path key stays a rule of its own.
+
 **The cache reservation is a fourth site, and it folds the path key's way.**
 `util::has_cache_prefix` asks a narrower question than any of the three above:
 is this path component one of the tool's own names (`girpr-cache` and its

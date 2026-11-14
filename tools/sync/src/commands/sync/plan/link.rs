@@ -27,6 +27,8 @@ use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
 use crate::link::try_is_link;
 use crate::util::path_key;
+#[cfg(windows)]
+use crate::util::unicode_lowercase;
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
@@ -202,25 +204,6 @@ pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("/"))
 }
 
-/// The Unicode lowercase fold the on-disk spelling lookup uses.
-///
-/// **Neither of the other two rules.** The path key
-/// ([`crate::util::path_key`]) folds ASCII case only and answers which bucket
-/// of a run's map a path belongs to; the identity rule
-/// ([`crate::util::same_path`]) keeps a Unicode fallback and answers whether
-/// two spellings open the same place on disk. This fold asks a third question
-/// — which directory entry the OS would open — and the OS's own table is a
-/// Unicode one, so the comparison folds Unicode case.
-///
-/// It is a *lowercase* mapping rather than a full case fold, and an
-/// approximation of the filesystem's own table rather than a copy of it: the
-/// lossy conversion also folds two distinct byte sequences that are not valid
-/// UTF-8 onto each other, since both become the replacement character.
-#[cfg(windows)]
-fn on_disk_fold(s: &OsStr) -> String {
-    s.to_string_lossy().to_lowercase()
-}
-
 /// The on-disk spelling of the entry `name` in the canonical directory `parent`.
 ///
 /// On Windows the filesystem matches names case-insensitively, so a link text
@@ -230,8 +213,17 @@ fn on_disk_fold(s: &OsStr) -> String {
 /// has to come from the directory listing: an exact entry wins, otherwise the
 /// unique case-insensitive match is the one the OS would open.
 ///
-/// The case-insensitive match is [`on_disk_fold`]'s comparison: a Unicode
-/// lowercase one, because the question is which entry the OS would open.
+/// **Neither of the other two rules.** The path key
+/// ([`crate::util::path_key`]) folds ASCII case only and answers which bucket
+/// of a run's map a path belongs to; the identity rule
+/// ([`crate::util::same_path`]) keeps a Unicode fallback and answers whether
+/// two spellings open the same place on disk. This lookup asks a third
+/// question — which directory entry the OS would open — and the OS's own table
+/// is a Unicode one, so the comparison folds Unicode case.
+///
+/// The comparison is `crate::util::unicode_lowercase`, the mapping the
+/// identity rule's fallback compares with as well: one implementation for two
+/// questions, not one rule.
 ///
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
 /// no lookup is needed; case folding stays Windows-only, as in
@@ -243,7 +235,7 @@ pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsStrin
     // The wanted name's fold, folded once: the name does not change while the
     // listing is read, so folding it again per entry would buy the same
     // answer with an allocation per entry.
-    let wanted = on_disk_fold(name);
+    let wanted = unicode_lowercase(name);
     let entries =
         std::fs::read_dir(parent).with_context(|| format!("list {}", parent.display()))?;
     for entry in entries {
@@ -252,7 +244,7 @@ pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsStrin
         if candidate == name {
             return Ok(Some(candidate));
         }
-        if on_disk_fold(&candidate) == wanted {
+        if unicode_lowercase(&candidate) == wanted {
             // A directory can be case-sensitive per directory on Windows; two
             // case-only names then make "the" entry ambiguous, and the name the
             // OS would open is the exact one that is not there.
