@@ -335,7 +335,8 @@ feature that does not build on its own is checked with each of the other
 features instead — the feature together with one other, which is a
 configuration that has to build on its own — so a member whose features only
 build together is covered rather than failed. The features are checked in
-combination as well — every combination of them — so a combination that needs a
+combination as well — every combination of them, the largest being every
+optional feature of the member enabled at once — so a combination that needs a
 newer Rust is caught even when each of its features builds on its own. A
 combination that cannot be enabled together fails the member — cargo allows
 it, so it is a configuration a user can ask for — and the failure names the

@@ -34,12 +34,13 @@ builds with no one other feature is broken on its own and fails the member.
 The same check runs in the `msrv` workflow.
 
 The combinations of those features are checked too — every subset of two or
-more of them, with the same command and `--features <a,b>`. Cargo adds
-features up, so every combination is a configuration a user can ask for, and a
-combination can need a newer Rust than the features it is made of do: the
-checks above would not see that, because each of its parts builds on its own. A
-member whose features cannot be enabled together is failed by that check — the
-combination is one cargo allows, so it is a configuration that has to build.
+more of them, with the same command and `--features <a,b>`, the largest being
+every optional feature of the member enabled at once. Cargo adds features up,
+so every combination is a configuration a user can ask for, and a combination
+can need a newer Rust than the features it is made of do: the checks above
+would not see that, because each of its parts builds on its own. A member whose
+features cannot be enabled together is failed by that check — the combination
+is one cargo allows, so it is a configuration that has to build.
 
 Run it from anywhere; it works from the repository root:
 
