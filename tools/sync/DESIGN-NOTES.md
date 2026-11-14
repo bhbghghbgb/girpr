@@ -832,11 +832,11 @@ healthy — right size, right mtime — which is what makes it worth stating.
 **A conversion a killed run left behind stays in the folder.** The converter
 writes the new cache into a temporary beside the destination and moves it onto
 the destination only once it is whole, so a conversion that is killed leaves
-that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or the
-`girpr-cache-convert-<pid>-<ts>_2.redb` spelling of the same name when that
-one is taken. Nothing reclaims it: the retention bound ranges over a cache's
-published copies and not over this name, so a leftover stays in the folder
-until it is removed by hand.
+that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or
+`girpr-cache-convert-<pid>-<ts>_2.redb` and its `_3`, `_4`, … spellings when
+the plain one is taken. Nothing reclaims any of them: the retention bound
+ranges over a cache's published copies and not over these names, so a leftover
+stays in the folder until it is removed by hand.
 That is the same trade as the working copy a killed backup leaves, and for the
 same reason: a temporary is the file a live run is writing, and a sweep that
 could not tell a live one from a dead one would take the copy a running
