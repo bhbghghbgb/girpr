@@ -461,13 +461,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M13
-    status: in_progress
-    tasks: [F166, F167, F168, F169, F170, F171]
-    base: 1fe6901c
-    head: 34293501
+  - batch: M30
+    status: pending
+    tasks: [F232, F234]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M13
+    status: done
+    tasks: [F166, F167, F168, F169, F170, F171]
+    base: 1fe6901c
+    head: 6236f9fa
+    result: F166 fixed (82fd8a95 corrects a doc that still called the arm a slice); F167 kept (6955810c); F168 kept (a095f412, 34293501); F169 kept (515bfa49); F170 kept (95a2d302, 4db5ab6a); F171 fixed (6236f9fa corrects the index doc); 585 passed without the feature and 599 with it, 1 skipped
+    followups: [F232, F234]
   - batch: M14
     status: pending
     tasks: [F172, F173, F174]
@@ -1561,39 +1568,39 @@ followups:
   - id: F166
     source: F34
     description: DigestSet::insert_named rebuilds the whole foreign slice on every insert, including an in-place replacement, and merge does the same.
-    status: pending_review
+    status: completed
     batch: M13
-    commits: [29b218f8]
+    commits: [29b218f8, 82fd8a95]
   - id: F167
     source: F41
     description: The adoption arm allocates a Vec of references per exact-case miss just to count the alternates.
-    status: pending_review
+    status: completed
     batch: M13
     commits: [6955810c]
   - id: F168
     source: F41
     description: The phase-A prune still walks the whole key set every scan; only the alternate index became lazy.
-    status: pending_review
+    status: completed
     batch: M13
     commits: [a095f412, 34293501]
   - id: F169
     source: F34
     description: DigestSet::merge and insert_named spell the same-name comparison two ways.
-    status: pending_review
+    status: completed
     batch: M13
     commits: [515bfa49]
   - id: F170
     source: F33
     description: The fold-equivalence case uses eq_ignore_ascii_case as its oracle, so it would follow std rather than catch a std change.
-    status: pending_review
+    status: completed
     batch: M13
     commits: [95a2d302, 4db5ab6a]
   - id: F171
     source: F41
     description: fold_alternates allocates a Vec of Strings per folded group, and groups with several stale spellings are the common shape there.
-    status: pending_review
+    status: completed
     batch: M13
-    commits: [ae982636]
+    commits: [ae982636, 6236f9fa]
   - id: F172
     source: F33
     description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
@@ -1958,6 +1965,32 @@ followups:
     status: pending
     batch: M29
     commits: []
+  - id: F232
+    source: F170
+    description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
+    status: pending
+    batch: M30
+    commits: []
+  - id: F233
+    source: F168
+    description: The prune key set is still an owned Vec of Strings, one allocation per cached row for keys it only borrows, so a borrowed key view is the next step down that cost.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F228, already scheduled in M29
+  - id: F234
+    source: F171
+    description: The index still folds every cached key at the first exact-case miss, one folded spelling per key, even when a single lookup needs one group.
+    status: pending
+    batch: M30
+    commits: []
+  - id: F235
+    source: F166
+    description: The arm keeps its capacity at the high-water mark after a replacement, where the old boxed slice was rebuilt to fit, so a row that once carried many foreign digests holds that capacity for life.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F229, already scheduled in M29
 ```
 
 ## Human checklist
@@ -1990,6 +2023,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M13 `done`: F166 fixed (82fd8a95), F167 kept, F168 kept,
+  F169 kept, F170 kept, F171 fixed (6236f9fa); follow-ups F232 and F234
+  appended with batch `M30`, and F233 and F235 recorded as `skipped` as the
+  same items as F228 and F229. F166–F171 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M13 review checkpoint opened: F166, F167, F168,
   F169, F170 and F171 `in_progress` → `pending_review`, commits `515bfa49`,
   `29b218f8`, `95a2d302`, `4db5ab6a`, `6955810c`, `ae982636`, `a095f412`,
