@@ -32,6 +32,14 @@ group is the configuration that holds every optional feature at once, and it
 is the only one that builds such a member. The same check runs in the `msrv`
 workflow.
 
+The combinations of those features are checked too — every subset of two or
+more of them, with the same command and `--features <a,b>`. Cargo adds
+features up, so every combination is a configuration a user can ask for, and a
+combination can need a newer Rust than the features it is made of do: the
+checks above would not see that, because each of its parts builds on its own. A
+member whose features cannot be enabled together is failed by that check — the
+combination is one cargo allows, so it is a configuration that has to build.
+
 Run it from anywhere; it works from the repository root:
 
     pwsh -File tests/scripts/check-msrv.ps1
@@ -67,6 +75,31 @@ function Get-OptionalFeatures($pkg) {
     $default = $features.PSObject.Properties['default']
     $enabled = if ($null -eq $default) { @() } else { @($default.Value) }
     return @($declared | Where-Object { $_ -ne 'default' -and $enabled -notcontains $_ })
+}
+
+# The combinations of a member's optional features: every subset of two or
+# more of them.
+#
+# Cargo adds features up, so a user can ask for any combination of a member's
+# features, and each combination is a configuration that has to build. The
+# subsets are named in the order the features are declared, so the same
+# combination always has the same name — and the name of the whole set is the
+# group's, which the fallback below looks up.
+function Get-FeatureCombinations($features) {
+    $features = @($features)
+    $combinations = @()
+    for ($mask = 1; $mask -lt (1 -shl $features.Count); $mask++) {
+        $members = @()
+        for ($bit = 0; $bit -lt $features.Count; $bit++) {
+            if ($mask -band (1 -shl $bit)) {
+                $members += $features[$bit]
+            }
+        }
+        if ($members.Count -ge 2) {
+            $combinations += ,($members -join ',')
+        }
+    }
+    return $combinations
 }
 
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -121,6 +154,35 @@ try {
             Write-Host "ok: $($pkg.name) builds with Rust $ver"
         }
 
+        # The optional features of this member, and the name of the group: the
+        # configuration that holds every one of them at once.
+        $optional = @(Get-OptionalFeatures $pkg)
+        $group = $optional -join ','
+
+        # The combinations of the optional features.
+        #
+        # Each feature is checked on its own below, and a combination is a
+        # configuration a user can ask for as well — so a combination can need
+        # a newer Rust than the features it is made of do, and the checks
+        # below would not see that, because each of its parts builds on its
+        # own. Every subset of two or more of the features is checked here.
+        #
+        # A member whose features cannot be enabled together is failed by
+        # this: cargo allows the combination, so it is a configuration that
+        # has to build.
+        $combinationExit = @{}
+        foreach ($combination in @(Get-FeatureCombinations $optional)) {
+            & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $combination
+            $combinationCode = $LASTEXITCODE
+            $combinationExit[$combination] = $combinationCode
+            if ($combinationCode -eq 0) {
+                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $combination"
+                continue
+            }
+            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $combination (exit code $combinationCode)"
+            $failed += "$($pkg.name) ($ver, --features $combination, exit code $combinationCode)"
+        }
+
         # The code behind an optional feature is not in the check above, so it
         # is checked on its own: a member's floor is the floor of every code it
         # ships, and an optional feature is code the member ships when it is
@@ -131,11 +193,11 @@ try {
         # one that only builds in combination with another, and a member with
         # one is checked with the group of its optional features instead: the
         # group is the configuration that holds every optional feature at once,
-        # and it is the only one that builds such a member. The group is
-        # checked once per member, and only once a feature has failed alone.
-        $optional = @(Get-OptionalFeatures $pkg)
-        $group = $optional -join ','
-        # $null until the group has been checked. A member with one optional
+        # and it is the only one that builds such a member. The group is one
+        # of the combinations checked above, so its result is looked up there
+        # rather than checked twice. The group is looked up once per member,
+        # and only once a feature has failed alone.
+        # $null until the group has been looked up. A member with one optional
         # feature has no group to enable, so a feature that does not build
         # alone is a failure of its own.
         $groupExit = $null
@@ -150,8 +212,7 @@ try {
             # builds in combination with another, so the group is checked
             # before the member is failed.
             if ($null -eq $groupExit -and $optional.Count -gt 1) {
-                & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $group
-                $groupExit = $LASTEXITCODE
+                $groupExit = $combinationExit[$group]
                 if ($groupExit -eq 0) {
                     Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $group"
                 } else {
@@ -170,7 +231,7 @@ try {
     if ($failed.Count -gt 0) {
         throw "MSRV check failed: $($failed -join ', ')"
     }
-    Write-Host "all $($members.Count) workspace members build with their declared Rust version, optional features included"
+    Write-Host "all $($members.Count) workspace members build with their declared Rust version, optional features and their combinations included"
 }
 finally {
     Pop-Location
