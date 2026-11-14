@@ -698,11 +698,25 @@ reviews:
     head: 6b15098a
     result: F200 kept (7e40bfb6); F201 kept (b8b98771); F202 kept (c64275cf); F203 kept (cb20bfea); F204 kept (6b15098a); no fix or revert commits; 596 passed, 1 skipped; the reviewer confirmed all three fold sites keep their own rule and that nothing in the repo links to the retitled heading
     followups: [F291, F292]
-  - batch: M22
+  - batch: M51
     status: pending
-    tasks: [F206, F207, F208]
+    tasks: [F294, F296]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M52
+    status: pending
+    tasks: [F295, F297]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M22
+    status: in_progress
+    tasks: [F206, F207, F208]
+    base: 7c9a179d
+    head: 0a942361
     result: null
     followups: []
   - batch: M7
@@ -1951,21 +1965,21 @@ followups:
   - id: F206
     source: F141
     description: has_cache_prefix's doc names ascii_case_eq without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
-    status: in_progress
+    status: pending_review
     batch: M22
-    commits: []
+    commits: [e5171086]
   - id: F207
     source: F138
     description: The new locals are src_folded and dst_folded although they hold folded-key indexes; names ending in _keys would say what they hold more exactly.
-    status: in_progress
+    status: pending_review
     batch: M22
-    commits: []
+    commits: [b683af1f]
   - id: F208
     source: F144
     description: on_disk_fold and util::identity_fold are now byte-identical Unicode-lowercase helpers in two modules; both docs warn against unifying them, but the duplication is visible to a reader.
-    status: in_progress
+    status: pending_review
     batch: M22
-    commits: []
+    commits: [0a942361]
   - id: F209
     source: F147
     description: The nonexistent --hash none still names a flag in source rather than in documents, in src/hash/set.rs module doc, parse_hash_list doc and the user-facing refusal, src/hash/algo.rs, src/effective, src/planner, src/commands/update.rs, src/commands/sync/apply/copy.rs and several test files; the set.rs refusal is user-visible text and the sharpest instance.
@@ -2490,6 +2504,30 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F288, already scheduled in M49
+  - id: F294
+    source: F207
+    description: The plan-safety module still names its folded index as if it held keys, though it maps a folded key to a value rather than being the key-shaped index the other modules name.
+    status: pending
+    batch: M51
+    commits: []
+  - id: F295
+    source: F206
+    description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
+    status: pending
+    batch: M52
+    commits: []
+  - id: F296
+    source: F206
+    description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
+    status: pending
+    batch: M51
+    commits: []
+  - id: F297
+    source: F208
+    description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
+    status: pending
+    batch: M52
+    commits: []
 ```
 
 ## Human checklist
@@ -2522,6 +2560,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M22 review checkpoint opened: F206, F207 and F208
+  `in_progress` → `pending_review`, commits `e5171086`, `b683af1f`,
+  `0a942361`; review M22 `pending` → `in_progress`, base `7c9a179d`, head
+  `0a942361`. Follow-ups F294–F297 appended with batches `M51` and `M52`.
 - 2026-11-14 — follow-up batch M22 started: F206, F207 and F208 `pending` →
   `in_progress`; `active_batch: M21` → `M22`.
 - 2026-11-14 — review M21 `done`: F200, F201, F202, F203 and F204 all kept,
