@@ -220,10 +220,15 @@ pub fn scan_stat_only(
     //
     // Only the keys decide whether a path has an alternate; the row is read
     // when a stale alternate is actually adopted, which is normally rare. So
-    // the index is built on first use rather than up front: a scan whose
-    // cached keys all match the spelling the disk uses never asks for an
-    // alternate, and building the index for it costs a folded spelling per
-    // cached row — a price paid for nothing on the common path.
+    // the index is built on first use rather than up front: a scan in which
+    // every path is found in the cache under the spelling the disk uses
+    // never asks for one, and building the index for it costs a folded
+    // spelling per cached row — a price paid for nothing on that path.
+    //
+    // What triggers the build is a path that misses exactly, not a spelling
+    // that differs: a path the cache has never held misses exactly too. So a
+    // run that only adds a file pays for the index as well, even though no
+    // spelling differs anywhere — the miss was about the path being new.
     //
     // The keys are the committed ones, read through the cache handle: the
     // scan's batch handle starts from the same committed state, and the rows
@@ -794,11 +799,11 @@ mod tests {
 
     /// **The alternate-case index is built when a lookup needs it.**
     ///
-    /// The index costs a folded spelling per cached row, and a scan whose
-    /// cached keys all match the spelling the disk uses never asks for one.
-    /// The count of entries-table reads says whether the scan paid for it:
-    /// the index is one read of the key set, and a scan that never misses
-    /// must make none.
+    /// The index costs a folded spelling per cached row, and a scan in which
+    /// every path is found in the cache under the spelling the disk uses
+    /// never asks for one. The count of entries-table reads says whether the
+    /// scan paid for it: the index is one read of the key set, and a scan
+    /// that never misses must make none.
     #[test]
     fn the_alternate_index_is_built_only_when_a_lookup_needs_it() {
         let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index");
