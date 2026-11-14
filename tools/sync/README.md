@@ -126,10 +126,12 @@ conversion that fails leaves the previous cache exactly as it was under
 removed either way, so nothing of the tool's own is left in the folder.
 
 The temporary is named inside the tool's own namespace —
-`girpr-cache-convert-<pid>-<ts>.redb` — because it is written into the folder
-the destination cache lives in. A conversion that is killed before it could
-clean up after itself therefore leaves tool state there, not a file the next
-run would mirror out of a source folder or delete as an extra in a
+`girpr-cache-convert-<pid>-<ts>.redb`, or `girpr-cache-convert-<pid>-<ts>_2.redb`
+and its `_3`, `_4`, … spellings when a name of that shape is already taken —
+because it is written into the folder the destination cache lives in. Every
+spelling of it is inside that namespace, so a conversion that is killed before
+it could clean up after itself therefore leaves tool state there, not a file
+the next run would mirror out of a source folder or delete as an extra in a
 destination one.
 
 **Nothing reclaims that temporary.** The retention bound
@@ -1278,7 +1280,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
   file; POSIX spellings stay exact. The converter's temporary is one of them
-  (`girpr-cache-convert-<pid>-<ts>.redb`), so a conversion that was killed
+  (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spelling of the
+  same name when that one is taken), so a conversion that was killed
   leaves the tool's own residue behind rather than a file that looks like
   content.
   Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
@@ -1502,7 +1505,8 @@ binary and the converter's own cases:
 ```powershell
 cargo build -p girsync                                     # the default: no sled, no converter
 cargo build -p girsync --features convert --bin sled2redb  # the converter
-cargo nextest run -p girsync --features convert --test convert  # the converter's cases
+cargo nextest run -p girsync --features convert --test convert  # the converter's end-to-end cases
+cargo nextest run -p girsync --features convert              # the whole suite, the converter's cases among them
 ```
 
 The feature is additive and off by default: `girsync` itself behaves the same
@@ -1548,7 +1552,9 @@ on their own.
 
 The converter's cases are behind the `convert` feature, so they are not in that
 run: `cargo nextest run -p girsync --features convert --test convert` runs
-them — see [Build features](#build-features).
+the end-to-end ones, and `cargo nextest run -p girsync --features convert` runs
+the whole suite with the converter's own cases in it — see
+[Build features](#build-features).
 
 **A green run is not full link coverage.** Some end-to-end cases need
 primitives a regular user cannot always create: Windows without developer mode

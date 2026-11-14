@@ -52,6 +52,12 @@ const OLD_META_KEY: &str = "\0meta";
 /// It is not the live cache's name: that is `girpr-cache` itself, and only
 /// the rename puts the finished database there.
 ///
+/// **The whole name is `<prefix><pid>-<ts>.redb`**, and a candidate whose
+/// name is taken is stepped over rather than reused — so the run may write
+/// `<prefix><pid>-<ts>_2.redb`, and its `_3`, `_4`, … spellings, instead.
+/// Every one of those spellings is inside the namespace too, so a leftover of
+/// any of them is tool state and not content.
+///
 /// **Nothing reclaims it.** The retention bound ranges over the two published
 /// lists beside a cache — the backups and the `old-*` snapshots — and not over
 /// this name, so a temporary that a killed conversion left behind stays in the
@@ -295,6 +301,11 @@ fn replace_destination(temp: &Path, dst: &Path) -> Result<()> {
 /// interrupted run is recognisable rather than anonymous, and it carries the
 /// tool's own prefix so that a scan reads such a leftover as tool state
 /// rather than as content.
+///
+/// **A name that is taken is stepped over, not reused**, so the file this
+/// returns is `<prefix><pid>-<ts>.redb` or one of its `<prefix><pid>-<ts>_2.redb`
+/// spellings — every one of them inside the tool's namespace, so a leftover of
+/// any of them is tool state rather than content.
 fn claim_temp_sibling(dst: &Path) -> Result<PathBuf> {
     let parent = dst.parent().unwrap_or_else(|| Path::new("."));
     let stamp = format!("{}-{}", std::process::id(), crate::util::ts_now());
@@ -362,6 +373,41 @@ fn cleanup_temp(primary: anyhow::Error, temp: &Path) -> anyhow::Error {
                 "{summary}; removing the temporary {} also failed: {cleanup}",
                 temp.display()
             ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CONVERT_TEMP_PREFIX, temp_candidate_name};
+
+    /// **The temporary's name, and the retry spellings it takes.**
+    ///
+    /// The claim steps over a name that is already there rather than reusing
+    /// it, so the names a conversion can leave behind are the plain one and
+    /// the `_2`, `_3`, … spellings of it. Every one of them is inside the
+    /// tool's namespace, so a leftover of any of them is tool state — and not
+    /// a file the next run would mirror out of a source folder or delete as an
+    /// extra in a destination one.
+    #[test]
+    fn the_temporary_name_and_its_retry_spellings_are_tool_state() {
+        let stamp = "1234-20240101T000000.000000Z";
+        assert_eq!(
+            temp_candidate_name(stamp, 1),
+            format!("{CONVERT_TEMP_PREFIX}{stamp}.redb"),
+            "the first candidate is the plain name"
+        );
+        assert_eq!(
+            temp_candidate_name(stamp, 2),
+            format!("{CONVERT_TEMP_PREFIX}{stamp}_2.redb"),
+            "and the next one is the same name with an underscore-n"
+        );
+        for n in 1..=3 {
+            let name = temp_candidate_name(stamp, n);
+            assert!(
+                crate::util::is_cache_rel(&name),
+                "`{name}` is the tool's own state, not content"
+            );
         }
     }
 }
