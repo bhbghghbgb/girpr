@@ -38,6 +38,24 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The ASCII-only case comparison: ASCII case folded, every other byte exact.
+///
+/// The **path key's** rule — the one [`path_key`] folds with, and the one every
+/// relative-path index uses — stated as a comparison for the sites that compare
+/// two spellings rather than fold one of them into a key.
+///
+/// It is deliberately **not** the identity rule's comparison. [`component_eq`]
+/// keeps a Unicode fallback because it asks whether two spellings open the same
+/// place on disk, and on Windows the filesystem really does open `Ärger` and
+/// `ärger` as one file. The cache reservation asks a narrower question — is this
+/// component one of the tool's own names — and the prefix it matches is ASCII,
+/// so the ASCII-only rule says it without borrowing a rule that answers
+/// something else.
+#[cfg(windows)]
+fn ascii_case_eq(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
 /// True when one path component names cache state: it starts with `girpr-cache`,
 /// covering the live DB, its backups and its `old-*` snapshots.
 ///
@@ -45,14 +63,22 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// `GIRPR-CACHE` from `girpr-cache`, so a case-only rename of the tool's own
 /// cache is the same file and must be reserved the same way. On POSIX the two
 /// spellings are distinct entries, and an upper-case one is ordinary content
-/// that must not be swept up by the reservation. This is the cache half of the
-/// platform rule [`component_eq`] applies to path identity.
+/// that must not be swept up by the reservation.
+///
+/// **The fold is the path key's, not the identity rule's.** `ascii_case_eq`
+/// folds ASCII case and compares every other byte exactly — the rule
+/// [`path_key`] states — while the identity rule ([`component_eq`]) keeps a
+/// Unicode fallback, because it answers a different question: do two spellings
+/// open the same place on disk. The reservation asks about the tool's own
+/// names, and the prefix it matches is ASCII, so the ASCII-only rule is the one
+/// that states it. The identity rule's fold would answer a question nobody is
+/// asking here.
 fn has_cache_prefix(component: &str) -> bool {
     #[cfg(windows)]
     {
         component
             .get(..CACHE_PREFIX.len())
-            .is_some_and(|head| head.eq_ignore_ascii_case(CACHE_PREFIX))
+            .is_some_and(|head| ascii_case_eq(head, CACHE_PREFIX))
     }
     #[cfg(not(windows))]
     {
