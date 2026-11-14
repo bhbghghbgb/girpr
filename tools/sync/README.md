@@ -393,9 +393,10 @@ The re-read is not a belt-and-braces extra and must not be "optimised" away into
 a single pass. Hashing both sides from the same chunks going out would compare a
 value with itself: equal by construction, so a mismatch could never be reported
 and the verify would read as a guarantee while checking nothing. Two independent
-reads are what make `verify hash mismatch` mean anything, and because the second
-one happens after `sync_all()`, it hashes the bytes that actually reached the
-disk — the only way a copy catches silent corruption on the way down.
+reads are what make the log's `verify hash mismatch` event mean anything, and
+because the second one happens after `sync_all()`, it hashes the bytes that
+actually reached the disk — the only way a copy catches silent corruption on
+the way down.
 
 What the src-side digest does **not** cover: a src file rewritten *during* the
 copy. dst is then a faithful copy of a src that no longer exists, and the pair
@@ -403,8 +404,13 @@ compares clean. That race is unwinnable by construction; phase A's stat sees the
 new mtime on the next run and re-copies.
 
 **A failed verify names its algorithm, in a fixed order.** A copy whose two
-reads disagree fails the run (exit `3`) with `verify hash(<algo>) <path>` — the
-algorithm whose digest differed, and the file it was read back from. The
+reads disagree fails the run (exit `3`) with the error text
+`verify hash(<algo>) <path>` — the algorithm whose digest differed, and the file
+it was read back from. **That is the error text, not the log's message:** the
+same disagreement is logged as an event whose message is
+`verify hash mismatch`, with the algorithm and the path as fields beside it.
+The two are different strings and answer different questions — a parser reads
+the event's fields, and the error text is what the run says as it fails. The
 algorithm named is the **first in canonical order** among those that disagreed
 (`md5` before `sha256`), never the order the flags were typed in: the copy
 computes and judges a *set* of algorithms, and a set carries no order, so
