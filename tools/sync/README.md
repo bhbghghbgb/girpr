@@ -113,6 +113,10 @@ build: the converter is behind the `convert` feature, so it is built with
 the converter shares one failure code with a failed conversion, so every way it
 can fail is `3` — while `girsync` itself keeps `2` for a parse error.
 
+**It has no `--version`.** The converter declares no version, so the flag is an
+unknown one: the run fails with `3` like any other usage error, and no version
+line is printed.
+
 **A conversion is atomic for a file destination.** The new cache is written
 into a temporary beside the destination and moved onto it only once it is
 whole, so the destination is either the old cache or the new one — never a
