@@ -551,11 +551,25 @@ reviews:
     head: 335cda4b
     result: F111 kept (335cda4b); F112 kept (1cac4f4b); F116 kept (839bcf84); F130 kept (0e73b57f); no fix or revert commits; 577 passed without the feature and 591 with it, 1 skipped; the reviewer drove the MSRV script with a stubbed cargo across five feature scenarios and found the fallback cannot hide a real failure
     followups: [F179, F180, F181, F183]
-  - batch: M17
+  - batch: M37
     status: pending
-    tasks: [F185, F186, F187, F188, F190, F191]
+    tasks: [F258, F259, F260]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M38
+    status: pending
+    tasks: [F261, F262]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M17
+    status: in_progress
+    tasks: [F185, F186, F187, F188, F190, F191]
+    base: 5c2e29fc
+    head: 94a17885
     result: null
     followups: []
   - batch: M18
@@ -1726,27 +1740,27 @@ followups:
   - id: F185
     source: F145
     description: Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [f0cd71f7]
   - id: F186
     source: F146
     description: tests/sync.rs run_sync_case_rename_steps_over_occupied_temporaries asserts a rename order from two src names that both start uppercase, so like the fixture just fixed it cannot tell the folded order from the exact one.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [a2bb2324]
   - id: F187
     source: F140
     description: side_folder returns a dot for a record named on its own, and that edge case has no test.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [4c48b5cb]
   - id: F188
     source: F140
     description: Coverage::folder is an Option, so a caller that forgets it silently loses the remedy bullet rather than failing.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [4d91eca7]
   - id: F189
     source: F140
     description: The README example block spells three commands the CLI rejects, girsync update src, girsync sync src dst and girsync compare-self src, while the prose directly beneath spells the same remedy correctly.
@@ -1756,15 +1770,15 @@ followups:
   - id: F190
     source: F140
     description: side_folder takes a record's parent, so a record whose name is not literally girpr-cache, such as girpr-cache-backup-1 which is_record_path also classifies as a record, gets a remedy that repopulates the folder's girpr-cache rather than the file that failed.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [4c48b5cb, 94a17885]
   - id: F191
     source: F140
     description: side_folder is public but has no caller outside the crate yet, so the surface is justified only by the same one-spelling argument as side_label.
-    status: in_progress
+    status: pending_review
     batch: M17
-    commits: []
+    commits: [4d91eca7]
   - id: F192
     source: F117
     description: The design notes and the README name the conversion temporary only as girpr-cache-convert-<pid>-<ts>.redb, omitting the underscore-n retry spellings claim_temp_sibling can also produce.
@@ -2172,6 +2186,36 @@ followups:
     status: pending
     batch: M36
     commits: []
+  - id: F258
+    source: F185
+    description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
+    status: pending
+    batch: M37
+    commits: []
+  - id: F259
+    source: F185
+    description: Nothing pins the spelling of side_label, although six harnesses now depend on it.
+    status: pending
+    batch: M37
+    commits: []
+  - id: F260
+    source: F191
+    description: Side::cache_path and side_label answer different questions for a folder side, the cache file against the root, so a caller has to know which one it wants.
+    status: pending
+    batch: M37
+    commits: []
+  - id: F261
+    source: F188
+    description: Repopulate::Nothing covers two different reasons, a folder side and a record that is not a folder cache, and the message cannot say which.
+    status: pending
+    batch: M38
+    commits: []
+  - id: F262
+    source: F188
+    description: The Repopulate type lives in planner::coverage while the rule that fills it lives in commands::side_folder, so one rule is split across two layers.
+    status: pending
+    batch: M38
+    commits: []
 ```
 
 ## Human checklist
@@ -2204,6 +2248,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M17 review checkpoint opened: F185, F186, F187,
+  F188, F190 and F191 `in_progress` → `pending_review`, commits `f0cd71f7`,
+  `a2bb2324`, `4d91eca7`, `4c48b5cb`, `94a17885`; review M17 `pending` →
+  `in_progress`, base `5c2e29fc`, head `94a17885`. Follow-ups F258–F262
+  appended with batches M37 and M38.
 - 2026-11-14 — follow-up batch M17 started: F185, F186, F187, F188, F190 and F191
   `pending` → `in_progress`; `active_batch: M16` → `M17`.
 - 2026-11-14 — review M16 `done`: F179, F180 and F181 all kept, no fix or
