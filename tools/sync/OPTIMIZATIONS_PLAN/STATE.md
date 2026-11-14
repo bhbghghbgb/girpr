@@ -593,13 +593,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M18
-    status: in_progress
-    tasks: [F189, F192]
-    base: 8308d0b6
-    head: a85579d2
+  - batch: M42
+    status: pending
+    tasks: [F269, F270, F271]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M18
+    status: done
+    tasks: [F189, F192]
+    base: 8308d0b6
+    head: b7f6afda
+    result: F189 kept (f4b00295); F192 fixed (b7f6afda completes the naming in the design notes, which named only one retry spelling and read as if two names were the most a killed conversion can leave behind); 594 passed without the feature and 610 with it, 1 skipped; the namespace claim was verified true
+    followups: [F269, F270, F271]
   - batch: M5
     status: done
     tasks: [F117, F118, F120, F140, F145, F146]
@@ -1785,7 +1792,7 @@ followups:
   - id: F189
     source: F140
     description: The README example block spells three commands the CLI rejects, girsync update src, girsync sync src dst and girsync compare-self src, while the prose directly beneath spells the same remedy correctly.
-    status: pending_review
+    status: completed
     batch: M18
     commits: [f4b00295]
   - id: F190
@@ -1803,9 +1810,9 @@ followups:
   - id: F192
     source: F117
     description: The design notes and the README name the conversion temporary only as girpr-cache-convert-<pid>-<ts>.redb, omitting the underscore-n retry spellings claim_temp_sibling can also produce.
-    status: pending_review
+    status: completed
     batch: M18
-    commits: [a85579d2]
+    commits: [a85579d2, b7f6afda]
   - id: F193
     source: F126
     description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
@@ -2273,6 +2280,31 @@ followups:
     status: pending
     batch: M41
     commits: []
+  - id: F269
+    source: F192
+    description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
+    status: pending
+    batch: M42
+    commits: []
+  - id: F270
+    source: F192
+    description: The inline case pins the second suffix exactly but not the third, so a rule change that kept the second and altered the later suffixes would pass it.
+    status: pending
+    batch: M42
+    commits: []
+  - id: F271
+    source: F192
+    description: The README bullet reads the retry list in the singular while the other two places read it in the plural.
+    status: pending
+    batch: M42
+    commits: []
+  - id: F272
+    source: F189
+    description: The commit message of the example-command fix claims every other README example command parses, which is false because of the two-value hash flag; the message is part of the history and cannot be corrected without rewriting it.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the claim is in a commit message and history must not be rewritten; the README text itself is correct, and the false example is tracked as F266
 ```
 
 ## Human checklist
@@ -2305,6 +2337,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M18 `done`: F189 kept (f4b00295), F192 fixed
+  (b7f6afda); follow-ups F269–F271 appended with batch `M42` and F272
+  recorded as `skipped` because the false claim sits in a commit message that
+  must not be rewritten. F189 and F192 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M18 review checkpoint opened: F189 and F192
   `in_progress` → `pending_review`, commits `f4b00295`, `a85579d2`; review M18
   `pending` → `in_progress`, base `8308d0b6`, head `a85579d2`. Follow-ups
