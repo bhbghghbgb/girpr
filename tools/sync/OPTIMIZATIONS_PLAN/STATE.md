@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M16
+active_batch: M17
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1726,25 +1726,25 @@ followups:
   - id: F185
     source: F145
     description: Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F186
     source: F146
     description: tests/sync.rs run_sync_case_rename_steps_over_occupied_temporaries asserts a rename order from two src names that both start uppercase, so like the fixture just fixed it cannot tell the folded order from the exact one.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F187
     source: F140
     description: side_folder returns a dot for a record named on its own, and that edge case has no test.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F188
     source: F140
     description: Coverage::folder is an Option, so a caller that forgets it silently loses the remedy bullet rather than failing.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F189
@@ -1756,13 +1756,13 @@ followups:
   - id: F190
     source: F140
     description: side_folder takes a record's parent, so a record whose name is not literally girpr-cache, such as girpr-cache-backup-1 which is_record_path also classifies as a record, gets a remedy that repopulates the folder's girpr-cache rather than the file that failed.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F191
     source: F140
     description: side_folder is public but has no caller outside the crate yet, so the surface is justified only by the same one-spelling argument as side_label.
-    status: pending
+    status: in_progress
     batch: M17
     commits: []
   - id: F192
@@ -2204,6 +2204,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M17 started: F185, F186, F187, F188, F190 and F191
+  `pending` → `in_progress`; `active_batch: M16` → `M17`.
 - 2026-11-14 — review M16 `done`: F179, F180 and F181 all kept, no fix or
   revert commits; follow-ups F254–F257 appended with batch `M36`. F179–F181
   `pending_review` → `completed`.
