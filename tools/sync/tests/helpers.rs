@@ -260,7 +260,7 @@ fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
 ///
 /// The exclusion is a set of keys, so one adoption cannot stand in for another.
 /// The fixture adopts `a.txt` and `b.txt`, and next to them leaves `c.txt` with
-/// two stale alternates (`C.txt`, `c.TXT`) in its lowercase group: adoption only
+/// two stale alternates (`C.txt`, `c.TXT`) in its folded group: adoption only
 /// takes a group with exactly one leftover, so those two are pruned like any
 /// other stale row. Their count is what proves the exclusion is per key rather
 /// than "the adopted path's group is skipped".
@@ -274,7 +274,7 @@ fn insensitive_dry_run_counts_every_adopted_key_as_renamed_not_pruned() {
     {
         let db = open_db(&db_path, true, rw()).unwrap();
         let _ = phased(&dir, &db, &opts(), scan(false, false));
-        // Two stale spellings of a third path, so its lowercase group has no
+        // Two stale spellings of a third path, so its folded group has no
         // single candidate to adopt. Both rows must still be pruned.
         let stale = FileRec {
             kind: "file".into(),

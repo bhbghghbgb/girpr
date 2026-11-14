@@ -193,7 +193,7 @@ fn paths(recs: &[serde_json::Value], event: &str) -> Vec<String> {
 
 /// Case-only pairing, insensitive mode. The disk side does not adopt the record's
 /// alternate-cased row, so `Case.txt` on disk and `case.txt` in the record are two
-/// independent sides of a pair the planner matches by lowercase.
+/// independent sides of a pair the planner matches by the folded key.
 ///
 /// The content differs at the same length and the mtime is restored, so size and
 /// mtime agree and only a digest can decide: the pair is both a `CASE-MISMATCH`

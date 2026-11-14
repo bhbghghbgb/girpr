@@ -362,7 +362,7 @@ pub(crate) fn ensure_link_safe(
     let fixed: HashSet<&str> = plan.fix_dirs.iter().map(String::as_str).collect();
     // A dry run names the link with its pre-rename spelling while `fix_dirs`
     // is keyed by src's casing, so the carve-out has to compare cases too.
-    let fixed_lower: HashSet<String> = if on_disk.is_some() {
+    let fixed_folded: HashSet<String> = if on_disk.is_some() {
         plan.fix_dirs.iter().map(|f| path_key(f)).collect()
     } else {
         HashSet::new()
@@ -387,7 +387,7 @@ pub(crate) fn ensure_link_safe(
             // link above the fixed one would have been returned first and is
             // still refused.
             if fixed.contains(link.as_str())
-                || (!fixed_lower.is_empty() && fixed_lower.contains(&path_key(&link)))
+                || (!fixed_folded.is_empty() && fixed_folded.contains(&path_key(&link)))
             {
                 continue;
             }
@@ -581,8 +581,8 @@ pub(crate) fn ensure_hard_linked_targets_safe(
 /// change, and a refusal must not follow one. It cannot read the plan — that is
 /// built after the rename — so it derives the same mkdir candidates
 /// [`build_plan`](super::build::build_plan) will: src directories the post-rename `dm` will
-/// not hold. In insensitive mode that is a lowercase match, because the rename
-/// pass collapses those pairs; a same-path dst **file** is then a planned
+/// not hold. In insensitive mode that is a match by the folded key, because the
+/// rename pass collapses those pairs; a same-path dst **file** is then a planned
 /// `fix_dirs` entry, not a mkdir, and is allowed.
 ///
 /// Every strict ancestor of a src directory is itself a src directory, so the
@@ -602,14 +602,14 @@ pub(crate) fn ensure_mkdir_targets_free(
     probes: &dyn Probes,
 ) -> Result<()> {
     // The dst view the plan will see after the rename: exact keys in sensitive
-    // mode, lowercase pairs otherwise. This index folds to a *value* rather than
+    // mode, folded pairs otherwise. This index folds to a *value* rather than
     // to a key, so it does not share the key-shaped `util::folded_keys` index.
-    let dst_lower: HashMap<String, &EffRec> = if case_sensitive {
+    let dst_folded: HashMap<String, &EffRec> = if case_sensitive {
         HashMap::new()
     } else {
         dm.iter().map(|(k, v)| (path_key(k), v)).collect()
     };
-    let paired = |rel: &str| dst_after_rename(rel, dm, &dst_lower, case_sensitive);
+    let paired = |rel: &str| dst_after_rename(rel, dm, &dst_folded, case_sensitive);
     // A src directory the plan will fix rather than mkdir, because dst holds a
     // file (or a file link) at the same path after the rename.
     let fixed: HashSet<&str> = sm
@@ -692,13 +692,13 @@ impl PrefixStats {
 fn dst_after_rename<'a>(
     rel: &str,
     dm: &'a HashMap<String, EffRec>,
-    lower: &'a HashMap<String, &'a EffRec>,
+    folded: &'a HashMap<String, &'a EffRec>,
     case_sensitive: bool,
 ) -> Option<&'a EffRec> {
     if case_sensitive {
         dm.get(rel)
     } else {
-        lower.get(&path_key(rel)).copied()
+        folded.get(&path_key(rel)).copied()
     }
 }
 

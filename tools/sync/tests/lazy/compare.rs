@@ -304,7 +304,7 @@ fn a_kind_conflict_needs_no_digest() {
 }
 
 /// **case-only difference, identical content.** In insensitive mode the pair is
-/// matched by lowercase, so it is compared rather than reported as
+/// matched by the folded key, so it is compared rather than reported as
 /// missing+extra — and since its stat agrees, the digest decides, which means
 /// both files are read. This is the case a planner that pairs by exact key gets
 /// wrong: it would plan nothing and the `CASE-MISMATCH` would be the only line.

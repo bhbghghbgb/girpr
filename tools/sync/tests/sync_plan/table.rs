@@ -230,7 +230,7 @@ fn the_fixture_covers_every_apply_phase() {
         );
     }
     // And the row that carries the planner's case flag, since it is the only thing
-    // in this file that depends on `plan_pairs` pairing by lowercase.
+    // in this file that depends on `plan_pairs` pairing by the folded key.
     assert!(
         cases()
             .iter()
