@@ -43,10 +43,11 @@ pub struct SideRequest<'a> {
     pub label: &'a str,
     /// Where a repopulation of this side would run.
     ///
-    /// A record's path is `<folder>/girpr-cache`, so the folder it describes is
-    /// its parent — and that folder is what the remedy repopulates. The planner
-    /// knows what a side *can do*, not where its cache lives, so this is the
-    /// caller's one chance to say that too.
+    /// A record that **is** a folder's own `girpr-cache` lives in that folder,
+    /// and that folder is what the remedy repopulates. A record that is not a
+    /// folder's own cache has none — a repopulation there would rebuild a
+    /// different file. The planner knows what a side *can do*, not where its
+    /// cache lives, so this is the caller's one chance to say that too.
     ///
     /// **Required**: a side with no folder to repopulate says so, in
     /// [`Repopulate::Nothing`], rather than leaving the field out. A caller

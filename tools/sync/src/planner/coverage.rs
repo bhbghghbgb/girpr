@@ -51,10 +51,13 @@ pub struct Coverage {
     pub label: String,
     /// Where a repopulation of this side would run.
     ///
-    /// A record's path is `<folder>/girpr-cache`, so the folder it describes is
-    /// its parent, and that folder is what `girsync update --dir` takes. The
-    /// planner is handed a side's *contents* and not the path of the file they
-    /// came from, so the caller is the one who says which folder this is.
+    /// A record that **is** a folder's own `girpr-cache` lives in that folder,
+    /// and that folder is what `girsync update --dir` takes. A record that is
+    /// not a folder's own cache — a `girpr-cache-backup-*` copy, say — has no
+    /// folder to repopulate: a repopulation there rebuilds the folder's *own*
+    /// cache, which is a different file. The planner is handed a side's
+    /// *contents* and not the path of the file they came from, so the caller is
+    /// the one who says which case this is.
     ///
     /// **Required, in two named cases.** [`Repopulate::Folder`] is the folder a
     /// repopulation would run on and [`Repopulate::Nothing`] is a side that has

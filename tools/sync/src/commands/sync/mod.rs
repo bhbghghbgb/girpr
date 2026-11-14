@@ -292,7 +292,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let dst_side = Side::Folder(dst.clone());
     let src_label = side_label(&src_side);
     let dst_label = side_label(&dst_side);
-    // The folders a repopulation would run on, for the same reason the labels
+    // The repopulation each side would offer, for the same reason the labels
     // are built here: both sides are folders, so neither has a record of its
     // own to repopulate.
     let src_folder = side_folder(&src_side);
