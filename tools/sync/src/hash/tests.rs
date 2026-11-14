@@ -513,7 +513,7 @@ fn a_merge_replaces_a_foreign_entry_only_under_its_own_spelling() {
         "one entry per spelling: the two that were there are replaced where they stand, and the spelling that was not is added beside them"
     );
     assert_eq!(
-        d.foreign_iter().nth(0).map(|(_, digest)| digest),
+        d.foreign_iter().next().map(|(_, digest)| digest),
         Some(&b"\x04\x04\x04\x04"[..]),
         "the entry under `MD5` holds the digest that was merged into it"
     );
