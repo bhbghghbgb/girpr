@@ -454,11 +454,18 @@ reviews:
     head: 0d49c077
     result: F36 kept (fb7fdc23); F37 kept (773d1c53); F38 kept (f398aa2a); F39 kept (779de219); F40 kept (0d49c077); no fix or revert commits; 572 passed, 1 skipped; the reviewer enumerated every direct filesystem call reachable from the guards and found the seam list complete
     followups: [F160, F161, F162, F163, F164, F165]
-  - batch: M13
+  - batch: M29
     status: pending
-    tasks: [F166, F167, F168, F169, F170, F171]
+    tasks: [F228, F229, F230, F231]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M13
+    status: in_progress
+    tasks: [F166, F167, F168, F169, F170, F171]
+    base: 1fe6901c
+    head: 34293501
     result: null
     followups: []
   - batch: M14
@@ -1554,39 +1561,39 @@ followups:
   - id: F166
     source: F34
     description: DigestSet::insert_named rebuilds the whole foreign slice on every insert, including an in-place replacement, and merge does the same.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [29b218f8]
   - id: F167
     source: F41
     description: The adoption arm allocates a Vec of references per exact-case miss just to count the alternates.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [6955810c]
   - id: F168
     source: F41
     description: The phase-A prune still walks the whole key set every scan; only the alternate index became lazy.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [a095f412, 34293501]
   - id: F169
     source: F34
     description: DigestSet::merge and insert_named spell the same-name comparison two ways.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [515bfa49]
   - id: F170
     source: F33
     description: The fold-equivalence case uses eq_ignore_ascii_case as its oracle, so it would follow std rather than catch a std change.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [95a2d302, 4db5ab6a]
   - id: F171
     source: F41
     description: fold_alternates allocates a Vec of Strings per folded group, and groups with several stale spellings are the common shape there.
-    status: in_progress
+    status: pending_review
     batch: M13
-    commits: []
+    commits: [ae982636]
   - id: F172
     source: F33
     description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
@@ -1927,6 +1934,30 @@ followups:
     status: pending
     batch: M28
     commits: []
+  - id: F228
+    source: F168
+    description: The prune still materialises the whole key set, a Vec of Strings with one string per cached row; a streaming key API on CacheDb and CacheWrite would remove that allocation on every scan, and it needs the cache module rather than phase A.
+    status: pending
+    batch: M29
+    commits: []
+  - id: F229
+    source: F166
+    description: DigestSet.foreign is a Vec now, so its capacity can exceed its length after growth and every clone of a row clones that capacity.
+    status: pending
+    batch: M29
+    commits: []
+  - id: F230
+    source: F169
+    description: same_spelling is a one-line wrapper over an equality comparison; it is the single place to change if the arm match rule ever stops being exact.
+    status: pending
+    batch: M29
+    commits: []
+  - id: F231
+    source: F171
+    description: The group second spelling exists so the rule does not depend on the disk own spelling never being in a group, a case a lookup cannot normally reach; if that invariant is ever stated as load-bearing, the second spelling could go.
+    status: pending
+    batch: M29
+    commits: []
 ```
 
 ## Human checklist
@@ -1959,6 +1990,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M13 review checkpoint opened: F166, F167, F168,
+  F169, F170 and F171 `in_progress` → `pending_review`, commits `515bfa49`,
+  `29b218f8`, `95a2d302`, `4db5ab6a`, `6955810c`, `ae982636`, `a095f412`,
+  `af1faa25`, `34293501`; review M13 `pending` → `in_progress`, base
+  `1fe6901c`, head `34293501`. Follow-ups F228–F231 appended with batch `M29`.
 - 2026-11-14 — follow-up batch M13 started: F166, F167, F168, F169, F170 and F171
   `pending` → `in_progress`; `active_batch: M12` → `M13`.
 - 2026-11-14 — review M12 `done`: F160 fixed (80ba72d1), F161–F165 kept; follow-
