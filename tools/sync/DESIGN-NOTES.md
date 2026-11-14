@@ -41,7 +41,10 @@ path, since there is no digest to justify giving it up.
 disagree, `a_digest_that_only_one_side_has_is_a_failure` covers the `Some !=
 None` case a loop over `src`'s keys would skip, and
 `a_failed_copy_names_the_algorithm_in_canonical_order` pins the algorithm a
-failure names — the canonical one, not the request's.
+failure names — the canonical one, not the request's. That case reads the
+error *text*; the error **event** is the other channel a parser can read, and
+`a_failed_verify_names_the_algorithm_in_the_error_event` pins its `algo` field
+to the same canonical algorithm.
 
 ### src → dst, always, for lock ordering
 
