@@ -591,10 +591,10 @@ few of them, the per-algorithm coverage, and the remedy. This is the commonest w
 to hit it and it is worth knowing:
 
 ```
-girsync update src      # cache warm
+girsync update --dir src      # cache warm
 # a file appears in src
-girsync sync src dst    # ...and leaves a stat-only row for it in src's cache
-girsync compare-self src   # exit 3: 1 of 3 undecided paths uncovered
+girsync sync --src src --dst dst    # ...and leaves a stat-only row for it in src's cache
+girsync compare-self --dir src   # exit 3: 1 of 3 undecided paths uncovered
 ```
 
 The `sync` is not at fault. It decided that pair by presence, so it needed no
