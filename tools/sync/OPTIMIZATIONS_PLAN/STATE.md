@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M20
+active_batch: M21
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1900,31 +1900,31 @@ followups:
   - id: F200
     source: F138
     description: src/planner/pairs.rs still has the same src-lowered abbreviation F138 fixed in the other two files.
-    status: pending
+    status: in_progress
     batch: M21
     commits: []
   - id: F201
     source: F138
     description: The lk and lkey locals in diff/mod.rs, commands/sync/rename.rs and planner/pairs.rs still abbreviate lowercase key.
-    status: pending
+    status: in_progress
     batch: M21
     commits: []
   - id: F202
     source: F139
     description: src/effective/phase_a.rs still says the cached keys are indexed by lowercase, which is the ASCII-only fold wording in a file F139 did not list, though the index there is built with path_key.
-    status: pending
+    status: in_progress
     batch: M21
     commits: []
   - id: F203
     source: F141
     description: The design notes three-questions section names the path key, the identity rule and the disk spelling, but the now-named cache reservation is a fourth fold site the section does not mention.
-    status: pending
+    status: in_progress
     batch: M21
     commits: []
   - id: F204
     source: F144
     description: on_disk_name recomputes the on-disk fold for every directory entry, one allocation per entry, and it could be hoisted out of the loop.
-    status: pending
+    status: in_progress
     batch: M21
     commits: []
   - id: F205
@@ -2464,6 +2464,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M21 started: F200, F201, F202, F203 and F204
+  `pending` → `in_progress`; `active_batch: M20` → `M21`.
 - 2026-11-14 — review M20 `done`: F195, F196, F197 and F199 all kept, no fix
   or revert commits; follow-ups F282–F285 appended with batches `M47` and
   `M48`, and F286 recorded as `skipped` as the same item as F278. F195–F199
