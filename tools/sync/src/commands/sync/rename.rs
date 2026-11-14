@@ -678,15 +678,28 @@ mod tests {
     /// The expectation folds the key the way the pass does — with `path_key` —
     /// rather than with a Unicode lowercase of its own, so the case states the
     /// rule it is about.
+    ///
+    /// **The names mix case on purpose.** Sorted by the exact key, these three
+    /// src names come out `Mid.txt`, `Zeta.txt`, `alpha.txt`; sorted by the
+    /// folded key they come out `alpha.txt`, `mid.txt`, `zeta.txt`. A fixture
+    /// whose names all started with the same case would have one order under
+    /// both rules, and the case would pass whichever of the two the pass used.
     #[test]
     fn the_rename_order_is_by_the_folded_key() {
-        let s = side(&["Zeta.txt", "Alpha.txt", "Mid.txt"]);
-        let d = side(&["zeta.txt", "alpha.txt", "mid.txt"]);
+        let s = side(&["Zeta.txt", "alpha.txt", "Mid.txt"]);
+        let d = side(&["zeta.txt", "Alpha.txt", "mid.txt"]);
         let ordered: Vec<String> = case_renames(&s, &d)
             .into_iter()
             .map(|(_, s)| path_key(s))
             .collect();
         assert_eq!(ordered, vec!["alpha.txt", "mid.txt", "zeta.txt"]);
+
+        // The exact order, which is a different order: a pass that sorted on
+        // the exact key would have produced this one, and the assertion above
+        // would not have held.
+        let mut exact = vec!["Zeta.txt", "alpha.txt", "Mid.txt"];
+        exact.sort();
+        assert_eq!(exact, vec!["Mid.txt", "Zeta.txt", "alpha.txt"]);
     }
 
     /// A dry run must re-key the dst map to src's casing, not just report that it
