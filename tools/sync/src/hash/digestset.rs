@@ -2,6 +2,19 @@
 
 use super::algo::HashAlg;
 
+/// Whether two names are the same name.
+///
+/// The foreign arm matches a name **exactly** — the spelling it was stored
+/// under and no other — so this is byte equality and nothing else.
+///
+/// One comparison for both writers, so [`DigestSet::insert_named`] and
+/// [`DigestSet::merge`] cannot drift on what "the same name" means: the arm
+/// holds one entry per spelling, and a repeat of a spelling replaces that
+/// entry rather than adding a second one beside it.
+fn same_spelling(a: &str, b: &str) -> bool {
+    a == b
+}
+
 /// The digests one cache row carries, as inline slots rather than a map.
 ///
 /// ## Not `Digests`
@@ -101,7 +114,7 @@ impl DigestSet {
         // An unknown name is exact, and only ever the spelling it was given.
         self.foreign
             .iter()
-            .find(|(n, _)| &**n == name)
+            .find(|(n, _)| same_spelling(&**n, name))
             .map(|(_, d)| d.as_slice())
     }
 
@@ -174,7 +187,7 @@ impl DigestSet {
         // rather than "find a slot and poke at it".
         let mut replaced = false;
         for (n, d) in entries.iter_mut() {
-            if &**n == name {
+            if same_spelling(&**n, name) {
                 *d = digest.to_vec();
                 replaced = true;
                 break;
@@ -210,7 +223,7 @@ impl DigestSet {
         for (name, digest) in &other.foreign {
             let mut replaced = false;
             for (n, d) in entries.iter_mut() {
-                if n == name {
+                if same_spelling(&**n, name) {
                     *d = digest.clone();
                     replaced = true;
                     break;
