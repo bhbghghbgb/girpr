@@ -403,6 +403,40 @@ mod tests {
         }
     }
 
+    /// **The cache's own name, and not the prefix the record rule reserves.**
+    ///
+    /// A record is anything named `girpr-cache*`, but only the exact name is a
+    /// folder's cache — the one `girsync update --dir` rebuilds. A backup or a
+    /// snapshot is a copy of one, and a repopulation would not rebuild it.
+    ///
+    /// The spelling rule is the record rule's: case is folded on Windows only,
+    /// where the filesystem cannot tell the two spellings apart.
+    #[test]
+    fn the_cache_name_is_the_exact_name_not_the_prefix() {
+        assert!(is_cache_name(Path::new("x/girpr-cache")));
+        assert!(is_cache_name(Path::new("girpr-cache")));
+        for path in [
+            "x/girpr-cache-backup-1",
+            "x/girpr-cache-old-2",
+            "x/girpr-caches",
+            "x/girpr-cachex",
+            "x",
+        ] {
+            assert!(!is_cache_name(Path::new(path)), "`{path}` is not a cache");
+        }
+
+        #[cfg(windows)]
+        assert!(
+            is_cache_name(Path::new("x/GIRPR-CACHE")),
+            "on Windows that is the same file"
+        );
+        #[cfg(not(windows))]
+        assert!(
+            !is_cache_name(Path::new("x/GIRPR-CACHE")),
+            "on POSIX that is a distinct entry"
+        );
+    }
+
     /// On Windows the same tree can be spelled with different case, so an
     /// identity check that compared bytes would miss the collision.
     #[cfg(windows)]
