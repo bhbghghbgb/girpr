@@ -40,6 +40,10 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 
 /// The ASCII-only case comparison: ASCII case folded, every other byte exact.
 ///
+/// **Windows only.** The comparison belongs where the filesystem folds case and
+/// nowhere else: on POSIX the two spellings are distinct entries, so there is
+/// nothing to compare them with.
+///
 /// The **path key's** rule — the one [`path_key`] folds with, and the one every
 /// relative-path index uses — stated as a comparison for the sites that compare
 /// two spellings rather than fold one of them into a key.
@@ -65,14 +69,15 @@ fn ascii_case_eq(a: &str, b: &str) -> bool {
 /// spellings are distinct entries, and an upper-case one is ordinary content
 /// that must not be swept up by the reservation.
 ///
-/// **The fold is the path key's, not the identity rule's.** `ascii_case_eq`
-/// folds ASCII case and compares every other byte exactly — the rule
-/// [`path_key`] states — while the identity rule ([`component_eq`]) keeps a
-/// Unicode fallback, because it answers a different question: do two spellings
-/// open the same place on disk. The reservation asks about the tool's own
-/// names, and the prefix it matches is ASCII, so the ASCII-only rule is the one
-/// that states it. The identity rule's fold would answer a question nobody is
-/// asking here.
+/// **The fold is the path key's, not the identity rule's.** On Windows the
+/// comparison is `ascii_case_eq` — a helper only that platform compiles, since
+/// on POSIX the reservation is an exact prefix match — and it folds ASCII case
+/// and compares every other byte exactly: the rule [`path_key`] states. The
+/// identity rule ([`component_eq`]) keeps a Unicode fallback, because it
+/// answers a different question: do two spellings open the same place on
+/// disk. The reservation asks about the tool's own names, and the prefix it
+/// matches is ASCII, so the ASCII-only rule is the one that states it. The
+/// identity rule's fold would answer a question nobody is asking here.
 fn has_cache_prefix(component: &str) -> bool {
     #[cfg(windows)]
     {
