@@ -115,7 +115,17 @@ fn ascii_case_eq(a: &str, b: &str) -> bool {
     a.len() == b.len()
         && a.bytes()
             .zip(b.bytes())
-            .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+            .all(|(x, y)| ascii_lower(x) == ascii_lower(y))
+}
+
+/// One byte, folded to lower case if it is an ASCII upper-case letter.
+///
+/// The fold is written out rather than borrowed. `to_ascii_lowercase` would
+/// do, and clippy would go further and suggest the comparison the oracle
+/// must not use: an ASCII upper-case letter is 32 above its lower-case
+/// counterpart, and every other byte is itself.
+fn ascii_lower(b: u8) -> u8 {
+    if b.is_ascii_uppercase() { b + 32 } else { b }
 }
 
 /// **The resolver folds exactly as the ASCII-case comparison does.**
