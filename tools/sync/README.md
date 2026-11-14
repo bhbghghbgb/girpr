@@ -34,6 +34,7 @@ file sits outside the module tree.
 | `commands/sync/mod.rs` | the mirror run; its phases are named in the module doc, which says what each one's order protects |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
 | `commands/sync/plan/` | `mod.rs` (the facade), `build.rs` (`Plan` + `build_plan`, pure), `link.rs` (link storage and the on-disk spellings), `safety.rs` (the plan-time guards), `records.rs` (the summary and the dry-run records); `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
+| `src/commands/sync/plan/tests.rs` | the plan module's own cases: the plan-time guards, the link storage they spare, and the on-disk spellings they name |
 | `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
 | `cache/mod.rs` | redb schema (`Meta`, `FileRec`), open/rebuild, backup/snapshot helpers — the facade and the table definitions |
 | `cache/schema.rs` | `Meta` + `FileRec`: what a row *is*, with no encoding |
