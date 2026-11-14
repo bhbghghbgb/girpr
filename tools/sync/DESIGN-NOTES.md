@@ -177,7 +177,7 @@ makes the *request* cheap to hold; inline names are what make the *cache* surviv
 **Enforced by:** `codec_preserves_unknown_algorithms`; the `blake3` cases in
 `tests/convert.rs` — a file that only runs under the `convert` feature —
 which go through a conversion and a whole scan rather than a round trip;
-`merge_row_drops_a_foreign_digest_when_the_stat_changed`, which is the
+`merge_row_drops_a_foreign_digest_when_the_stat_changed`, which is
 one place the rule has to be visible to `merge`; and
 `a_digest_set_is_eighty_bytes_and_allocates_nothing`, which fails if a later
 edit puts a map back — a map passes every other test here and costs five
