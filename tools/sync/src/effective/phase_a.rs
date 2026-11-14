@@ -832,6 +832,45 @@ mod tests {
         );
     }
 
+    /// **A run that only adds a file still pays for the index.**
+    ///
+    /// What builds the index is a path that misses exactly, and a path the
+    /// cache has never held misses exactly too. So the run that adds one
+    /// file to a tree whose other files are all cached builds the index, even
+    /// though no spelling differs anywhere: the miss was about the path
+    /// being new, not about its case.
+    ///
+    /// This is the shape the index's own note has to leave out. A scan whose
+    /// cached keys all match the spelling the disk uses still pays for the
+    /// index when it adds a file, so "the cached keys match" is not the
+    /// condition that saves the work.
+    #[test]
+    fn a_run_that_only_adds_a_file_still_builds_the_index() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index_new");
+        tree(&root, &[("a.txt", b"a")]);
+        let db = CacheDb::open_temp(false).unwrap();
+        let common = insensitive(opts(&[], &[]));
+
+        // The first scan caches the file; nothing was cached, so the path
+        // missed and the index was built.
+        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+
+        // The second scan finds it exactly and builds nothing.
+        let before = db.entries_read_count();
+        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(db.entries_read_count() - before, 0, "no miss, no index");
+
+        // A new file misses exactly as well, and the miss builds the index.
+        tree(&root, &[("b.txt", b"b")]);
+        let before = db.entries_read_count();
+        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            db.entries_read_count() - before,
+            1,
+            "the new path missed exactly, so the index was built: the miss was not about the case"
+        );
+    }
+
     /// **A stale alternate is still adopted when the index is built on
     /// demand.**
     ///
