@@ -476,25 +476,25 @@ reviews:
     followups: [F189, F190, F191, F192]
   - batch: M19
     status: pending
-    tasks: [F193, F194]
+    tasks: [F193, F194, F198]
     base: null
     head: null
     result: null
     followups: []
   - batch: M20
     status: pending
-    tasks: [F195, F196, F197]
+    tasks: [F195, F196, F197, F199]
     base: null
     head: null
     result: null
     followups: []
   - batch: M6
-    status: in_progress
+    status: done
     tasks: [F121, F122, F125, F126, F127, F129]
     base: e68043dd
     head: 5b6fdf3b
-    result: null
-    followups: []
+    result: F121 kept (50e81f06); F122 kept (2115d14e, 5a5cb7a2); F125 kept (c4f93a7f); F126 kept (6c16cf00); F127 kept (20b42517); F129 kept (a5b3b2c1, 9c327065); no fix or revert commits; 584 passed, 1 skipped, and the whole workspace at 2069 passed, 13 skipped; four mutation probes confirmed the new cases discriminate, and a mis-set gate was probed and failed that one copy loudly
+    followups: [F198, F199]
   - batch: M7
     status: pending
     tasks: [F138, F139, F141, F144, F133, F134]
@@ -1220,13 +1220,13 @@ followups:
   - id: F121
     source: F20
     description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [50e81f06]
   - id: F122
     source: F19
     description: The walk's other counters, scan start and scan progress, and the effective-map counters are still unpinned; only scan done is now.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [2115d14e, 5a5cb7a2]
   - id: F123
@@ -1245,19 +1245,19 @@ followups:
   - id: F125
     source: F19
     description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [c4f93a7f]
   - id: F126
     source: F20
     description: The discrimination still rests on the removal tree outlasting a worker wake-up rather than on an explicit barrier, so a case that gated one copy on the other failure would remove the last ordering dependence.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [6c16cf00]
   - id: F127
     source: F20
     description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [20b42517]
   - id: F128
@@ -1270,7 +1270,7 @@ followups:
   - id: F129
     source: F44
     description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
-    status: pending_review
+    status: completed
     batch: M6
     commits: [a5b3b2c1, 9c327065]
   - id: F130
@@ -1689,6 +1689,18 @@ followups:
     status: pending
     batch: M20
     commits: []
+  - id: F198
+    source: F129
+    description: The design notes Enforced by list for the verify names the canonical-order case but not the new error-event case, so the second channel's case is unlisted, the same gap F124 closed for the first one.
+    status: pending
+    batch: M19
+    commits: []
+  - id: F199
+    source: F122
+    description: The two phases' progress totals are asserted as the set of two values, so the case does not say which phase reports the walk's count and which the map's.
+    status: pending
+    batch: M20
+    commits: []
 ```
 
 ## Human checklist
@@ -1721,6 +1733,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M6 `done`: F121, F122, F125, F126, F127 and F129 all kept,
+  no fix or revert commits; follow-ups F198 and F199 appended to M19 and M20.
+  F121, F122, F125, F126, F127 and F129 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M6 review checkpoint opened: F121, F122, F125,
   F126, F127 and F129 `in_progress` → `pending_review`, commits `50e81f06`,
   `a5b3b2c1`, `2115d14e`, `c4f93a7f`, `6c16cf00`, `20b42517`, `5a5cb7a2`,
