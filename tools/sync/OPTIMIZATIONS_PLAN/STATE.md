@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M14
+active_batch: M15
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1636,25 +1636,25 @@ followups:
   - id: F175
     source: F116
     description: Nothing pins the converter help output, so a doc comment on Args could come back and print the source note again; the existing help case only asserts the flags are named.
-    status: pending
+    status: in_progress
     batch: M15
     commits: []
   - id: F176
     source: F111
     description: The MSRV gate still does not cover a combination whose parts each build alone, so a member whose features all build alone but whose combination needs a newer Rust is not checked.
-    status: pending
+    status: in_progress
     batch: M15
     commits: []
   - id: F177
     source: F116
     description: The converter refusal of --version, which exits 3, now lives only in the module doc; the README converter section does not mention it.
-    status: pending
+    status: in_progress
     batch: M15
     commits: []
   - id: F178
     source: F130
     description: The README still quotes verify hash mismatch, the log event message, near the failure-message shape verify hash(<algo>) <path>, the error text; two different strings, but a reader could confuse them.
-    status: pending
+    status: in_progress
     batch: M15
     commits: []
   - id: F179
@@ -1685,7 +1685,7 @@ followups:
   - id: F183
     source: F116
     description: The help case only asserts that --force, --output and the positional order appear, so nothing in the suite would fail if a doc comment were put back on Args and the note started printing in --help again.
-    status: pending
+    status: in_progress
     batch: M15
     commits: []
   - id: F184
@@ -2082,6 +2082,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M15 started: F175, F176, F177, F178 and F183
+  `pending` → `in_progress`; `active_batch: M14` → `M15`.
 - 2026-11-14 — review M14 `done`: F172 kept (0f9e7d33, a747499a), F173 fixed
   (6dd4294d), F174 kept (3a65ca7f, 41656cb5, 2d6014e6); follow-ups F240–F242
   appended with batch `M32`. F172–F174 `pending_review` → `completed`.
