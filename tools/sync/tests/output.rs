@@ -83,6 +83,18 @@ fn compare_args<'a>(src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Vec<Stri
     args
 }
 
+/// The log events that carry this message, in the order they were written.
+///
+/// The log file is the run's own narration, one JSON object per event, and the
+/// `message` field is what the console renders — so it is what a reader looks
+/// at. The payload is beside it, in the same object, under named fields.
+fn events_with<'a>(logged: &'a [Value], message: &str) -> Vec<&'a Value> {
+    logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == message)
+        .collect()
+}
+
 #[test]
 fn compare_json_is_one_object_per_line_with_a_single_summary() {
     let t = temp_root("out_cmp");
@@ -801,6 +813,179 @@ fn the_scan_counts_the_entries_the_walk_saw() {
     assert_eq!(
         recs[0]["files"], 2,
         "the run's own count leaves the excluded file out"
+    );
+}
+
+/// **The walk counts what it saw, and the map counts what it kept.**
+///
+/// The walk's counters and the effective map's counters answer different
+/// questions, and a run reports both: the walk says how many entries it
+/// pushed, and the map says how many paths survived the filter. A run with an
+/// `--exclude` is where the two part company, so it is the fixture that tells
+/// them apart.
+///
+/// The walk's own **heartbeat** is here too, and it is the walk's count and
+/// not the map's: it reports the entries it has pushed, every two thousand, so
+/// the tree has to be big enough to reach it. The excluded file is in that
+/// count — the walk does not know what the run excludes.
+///
+/// The map's counters are in the "effective" events, and there are **two** of
+/// them: one per phase, and they are told apart by the field only the second
+/// carries. The first phase reads no bytes at all, so it hashes nothing; the
+/// second one hashes what the map held and says how many were cache hits.
+#[test]
+fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
+    let t = temp_root("out_walk_progress");
+    let dir = t.subdir("tree");
+    // Two thousand entries, so the walk's heartbeat fires exactly once: it
+    // reports every two thousand entries it has pushed.
+    for i in 0..1999 {
+        wfile(&dir, &format!("f{i:04}.txt"), b"x");
+    }
+    // The last of them is the one the run excludes.
+    wfile(&dir, "skip.log", b"excluded");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--exclude",
+            "*.log",
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    // The walk says which root it is walking and how deep it is going, before
+    // it walks anything.
+    let starts = events_with(&logged, "scan start");
+    assert_eq!(
+        starts.len(),
+        1,
+        "one walk, one scan-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        starts[0]["fields"]["root"],
+        dir.display().to_string(),
+        "the walk names the root it is walking"
+    );
+    assert_eq!(
+        starts[0]["fields"]["max_depth"], 10,
+        "and the depth cap it is walking to"
+    );
+
+    // The walk's heartbeat. It carries the entries it has pushed, which is
+    // what tells it apart from the phases' own progress events — those count
+    // the work they have done, not the tree.
+    let heartbeats: Vec<&Value> = logged
+        .iter()
+        .filter(|e| {
+            e["fields"]["message"] == "scan progress" && e["fields"].get("entries").is_some()
+        })
+        .collect();
+    assert_eq!(
+        heartbeats.len(),
+        1,
+        "one heartbeat for two thousand entries: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        heartbeats[0]["fields"]["entries"], 2000,
+        "the heartbeat counts the entries the walk pushed, the excluded file \
+         included"
+    );
+
+    // The phases report their progress under the same name, and they count
+    // the work they have done rather than the tree: the first phase's total
+    // is every entry the walk saw, and the second's is only what the map
+    // kept — the second phase never touches a path the filter hid.
+    let phase_progress: Vec<&Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "scan progress" && e["fields"].get("done").is_some())
+        .collect();
+    assert!(
+        !phase_progress.is_empty(),
+        "the phases report their progress: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    let totals: std::collections::BTreeSet<u64> = phase_progress
+        .iter()
+        .filter_map(|e| e["fields"]["total"].as_u64())
+        .collect();
+    assert_eq!(
+        totals,
+        [1999u64, 2000].into_iter().collect(),
+        "the first phase counts every entry the walk saw and the second only \
+         what the map kept"
+    );
+
+    // The map starts from the walk's count: the filter has not been applied
+    // yet at this point, so the excluded file is in it.
+    let effective = events_with(&logged, "effective start");
+    assert_eq!(
+        effective.len(),
+        1,
+        "one map, one effective-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        effective[0]["fields"]["live"], 2000,
+        "the map starts from every entry the walk saw"
+    );
+
+    // The map's own counts, one event per phase. The second phase is the one
+    // that says how many rows it found stat-only, so the two are told apart by
+    // that field rather than by the order they happen to be written in.
+    let done = events_with(&logged, "effective done");
+    assert_eq!(
+        done.len(),
+        2,
+        "two phases, two effective-done events: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    let phase_a = done
+        .iter()
+        .find(|e| e["fields"].get("stat_only").is_none())
+        .expect("the phase that reads no bytes reports without the stat-only count");
+    let phase_c = done
+        .iter()
+        .find(|e| e["fields"].get("stat_only").is_some())
+        .expect("the phase that hashes reports with the stat-only count");
+    assert_eq!(
+        phase_a["fields"]["files"], 1999,
+        "the map leaves the excluded file out"
+    );
+    assert_eq!(phase_a["fields"]["dirs"], 0);
+    assert_eq!(
+        phase_a["fields"]["hashed"], 0,
+        "the first phase reads no bytes, so it hashes nothing"
+    );
+    assert_eq!(phase_a["fields"]["cache_hit"], 0);
+    assert_eq!(phase_a["fields"]["pruned"], 0);
+    assert_eq!(phase_c["fields"]["files"], 1999, "the map is the same map");
+    assert_eq!(phase_c["fields"]["dirs"], 0);
+    assert_eq!(
+        phase_c["fields"]["hashed"], 1999,
+        "the second phase hashed what the map held"
+    );
+    assert_eq!(phase_c["fields"]["cache_hit"], 0, "and the cache was cold");
+    assert_eq!(
+        phase_c["fields"]["pruned"], 0,
+        "and there was nothing to prune"
     );
 }
 
