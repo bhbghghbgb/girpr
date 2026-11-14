@@ -827,10 +827,11 @@ mod tests {
     /// kept the message while dropping or renaming the field would leave the
     /// message's case passing with the other channel broken.
     ///
-    /// The event is named for what happened (`verify hash mismatch`) and
-    /// carries the algorithm as a field. The algorithm is the **canonical**
-    /// one, the same the message names: the set carries no order of its own, so
-    /// the first disagreement in canonical order is the one reported.
+    /// The event's **message** says what happened (`verify hash mismatch`) and
+    /// it carries the algorithm as a field beside it. The algorithm is the
+    /// **canonical** one, the same the message names: the set carries no order
+    /// of its own, so the first disagreement in canonical order is the one
+    /// reported.
     #[test]
     fn a_failed_verify_names_the_algorithm_in_the_error_event() {
         let path = Path::new("dst/file.bin");
