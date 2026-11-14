@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M6
+active_batch: M7
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1327,13 +1327,13 @@ followups:
   - id: F138
     source: F133
     description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
-    status: pending
+    status: in_progress
     batch: M7
     commits: []
   - id: F139
     source: F133
     description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
-    status: pending
+    status: in_progress
     batch: M7
     commits: []
   - id: F140
@@ -1345,7 +1345,7 @@ followups:
   - id: F141
     source: F134
     description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
-    status: pending
+    status: in_progress
     batch: M7
     commits: []
   - id: F142
@@ -1365,7 +1365,7 @@ followups:
   - id: F144
     source: F134
     description: commands/sync/plan/link.rs:219 still folds the on-disk lookup with an inline to_string_lossy().to_lowercase(), so after the identity fold was named there is one named Unicode fold and one anonymous Unicode fold that answer different questions, the on-disk rule being the third rule the design notes describe.
-    status: pending
+    status: in_progress
     batch: M7
     commits: []
   - id: F145
@@ -1733,6 +1733,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M7 started: F138, F139, F141 and F144 `pending` →
+  `in_progress`; `active_batch: M6` → `M7`.
 - 2026-11-14 — review M6 `done`: F121, F122, F125, F126, F127 and F129 all kept,
   no fix or revert commits; follow-ups F198 and F199 appended to M19 and M20.
   F121, F122, F125, F126, F127 and F129 `pending_review` → `completed`.
