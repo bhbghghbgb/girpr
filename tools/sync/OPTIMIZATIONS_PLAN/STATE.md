@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M15
+active_batch: M16
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1674,19 +1674,19 @@ followups:
   - id: F179
     source: F111
     description: The MSRV fallback cannot tell this feature needs another from this feature is broken alone, so for a member with two or more optional features whose group builds, a genuinely broken lone feature is reported as covered by the group.
-    status: pending
+    status: in_progress
     batch: M16
     commits: []
   - id: F180
     source: F111
     description: The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there.
-    status: pending
+    status: in_progress
     batch: M16
     commits: []
   - id: F181
     source: F111
     description: The MSRV script description calls the group the only one that builds such a member and the root README says the group's features enabled; both would be more accurate as every optional feature of the member enabled at once.
-    status: pending
+    status: in_progress
     batch: M16
     commits: []
   - id: F182
@@ -2147,6 +2147,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M16 started: F179, F180 and F181 `pending` →
+  `in_progress`; `active_batch: M15` → `M16`.
 - 2026-11-14 — review M15 `done`: F175 kept (b1610c1e), F176 fixed (e86a40aa),
   F177 kept (493fce5b), F178 kept (b0081392); follow-ups F247–F249 appended
   with batch `M34` and F250 recorded as `skipped` as the same item as F243.
