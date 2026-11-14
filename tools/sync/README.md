@@ -492,9 +492,10 @@ under the spelling the disk uses never reads the keys for it at all. The
 prune that follows asks the same question of the keys — "which rows exist?" —
 and gets `load_keys`, which walks the table without decoding a single
 `FileRec`. In the default insensitive mode that is a full pass over the
-table's keys in one phase, and the alternate-case index is a second one for a
-scan that misses a path exactly, so the distinction is the difference between
-rebuilding a hash map of rows per file and not.
+table's keys in one phase, and the scan makes that pass **once**: the index
+keeps the keys it read, and the prune works from the same set. The
+distinction the two questions are worth telling apart for is the difference
+between rebuilding a hash map of rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
 rather than copied out of it. It exists so the prune can ask "is this row still
