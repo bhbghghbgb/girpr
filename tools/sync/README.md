@@ -1574,15 +1574,56 @@ directory, an environment variable — can reach the next one.
 **Doctests are not run**: nextest has no doctest support at all. This crate has
 none, so nothing is lost.
 
-The suite has one test-only switch of its own: **`GIRSYNC_TEST_CACHE=memory`**
-makes a folder's cache open against redb's shared in-memory backend instead of
-the `girpr-cache` file, so a case that asserts a verdict rather than the cache
-file pays no 1 MB create + fsync per command. It is resolved **once, at command
-start**, and the run's options carry the answer from there — so a subprocess
-suite sets it on the child process and the child uses it for every cache it
-opens, while a caller that builds the options itself gets exactly what it
-asked for. Any value other than exactly `memory` means the real file, which is
-what production uses.
+The suite has a handful of test-only switches of its own, and **every one of
+them is default-off**: an unset variable means production behaviour, and a case
+opts in by naming it.
+
+| switch | what it does |
+| --- | --- |
+| `GIRSYNC_TEST_CACHE=memory` | a folder's cache opens against redb's shared in-memory backend instead of the `girpr-cache` file, so a case that asserts a verdict rather than the cache file pays no 1 MB create + fsync per command |
+| `GIRSYNC_TEST_FAIL_COPY=<rel>` | the copy of `<rel>` fails before it opens its destination, so nothing is written |
+| `GIRSYNC_TEST_FAIL_FLUSH=<rel>` | the flush after that copy's write fails, so the copy fails at the flush rather than at the write |
+| `GIRSYNC_TEST_NO_FSYNC=1` | the per-file `sync_all` after a copy is skipped — the runner sets it for the whole suite |
+| `GIRSYNC_TEST_FAIL_RENAME=<rel>` | the case-fixing rename of `<rel>` fails before the temporary is claimed |
+| `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the placeholder exists |
+| `GIRSYNC_TEST_FAIL_RENAME_STEP2=<rel>` | the same rename fails after step 1, so the entry is in the temporary |
+| `GIRSYNC_TEST_GATE_COPY=<wait>:<on>` | the copy of `<wait>` does not begin until the copy of `<on>` has **failed** |
+| `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the default batch of 50 |
+| `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the default 256 MiB |
+| `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the default 5 s |
+| `GIRSYNC_TEST_DURABILITY=none` | a cache write transaction skips its per-commit fsync — the runner sets it for the whole suite |
+
+`<rel>` is the path **inside the mirror**: `/`-separated, relative to the root,
+never absolute. The copy and flush hooks name the path the plan copies — with
+src's casing — and the rename hooks name the **dst** path as it is on disk
+before the rename, since that is the path the pass moves.
+
+**The gate's value is split on the first colon**, which is unambiguous for a
+relative path: a colon is the drive separator's character and is illegal in a
+name, so a relative path cannot hold one. The two halves are therefore two
+paths and nothing else.
+
+Each switch is read where it belongs, and the answer cannot change under a
+run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the
+run's options carry the answer from there — so a subprocess suite sets it on
+the child process and the child uses it for every cache it opens, while a
+caller that builds the options itself gets exactly what it asked for. The
+failure and gate hooks are read once per process, the commit limits when a
+cache write handle is opened, and the durability once per transaction.
+
+A value that is not the one named means the production behaviour: the real
+cache file, a durable commit, the default commit thresholds, and no injected
+failure. The fsync switch is the one that takes any unambiguous truthy value
+— `1`, `true`, `yes` or `on` — and every other value is an exact match. A
+commit limit that cannot be parsed is the one exception: it is reported in the
+log and ignored, so a typo is visible rather than silent.
+
+The runner sets two of them for every test process — `GIRSYNC_TEST_DURABILITY=none`
+and `GIRSYNC_TEST_NO_FSYNC=1` — and it does it in `.config/nextest-test-env`,
+which the workspace's nextest setup copies into the environment of every test
+process. That is why a case that wants the **flush** hook has to turn the
+fsync switch back off (`GIRSYNC_TEST_NO_FSYNC=0`): the flush only happens when
+the switch is off.
 
 ### Benchmarks
 
