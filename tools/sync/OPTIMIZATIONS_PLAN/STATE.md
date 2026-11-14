@@ -482,13 +482,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M14
-    status: in_progress
-    tasks: [F172, F173, F174]
-    base: 78244080
-    head: 2d6014e6
+  - batch: M32
+    status: pending
+    tasks: [F240, F241, F242]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M14
+    status: done
+    tasks: [F172, F173, F174]
+    base: 78244080
+    head: 6dd4294d
+    result: F172 kept (0f9e7d33, a747499a); F173 fixed (6dd4294d drops the claim that the merge rule has one place, which the new merge case invalidated); F174 kept (3a65ca7f, 41656cb5, 2d6014e6); 588 passed without the feature and 602 with it, 1 skipped; the const pin was verified to break a plain cargo build
+    followups: [F240, F241, F242]
   - batch: M3
     status: done
     tasks: [F33, F34, F35, F41]
@@ -1611,19 +1618,19 @@ followups:
   - id: F172
     source: F33
     description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
-    status: pending_review
+    status: completed
     batch: M14
     commits: [0f9e7d33, a747499a]
   - id: F173
     source: F34
     description: DigestSet::merge applies the same exact-name replacement rule as insert_named, but no case holds a row with two spellings of one algorithm across a merge, so the rule is pinned on the insert path only.
-    status: pending_review
+    status: completed
     batch: M14
-    commits: [0fe48358]
+    commits: [0fe48358, 2d6014e6, 6dd4294d]
   - id: F174
     source: F41
     description: The comment above the index in phase_a.rs still phrases the saving as a scan whose cached keys all match the spelling the disk uses never asking for an alternate, leaving out the run that only adds a file and still pays for the index.
-    status: pending_review
+    status: completed
     batch: M14
     commits: [3a65ca7f, 41656cb5, 2d6014e6]
   - id: F175
@@ -2025,6 +2032,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F230, already scheduled in M29
+  - id: F240
+    source: F172
+    description: The const block answer list is a hand-written subset of HashAlg::ALL, so a third algorithm would be covered by the runtime resolver case but silently not by the const one.
+    status: pending
+    batch: M32
+    commits: []
+  - id: F241
+    source: F174
+    description: The index note that a run which only adds a file pays for the index holds only in insensitive mode, since in sensitive mode there is no alternate to look for and the index is never built, and the note does not say so.
+    status: pending
+    batch: M32
+    commits: []
+  - id: F242
+    source: F174
+    description: The new index case pins the index build through the entries-table read counter, so a prune that ever moved to the counting handle would change the asserted numbers for a reason unrelated to the index.
+    status: pending
+    batch: M32
+    commits: []
 ```
 
 ## Human checklist
@@ -2057,6 +2082,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M14 `done`: F172 kept (0f9e7d33, a747499a), F173 fixed
+  (6dd4294d), F174 kept (3a65ca7f, 41656cb5, 2d6014e6); follow-ups F240–F242
+  appended with batch `M32`. F172–F174 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M14 review checkpoint opened: F172, F173 and F174
   `in_progress` → `pending_review`, commits `0f9e7d33`, `a747499a`,
   `0fe48358`, `3a65ca7f`, `41656cb5`, `2d6014e6`; review M14 `pending` →
