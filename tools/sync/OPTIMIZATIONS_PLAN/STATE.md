@@ -455,18 +455,25 @@ reviews:
     followups: [F179, F180, F181, F183]
   - batch: M17
     status: pending
-    tasks: [F185, F186, F187, F188]
+    tasks: [F185, F186, F187, F188, F190, F191]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M18
+    status: pending
+    tasks: [F189, F192]
     base: null
     head: null
     result: null
     followups: []
   - batch: M5
-    status: in_progress
+    status: done
     tasks: [F117, F118, F120, F140, F145, F146]
     base: 51806c37
     head: b08451c7
-    result: null
-    followups: []
+    result: F117 kept (e30e6c6f); F118 kept (13304c2f); F120 kept (1409bbf6); F140 kept (4c285d30); F145 kept (0f3609a7); F146 kept (b08451c7); no fix or revert commits; 578 passed without the feature and 592 with it, 1 skipped; the remedy was checked end to end by running it, and the renamed fixture was mutation-checked
+    followups: [F189, F190, F191, F192]
   - batch: M6
     status: pending
     tasks: [F121, F122, F125, F126, F127, F129]
@@ -1174,13 +1181,13 @@ followups:
   - id: F117
     source: F51
     description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [e30e6c6f]
   - id: F118
     source: F51
     description: The recorded reasoning that a sweep could not tell a live temporary from a dead one does not address why the process id in the temporary's name is not used to test liveness, given pid reuse and cross-host containers.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [13304c2f]
   - id: F119
@@ -1193,7 +1200,7 @@ followups:
   - id: F120
     source: F64
     description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [1409bbf6]
   - id: F121
@@ -1318,7 +1325,7 @@ followups:
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [4c285d30]
   - id: F141
@@ -1350,13 +1357,13 @@ followups:
   - id: F145
     source: F132
     description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [0f3609a7]
   - id: F146
     source: F133
     description: The rename-order test fixture cannot distinguish sorted by the folded key from sorted by the exact key, since all three src names start with an uppercase letter and both orders are the same; a fixture mixing cases would make the test pin the folded order it claims to be about.
-    status: pending_review
+    status: completed
     batch: M5
     commits: [b08451c7]
   - id: F147
@@ -1614,6 +1621,30 @@ followups:
     status: pending
     batch: M17
     commits: []
+  - id: F189
+    source: F140
+    description: The README example block spells three commands the CLI rejects, girsync update src, girsync sync src dst and girsync compare-self src, while the prose directly beneath spells the same remedy correctly.
+    status: pending
+    batch: M18
+    commits: []
+  - id: F190
+    source: F140
+    description: side_folder takes a record's parent, so a record whose name is not literally girpr-cache, such as girpr-cache-backup-1 which is_record_path also classifies as a record, gets a remedy that repopulates the folder's girpr-cache rather than the file that failed.
+    status: pending
+    batch: M17
+    commits: []
+  - id: F191
+    source: F140
+    description: side_folder is public but has no caller outside the crate yet, so the surface is justified only by the same one-spelling argument as side_label.
+    status: pending
+    batch: M17
+    commits: []
+  - id: F192
+    source: F117
+    description: The design notes and the README name the conversion temporary only as girpr-cache-convert-<pid>-<ts>.redb, omitting the underscore-n retry spellings claim_temp_sibling can also produce.
+    status: pending
+    batch: M18
+    commits: []
 ```
 
 ## Human checklist
@@ -1646,6 +1677,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M5 `done`: F117, F118, F120, F140, F145 and F146 all
+  kept, no fix or revert commits; follow-ups F185–F192 appended, with F185,
+  F186, F187, F188, F190 and F191 in M17 and F189 and F192 in M18. F117,
+  F118, F120, F140, F145 and F146 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M5 review checkpoint opened: F117, F118, F120,
   F140, F145 and F146 `in_progress` → `pending_review`, commits `e30e6c6f`,
   `13304c2f`, `1409bbf6`, `0f3609a7`, `4c285d30`, `b08451c7`; review M5
