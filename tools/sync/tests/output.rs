@@ -853,6 +853,10 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
             dir.to_str().unwrap(),
             "--exclude",
             "*.log",
+            // A depth cap of its own, so the event's number is the one the run
+            // was asked for rather than whatever the default happens to be.
+            "--max-depth",
+            "3",
             "--output",
             "json",
             "--log-file",
@@ -884,7 +888,7 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         "the walk names the root it is walking"
     );
     assert_eq!(
-        starts[0]["fields"]["max_depth"], 10,
+        starts[0]["fields"]["max_depth"], 3,
         "and the depth cap it is walking to"
     );
 
