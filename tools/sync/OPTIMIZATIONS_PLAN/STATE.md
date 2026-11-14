@@ -502,13 +502,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M7
-    status: in_progress
-    tasks: [F138, F139, F141, F144]
-    base: 0013d040
-    head: 1148ad43
+  - batch: M22
+    status: pending
+    tasks: [F206, F207, F208]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M7
+    status: done
+    tasks: [F138, F139, F141, F144]
+    base: 0013d040
+    head: 10ec5297
+    result: F138 kept (8e5f5bd0); F139 fixed (10ec5297 names the path key fold in the design notes mkdir-candidate paragraph, which still used the retired wording); F141 kept (0d360416); F144 kept (5777bf8c); 584 passed, 1 skipped; the reviewer confirmed exactly three path fold sites remain and no fourth rule was created
+    followups: [F206, F207, F208]
 followups:
   - id: F1
     source: T01
@@ -1334,15 +1341,15 @@ followups:
   - id: F138
     source: F133
     description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
-    status: pending_review
+    status: completed
     batch: M7
     commits: [8e5f5bd0]
   - id: F139
     source: F133
     description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
-    status: pending_review
+    status: completed
     batch: M7
-    commits: [4dd86821, 1148ad43]
+    commits: [4dd86821, 1148ad43, 10ec5297]
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
@@ -1352,7 +1359,7 @@ followups:
   - id: F141
     source: F134
     description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
-    status: pending_review
+    status: completed
     batch: M7
     commits: [0d360416]
   - id: F142
@@ -1372,7 +1379,7 @@ followups:
   - id: F144
     source: F134
     description: commands/sync/plan/link.rs:219 still folds the on-disk lookup with an inline to_string_lossy().to_lowercase(), so after the identity fold was named there is one named Unicode fold and one anonymous Unicode fold that answer different questions, the on-disk rule being the third rule the design notes describe.
-    status: pending_review
+    status: completed
     batch: M7
     commits: [5777bf8c]
   - id: F145
@@ -1738,6 +1745,31 @@ followups:
     status: pending
     batch: M21
     commits: []
+  - id: F205
+    source: F139
+    description: effective/phase_a.rs still says the cached keys are indexed by lowercase for the ASCII-only fold, the same retired wording, outside that follow-up scope.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F202, already scheduled in M21
+  - id: F206
+    source: F141
+    description: has_cache_prefix's doc names ascii_case_eq without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
+    status: pending
+    batch: M22
+    commits: []
+  - id: F207
+    source: F138
+    description: The new locals are src_folded and dst_folded although they hold folded-key indexes; names ending in _keys would say what they hold more exactly.
+    status: pending
+    batch: M22
+    commits: []
+  - id: F208
+    source: F144
+    description: on_disk_fold and util::identity_fold are now byte-identical Unicode-lowercase helpers in two modules; both docs warn against unifying them, but the duplication is visible to a reader.
+    status: pending
+    batch: M22
+    commits: []
 ```
 
 ## Human checklist
@@ -1770,6 +1802,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M7 `done`: F138 kept (8e5f5bd0), F139 fixed
+  (10ec5297), F141 kept (0d360416), F144 kept (5777bf8c); follow-ups
+  F206–F208 appended with batch `M22` and F205 recorded as `skipped` because
+  it is the same item as F202. F138, F139, F141 and F144 `pending_review` →
+  `completed`.
 - 2026-11-14 — follow-up batch M7 review checkpoint opened: F138, F139, F141
   and F144 `in_progress` → `pending_review`, commits `8e5f5bd0`, `4dd86821`,
   `0d360416`, `5777bf8c`, `1148ad43`; review M7 `pending` → `in_progress`,
