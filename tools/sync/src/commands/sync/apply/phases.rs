@@ -243,9 +243,7 @@ impl<'a> Applier<'a> {
                             // The lock guards one value and never runs user code, so a
                             // poisoned guard still holds a usable answer.
                             let mut best = failure.lock().unwrap_or_else(|e| e.into_inner());
-                            if best.as_ref().is_none_or(|(i, _)| idx < *i) {
-                                *best = Some((idx, e));
-                            }
+                            keep_lowest_index(&mut best, idx, e);
                         }
                     }
                 });
@@ -425,6 +423,32 @@ impl<'a> Applier<'a> {
     }
 }
 
+/// Keep the failure with the **lowest plan index**.
+///
+/// Every copy is attempted and more than one of them can fail, so the phase
+/// reports one of them: the one whose copy comes **first in the plan**, because
+/// the plan's order is the order the report speaks in. The index is the plan's,
+/// not the completion's — a worker that happened to finish first has no claim
+/// on the report, and a run that named the first failure to *finish* would name
+/// a different file on a different run.
+///
+/// The first failure recorded is kept, since there is nothing to compare it
+/// against; a later one replaces it only if its index is lower. So the rule is
+/// a comparison and not a choice between two orders, and the error that comes
+/// with the winning index is the error that came with it.
+///
+/// The slot is `Option<(usize, anyhow::Error)>`: the plan index of the copy
+/// that failed, and the error it failed with.
+fn keep_lowest_index(
+    slot: &mut Option<(usize, anyhow::Error)>,
+    index: usize,
+    error: anyhow::Error,
+) {
+    if slot.as_ref().is_none_or(|(kept, _)| index < *kept) {
+        *slot = Some((index, error));
+    }
+}
+
 /// Refuse a removal whose target's directory resolves inside `src`.
 ///
 /// This is defence in depth, not the primary guard. `validate_src_links`
@@ -492,6 +516,60 @@ fn remove_dir_all(p: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The rule that picks the failure a run reports, on its own.**
+    ///
+    /// More than one copy can fail, and the phase reports one of them: the one
+    /// whose copy comes **first in the plan**. That is not the same answer as
+    /// "the first copy to fail", and the difference is the whole point of the
+    /// rule — the plan's order is the order the report speaks in, so a run
+    /// that named the first failure to *finish* would name a different file on
+    /// a different run.
+    ///
+    /// The rule is pinned here, on the comparison itself, so the case says
+    /// something about the rule rather than about the machinery that applies
+    /// it: no pool, no dispatcher, no filesystem and no timing. Three
+    /// recordings in a known order, and the one that survives.
+    #[test]
+    fn the_reported_failure_is_the_lowest_plan_index_one() {
+        let mut failure: Option<(usize, anyhow::Error)> = None;
+
+        // Nothing has failed yet, so the first failure is simply kept.
+        assert!(
+            failure.is_none(),
+            "a phase that has not seen a failure has none to report"
+        );
+        keep_lowest_index(&mut failure, 3, anyhow!("the third copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(3),
+            "the first failure recorded is the one reported"
+        );
+
+        // A later copy fails. Its index is higher, so the earlier one stays:
+        // the report names the plan's first, not the last to arrive.
+        keep_lowest_index(&mut failure, 5, anyhow!("the fifth copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(3),
+            "a later copy does not displace the earlier one"
+        );
+
+        // An earlier copy fails now, and it takes the report: the lowest index
+        // wins, whatever order the failures arrived in.
+        keep_lowest_index(&mut failure, 1, anyhow!("the first copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(1),
+            "an earlier copy displaces a later one"
+        );
+
+        // And the error that comes with the winning index is the error that
+        // came with it — the report names the copy that failed and why.
+        let (index, error) = failure.expect("a failure was recorded");
+        assert_eq!(index, 1);
+        assert_eq!(error.to_string(), "the first copy");
+    }
 
     /// The removal guard compares the target's **resolved** directory with the
     /// canonical src, so a path that starts under dst but resolves elsewhere is
