@@ -503,8 +503,8 @@ fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
 /// **First match wins, and the answer is a property of the row.**
 ///
 /// Two entries can name the same algorithm — `MD5` and `md5`, both with a
-/// length their algorithm does not have — and the arm is a slice, so the
-/// answer is the first of them. It is not an iteration order: the arm has
+/// length their algorithm does not have — and the arm is an ordered list, so
+/// the answer is the first of them. It is not an iteration order: the arm has
 /// one, and the entry that comes first in it is the one that answers.
 ///
 /// Both lookups go through the same helper, so they cannot disagree about
