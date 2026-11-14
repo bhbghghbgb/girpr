@@ -503,11 +503,18 @@ reviews:
     head: 929908a7
     result: F33 fixed (2bd29e74 corrects the design notes, which still justified the allocation-free comparison by reading the body); F34 kept (0d7f7646); F35 kept (4fb0741f); F41 fixed (929908a7 corrects the README cost claim, which named the wrong condition); 577 passed without the feature and 590 with it, 1 skipped; the const pin was verified to fail when the const is dropped and when the resolver allocates
     followups: [F172, F173, F174]
-  - batch: M15
+  - batch: M33
     status: pending
-    tasks: [F175, F176, F177, F178, F183]
+    tasks: [F243, F244]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M15
+    status: in_progress
+    tasks: [F175, F176, F177, F178, F183]
+    base: 49e768cc
+    head: b0081392
     result: null
     followups: []
   - batch: M16
@@ -1636,27 +1643,27 @@ followups:
   - id: F175
     source: F116
     description: Nothing pins the converter help output, so a doc comment on Args could come back and print the source note again; the existing help case only asserts the flags are named.
-    status: in_progress
+    status: pending_review
     batch: M15
-    commits: []
+    commits: [b1610c1e]
   - id: F176
     source: F111
     description: The MSRV gate still does not cover a combination whose parts each build alone, so a member whose features all build alone but whose combination needs a newer Rust is not checked.
-    status: in_progress
+    status: pending_review
     batch: M15
-    commits: []
+    commits: [45c4649e]
   - id: F177
     source: F116
     description: The converter refusal of --version, which exits 3, now lives only in the module doc; the README converter section does not mention it.
-    status: in_progress
+    status: pending_review
     batch: M15
-    commits: []
+    commits: [493fce5b]
   - id: F178
     source: F130
     description: The README still quotes verify hash mismatch, the log event message, near the failure-message shape verify hash(<algo>) <path>, the error text; two different strings, but a reader could confuse them.
-    status: in_progress
+    status: pending_review
     batch: M15
-    commits: []
+    commits: [b0081392]
   - id: F179
     source: F111
     description: The MSRV fallback cannot tell this feature needs another from this feature is broken alone, so for a member with two or more optional features whose group builds, a genuinely broken lone feature is reported as covered by the group.
@@ -1685,9 +1692,9 @@ followups:
   - id: F183
     source: F116
     description: The help case only asserts that --force, --output and the positional order appear, so nothing in the suite would fail if a doc comment were put back on Args and the note started printing in --help again.
-    status: in_progress
+    status: pending_review
     batch: M15
-    commits: []
+    commits: [b1610c1e]
   - id: F184
     source: F130
     description: The README still carries both the log event string and the error text near each other, and a reader could still confuse the two.
@@ -2050,6 +2057,32 @@ followups:
     status: pending
     batch: M32
     commits: []
+  - id: F243
+    source: F177
+    description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
+    status: pending
+    batch: M33
+    commits: []
+  - id: F244
+    source: F175
+    description: The help pin couples the converter test to the shared OutputFormat doc wording; a narrower pin over the converter own text would drop that coupling.
+    status: pending
+    batch: M33
+    commits: []
+  - id: F245
+    source: F176
+    description: The MSRV fallback still covers a lone feature with the group only, so this feature needs another and this feature is broken alone remain indistinguishable there.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F179, already scheduled in M16
+  - id: F246
+    source: F176
+    description: The MSRV combination check cannot tell a combination that needs a newer Rust from one that does not build at all, so a member with mutually exclusive features is failed by the gate.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F180, already scheduled in M16
 ```
 
 ## Human checklist
@@ -2082,6 +2115,12 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M15 review checkpoint opened: F175, F176, F177,
+  F178 and F183 `in_progress` → `pending_review`, commits `b1610c1e`,
+  `45c4649e`, `493fce5b`, `b0081392`; review M15 `pending` → `in_progress`,
+  base `49e768cc`, head `b0081392`. Follow-ups F243 and F244 appended with
+  batch `M33`; F245 and F246 recorded as `skipped` as the same items as F179
+  and F180.
 - 2026-11-14 — follow-up batch M15 started: F175, F176, F177, F178 and F183
   `pending` → `in_progress`; `active_batch: M14` → `M15`.
 - 2026-11-14 — review M14 `done`: F172 kept (0f9e7d33, a747499a), F173 fixed
