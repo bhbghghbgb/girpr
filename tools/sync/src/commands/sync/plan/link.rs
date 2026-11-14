@@ -1,9 +1,19 @@
 //! Link storage, alias resolution, and the on-disk/dst spellings.
 //!
-//! These helpers are pure over the effective maps plus the link-resolution
-//! primitives in [`crate::link`]. They are plan-time only: no filesystem write
-//! happens here, only `read_link`/`canonicalize` probes to learn which paths a
-//! kept dst file link depends on.
+//! Most of the helpers here are pure: they answer from what the run already
+//! knows — the effective maps, the disk-spelling map, the paths themselves —
+//! and touch nothing. Three of them ask the disk as well, because the plan
+//! needs what only the disk can say — which spelling the OS would open
+//! ([`on_disk_name`], a Windows-only listing), where a link's target sits
+//! inside dst ([`target_rel`]), and which of a target's prefixes are links
+//! ([`spare_link_components`], which asks the link-resolution primitive
+//! [`try_is_link`]).
+//!
+//! They are plan-time only: no filesystem write happens here, only those
+//! `read_dir`/`canonicalize`/`try_is_link` probes, and they are asked to
+//! learn which paths a kept dst file link depends on. The probes are made
+//! directly rather than through the guard seam — see
+//! [`Probes`](super::safety::Probes).
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
