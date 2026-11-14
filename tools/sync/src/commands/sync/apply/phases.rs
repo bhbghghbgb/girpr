@@ -5,6 +5,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
 use tracing::{debug, info, trace};
 
 use super::super::plan::{DirPrefixes, Plan};
@@ -180,6 +181,10 @@ impl<'a> Applier<'a> {
         // a fixed-size value instead of one entry per copied file.
         let failure: std::sync::Mutex<Option<(usize, anyhow::Error)>> = std::sync::Mutex::new(None);
         let copied = std::sync::atomic::AtomicUsize::new(0);
+        // The test-only rendezvous between two copies of this run, if the
+        // environment asks for one. Absent in production, and absent in every
+        // run that does not ask.
+        let gate = CopyGate::from_env();
         pool.install(|| {
             use rayon::prelude::*;
             plan.copy
@@ -192,6 +197,11 @@ impl<'a> Applier<'a> {
                         // done after the permit is released rather than stretching the
                         // permit over an unrelated fsync.
                         let r = {
+                            // The test-only gate, waited on **before** the permit: a
+                            // copy that waits holds nothing another copy needs.
+                            if let Some(gate) = &gate {
+                                gate.wait(&item.rel)?;
+                            }
                             let _rw = self.rw.acquire_copy();
                             debug!(rel = %item.rel, "copy start");
                             copy_one(
@@ -244,6 +254,12 @@ impl<'a> Applier<'a> {
                             // poisoned guard still holds a usable answer.
                             let mut best = failure.lock().unwrap_or_else(|e| e.into_inner());
                             keep_lowest_index(&mut best, idx, e);
+                            // The gate is released **after** the failure is recorded,
+                            // so a copy waiting on it is released only once the failure
+                            // it waits for is already the one the phase would report.
+                            if let Some(gate) = &gate {
+                                gate.release(&item.rel);
+                            }
                         }
                     }
                 });
@@ -420,6 +436,102 @@ impl<'a> Applier<'a> {
         }
         w.commit()?;
         Ok(())
+    }
+}
+
+/// How long a gated copy waits for the copy it is gated on.
+///
+/// A **deadlock guard**, not a deadline anything depends on: the gate is
+/// released by the failure of another copy of the same run, which is a fact
+/// about the run and not about the clock. The bound is here so that a gate
+/// that is never released fails that one copy loudly instead of hanging the
+/// run.
+const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A rendezvous between two copies of one run.
+///
+/// **Test-only, default off.** The gate is asked for by
+/// `GIRSYNC_TEST_GATE_COPY=<wait>:<on>`: the copy of `<wait>` does not begin
+/// until the copy of `<on>` has **failed**. A run that asks for no gate never
+/// waits, and an unset variable names no gate at all — so this is a switch
+/// that is off in production and says nothing a user can meet.
+///
+/// The release happens when the failure has been **recorded**, so a copy
+/// waiting on it is released only once the failure it waits for is already
+/// the one the phase would report. That is what makes the wait an *ordering*
+/// statement rather than a delay: the two failures are recorded in a known
+/// order, whatever the workers happen to be doing and however fast the host
+/// is. A fixture that merely made one copy slow would say the same thing only
+/// while the host stayed slow enough.
+///
+/// The wait happens before the copy takes a rw permit, so a copy that waits
+/// holds nothing another copy needs.
+struct CopyGate {
+    /// The copy that waits.
+    wait: String,
+    /// The copy whose failure releases it.
+    on: String,
+    /// Whether that failure has been recorded.
+    released: Mutex<bool>,
+    /// Signalled when it has.
+    signal: Condvar,
+}
+
+impl CopyGate {
+    /// The gate the environment asks for, or `None` when it asks for none.
+    ///
+    /// Read once per process, like the other test-only switches: the answer
+    /// cannot change under a run. A malformed specification asks for no gate,
+    /// which is the same as not asking for one.
+    fn from_env() -> Option<Arc<Self>> {
+        static GATE: std::sync::OnceLock<Option<Arc<CopyGate>>> = std::sync::OnceLock::new();
+        GATE.get_or_init(|| {
+            let spec = std::env::var("GIRSYNC_TEST_GATE_COPY").ok()?;
+            let (wait, on) = spec.split_once(':')?;
+            if wait.is_empty() || on.is_empty() {
+                return None;
+            }
+            Some(Arc::new(CopyGate {
+                wait: wait.to_string(),
+                on: on.to_string(),
+                released: Mutex::new(false),
+                signal: Condvar::new(),
+            }))
+        })
+        .clone()
+    }
+
+    /// Wait for the named copy's failure, if this copy is the one that waits.
+    fn wait(&self, rel: &str) -> Result<()> {
+        if rel != self.wait {
+            return Ok(());
+        }
+        let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        while !*released {
+            let (guard, timeout) = self
+                .signal
+                .wait_timeout(released, GATE_WAIT)
+                .unwrap_or_else(|e| e.into_inner());
+            released = guard;
+            if timeout.timed_out() && !*released {
+                bail!(
+                    "test: the copy gate was never released: `{}` waited for `{}` to fail",
+                    self.wait,
+                    self.on
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Release the gate, if this copy is the one whose failure releases it.
+    fn release(&self, rel: &str) {
+        if rel != self.on {
+            return;
+        }
+        let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        *released = true;
+        self.signal.notify_all();
     }
 }
 

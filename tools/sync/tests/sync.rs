@@ -1723,23 +1723,16 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 /// phase that reported the first failure to finish would name `mmm.bin`; the
 /// plan's order says `aaa.bin`, and that is what has to be reported.
 ///
-/// **The two failures have to be *recorded* in the opposite order to the plan's,
-/// or the case says nothing** — and that order must not be a race against the
-/// host's speed. A copy of a megabyte is a bandwidth question: on a fast host
-/// it can be over before the second worker has been handed its share of the
-/// work, and the case then passes whatever the phase reports. So `aaa.bin`'s
-/// delay is a **count of removals** instead: its destination is a directory
-/// holding a hundred-odd empty subdirectories, and the copy has to clear that
-/// tree before it can write there. One removal per entry is a syscall apiece,
-/// so it outlasts any wake-up a second worker needs — and `mmm.bin`, which
-/// fails the moment it is attempted, is recorded while that tree is still
-/// going.
+/// **The order the two failures are recorded in is put in place by a barrier,
+/// not by a race.** `aaa.bin` waits at a gate until `mmm.bin` has failed, so
+/// the recording order is the opposite of the plan's whatever the workers
+/// happen to do and however fast the host is. A fixture that merely made
+/// `aaa.bin` slow would say the same thing only while the host stayed slow
+/// enough: the case would pass for the wrong reason on a fast machine, and
+/// fail for the wrong reason on a loaded one.
 ///
 /// The third file is the control: it succeeds, and it was still copied, so
-/// the failure did not cut the phase short. It sits *after* the failing copy
-/// in the plan on purpose: a control in front of it would pay a flush before
-/// the failure that has to be recorded first, and that is long enough to put
-/// the two orders back in step.
+/// the failure did not cut the phase short.
 #[test]
 fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     let t = temp_root("copy_fail_order");
@@ -1748,15 +1741,6 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
     wfile(&src, "aaa.bin", b"first in the plan");
     wfile(&src, "mmm.bin", b"fails first");
     wfile(&src, "zzz.bin", b"the control");
-    // `aaa.bin`'s destination is a directory the copy has to clear before it
-    // can write there. The subdirectories are empty on purpose: the delete
-    // pass takes dst-only *files*, so a tree of directories is what survives
-    // until the copy phase reaches it.
-    let blocking = dst.join("aaa.bin");
-    std::fs::create_dir_all(&blocking).unwrap();
-    for i in 0..128 {
-        std::fs::create_dir(blocking.join(format!("d{i:03}"))).unwrap();
-    }
 
     let out = run_binary_raw(
         &src,
@@ -1768,6 +1752,10 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
             // The workspace's nextest setup turns the flush off for speed; this
             // case is about the flush.
             ("GIRSYNC_TEST_NO_FSYNC", "0"),
+            // The barrier: `aaa.bin` does not begin until `mmm.bin` has failed,
+            // so the failure recorded first is the one that comes *later* in
+            // the plan.
+            ("GIRSYNC_TEST_GATE_COPY", "aaa.bin:mmm.bin"),
         ],
     );
     assert_eq!(
