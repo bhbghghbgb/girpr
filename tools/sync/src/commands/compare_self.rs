@@ -58,7 +58,7 @@ use crate::diff::diff_maps;
 use crate::effective::{
     Side, SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
 };
-use crate::planner::{CasePairing, SideRequest, plan_pairs};
+use crate::planner::{CasePairing, Repopulate, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
 use super::{report_and_finish, side_folder, side_label};
@@ -215,7 +215,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
-            folder: rec_folder.as_deref(),
+            folder: rec_folder,
         },
         SideRequest {
             entries: &disk_a.map,
@@ -224,7 +224,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
             // A folder side can always backfill, so it is never the short one.
-            folder: None,
+            folder: Repopulate::Nothing,
         },
         pairing,
         common.hash_mode,

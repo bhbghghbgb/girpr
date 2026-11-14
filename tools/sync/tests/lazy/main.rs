@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
-use girsync::commands::side_label;
+use girsync::commands::{side_folder, side_label};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
@@ -115,7 +115,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -123,7 +123,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

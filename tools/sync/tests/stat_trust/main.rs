@@ -51,7 +51,7 @@ use common::{
     TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update_mem, wfile,
 };
 use girsync::cache::TestCacheBackend;
-use girsync::commands::side_label;
+use girsync::commands::{side_folder, side_label};
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
@@ -189,7 +189,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
             no_trust: false,
             cap: s.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -197,7 +197,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
             no_trust: false,
             cap: d.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

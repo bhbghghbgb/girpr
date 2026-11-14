@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::TestCacheBackend;
-use girsync::commands::side_label;
+use girsync::commands::{side_folder, side_label};
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
@@ -176,7 +176,7 @@ fn resolved(
             no_trust: false,
             cap: s.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -184,7 +184,7 @@ fn resolved(
             no_trust: false,
             cap: d.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

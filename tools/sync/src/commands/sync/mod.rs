@@ -123,7 +123,7 @@ use plan::{
 };
 use rename::{RenameOutcome, rename_to_src_casing};
 
-use super::side_label;
+use super::{side_folder, side_label};
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
@@ -288,8 +288,15 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     // Built by the shared helper rather than spelled out here: a side is named
     // the same way in every command, and `sync` is no exception — both of its
     // sides are folders, and the helper says so.
-    let src_label = side_label(&Side::Folder(src.clone()));
-    let dst_label = side_label(&Side::Folder(dst.clone()));
+    let src_side = Side::Folder(src.clone());
+    let dst_side = Side::Folder(dst.clone());
+    let src_label = side_label(&src_side);
+    let dst_label = side_label(&dst_side);
+    // The folders a repopulation would run on, for the same reason the labels
+    // are built here: both sides are folders, so neither has a record of its
+    // own to repopulate.
+    let src_folder = side_folder(&src_side);
+    let dst_folder = side_folder(&dst_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
@@ -301,7 +308,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&src_db, src_mode),
             label: &src_label,
             // And a folder side has no record to repopulate either.
-            folder: None,
+            folder: src_folder,
         },
         SideRequest {
             entries: &dst_a.map,
@@ -309,7 +316,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, dst_mode),
             label: &dst_label,
-            folder: None,
+            folder: dst_folder,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

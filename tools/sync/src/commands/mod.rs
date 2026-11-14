@@ -22,6 +22,7 @@ use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
 use crate::effective::Side;
+use crate::planner::Repopulate;
 use crate::report::{Report, visit_verdict};
 use crate::util::elapsed_s;
 
@@ -75,19 +76,20 @@ pub fn side_label(side: &Side) -> String {
 /// coverage failure can end with a command the user can paste instead of a
 /// placeholder.
 ///
-/// `None` for a folder side: a folder can always answer for itself, so it is
-/// never the short side, and it has no record of its own to repopulate.
+/// [`Repopulate::Nothing`] for a folder side: a folder can always answer for
+/// itself, so it is never the short side, and it has no record of its own to
+/// repopulate.
 ///
 /// **Public, for the same reason [`side_label`] is**: a caller outside the
 /// crate names a side the way the commands do, or it keeps a second spelling.
-pub fn side_folder(side: &Side) -> Option<PathBuf> {
+pub fn side_folder(side: &Side) -> Repopulate {
     match side {
-        Side::Record(p) => Some(match p.parent() {
+        Side::Record(p) => Repopulate::Folder(match p.parent() {
             Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
             // A record named on its own lives in the working directory.
             _ => PathBuf::from("."),
         }),
-        Side::Folder(_) => None,
+        Side::Folder(_) => Repopulate::Nothing,
     }
 }
 

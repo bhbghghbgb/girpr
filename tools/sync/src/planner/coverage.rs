@@ -12,10 +12,26 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
+
+/// Where a repopulation of a side would run.
+///
+/// **Two cases, named rather than left to an `Option`.** "This side has nothing
+/// to repopulate" is a fact about the side, and a caller that has not said
+/// which it is has not said enough: the remedy bullet is the one line in the
+/// message a user pastes, so a caller that forgot it would lose the remedy
+/// without saying so — which is the one thing this type is here to stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Repopulate {
+    /// The folder `girsync update --dir` rebuilds.
+    Folder(PathBuf),
+    /// Nothing to repopulate: this side has no cache a repopulation could fix.
+    Nothing,
+}
 
 /// A side that could not supply every digest the run required.
 ///
@@ -33,17 +49,19 @@ pub struct Coverage {
     /// which is `'static`; the alternative would be for every caller to keep its
     /// labels alive for the life of the error.
     pub label: String,
-    /// The folder a repopulation of this side would run on.
+    /// Where a repopulation of this side would run.
     ///
     /// A record's path is `<folder>/girpr-cache`, so the folder it describes is
     /// its parent, and that folder is what `girsync update --dir` takes. The
     /// planner is handed a side's *contents* and not the path of the file they
     /// came from, so the caller is the one who says which folder this is.
     ///
-    /// `None` when the caller did not say, and the message then offers no
-    /// repopulation: there is no folder to name, and a placeholder would be a
-    /// command nobody can paste.
-    pub folder: Option<String>,
+    /// **Required, in two named cases.** [`Repopulate::Folder`] is the folder a
+    /// repopulation would run on and [`Repopulate::Nothing`] is a side that has
+    /// none. The field is not an `Option` because a caller that left it out
+    /// would lose the remedy bullet without saying so, and the bullet is the
+    /// one line in this message a user pastes.
+    pub folder: Repopulate,
     /// Which mode was asked for. Carried because the two modes fail differently and
     /// so are *remedied* differently — an all-of failure can be answered by asking
     /// for any one algorithm, which is the whole of `any-of`.
@@ -161,10 +179,11 @@ impl fmt::Display for Coverage {
         }
         // The one remedy that names a path, so it is the one that has to be
         // copy-pasteable: the folder the caller named, never a placeholder.
-        if let Some(folder) = &self.folder {
+        if let Repopulate::Folder(folder) = &self.folder {
             writeln!(
                 f,
-                "  - repopulate it, then run this again: girsync update --dir {folder}"
+                "  - repopulate it, then run this again: girsync update --dir {}",
+                folder.display()
             )?;
         }
         writeln!(
@@ -202,7 +221,9 @@ const EXAMPLE_PATHS: usize = 5;
 
 #[cfg(test)]
 mod tests {
-    use super::Coverage;
+    use std::path::PathBuf;
+
+    use super::{Coverage, Repopulate};
     use crate::hash::{AlgoSet, HashAlg};
     use crate::planner::HashMode;
     use crate::planner::fixtures::{Shape, cached_entry, dir, file, map};
@@ -425,7 +446,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
-                folder: Some("D:\\game\\old".into()),
+                folder: Repopulate::Folder(PathBuf::from("D:\\game\\old")),
                 mode: HashMode::AllOf,
                 missing: BTreeMap::from([(
                     "a.txt".to_string(),
@@ -462,23 +483,26 @@ mod tests {
     /// of the file they came from, so the caller says which folder the record
     /// lives in and the message ends with that.
     ///
-    /// Two cases, and the second is the one that matters: a caller that did not
-    /// say offers **no** repopulation at all, rather than a line with a
-    /// placeholder in it that nobody can paste.
+    /// Two cases, and the second is the one that matters: a side that has
+    /// nothing to repopulate offers **no** repopulation at all, rather than a
+    /// line with a placeholder in it that nobody can paste.
     #[test]
     fn the_repopulate_remedy_names_a_folder_or_is_not_offered() {
         use std::collections::BTreeMap;
 
-        let coverage = |folder: Option<&str>| Coverage {
+        let coverage = |folder: Repopulate| Coverage {
             side: "src",
             label: "record D:\\game\\old\\girpr-cache".into(),
-            folder: folder.map(str::to_string),
+            folder,
             mode: HashMode::AllOf,
             missing: BTreeMap::new(),
             coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 1usize))]),
         };
 
-        let named = format!("{:#}", coverage(Some("D:\\game\\old")));
+        let named = format!(
+            "{:#}",
+            coverage(Repopulate::Folder(PathBuf::from("D:\\game\\old")))
+        );
         assert!(
             named.contains("girsync update --dir D:\\game\\old"),
             "the remedy names the folder the record lives in:\n{named}"
@@ -488,10 +512,10 @@ mod tests {
             "and no placeholder is left in it:\n{named}"
         );
 
-        let unnamed = format!("{:#}", coverage(None));
+        let unnamed = format!("{:#}", coverage(Repopulate::Nothing));
         assert!(
             !unnamed.contains("girsync update"),
-            "a caller that named no folder offers no repopulation:\n{unnamed}"
+            "a side with nothing to repopulate offers no repopulation:\n{unnamed}"
         );
     }
 
@@ -507,7 +531,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
-                folder: None,
+                folder: Repopulate::Nothing,
                 mode: HashMode::AllOf,
                 missing: BTreeMap::new(),
                 coverage: BTreeMap::from([

@@ -48,7 +48,7 @@ use std::path::Path;
 
 use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
-use girsync::commands::side_label;
+use girsync::commands::{side_folder, side_label};
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
 use girsync::effective::{
@@ -57,7 +57,7 @@ use girsync::effective::{
 };
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::planner::{
-    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
+    CasePairing, HashMode, PairPlan, Repopulate, Required, SideRequest, StatTrust, plan_pairs,
 };
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};
@@ -124,7 +124,7 @@ fn plan(
             no_trust: false,
             cap: sc,
             label: "src",
-            folder: None,
+            folder: Repopulate::Nothing,
         },
         SideRequest {
             entries: d,
@@ -132,7 +132,7 @@ fn plan(
             no_trust: false,
             cap: dc,
             label: "dst",
-            folder: None,
+            folder: Repopulate::Nothing,
         },
         CasePairing::Exact,
         mode,
@@ -220,7 +220,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             no_trust: false,
             cap: so.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -228,7 +228,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -263,7 +263,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
-            folder: None,
+            folder: side_folder(&Side::Record(dir.join(CACHE_PREFIX))),
         },
         SideRequest {
             entries: &disk_a.map,
@@ -271,7 +271,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             no_trust: false,
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
-            folder: None,
+            folder: side_folder(&Side::Folder(dir.to_path_buf())),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

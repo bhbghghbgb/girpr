@@ -127,7 +127,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
-            folder: s_folder.as_deref(),
+            folder: s_folder,
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -135,7 +135,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
-            folder: d_folder.as_deref(),
+            folder: d_folder,
         },
         pairing,
         common.hash_mode,

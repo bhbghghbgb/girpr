@@ -37,7 +37,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
             no_trust: trust.no_trust_src,
             cap: SideCapability::for_folder(&src_db, mode(trust.no_trust_src)),
             label: &s_label,
-            folder: None,
+            folder: side_folder(&Side::Folder(src.to_path_buf())),
         },
         SideRequest {
             entries: &dst_a.map,
@@ -45,7 +45,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, mode(trust.no_trust_dst)),
             label: &d_label,
-            folder: None,
+            folder: side_folder(&Side::Folder(dst.to_path_buf())),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

@@ -8,7 +8,7 @@
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
-use girsync::commands::side_label;
+use girsync::commands::{side_folder, side_label};
 use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
@@ -721,7 +721,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&src),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -729,7 +729,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&dst),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

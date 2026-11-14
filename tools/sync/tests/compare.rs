@@ -9,6 +9,7 @@ use common::{
     recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
+use girsync::commands::side_folder;
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
@@ -117,7 +118,7 @@ fn effective_maps(
             no_trust: false,
             cap: so.cap,
             label: &s_label,
-            folder: None,
+            folder: side_folder(&s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -125,7 +126,7 @@ fn effective_maps(
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
-            folder: None,
+            folder: side_folder(&d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

@@ -18,6 +18,7 @@ use crate::effective::{SideCapability, SideEntry};
 use crate::hash::{DigestSet, HashAlg};
 
 use super::HashMode;
+use super::coverage::Repopulate;
 use super::pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
 use super::stat_trust::StatTrust;
 
@@ -143,7 +144,7 @@ impl Shape {
                 no_trust: self.no_trust.0,
                 cap: cap(self.hashable.0),
                 label: "src",
-                folder: None,
+                folder: Repopulate::Nothing,
             },
             SideRequest {
                 entries: d,
@@ -151,7 +152,7 @@ impl Shape {
                 no_trust: self.no_trust.1,
                 cap: cap(self.hashable.1),
                 label: "dst",
-                folder: None,
+                folder: Repopulate::Nothing,
             },
             CasePairing::from(sensitive),
             self.mode,
