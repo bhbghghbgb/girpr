@@ -524,11 +524,18 @@ reviews:
     head: e86a40aa
     result: F175 kept (b1610c1e); F176 fixed (e86a40aa states the rule in the script and the root README, since the old note said the opposite of what the new check does); F177 kept (493fce5b); F178 kept (b0081392); 588 passed without the feature and 603 with it, 1 skipped; the help pin was verified to fail when a doc comment is put back on Args
     followups: [F247, F248, F249]
-  - batch: M16
+  - batch: M35
     status: pending
-    tasks: [F179, F180, F181]
+    tasks: [F251, F252]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M16
+    status: in_progress
+    tasks: [F179, F180, F181]
+    base: 23a5974d
+    head: 673b99b1
     result: null
     followups: []  - batch: M4
     status: done
@@ -1674,21 +1681,21 @@ followups:
   - id: F179
     source: F111
     description: The MSRV fallback cannot tell this feature needs another from this feature is broken alone, so for a member with two or more optional features whose group builds, a genuinely broken lone feature is reported as covered by the group.
-    status: in_progress
+    status: pending_review
     batch: M16
-    commits: []
+    commits: [c0348f54]
   - id: F180
     source: F111
     description: The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there.
-    status: in_progress
+    status: pending_review
     batch: M16
-    commits: []
+    commits: [c0348f54]
   - id: F181
     source: F111
     description: The MSRV script description calls the group the only one that builds such a member and the root README says the group's features enabled; both would be more accurate as every optional feature of the member enabled at once.
-    status: in_progress
+    status: pending_review
     batch: M16
-    commits: []
+    commits: [673b99b1]
   - id: F182
     source: F112
     description: The new argument-forms case lives in the convert-gated test target, so a plain cargo nextest run never builds or runs it; only a --features convert run exercises the pin.
@@ -2115,6 +2122,25 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F243, already scheduled in M33
+  - id: F251
+    source: F179
+    description: A member whose feature needs two other features at once, with no single partner building, is now failed; the script could report the building combination alongside the failure so the reader sees which configuration does build.
+    status: pending
+    batch: M35
+    commits: []
+  - id: F252
+    source: F181
+    description: Get-OptionalFeatures and Get-FeaturePairs compare feature names case-insensitively while cargo feature names are case-sensitive; harmless in practice, untidy in principle.
+    status: pending
+    batch: M35
+    commits: []
+  - id: F253
+    source: F176
+    description: The pair lookup reuses the combination results, so a member with many optional features pays for every subset of size two or more.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F248, already scheduled in M34
 ```
 
 ## Human checklist
@@ -2147,6 +2173,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M16 review checkpoint opened: F179, F180 and F181
+  `in_progress` → `pending_review`, commits `c0348f54`, `673b99b1`; review M16
+  `pending` → `in_progress`, base `23a5974d`, head `673b99b1`. Follow-ups
+  F251 and F252 appended with batch `M35`; F253 recorded as `skipped` as the
+  same item as F248.
 - 2026-11-14 — follow-up batch M16 started: F179, F180 and F181 `pending` →
   `in_progress`; `active_batch: M15` → `M16`.
 - 2026-11-14 — review M15 `done`: F175 kept (b1610c1e), F176 fixed (e86a40aa),
