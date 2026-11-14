@@ -679,25 +679,25 @@ reviews:
     followups: [F198, F199]
   - batch: M49
     status: pending
-    tasks: [F287, F288]
+    tasks: [F287, F288, F292]
     base: null
     head: null
     result: null
     followups: []
   - batch: M50
     status: pending
-    tasks: [F289]
+    tasks: [F289, F291]
     base: null
     head: null
     result: null
     followups: []
   - batch: M21
-    status: in_progress
+    status: done
     tasks: [F200, F201, F202, F203, F204]
     base: ead8e3bd
     head: 6b15098a
-    result: null
-    followups: []
+    result: F200 kept (7e40bfb6); F201 kept (b8b98771); F202 kept (c64275cf); F203 kept (cb20bfea); F204 kept (6b15098a); no fix or revert commits; 596 passed, 1 skipped; the reviewer confirmed all three fold sites keep their own rule and that nothing in the repo links to the retitled heading
+    followups: [F291, F292]
   - batch: M22
     status: pending
     tasks: [F206, F207, F208]
@@ -1914,31 +1914,31 @@ followups:
   - id: F200
     source: F138
     description: src/planner/pairs.rs still has the same src-lowered abbreviation F138 fixed in the other two files.
-    status: pending_review
+    status: completed
     batch: M21
     commits: [7e40bfb6]
   - id: F201
     source: F138
     description: The lk and lkey locals in diff/mod.rs, commands/sync/rename.rs and planner/pairs.rs still abbreviate lowercase key.
-    status: pending_review
+    status: completed
     batch: M21
     commits: [b8b98771]
   - id: F202
     source: F139
     description: src/effective/phase_a.rs still says the cached keys are indexed by lowercase, which is the ASCII-only fold wording in a file F139 did not list, though the index there is built with path_key.
-    status: pending_review
+    status: completed
     batch: M21
     commits: [c64275cf]
   - id: F203
     source: F141
     description: The design notes three-questions section names the path key, the identity rule and the disk spelling, but the now-named cache reservation is a fourth fold site the section does not mention.
-    status: pending_review
+    status: completed
     batch: M21
     commits: [cb20bfea]
   - id: F204
     source: F144
     description: on_disk_name recomputes the on-disk fold for every directory entry, one allocation per entry, and it could be hoisted out of the loop.
-    status: pending_review
+    status: completed
     batch: M21
     commits: [6b15098a]
   - id: F205
@@ -2471,6 +2471,25 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F206, already scheduled in M22
+  - id: F291
+    source: F203
+    description: The new fourth fold site names the cache-prefix helper but not its exact-name counterpart, which states the same ASCII-only comparison.
+    status: pending
+    batch: M50
+    commits: []
+  - id: F292
+    source: F204
+    description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
+    status: pending
+    batch: M49
+    commits: []
+  - id: F293
+    source: F204
+    description: The remaining per-entry allocation in the disk listing is the candidate own fold, which a non-allocating comparison with an ASCII fast path would remove.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F288, already scheduled in M49
 ```
 
 ## Human checklist
@@ -2503,6 +2522,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M21 `done`: F200, F201, F202, F203 and F204 all kept,
+  no fix or revert commits; follow-ups F291 and F292 appended with batches
+  `M49` and `M50`, and F293 recorded as `skipped` as the same item as F288.
+  F200–F204 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M21 review checkpoint opened: F200, F201, F202,
   F203 and F204 `in_progress` → `pending_review`, commits `7e40bfb6`,
   `b8b98771`, `c64275cf`, `cb20bfea`, `6b15098a`; review M21 `pending` →
