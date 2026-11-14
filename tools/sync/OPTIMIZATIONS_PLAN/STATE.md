@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M13
+active_batch: M14
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1604,19 +1604,19 @@ followups:
   - id: F172
     source: F33
     description: The const-context pin lives in the crate test module, so it bites only when the tests are built; a plain cargo build would still accept a resolver that stopped being const, though one that allocated would fail in every build.
-    status: pending
+    status: in_progress
     batch: M14
     commits: []
   - id: F173
     source: F34
     description: DigestSet::merge applies the same exact-name replacement rule as insert_named, but no case holds a row with two spellings of one algorithm across a merge, so the rule is pinned on the insert path only.
-    status: pending
+    status: in_progress
     batch: M14
     commits: []
   - id: F174
     source: F41
     description: The comment above the index in phase_a.rs still phrases the saving as a scan whose cached keys all match the spelling the disk uses never asking for an alternate, leaving out the run that only adds a file and still pays for the index.
-    status: pending
+    status: in_progress
     batch: M14
     commits: []
   - id: F175
@@ -2023,6 +2023,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M14 started: F172, F173 and F174 `pending` →
+  `in_progress`; `active_batch: M13` → `M14`.
 - 2026-11-14 — review M13 `done`: F166 fixed (82fd8a95), F167 kept, F168 kept,
   F169 kept, F170 kept, F171 fixed (6236f9fa); follow-ups F232 and F234
   appended with batch `M30`, and F233 and F235 recorded as `skipped` as the
