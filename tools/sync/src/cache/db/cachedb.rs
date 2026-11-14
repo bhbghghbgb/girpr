@@ -56,6 +56,13 @@ struct Preflight {
 /// A missing table is a fresh cache, not a corrupt one — the same rule the
 /// read-only path follows — so the preflight reports absence instead of
 /// failing on it.
+///
+/// **The entries-table open here is not one of the counted reads.** It opens
+/// the table to learn whether it is there and reads no row, and it runs on a
+/// raw [`Database`] before any [`CacheDb`] handle exists — the counter
+/// belongs to the handle, so there is nothing here for it to move. The
+/// counted reads are the ones that fetch rows, and every one of them goes
+/// through `begin_entries_read`.
 fn preflight(db: &Database) -> Result<Preflight> {
     let txn = db.begin_read().context("begin read (meta)")?;
     let entries_present = match txn.open_table(ENTRIES) {
@@ -447,7 +454,9 @@ impl CacheDb {
     ///
     /// A read of **another** table does not come here, and so does not move
     /// the count: the number says what the entries table cost, and nothing
-    /// else can change it by accident.
+    /// else can change it by accident. Neither does the preflight's check
+    /// that the entries table is *there*: it reads no row, and it runs
+    /// before any handle exists to count it.
     ///
     /// The batched write handle reads the same table without coming here —
     /// its reads run in its own write transaction — so they are not counted.
