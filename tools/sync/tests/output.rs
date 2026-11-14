@@ -904,7 +904,8 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     assert_eq!(
         heartbeats.len(),
         1,
-        "one heartbeat for two thousand entries: {}",
+        "the walk reports its progress every two thousand entries, so a tree of \
+         two thousand has one heartbeat: {}",
         serde_json::to_string(&logged).unwrap()
     );
     assert_eq!(
