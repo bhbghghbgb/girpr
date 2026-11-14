@@ -142,9 +142,9 @@ fn shared_pairs<'a>(
         CasePairing::Lowercase => {
             // The src side is the index and dst is what is looked up, so dst's
             // own folded key is computed per path rather than indexed.
-            let slow = folded_keys(src);
+            let src_folded = folded_keys(src);
             for (lkey, drel) in dst.keys().map(|k| (path_key(k), k)) {
-                if let Some(&(srel, _)) = slow.get(&lkey) {
+                if let Some(&(srel, _)) = src_folded.get(&lkey) {
                     out.push((srel, drel));
                 }
             }
