@@ -812,6 +812,21 @@ digests dropped, and a size difference settles the pair for free, so nothing eve
 rehashes it. `--no-trust-size` is the repair. The row looks healthy — right size,
 right mtime — which is what makes it worth stating.
 
+**A conversion a killed run left behind stays in the folder.** The converter
+writes the new cache into a temporary beside the destination and moves it onto
+the destination only once it is whole, so a conversion that is killed leaves
+that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`. Nothing
+reclaims it: the retention bound ranges over a cache's published copies and not
+over this name, so a leftover stays in the folder until it is removed by hand.
+That is the same trade as the working copy a killed backup leaves, and for the
+same reason: a temporary is the file a live run is writing, and a sweep that
+could not tell a live one from a dead one would take the copy a running
+conversion is making. The name carries the process id, so a leftover says which
+run left it — which is for the reader, not for the tool: the tool cannot use it
+to decide that a temporary is stale, because a process id is reused and a
+folder can be shared between hosts whose process ids mean nothing to each
+other. Stated in `README.md`, where a user meets it.
+
 **Host coverage of the link cases.** Some end-to-end cases need primitives a
 regular user cannot always create: Windows without developer mode refuses
 `symlink_file`/`symlink_dir` (directory junctions via `mklink /J` still work
