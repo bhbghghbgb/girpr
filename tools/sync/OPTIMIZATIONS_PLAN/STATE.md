@@ -474,11 +474,25 @@ reviews:
     head: b08451c7
     result: F117 kept (e30e6c6f); F118 kept (13304c2f); F120 kept (1409bbf6); F140 kept (4c285d30); F145 kept (0f3609a7); F146 kept (b08451c7); no fix or revert commits; 578 passed without the feature and 592 with it, 1 skipped; the remedy was checked end to end by running it, and the renamed fixture was mutation-checked
     followups: [F189, F190, F191, F192]
-  - batch: M6
+  - batch: M19
     status: pending
-    tasks: [F121, F122, F125, F126, F127, F129]
+    tasks: [F193, F194]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M20
+    status: pending
+    tasks: [F195, F196, F197]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M6
+    status: in_progress
+    tasks: [F121, F122, F125, F126, F127, F129]
+    base: e68043dd
+    head: 5b6fdf3b
     result: null
     followups: []
   - batch: M7
@@ -1206,15 +1220,15 @@ followups:
   - id: F121
     source: F20
     description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [50e81f06]
   - id: F122
     source: F19
     description: The walk's other counters, scan start and scan progress, and the effective-map counters are still unpinned; only scan done is now.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [2115d14e, 5a5cb7a2]
   - id: F123
     source: F20
     description: The blocking-destination fixture costs about half a second on this host because of antivirus; a smaller tree would be cheaper but would give a thinner margin.
@@ -1231,21 +1245,21 @@ followups:
   - id: F125
     source: F19
     description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [c4f93a7f]
   - id: F126
     source: F20
     description: The discrimination still rests on the removal tree outlasting a worker wake-up rather than on an explicit barrier, so a case that gated one copy on the other failure would remove the last ordering dependence.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [6c16cf00]
   - id: F127
     source: F20
     description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [20b42517]
   - id: F128
     source: F21
     description: CommonOpts::case_sensitive is still a public field, so nothing stops a future test from assigning it directly and re-introducing the field and filter disagreement the setter exists to prevent.
@@ -1256,9 +1270,9 @@ followups:
   - id: F129
     source: F44
     description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
-    status: in_progress
+    status: pending_review
     batch: M6
-    commits: []
+    commits: [a5b3b2c1, 9c327065]
   - id: F130
     source: F45
     description: The README states the copy failure-message shape in two places joined by a cross-link, and nothing keeps the two from drifting.
@@ -1645,6 +1659,36 @@ followups:
     status: pending
     batch: M18
     commits: []
+  - id: F193
+    source: F126
+    description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
+    status: pending
+    batch: M19
+    commits: []
+  - id: F194
+    source: F126
+    description: GIRSYNC_TEST_GATE_COPY splits on a colon, harmless for relative paths, but the constraint is stated only in the hook doc comment.
+    status: pending
+    batch: M19
+    commits: []
+  - id: F195
+    source: F122
+    description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
+    status: pending
+    batch: M20
+    commits: []
+  - id: F196
+    source: F121
+    description: The copy phase's selection rule is pinned by a unit test on the comparison, but the mapping from a plan index to the path the report names is only covered end-to-end.
+    status: pending
+    batch: M20
+    commits: []
+  - id: F197
+    source: F122
+    description: The effective done event is logged once per phase and the two are told apart only by the presence of the stat_only field; a message that named the phase would remove that subtlety.
+    status: pending
+    batch: M20
+    commits: []
 ```
 
 ## Human checklist
@@ -1677,6 +1721,12 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M6 review checkpoint opened: F121, F122, F125,
+  F126, F127 and F129 `in_progress` → `pending_review`, commits `50e81f06`,
+  `a5b3b2c1`, `2115d14e`, `c4f93a7f`, `6c16cf00`, `20b42517`, `5a5cb7a2`,
+  `9c327065`, `5b6fdf3b`; review M6 `pending` → `in_progress`, base
+  `e68043dd`, head `5b6fdf3b`. Follow-ups F193–F197 appended with batches
+  M19 and M20.
 - 2026-11-14 — follow-up batch M6 started: F121, F122, F125, F126, F127 and F129
   `pending` → `in_progress`; `active_batch: M5` → `M6`.
 - 2026-11-14 — review M5 `done`: F117, F118, F120, F140, F145 and F146 all
