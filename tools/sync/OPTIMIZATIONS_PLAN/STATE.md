@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M12
+active_batch: M13
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1554,37 +1554,37 @@ followups:
   - id: F166
     source: F34
     description: DigestSet::insert_named rebuilds the whole foreign slice on every insert, including an in-place replacement, and merge does the same.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F167
     source: F41
     description: The adoption arm allocates a Vec of references per exact-case miss just to count the alternates.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F168
     source: F41
     description: The phase-A prune still walks the whole key set every scan; only the alternate index became lazy.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F169
     source: F34
     description: DigestSet::merge and insert_named spell the same-name comparison two ways.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F170
     source: F33
     description: The fold-equivalence case uses eq_ignore_ascii_case as its oracle, so it would follow std rather than catch a std change.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F171
     source: F41
     description: fold_alternates allocates a Vec of Strings per folded group, and groups with several stale spellings are the common shape there.
-    status: pending
+    status: in_progress
     batch: M13
     commits: []
   - id: F172
@@ -1959,6 +1959,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M13 started: F166, F167, F168, F169, F170 and F171
+  `pending` → `in_progress`; `active_batch: M12` → `M13`.
 - 2026-11-14 — review M12 `done`: F160 fixed (80ba72d1), F161–F165 kept; follow-
   ups F225 and F227 appended with batch `M28` and F226 recorded as `skipped`
   because it is the same item as F222. F160–F165 `pending_review` →
