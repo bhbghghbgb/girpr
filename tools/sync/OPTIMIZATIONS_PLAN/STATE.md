@@ -712,13 +712,34 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M53
+    status: pending
+    tasks: [F298, F301]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M54
+    status: pending
+    tasks: [F299, F300]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M55
+    status: pending
+    tasks: [F302, F303]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M22
-    status: in_progress
+    status: done
     tasks: [F206, F207, F208]
     base: 7c9a179d
     head: 0a942361
-    result: null
-    followups: []
+    result: F206 kept (e5171086); F207 kept (b683af1f); F208 kept (0a942361); no fix or revert commits; 596 passed, 1 skipped; the reviewer confirmed one implementation is left, the three questions stay apart, and the helper is not compiled on POSIX
+    followups: [F298, F299, F300, F301, F302, F303]
   - batch: M7
     status: done
     tasks: [F138, F139, F141, F144]
@@ -1965,19 +1986,19 @@ followups:
   - id: F206
     source: F141
     description: has_cache_prefix's doc names ascii_case_eq without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
-    status: pending_review
+    status: completed
     batch: M22
     commits: [e5171086]
   - id: F207
     source: F138
     description: The new locals are src_folded and dst_folded although they hold folded-key indexes; names ending in _keys would say what they hold more exactly.
-    status: pending_review
+    status: completed
     batch: M22
     commits: [b683af1f]
   - id: F208
     source: F144
     description: on_disk_fold and util::identity_fold are now byte-identical Unicode-lowercase helpers in two modules; both docs warn against unifying them, but the duplication is visible to a reader.
-    status: pending_review
+    status: completed
     batch: M22
     commits: [0a942361]
   - id: F209
@@ -2528,6 +2549,42 @@ followups:
     status: pending
     batch: M52
     commits: []
+  - id: F298
+    source: F208
+    description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
+    status: pending
+    batch: M53
+    commits: []
+  - id: F299
+    source: F208
+    description: The design notes' fold section still says the on-disk lookup and the key sit side by side in one file, though the path key itself lives in the utility module.
+    status: pending
+    batch: M54
+    commits: []
+  - id: F300
+    source: F208
+    description: The new notes paragraph says the value is written once rather than twice in two modules, a comparison with the old state that the notes own rule against recording changes discourages.
+    status: pending
+    batch: M54
+    commits: []
+  - id: F301
+    source: F208
+    description: The on-disk lookup's doc points at the shared mapping as plain code where the two neighbouring references use intra-doc links.
+    status: pending
+    batch: M53
+    commits: []
+  - id: F302
+    source: F207
+    description: The renamed indexes carry a keys suffix while the helper's own doc calls it the folded-key index, so the names do not match the wording exactly.
+    status: pending
+    batch: M55
+    commits: []
+  - id: F303
+    source: F207
+    description: The POSIX build warns about an unused import in the sync test module, which predates this work.
+    status: pending
+    batch: M55
+    commits: []
 ```
 
 ## Human checklist
@@ -2560,6 +2617,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M22 `done`: F206, F207 and F208 all kept, no fix or
+  revert commits; follow-ups F298–F303 appended with batches `M53`, `M54` and
+  `M55`. F206–F208 `pending_review` → `completed`.
 - 2026-11-14 — follow-up batch M22 review checkpoint opened: F206, F207 and F208
   `in_progress` → `pending_review`, commits `e5171086`, `b683af1f`,
   `0a942361`; review M22 `pending` → `in_progress`, base `7c9a179d`, head
