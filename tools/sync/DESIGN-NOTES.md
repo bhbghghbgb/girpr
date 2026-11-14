@@ -785,11 +785,13 @@ look fine, only the verdict is wrong.
 
 ## Known limits, deliberately not fixed
 
-Each is cache hygiene or a race, not a wrong answer. All but one are stated in
-`README.md` where a user can meet them; the exception is the host-coverage
-one, which is about the test suite rather than about a run, so it is here
-alone. Recorded here so a reader deciding whether to "fix" one knows what the
-trade was.
+They fall into four kinds, and none of them is a defect in the answer for the
+paths the run treats as distinct: cache state that outlives its use, a race
+the run cannot win, a limit on what the host can create, and an approximation
+of the filesystem's own case table. Every one of them is stated in
+`README.md` where a reader meets it — the host-coverage one in the suite's own
+section, since it is about the test suite rather than about a run. Recorded
+here so a reader deciding whether to "fix" one knows what the trade was.
 
 **A row for a directory created and removed in one run survives until the next
 prune.** Reachable only with `--case-sensitive` on a case-insensitive filesystem:
@@ -832,14 +834,14 @@ other. Stated in `README.md`, where a user meets it.
 
 **Host coverage of the link cases.** Some end-to-end cases need primitives a
 regular user cannot always create: Windows without developer mode refuses
-`symlink_file`/`symlink_dir` (directory junctions via `mklink /J` still work
-without elevation), and hard-link fixtures need link creation too. `tests/symlink.rs`
-and `tests/sync.rs` self-skip those cases with a `skip:` line saying why, so a
-locked-down host runs the junction- and unit-level halves while the file-symlink
-bodies do not. A green local run is therefore not full link coverage — that gap
-is closed on a host that can create links, not by weakening or removing the
-cases. The skip reason sits beside each case; there is no separate document to
-keep in step with them.
+`symlink_file`/`symlink_dir`, while a directory junction (`mklink /J`) and a
+hard link are both created without elevation. `tests/symlink.rs` and
+`tests/sync.rs` self-skip the cases whose primitive the host refused, printing a
+`skip:` line that says why, so a locked-down host runs the junction- and
+unit-level halves while the file-symlink bodies do not. A green local run is
+therefore not full link coverage — that gap is closed on a host that can create
+the links, not by weakening or removing the cases. The skip reason sits beside
+each case; there is no separate document to keep in step with them.
 
 **Neither fold is the filesystem's own case table.** Windows treats `Ärger`
 and `ärger` as one file and the Kelvin sign and `k` as two, so the ASCII-only

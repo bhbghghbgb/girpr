@@ -1527,6 +1527,17 @@ The converter's cases are behind the `convert` feature, so they are not in that
 run: `cargo nextest run -p girsync --features convert --test convert` runs
 them — see [Build features](#build-features).
 
+**A green run is not full link coverage.** Some end-to-end cases need
+primitives a regular user cannot always create: Windows without developer mode
+refuses `symlink_file`/`symlink_dir`, while a directory junction (`mklink /J`)
+and a hard link are both created without elevation. `tests/symlink.rs` and
+`tests/sync.rs` self-skip the cases whose primitive the host refused, printing a
+`skip:` line that says why, so a locked-down host runs the junction- and
+unit-level halves while the file-symlink bodies do not. The gap is closed on a
+host that can create the links, not by weakening or removing the cases, and the
+skip reason sits beside each case — there is no separate document to keep in
+step with them.
+
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real rather than incidental: nothing one test does — a global, a temp
 directory, an environment variable — can reach the next one.
