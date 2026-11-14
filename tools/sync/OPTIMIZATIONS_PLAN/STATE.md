@@ -579,11 +579,25 @@ reviews:
     head: 6c23cb4b
     result: F185 kept (f0cd71f7); F186 kept (a2bb2324); F187 kept (4c48b5cb); F188 kept (4d91eca7); F190 fixed (6c23cb4b corrects the two docs that still asserted the removed rule); F191 kept (4d91eca7); 594 passed without the feature and 609 with it, 1 skipped
     followups: [F263, F264, F265]
-  - batch: M18
+  - batch: M40
     status: pending
-    tasks: [F189, F192]
+    tasks: [F266]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M41
+    status: pending
+    tasks: [F267, F268]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M18
+    status: in_progress
+    tasks: [F189, F192]
+    base: 8308d0b6
+    head: a85579d2
     result: null
     followups: []
   - batch: M5
@@ -1771,9 +1785,9 @@ followups:
   - id: F189
     source: F140
     description: The README example block spells three commands the CLI rejects, girsync update src, girsync sync src dst and girsync compare-self src, while the prose directly beneath spells the same remedy correctly.
-    status: in_progress
+    status: pending_review
     batch: M18
-    commits: []
+    commits: [f4b00295]
   - id: F190
     source: F140
     description: side_folder takes a record's parent, so a record whose name is not literally girpr-cache, such as girpr-cache-backup-1 which is_record_path also classifies as a record, gets a remedy that repopulates the folder's girpr-cache rather than the file that failed.
@@ -1789,9 +1803,9 @@ followups:
   - id: F192
     source: F117
     description: The design notes and the README name the conversion temporary only as girpr-cache-convert-<pid>-<ts>.redb, omitting the underscore-n retry spellings claim_temp_sibling can also produce.
-    status: in_progress
+    status: pending_review
     batch: M18
-    commits: []
+    commits: [a85579d2]
   - id: F193
     source: F126
     description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
@@ -2241,6 +2255,24 @@ followups:
     status: pending
     batch: M39
     commits: []
+  - id: F266
+    source: F189
+    description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
+    status: pending
+    batch: M40
+    commits: []
+  - id: F267
+    source: F189
+    description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
+    status: pending
+    batch: M41
+    commits: []
+  - id: F268
+    source: F189
+    description: The README update command names a placeholder where a real path would go, so it is prose rather than a runnable example, unlike the rest of the block it sits in.
+    status: pending
+    batch: M41
+    commits: []
 ```
 
 ## Human checklist
@@ -2273,6 +2305,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M18 review checkpoint opened: F189 and F192
+  `in_progress` → `pending_review`, commits `f4b00295`, `a85579d2`; review M18
+  `pending` → `in_progress`, base `8308d0b6`, head `a85579d2`. Follow-ups
+  F266–F268 appended with batches `M40` and `M41`.
 - 2026-11-14 — follow-up batch M18 started: F189 and F192 `pending` →
   `in_progress`; `active_batch: M17` → `M18`.
 - 2026-11-14 — review M17 `done`: F185 kept (f0cd71f7), F186 kept (a2bb2324),
