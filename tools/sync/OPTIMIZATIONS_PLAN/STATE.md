@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M5
+active_batch: M6
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1206,13 +1206,13 @@ followups:
   - id: F121
     source: F20
     description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F122
     source: F19
     description: The walk's other counters, scan start and scan progress, and the effective-map counters are still unpinned; only scan done is now.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F123
@@ -1231,19 +1231,19 @@ followups:
   - id: F125
     source: F19
     description: The counters are pinned for one update run, but a pruned girpr-cache* subtree absence from them, and the fact that a sync run two walks each report their own counts, are still unpinned.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F126
     source: F20
     description: The discrimination still rests on the removal tree outlasting a worker wake-up rather than on an explicit barrier, so a case that gated one copy on the other failure would remove the last ordering dependence.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F127
     source: F20
     description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F128
@@ -1256,7 +1256,7 @@ followups:
   - id: F129
     source: F44
     description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
-    status: pending
+    status: in_progress
     batch: M6
     commits: []
   - id: F130
@@ -1677,6 +1677,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M6 started: F121, F122, F125, F126, F127 and F129
+  `pending` → `in_progress`; `active_batch: M5` → `M6`.
 - 2026-11-14 — review M5 `done`: F117, F118, F120, F140, F145 and F146 all
   kept, no fix or revert commits; follow-ups F185–F192 appended, with F185,
   F186, F187, F188, F190 and F191 in M17 and F189 and F192 in M18. F117,
