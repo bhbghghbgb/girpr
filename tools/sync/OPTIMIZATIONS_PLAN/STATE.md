@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M18
+active_batch: M19
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1816,13 +1816,13 @@ followups:
   - id: F193
     source: F126
     description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
-    status: pending
+    status: in_progress
     batch: M19
     commits: []
   - id: F194
     source: F126
     description: GIRSYNC_TEST_GATE_COPY splits on a colon, harmless for relative paths, but the constraint is stated only in the hook doc comment.
-    status: pending
+    status: in_progress
     batch: M19
     commits: []
   - id: F195
@@ -1846,7 +1846,7 @@ followups:
   - id: F198
     source: F129
     description: The design notes Enforced by list for the verify names the canonical-order case but not the new error-event case, so the second channel's case is unlisted, the same gap F124 closed for the first one.
-    status: pending
+    status: in_progress
     batch: M19
     commits: []
   - id: F199
@@ -2337,6 +2337,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M19 started: F193, F194 and F198 `pending` →
+  `in_progress`; `active_batch: M18` → `M19`.
 - 2026-11-14 — review M18 `done`: F189 kept (f4b00295), F192 fixed
   (b7f6afda); follow-ups F269–F271 appended with batch `M42` and F272
   recorded as `skipped` because the false claim sits in a commit message that
