@@ -37,8 +37,9 @@ use super::link::{
 /// It runs before the rename pass, which is the run's first change to dst.
 /// The guards that ask the disk after the rename — [`spare_link_storage`],
 /// [`ensure_link_safe`] and [`ensure_hard_linked_targets_safe`] — refuse a
-/// plan that is already one change in, so a refusal there does not leave dst
-/// as it was.
+/// plan that is already one change in, so in a real run a refusal there does
+/// not leave dst as it was. A dry run performs no rename and changes
+/// nothing, so dst is as it was in either mode.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
 /// paths a plan touches. The link questions are asked of the disk directly:
