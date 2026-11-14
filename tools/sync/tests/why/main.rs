@@ -171,6 +171,7 @@ fn resolved(
             no_trust: false,
             cap: s.cap,
             label: &format!("src {}", s_side.cache_path().display()),
+            folder: None,
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -178,6 +179,7 @@ fn resolved(
             no_trust: false,
             cap: d.cap,
             label: &format!("dst {}", d_side.cache_path().display()),
+            folder: None,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

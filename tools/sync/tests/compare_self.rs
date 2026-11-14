@@ -402,6 +402,13 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
         msg.contains(&want),
         "and the label names the record whose parent is the folder to run it on:\n{msg}"
     );
+    // And the remedy names that folder itself, so the line is a command that
+    // can be pasted as it stands rather than one with a placeholder in it.
+    let remedy = format!("girsync update --dir {}", src.display());
+    assert!(
+        msg.contains(&remedy),
+        "and the remedy names the folder to run it on:\n{msg}"
+    );
     // And the covered paths are counted, so the user can see this is 1 of N
     // rather than a whole broken record.
     assert!(msg.contains("2/3"), "per-algorithm coverage:\n{msg}");
@@ -461,6 +468,13 @@ fn a_record_side_is_named_the_same_way_by_both_commands() {
     assert!(
         msg.contains(&want),
         "compare names the record the same way:\n{msg}"
+    );
+    // And the remedy names the folder to run it on, from `compare` as well:
+    // the folder is the record's parent, whichever command reported it.
+    let remedy = format!("girsync update --dir {}", rec_home.display());
+    assert!(
+        msg.contains(&remedy),
+        "and the remedy names the same folder:\n{msg}"
     );
 }
 

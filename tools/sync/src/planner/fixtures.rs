@@ -143,6 +143,7 @@ impl Shape {
                 no_trust: self.no_trust.0,
                 cap: cap(self.hashable.0),
                 label: "src",
+                folder: None,
             },
             SideRequest {
                 entries: d,
@@ -150,6 +151,7 @@ impl Shape {
                 no_trust: self.no_trust.1,
                 cap: cap(self.hashable.1),
                 label: "dst",
+                folder: None,
             },
             CasePairing::from(sensitive),
             self.mode,

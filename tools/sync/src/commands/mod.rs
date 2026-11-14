@@ -12,6 +12,7 @@ pub use update::cmd_update;
 
 pub use crate::report::verdict;
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -65,6 +66,29 @@ pub fn side_label(side: &Side) -> String {
         Side::Folder(root) => root,
     };
     format!("{} {}", side_kind(side), path.display())
+}
+
+/// The folder a side's cache lives in, when it has one to repopulate.
+///
+/// A record's path is `<folder>/girpr-cache`, so the folder it describes is
+/// its parent — and that folder is what `girsync update --dir` takes, so a
+/// coverage failure can end with a command the user can paste instead of a
+/// placeholder.
+///
+/// `None` for a folder side: a folder can always answer for itself, so it is
+/// never the short side, and it has no record of its own to repopulate.
+///
+/// **Public, for the same reason [`side_label`] is**: a caller outside the
+/// crate names a side the way the commands do, or it keeps a second spelling.
+pub fn side_folder(side: &Side) -> Option<PathBuf> {
+    match side {
+        Side::Record(p) => Some(match p.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+            // A record named on its own lives in the working directory.
+            _ => PathBuf::from("."),
+        }),
+        Side::Folder(_) => None,
+    }
 }
 
 /// Emit every record a diff reports — one per difference plus the `SUMMARY` — and

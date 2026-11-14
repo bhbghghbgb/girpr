@@ -33,6 +33,17 @@ pub struct Coverage {
     /// which is `'static`; the alternative would be for every caller to keep its
     /// labels alive for the life of the error.
     pub label: String,
+    /// The folder a repopulation of this side would run on.
+    ///
+    /// A record's path is `<folder>/girpr-cache`, so the folder it describes is
+    /// its parent, and that folder is what `girsync update --dir` takes. The
+    /// planner is handed a side's *contents* and not the path of the file they
+    /// came from, so the caller is the one who says which folder this is.
+    ///
+    /// `None` when the caller did not say, and the message then offers no
+    /// repopulation: there is no folder to name, and a placeholder would be a
+    /// command nobody can paste.
+    pub folder: Option<String>,
     /// Which mode was asked for. Carried because the two modes fail differently and
     /// so are *remedied* differently — an all-of failure can be answered by asking
     /// for any one algorithm, which is the whole of `any-of`.
@@ -148,11 +159,14 @@ impl fmt::Display for Coverage {
                 )?;
             }
         }
-        writeln!(
-            f,
-            "  - repopulate it, then run this again: girsync update --dir <the folder \
-             this record describes>"
-        )?;
+        // The one remedy that names a path, so it is the one that has to be
+        // copy-pasteable: the folder the caller named, never a placeholder.
+        if let Some(folder) = &self.folder {
+            writeln!(
+                f,
+                "  - repopulate it, then run this again: girsync update --dir {folder}"
+            )?;
+        }
         writeln!(
             f,
             "  - compare by stat only, and accept that content is unchecked: \
@@ -411,6 +425,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
+                folder: Some("D:\\game\\old".into()),
                 mode: HashMode::AllOf,
                 missing: BTreeMap::from([(
                     "a.txt".to_string(),
@@ -431,12 +446,53 @@ mod tests {
             // Neither algorithm alone covers, so the remedy is the weaker mode
             // over the whole request — the string the user will paste.
             "  - require only one of them: --hash-any-of md5 sha256",
+            // And the repopulation names the folder itself, so the line is a
+            // command that can be pasted as it stands.
+            "  - repopulate it, then run this again: girsync update --dir D:\\game\\old",
         ] {
             assert!(
                 msg.contains(want),
                 "missing from the message:\n{want}\n\n{msg}"
             );
         }
+    }
+
+    /// **The remedy is copy-pasteable, so it names a folder and not a
+    /// placeholder.** The planner is handed a side's contents and not the path
+    /// of the file they came from, so the caller says which folder the record
+    /// lives in and the message ends with that.
+    ///
+    /// Two cases, and the second is the one that matters: a caller that did not
+    /// say offers **no** repopulation at all, rather than a line with a
+    /// placeholder in it that nobody can paste.
+    #[test]
+    fn the_repopulate_remedy_names_a_folder_or_is_not_offered() {
+        use std::collections::BTreeMap;
+
+        let coverage = |folder: Option<&str>| Coverage {
+            side: "src",
+            label: "record D:\\game\\old\\girpr-cache".into(),
+            folder: folder.map(str::to_string),
+            mode: HashMode::AllOf,
+            missing: BTreeMap::new(),
+            coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 1usize))]),
+        };
+
+        let named = format!("{:#}", coverage(Some("D:\\game\\old")));
+        assert!(
+            named.contains("girsync update --dir D:\\game\\old"),
+            "the remedy names the folder the record lives in:\n{named}"
+        );
+        assert!(
+            !named.contains("the folder this record describes"),
+            "and no placeholder is left in it:\n{named}"
+        );
+
+        let unnamed = format!("{:#}", coverage(None));
+        assert!(
+            !unnamed.contains("girsync update"),
+            "a caller that named no folder offers no repopulation:\n{unnamed}"
+        );
     }
 
     /// One algorithm *does* cover the undecided set, so the remedy is to narrow the
@@ -451,6 +507,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
+                folder: None,
                 mode: HashMode::AllOf,
                 missing: BTreeMap::new(),
                 coverage: BTreeMap::from([

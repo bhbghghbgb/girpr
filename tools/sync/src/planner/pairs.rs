@@ -7,6 +7,7 @@
 //! and to refuse the run when a pair cannot be answered at all.
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use anyhow::Result;
 
@@ -41,6 +42,17 @@ pub struct SideRequest<'a> {
     /// side *can do*, not what it *is*, so this is the one chance a caller has to
     /// put its own vocabulary into the message.
     pub label: &'a str,
+    /// The folder a repopulation of this side would run on, when the side is a
+    /// **record**.
+    ///
+    /// A record's path is `<folder>/girpr-cache`, so the folder it describes is
+    /// its parent — and that folder is what the remedy repopulates. The planner
+    /// knows what a side *can do*, not where its cache lives, so this is the
+    /// caller's one chance to say that too.
+    ///
+    /// `None` for a folder side: a folder can always backfill, so it is never
+    /// the short one, and there is no record of its own to repopulate.
+    pub folder: Option<&'a Path>,
 }
 
 /// Both sides' plans, from one decision.
@@ -349,6 +361,7 @@ pub fn plan_pairs(
             return Err(Coverage {
                 side: ["src", "dst"][idx],
                 label: req.label.to_string(),
+                folder: req.folder.map(|f| f.display().to_string()),
                 mode,
                 missing: std::mem::take(&mut tally[idx].missing),
                 coverage: std::mem::take(&mut tally[idx].coverage),

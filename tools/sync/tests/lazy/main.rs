@@ -112,6 +112,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
+            folder: None,
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -119,6 +120,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
+            folder: None,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

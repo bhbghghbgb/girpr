@@ -124,6 +124,7 @@ fn plan(
             no_trust: false,
             cap: sc,
             label: "src",
+            folder: None,
         },
         SideRequest {
             entries: d,
@@ -131,6 +132,7 @@ fn plan(
             no_trust: false,
             cap: dc,
             label: "dst",
+            folder: None,
         },
         CasePairing::Exact,
         mode,
@@ -218,6 +220,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             no_trust: false,
             cap: so.cap,
             label: &s_label,
+            folder: None,
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -225,6 +228,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts) -> (usize, usize) {
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
+            folder: None,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -259,6 +263,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
+            folder: None,
         },
         SideRequest {
             entries: &disk_a.map,
@@ -266,6 +271,7 @@ fn self_audit_count(dir: &Path, common: &CommonOpts) -> (usize, i32) {
             no_trust: false,
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
+            folder: None,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

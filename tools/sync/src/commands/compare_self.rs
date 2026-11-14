@@ -61,7 +61,7 @@ use crate::effective::{
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
-use super::{report_and_finish, side_label};
+use super::{report_and_finish, side_folder, side_label};
 
 /// Audit `<dir>` against `<dir>/girpr-cache`. Returns the process exit code:
 /// `0` if the cache is in step, `4` if it has drifted.
@@ -190,11 +190,14 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // a failure names — which is the side that cannot fill a gap, and the one the
     // remedy is about. The record is named by its path and by nothing else, the
     // same way `compare` names it: the path is `<folder>/girpr-cache`, so the
-    // folder it describes is its parent, and the remedy the message ends with
-    // (`girsync update --dir <the folder this record describes>`) is where that
-    // folder belongs.
-    let rec_label = side_label(&Side::Record(db_path.clone()));
+    // folder it describes is its parent, and that folder is what the remedy
+    // repopulates — so the message ends with a command the user can paste.
+    let rec_side = Side::Record(db_path.clone());
+    let rec_label = side_label(&rec_side);
     let disk_label = side_label(&Side::Folder(dir.clone()));
+    // The folder the record lives in, for the same reason the label is needed:
+    // the planner knows what a side can do, not where its cache is.
+    let rec_folder = side_folder(&rec_side);
     // The `?` stops the run before either side reads anything: a record that
     // cannot supply a requested digest must fail rather than let the pair fall
     // back to size+mtime, which for an audit means reporting "in step" about
@@ -212,6 +215,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
+            folder: rec_folder.as_deref(),
         },
         SideRequest {
             entries: &disk_a.map,
@@ -219,6 +223,8 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
+            // A folder side can always backfill, so it is never the short one.
+            folder: None,
         },
         pairing,
         common.hash_mode,

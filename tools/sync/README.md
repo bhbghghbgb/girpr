@@ -588,7 +588,8 @@ stat-equal pair the record cannot digest, and without this rule it would have
 exited **0**: `hashes_differ` skips an algorithm either side lacks, so the pair
 quietly falls back to the size+mtime that had already agreed and the audit reports
 the newcomer as in step. Three ways out, all named in the error: one command
-(`girsync update --dir src`), a narrower request
+(`girsync update --dir src` — with the **folder spelled out**, so the line is
+one you can paste as it stands), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
 `--hash-all-of none` for a stat-only audit.
 
@@ -1615,8 +1616,9 @@ them; `--dry-run` costs the same again.
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
   it cannot compare content for that path. `girsync update --dir <the folder>` is
   the fix, or `--hash-any-of` if the record holds *some* of what you asked for; the
-  error names the record (its path says which folder), the count, the paths and the
-  mode that failed.
+  error names the record (its path says which folder), the folder to run that fix
+  on (spelled out, so the command can be pasted as it stands), the count, the
+  paths and the mode that failed.
 - **A size-changed cache row can get stuck.** Editing a file's length drops its digests
   (a stale row's are all suspect), and a size difference settles the pair for free — so
   nothing ever rehashes it and the row stays stat-only permanently, describing content

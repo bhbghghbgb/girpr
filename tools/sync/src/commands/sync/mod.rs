@@ -300,6 +300,8 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             // is the same one `compare` uses, and here it is vacuous.
             cap: SideCapability::for_folder(&src_db, src_mode),
             label: &src_label,
+            // And a folder side has no record to repopulate either.
+            folder: None,
         },
         SideRequest {
             entries: &dst_a.map,
@@ -307,6 +309,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, dst_mode),
             label: &dst_label,
+            folder: None,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
