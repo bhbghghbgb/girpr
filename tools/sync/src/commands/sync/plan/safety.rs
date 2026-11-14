@@ -39,7 +39,7 @@ use super::link::{
 /// [`ensure_link_safe`] and [`ensure_hard_linked_targets_safe`] — refuse a
 /// plan that is already one change in, so in a real run a refusal there does
 /// not leave dst as it was. A dry run performs no rename and changes
-/// nothing, so dst is as it was in either mode.
+/// nothing, so a refusal there leaves dst as it was.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
 /// paths a plan touches. The **link-resolution** questions are asked of the
