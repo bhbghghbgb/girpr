@@ -453,11 +453,18 @@ reviews:
     head: 335cda4b
     result: F111 kept (335cda4b); F112 kept (1cac4f4b); F116 kept (839bcf84); F130 kept (0e73b57f); no fix or revert commits; 577 passed without the feature and 591 with it, 1 skipped; the reviewer drove the MSRV script with a stubbed cargo across five feature scenarios and found the fallback cannot hide a real failure
     followups: [F179, F180, F181, F183]
-  - batch: M5
+  - batch: M17
     status: pending
-    tasks: [F117, F118, F120, F140, F145, F146]
+    tasks: [F185, F186, F187, F188]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M5
+    status: in_progress
+    tasks: [F117, F118, F120, F140, F145, F146]
+    base: 51806c37
+    head: b08451c7
     result: null
     followups: []
   - batch: M6
@@ -1167,15 +1174,15 @@ followups:
   - id: F117
     source: F51
     description: DESIGN-NOTES.md's "Known limits, deliberately not fixed" list does not carry the converter's stale temporary, although that section is where such hygiene trade-offs are meant to be recorded and the working-copy case is already there.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [e30e6c6f]
   - id: F118
     source: F51
     description: The recorded reasoning that a sweep could not tell a live temporary from a dead one does not address why the process id in the temporary's name is not used to test liveness, given pid reuse and cross-host containers.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [13304c2f]
   - id: F119
     source: F31
     description: The per-feature check enables each declared feature alone, so a member that ever declares two features that only compile together would not be covered by the MSRV gate.
@@ -1186,9 +1193,9 @@ followups:
   - id: F120
     source: F64
     description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [1409bbf6]
   - id: F121
     source: F20
     description: The copy phase's failure-selection rule is still pinned only end-to-end; a unit test on the selection itself, in apply/phases.rs, would pin it without any dispatcher assumption.
@@ -1311,9 +1318,9 @@ followups:
   - id: F140
     source: F136
     description: The coverage message's remedy still prints the placeholder girsync update --dir <the folder this record describes> rather than the actual folder path, which the message names one line above; making it copy-pasteable would need a README update.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [4c285d30]
   - id: F141
     source: F134
     description: has_cache_prefix uses its own ASCII-only Windows fold rather than the identity rule; intentional and documented, but a third case-fold site a reader has to notice.
@@ -1343,15 +1350,15 @@ followups:
   - id: F145
     source: F132
     description: The integration-test helpers tests/lazy/sync.rs, tests/lazy/compare_self.rs and tests/hash_mode/main.rs still build side labels inline, and since side_label is pub(super) inside commands the tests cannot reach it, so one spelling for every command holds in src but the test suites keep a second spelling.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [0f3609a7]
   - id: F146
     source: F133
     description: The rename-order test fixture cannot distinguish sorted by the folded key from sorted by the exact key, since all three src names start with an uppercase letter and both orders are the same; a fixture mixing cases would make the test pin the folded order it claims to be about.
-    status: in_progress
+    status: pending_review
     batch: M5
-    commits: []
+    commits: [b08451c7]
   - id: F147
     source: F29
     description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
@@ -1583,6 +1590,30 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F178, already scheduled in M15
+  - id: F185
+    source: F145
+    description: Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message.
+    status: pending
+    batch: M17
+    commits: []
+  - id: F186
+    source: F146
+    description: tests/sync.rs run_sync_case_rename_steps_over_occupied_temporaries asserts a rename order from two src names that both start uppercase, so like the fixture just fixed it cannot tell the folded order from the exact one.
+    status: pending
+    batch: M17
+    commits: []
+  - id: F187
+    source: F140
+    description: side_folder returns a dot for a record named on its own, and that edge case has no test.
+    status: pending
+    batch: M17
+    commits: []
+  - id: F188
+    source: F140
+    description: Coverage::folder is an Option, so a caller that forgets it silently loses the remedy bullet rather than failing.
+    status: pending
+    batch: M17
+    commits: []
 ```
 
 ## Human checklist
@@ -1615,6 +1646,11 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M5 review checkpoint opened: F117, F118, F120,
+  F140, F145 and F146 `in_progress` → `pending_review`, commits `e30e6c6f`,
+  `13304c2f`, `1409bbf6`, `0f3609a7`, `4c285d30`, `b08451c7`; review M5
+  `pending` → `in_progress`, base `51806c37`, head `b08451c7`. Follow-ups
+  F185–F188 appended with batch `M17`.
 - 2026-11-14 — follow-up batch M5 started: F117, F118, F120, F140, F145 and F146
   `pending` → `in_progress`; `active_batch: M4` → `M5`.
 - 2026-11-14 — review M4 `done`: F111, F112, F116 and F130 all kept, no fix
