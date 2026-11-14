@@ -831,9 +831,9 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 /// in that count — the walk does not know what the run excludes.
 ///
 /// The map's counters are in the "effective" events, and there are **two** of
-/// them: one per phase, and they are told apart by the field only the second
-/// carries. The first phase reads no bytes at all, so it hashes nothing; the
-/// second one hashes what the map held and says how many were cache hits.
+/// them: one per phase, and each names the phase it came from. The first
+/// phase reads no bytes at all, so it hashes nothing; the second one hashes
+/// what the map held and says how many were cache hits.
 #[test]
 fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     let t = temp_root("out_walk_progress");
@@ -916,10 +916,11 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     );
 
     // The phases report their progress, and they count the work they have
-    // done rather than the tree: the first phase's total is every entry the
-    // walk saw, and the second's is only what the map kept — the second phase
-    // never touches a path the filter hid. Each event names its phase, so
-    // the two are told apart by the message rather than by a field.
+    // done rather than the tree. The first phase's total is every entry the
+    // walk saw — the filter has not been applied yet — and the second's is
+    // only what the map kept: the second phase never touches a path the
+    // filter hid. Each event names its phase, so the case says which phase
+    // reports which count, rather than stating the two numbers as a set.
     let phase_a_progress = events_with(&logged, "scan progress: phase a");
     let phase_c_progress = events_with(&logged, "scan progress: phase c");
     assert!(
@@ -927,18 +928,19 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         "the phases report their progress: {}",
         serde_json::to_string(&logged).unwrap()
     );
-    let totals: std::collections::BTreeSet<u64> = phase_a_progress
-        .iter()
-        .chain(phase_c_progress.iter())
-        .filter_map(|e| e["fields"]["total"].as_u64())
-        .collect();
-    assert_eq!(
-        totals,
-        [(HEARTBEAT_ENTRIES - 1) as u64, HEARTBEAT_ENTRIES as u64]
-            .into_iter()
-            .collect(),
-        "the first phase counts every entry the walk saw and the second only \
-         what the map kept"
+    assert!(
+        phase_a_progress
+            .iter()
+            .all(|e| e["fields"]["total"] == HEARTBEAT_ENTRIES),
+        "the phase that reads no bytes counts every entry the walk saw: {}",
+        serde_json::to_string(&phase_a_progress).unwrap()
+    );
+    assert!(
+        phase_c_progress
+            .iter()
+            .all(|e| e["fields"]["total"] == HEARTBEAT_ENTRIES - 1),
+        "the phase that hashes counts only what the map kept: {}",
+        serde_json::to_string(&phase_c_progress).unwrap()
     );
 
     // The map starts from the walk's count: the filter has not been applied
