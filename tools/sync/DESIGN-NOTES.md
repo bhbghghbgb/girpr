@@ -101,7 +101,7 @@ either way. The one that does not is
 and its row in `tests/sync_plan/`. If you add a case-only fixture, give the two
 sides **different bytes at the same length** or it tests nothing.
 
-### The path key, the identity rule, and the disk spelling answer three questions
+### Four fold sites, and the questions each one answers
 
 **The path key folds ASCII case only.** `util::path_key` is the key every
 relative-path index uses — the mixed-case guard, the planner's pairing, the
@@ -131,12 +131,24 @@ not about how a run keys its map, and it follows neither rule above. The same
 file holds both — the on-disk lookup and the key, side by side, answering two
 different questions.
 
+**The cache reservation is a fourth site, and it folds the path key's way.**
+`util::has_cache_prefix` asks a narrower question than any of the three above:
+is this path component one of the tool's own names (`girpr-cache` and its
+copies)? The prefix it matches is ASCII, so the ASCII-only comparison
+(`util::ascii_case_eq`) states it without borrowing the identity rule's Unicode
+fallback — that rule answers whether two spellings open the same place on disk,
+which is not the question here. On POSIX neither fold applies at all: the two
+spellings are distinct entries, so the reservation is an exact prefix match
+and `GIRPR-CACHE` is ordinary content.
+
 **Enforced by:** `util::tests::path_key_folds_ascii_case_only` and
 `util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key;
 `util::tests::component_equality_folds_ascii_and_non_ascii_case` and
 `util::tests::path_identity_ignores_case_on_windows` for identity;
 `util::tests::the_path_key_and_the_identity_rule_disagree_deliberately` for
 the boundary between them;
+`util::tests::the_cache_prefix_folds_case_on_windows_only` for the
+reservation;
 `planner::pairs::tests::insensitive_mode_does_not_fold_non_ascii_case` and
 `planner::pairs::tests::insensitive_mode_keeps_a_non_ascii_lookalike_distinct`
 for the planner's use of the key; and the `plan::tests` cases
