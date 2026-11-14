@@ -113,6 +113,36 @@ impl HashAlg {
     }
 }
 
+/// **The resolver's `const` context, checked by every build.**
+///
+/// A `const fn` may not allocate, so the resolver cannot: the
+/// allocation-free property is the compiler's guarantee rather than a matter
+/// of reading the body. Calling it in a const context is what pins that — a
+/// resolver that stopped being `const` would not compile here, and neither
+/// would one that allocated.
+///
+/// The pin is here, in the crate itself, rather than in the crate's tests,
+/// so it holds for every build and not only for the ones that build the
+/// tests: a resolver that stopped being `const` has to fail a plain build
+/// too, and a plain build is what most of the time is what runs.
+///
+/// The answers are checked in the same place, because a const context checks
+/// them without a runtime.
+const _: () = {
+    assert!(matches!(HashAlg::from_name("md5"), Some(HashAlg::Md5)));
+    assert!(matches!(HashAlg::from_name("MD5"), Some(HashAlg::Md5)));
+    assert!(matches!(
+        HashAlg::from_name("sha256"),
+        Some(HashAlg::Sha256)
+    ));
+    assert!(matches!(
+        HashAlg::from_name("SHA256"),
+        Some(HashAlg::Sha256)
+    ));
+    assert!(HashAlg::from_name("blake3").is_none());
+    assert!(HashAlg::from_name("").is_none());
+};
+
 /// The name an algorithm was parsed from that this build does not know.
 ///
 /// Carries the offending name and nothing else. **The supported list is not part

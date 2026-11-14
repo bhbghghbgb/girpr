@@ -76,29 +76,11 @@ fn the_name_resolver_agrees_with_the_parser() {
     );
 }
 
-/// **The resolver cannot allocate, and the compiler says so.**
-///
-/// The resolver is a `const fn`, and a const fn may not allocate: the
-/// allocation-free property is the compiler's guarantee rather than a matter
-/// of reading the body. Calling it in a const context is what pins that — a
-/// resolver that stopped being `const` would not compile here.
-///
-/// The answers are checked in the same place, because a const context checks
-/// them without a runtime.
-const _: () = {
-    assert!(matches!(HashAlg::from_name("md5"), Some(HashAlg::Md5)));
-    assert!(matches!(HashAlg::from_name("MD5"), Some(HashAlg::Md5)));
-    assert!(matches!(
-        HashAlg::from_name("sha256"),
-        Some(HashAlg::Sha256)
-    ));
-    assert!(matches!(
-        HashAlg::from_name("SHA256"),
-        Some(HashAlg::Sha256)
-    ));
-    assert!(HashAlg::from_name("blake3").is_none());
-    assert!(HashAlg::from_name("").is_none());
-};
+// The resolver's `const` context is pinned outside this module, in `algo.rs`:
+// a const context cannot allocate, and a resolver that stopped being `const`
+// would not compile there. The pin is in the crate rather than in its tests
+// so that it holds for every build, not only for the ones that build the
+// tests.
 
 /// The ASCII-case fold, written out rather than borrowed from `std`.
 ///
