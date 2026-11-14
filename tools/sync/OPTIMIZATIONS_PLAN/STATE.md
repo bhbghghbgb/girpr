@@ -433,13 +433,20 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M12
-    status: in_progress
-    tasks: [F160, F161, F162, F163, F164, F165]
-    base: 2f983689
-    head: ce0cab8a
+  - batch: M28
+    status: pending
+    tasks: [F225, F227]
+    base: null
+    head: null
     result: null
     followups: []
+  - batch: M12
+    status: done
+    tasks: [F160, F161, F162, F163, F164, F165]
+    base: 2f983689
+    head: 80ba72d1
+    result: F160 fixed (80ba72d1 removes a clause the premise could not support); F161 kept (312f8852); F162 kept (71434e08); F163 kept (7d01f95b); F164 kept (1ff3d1ac); F165 kept (ce0cab8a); 584 passed, 1 skipped
+    followups: [F225, F227]
   - batch: M2
     status: done
     tasks: [F36, F37, F38, F39, F40]
@@ -1511,37 +1518,37 @@ followups:
   - id: F160
     source: F36
     description: The clause that a refusal there does not leave dst as it was holds for a real run only, since a dry run performs no rename and changes nothing.
-    status: pending_review
+    status: completed
     batch: M12
-    commits: [0e48eda4]
+    commits: [0e48eda4, 80ba72d1]
   - id: F161
     source: F37
     description: The opener that the link questions are asked of the disk directly reads as universal, but the hard-link question goes through the seam, so a reader could conclude the hard-link guard bypasses it.
-    status: pending_review
+    status: completed
     batch: M12
     commits: [312f8852]
   - id: F162
     source: F37
     description: plan/link.rs's own module doc still says only read_link and canonicalize probes, omitting the try_is_link and the Windows read_dir probes the safety doc now lists.
-    status: pending_review
+    status: completed
     batch: M12
     commits: [71434e08]
   - id: F163
     source: F37
     description: The old rationale for the bypass, that no plan-time decision is lost with it, went with the sentence it belonged to, and a clause saying what a direct question costs the seam would say more than the new list does.
-    status: pending_review
+    status: completed
     batch: M12
     commits: [7d01f95b]
   - id: F164
     source: F38
     description: The notes name the new case but never state the rule it pins, that the dst root is resolved at plan time, so a reader has to infer what the case enforces from the case itself.
-    status: pending_review
+    status: completed
     batch: M12
     commits: [1ff3d1ac]
   - id: F165
     source: F39
     description: The headline that the count belongs to the cache and not to the handle is true only of the shared backend, so scoping it to that backend would keep the next sentence from reading as a correction.
-    status: pending_review
+    status: completed
     batch: M12
     commits: [ce0cab8a]
   - id: F166
@@ -1901,6 +1908,25 @@ followups:
     status: pending
     batch: M27
     commits: []
+  - id: F225
+    source: F165
+    description: CacheDb::reads field doc still says entries-table reads this cache has served, which the now-scoped method doc no longer supports for a file read-only handles, since each serves only its own reads.
+    status: pending
+    batch: M28
+    commits: []
+  - id: F226
+    source: F160
+    description: safety.rs module doc still reads the guards that run after the rename refuse a plan that is already one change in, which is a real-run statement since a dry run rename pass changes nothing.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F222, already scheduled in M27
+  - id: F227
+    source: F161
+    description: The label link-resolution is loose for link_ancestor_above, which asks whether a link sits above a path rather than what anything resolves to, though the list that follows enumerates the direct questions exactly.
+    status: pending
+    batch: M28
+    commits: []
 ```
 
 ## Human checklist
@@ -1933,6 +1959,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M12 `done`: F160 fixed (80ba72d1), F161–F165 kept; follow-
+  ups F225 and F227 appended with batch `M28` and F226 recorded as `skipped`
+  because it is the same item as F222. F160–F165 `pending_review` →
+  `completed`.
 - 2026-11-14 — follow-up batch M12 review checkpoint opened: F160, F161, F162,
   F163, F164 and F165 `in_progress` → `pending_review`, commits `0e48eda4`,
   `312f8852`, `71434e08`, `7d01f95b`, `1ff3d1ac`, `ce0cab8a`; review M12
