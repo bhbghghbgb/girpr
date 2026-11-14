@@ -384,13 +384,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M24
+    status: pending
+    tasks: [F212, F213, F214, F215]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M9
-    status: in_progress
+    status: done
     tasks: [F147, F148, F149, F150, F151, F152, F153, F154]
     base: c2295439
     head: 4a2acaea
-    result: null
-    followups: []
+    result: F147 kept (91d626b5); F148 kept (1f493787, 4a2acaea); F149 kept (dfaecf32); F150 kept (8bbba952); F151 kept (dfaecf32); F152 kept (dfaecf32); F153 kept (ccf14a43); F154 kept (1f493787, 4a2acaea); no fix or revert commits; 584 passed without the feature and 14 converter cases with it, 1 skipped; the reviewer verified each of the six known limits is stated in the README
+    followups: [F212, F213, F214, F215]
   - batch: M1
     status: done
     tasks: [F6, F28, F29, F32, F124]
@@ -1404,49 +1411,49 @@ followups:
   - id: F147
     source: F29
     description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [91d626b5]
   - id: F148
     source: F29
     description: The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [1f493787, 4a2acaea]
   - id: F149
     source: F28
     description: The src/bin/sled2redb.rs binary has no row of its own in the source-layout table; it is named inside the convert.rs row.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [dfaecf32]
   - id: F150
     source: F29
     description: The stat-only row can get stuck limit has two different names, the design notes one and the README another, so the wording differs enough to read as two limits.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [8bbba952]
   - id: F151
     source: F28
     description: The README source-layout table has no entry for src/hash/tests.rs or src/planner/fixtures.rs; the inline test modules are covered by the surrounding prose, so this is cosmetic.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [dfaecf32]
   - id: F152
     source: F28
     description: The new link.rs row shares its basename with the commands/sync/plan/ row's link.rs; naming the src-relative path would remove the ambiguity for a reader scanning for link.rs.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [dfaecf32]
   - id: F153
     source: F32
     description: The README Integration tests bullet omits tests/convert.rs, tests/symlink.rs and tests/migration_lock.rs, and never says the converter cases need the convert feature, which is the same gap this batch fixed in the design notes.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [ccf14a43]
   - id: F154
     source: F29
     description: The known-limits preamble still says each is cache hygiene or a race, not a wrong answer, which describes neither the host-coverage limit nor the filesystem case table.
-    status: pending_review
+    status: completed
     batch: M9
     commits: [1f493787, 4a2acaea]
   - id: F155
@@ -1795,6 +1802,30 @@ followups:
     status: pending
     batch: M23
     commits: []
+  - id: F212
+    source: F151
+    description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
+    status: pending
+    batch: M24
+    commits: []
+  - id: F213
+    source: F151
+    description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the three new rows that spell the whole path for neither reason, though every path is correct.
+    status: pending
+    batch: M24
+    commits: []
+  - id: F214
+    source: F150
+    description: The stuck-row limit names the flag as the repair, but girsync update --dir <folder> also rehashes a stat-only row, and the README already names it as the fix for the neighbouring record case.
+    status: pending
+    batch: M24
+    commits: []
+  - id: F215
+    source: F154
+    description: The preamble first kind, state in the cache or the folder that nothing reclaims on its own, does not fit the directory-row limit, which the next prune does reclaim; the limit own body says so, the preamble does not.
+    status: pending
+    batch: M24
+    commits: []
 ```
 
 ## Human checklist
@@ -1827,6 +1858,9 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — review M9 `done`: F147–F154 all kept, no fix or revert commits;
+  follow-ups F212–F215 appended with batch `M24`. F147–F154 `pending_review` →
+  `completed`.
 - 2026-11-14 — follow-up batch M9 review checkpoint opened: F147, F148, F149,
   F150, F151, F152, F153 and F154 `in_progress` → `pending_review`, commits
   `91d626b5`, `1f493787`, `dfaecf32`, `8bbba952`, `ccf14a43`, `4a2acaea`;
