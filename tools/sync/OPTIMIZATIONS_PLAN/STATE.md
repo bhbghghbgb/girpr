@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M9
+active_batch: M11
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-11T00:26:52Z
 tasks:
@@ -1466,25 +1466,25 @@ followups:
   - id: F156
     source: F39
     description: cache/db/backend.rs's SharedCache::reads doc and cachedb.rs's with_handle doc describe the same counter from the other side, and with_handle never says why the fresh counter is the cache's count for a file-backed cache.
-    status: pending
+    status: in_progress
     batch: M11
     commits: []
   - id: F157
     source: F40
     description: The preflight open also opens the entries table, a presence check with no rows read, outside begin_entries_read, so a reader of that function could ask whether that transaction is counted.
-    status: pending
+    status: in_progress
     batch: M11
     commits: []
   - id: F158
     source: F37
     description: plan/link.rs's module doc says the helpers are pure over the effective maps plus the link-resolution primitives, which reads as if they touch no disk, while on_disk_name, target_rel and spare_link_components all do.
-    status: pending
+    status: in_progress
     batch: M11
     commits: []
   - id: F159
     source: F39
     description: Seven pre-existing broken intra-doc links remain, for CacheDb twice, codec, Summary, super::super::apply::copy, AlgoSet and crate::effective::merge_row.
-    status: pending
+    status: in_progress
     batch: M11
     commits: []
   - id: F160
@@ -1858,6 +1858,8 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M11 started: F156, F157, F158 and F159 `pending` →
+  `in_progress`; `active_batch: M9` → `M11`.
 - 2026-11-14 — review M9 `done`: F147–F154 all kept, no fix or revert commits;
   follow-ups F212–F215 appended with batch `M24`. F147–F154 `pending_review` →
   `completed`.
