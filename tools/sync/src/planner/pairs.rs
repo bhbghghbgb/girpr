@@ -169,7 +169,7 @@ fn shared_pairs<'a>(
 ///
 /// Two consequences worth stating, because both are deliberate:
 ///
-/// - `--hash none` is trivially lazy: an empty `algos` means there is nothing to
+/// - `--hash-all-of none` is trivially lazy: an empty `algos` means there is nothing to
 ///   ask for, so no file is opened. It is a distinct mode, not all-of over an
 ///   empty set that happens to pass — and it is also why an empty request is never
 ///   a coverage failure, since the early return happens before any pair is even
@@ -257,7 +257,7 @@ pub fn plan_pairs(
         ..PairPlan::default()
     };
     if src.algos.is_empty() {
-        // `--hash none`: nothing to ask for, so nothing to read and nothing to be
+        // `--hash-all-of none`: nothing to ask for, so nothing to read and nothing to be
         // short of.
         return Ok(plan);
     }
@@ -408,9 +408,9 @@ fn record_shortfalls(
 /// nothing.
 ///
 /// **Then the user's flag order.** `min_by_key` keeps the *first* minimum, and
-/// `algos` is the flag order, so `--hash-any-of md5 --hash sha256` prefers md5 and
-/// the choice is visible in the command they typed rather than in a rule they would
-/// have to look up.
+/// `algos` is the flag order, so `--hash-any-of md5 --hash-any-of sha256` prefers
+/// md5 and the choice is visible in the command they typed rather than in a rule
+/// they would have to look up.
 fn pick_one(
     algos: &[HashAlg],
     s: &SideEntry,
@@ -501,7 +501,7 @@ mod tests {
         let d = map(vec![("d", dir())]);
         assert!(plan(&s, &d, true, false).src.pending().is_empty());
     }
-    /// `--hash none` is a mode, not all-of over an empty set: no path may reach
+    /// `--hash-all-of none` is a mode, not all-of over an empty set: no path may reach
     /// either plan, so phase C never runs and no file is opened.
     #[test]
     fn an_empty_algorithm_set_plans_nothing_on_any_pair_state() {
@@ -518,7 +518,7 @@ mod tests {
         assert!(p.src.by_rel.is_empty() && p.dst.by_rel.is_empty());
     }
 
-    /// `--hash none` is also not a coverage failure, and that needs no special
+    /// `--hash-all-of none` is also not a coverage failure, and that needs no special
     /// case: nothing was asked for, so nothing can be short of it. With a record
     /// on one side and a completely empty row, the run still succeeds.
     #[test]

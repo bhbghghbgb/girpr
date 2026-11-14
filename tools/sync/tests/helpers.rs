@@ -447,7 +447,7 @@ fn every_file_lands_in_exactly_one_bucket() {
     }
 }
 
-/// `--hash none` is a case where a naive counter would lie. `hash_file` with no
+/// `--hash-all-of none` is a case where a naive counter would lie. `hash_file` with no
 /// algorithms returns empty *without opening the file*, so a counter incremented on
 /// the rehash branch would report a cold tree as 3 files hashed having read none.
 ///
@@ -465,12 +465,12 @@ fn hash_none_reads_nothing_and_says_so() {
     assert_eq!(
         (cold.a.hashed, cold.c.hashed),
         (0, 0),
-        "and the cold run read nothing either: a --hash none run answers from stat alone"
+        "and the cold run read nothing either: a --hash-all-of none run answers from stat alone"
     );
     assert_eq!(
         (warm.c.hashed, warm.c.cache_hit, warm.c.stat_only),
         (0, 0, 3),
-        "a row from a --hash none run is stat-only, not a cache hit"
+        "a row from a --hash-all-of none run is stat-only, not a cache hit"
     );
 }
 

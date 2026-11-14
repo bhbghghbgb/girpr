@@ -11,7 +11,7 @@
 ///
 /// **It is not what a cache row stores.** A row may carry a digest under a name
 /// this build has never heard of — a cache written by a newer binary with
-/// `--hash blake3` has to stay readable here — so the persistence layer cannot be
+/// `--hash-all-of blake3` has to stay readable here — so the persistence layer cannot be
 /// an enum without giving that up. See `crate::cache::codec`, which keeps names
 /// inline for exactly that reason, and [`super::DigestSet`]'s `foreign` arm for the
 /// in-memory end of the same guarantee. A closed enum here and an open set there
@@ -107,7 +107,8 @@ impl HashAlg {
         1u16 << (self as u8)
     }
 
-    /// `md5,sha256` — the supported list as the existing `--hash` refusal names it.
+    /// `md5,sha256` — the supported list as the existing `--hash-all-of` refusal
+    /// names it.
     pub fn names() -> String {
         HashAlg::ALL.map(|a| a.as_str()).join(",")
     }
@@ -147,8 +148,8 @@ const _: () = {
 ///
 /// Carries the offending name and nothing else. **The supported list is not part
 /// of it**, because that list is the caller's sentence to finish: `Display` here
-/// says what was wrong, and the `--hash` refusal appends what would have been
-/// right. Two copies of one message is two spellings to keep in step.
+/// says what was wrong, and the `--hash-all-of` refusal appends what would have
+/// been right. Two copies of one message is two spellings to keep in step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownHash {
     name: String,
@@ -192,7 +193,7 @@ impl std::str::FromStr for HashAlg {
     type Err = UnknownHash;
 
     /// Case-insensitive **on its own**, not because a caller remembered to
-    /// lowercase first. `--hash MD5` works today for a reason that lives in
+    /// lowercase first. `--hash-all-of MD5` works today for a reason that lives in
     /// `parse_hash_list`, which is one caller's private detail; a parser whose
     /// contract depends on someone else having normalised the input first is a
     /// parser every new caller gets wrong. ASCII case only, which is all an

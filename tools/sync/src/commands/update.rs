@@ -17,7 +17,7 @@ use crate::util::elapsed_s;
 /// "From scratch" describes the row set, not the digests. `update` never trusts
 /// a cached digest, so every requested algo is recomputed on every run — but a
 /// file whose size+mtime are unchanged keeps any *other* algorithm already on
-/// its row, and `--hash none` therefore records stat data without touching
+/// its row, and `--hash-all-of none` therefore records stat data without touching
 /// stored digests at all. A file whose stat *did* change has all of its digests
 /// dropped, including algorithms this run did not request, because the content
 /// is assumed to have changed with it. Ask for every algorithm you want

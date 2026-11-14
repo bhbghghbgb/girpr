@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn codec_preserves_unknown_algorithms() {
-        // Forward compat: a future `--hash blake3` row must survive a
+        // Forward compat: a future `--hash-all-of blake3` row must survive a
         // roundtrip through this binary, which never drops opaque entries.
         let mut rec = FileRec {
             kind: "file".into(),

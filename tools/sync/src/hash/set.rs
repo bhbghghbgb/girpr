@@ -1,4 +1,4 @@
-//! [`AlgoSet`] and the `--hash` / `--hash-any-of` parsers.
+//! [`AlgoSet`] and the `--hash-all-of` / `--hash-any-of` parsers.
 
 use anyhow::{Result, anyhow, bail};
 
@@ -95,11 +95,11 @@ impl std::fmt::Debug for AlgoSet {
     }
 }
 
-/// Validate repeated `--hash` values.
+/// Validate repeated `--hash-all-of` values.
 ///
 /// Returns the requested algorithms — each one once, in the order it was first
-/// typed — or an empty list for `--hash none` (which is exclusive: decisions fall
-/// back to size+mtime).
+/// typed — or an empty list for `--hash-all-of none` (which is exclusive: decisions
+/// fall back to size+mtime).
 ///
 /// Strings stop here. Below this point an algorithm is a [`HashAlg`], so "which
 /// algorithms can a row hold" and "which algorithms did the user ask for" are

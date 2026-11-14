@@ -176,7 +176,7 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
     assert_eq!(r.hashed, 0, "the cached digests already disagree");
 }
 
-/// **`--hash none`.** No digest is required, so nothing is read, whatever the
+/// **`--hash-all-of none`.** No digest is required, so nothing is read, whatever the
 /// tree looks like.
 #[test]
 fn hash_none_reads_nothing_on_a_differing_tree() {

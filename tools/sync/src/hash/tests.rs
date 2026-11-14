@@ -31,7 +31,7 @@ fn every_algorithm_name_round_trips() {
     }
 }
 
-/// Case-insensitive **on its own**. `--hash MD5` works today because
+/// Case-insensitive **on its own**. `--hash-all-of MD5` works today because
 /// `parse_hash_list` lowercases before validating, which is a private detail
 /// of one caller; a parser that only works when someone else has normalised
 /// the input is a parser every new caller gets wrong.
@@ -750,7 +750,7 @@ fn merging_keeps_what_was_not_recomputed_and_prefers_what_was() {
     assert_eq!(row.foreign_iter().count(), 1, "not appended beside itself");
 
     // The other direction is the real invariant: merging something empty changes
-    // nothing, which is what a `--hash none` scan writes.
+    // nothing, which is what a `--hash-all-of none` scan writes.
     let mut untouched = prior.clone();
     untouched.merge(&DigestSet::default());
     assert_eq!(untouched, prior);
@@ -919,7 +919,7 @@ fn an_empty_file_hashes_to_the_digest_of_nothing() {
     assert_eq!(never_fed.finish(), hash_file(&path, &set).unwrap());
 }
 
-/// `Digests::new(&[])` must be the inert object, because `--hash none` is
+/// `Digests::new(&[])` must be the inert object, because `--hash-all-of none` is
 /// the mode where a copy never builds one. A context built and thrown away is
 /// the per-file allocation [`hash_file`] is written to avoid.
 #[test]

@@ -347,7 +347,7 @@ fn a_tag_names_the_algorithms_that_disagreed() {
 }
 
 /// **The tag's order is the disagreement's, not the flag order's.** Same fixture
-/// as above with the two `--hash` flags the other way round: the pair still
+/// as above with the two `--hash-all-of` flags the other way round: the pair still
 /// disagrees on both algorithms, and the tag is unchanged.
 ///
 /// A tag that depends on how two flags were ordered is a tag a parser has to

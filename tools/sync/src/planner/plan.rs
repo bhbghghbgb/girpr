@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(names(p.get("odd.txt")), vec!["md5", "sha256"]);
     }
 
-    /// `--hash none` is a distinct mode, not all-of over an empty set that
+    /// `--hash-all-of none` is a distinct mode, not all-of over an empty set that
     /// happens to succeed: no path may appear in the plan at all, so phase C
     /// never runs and no file is opened.
     #[test]

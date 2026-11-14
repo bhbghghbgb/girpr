@@ -153,7 +153,7 @@ impl AltIndex {
 /// | unchanged | those, merged over the algos already on the row          |
 ///
 /// So a run never destroys a digest it did not recompute unless the file's stat
-/// says it changed. `--hash none` and `--no-trust-cached-hashes` both write stat
+/// says it changed. `--hash-all-of none` and `--no-trust-cached-hashes` both write stat
 /// data while leaving unrequested digests intact. This is `merge_row`'s rule,
 /// stated here because this is where the rows are written.
 ///

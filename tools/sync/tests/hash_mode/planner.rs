@@ -255,7 +255,7 @@ fn a_stat_differing_pair_needs_no_coverage_in_either_mode() {
     }
 }
 
-/// `--hash none` is still a mode and not a failure, in both. Nothing requested
+/// `--hash-all-of none` is still a mode and not a failure, in both. Nothing requested
 /// means nothing to be short of.
 #[test]
 fn an_empty_request_is_not_a_coverage_failure_in_either_mode() {

@@ -21,7 +21,7 @@ use crate::util::{mtime_ns_of, path_within};
 ///
 /// With no algorithms requested there is nothing to fold into the loop, so
 /// `io::copy` is left alone and keeps whatever fast path it has between two
-/// files. Under `--hash none` that path is the entire copy, and there is no
+/// files. Under `--hash-all-of none` that path is the entire copy, and there is no
 /// digest to justify giving it up.
 ///
 /// `buf` is the caller's scratch space: a worker hands in the same buffer for
@@ -648,7 +648,7 @@ mod tests {
         );
     }
 
-    /// `--hash none` takes the other arm of `copy_and_digest`, and that arm is
+    /// `--hash-all-of none` takes the other arm of `copy_and_digest`, and that arm is
     /// the only thing standing between a stat-only sync and `io::copy`'s fast
     /// path. It must still copy every byte — "no digest" is not "no copy" — and
     /// must report no digest rather than an empty one for some other reason.

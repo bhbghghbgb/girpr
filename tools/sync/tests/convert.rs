@@ -451,8 +451,9 @@ fn the_converter_reports_json_records_on_stdout() {
     };
     // 5 = md5 + sha256 on each of the two files, plus blake3 on one of them. The
     // count tracks the fixture: `build_sled_db` gives every row both requested
-    // algorithms so the converted record can answer a `--hash md5 --hash sha256`
-    // audit, and `blake3` is the extra one that must survive untouched.
+    // algorithms so the converted record can answer a
+    // `--hash-all-of md5 --hash-all-of sha256` audit, and `blake3` is the extra
+    // one that must survive untouched.
     let want = serde_json::json!({"event": "converted", "src": src.display().to_string(),
                                  "dst": dst.display().to_string(), "files": 2, "dirs": 1,
                                  "hashes": 5});
