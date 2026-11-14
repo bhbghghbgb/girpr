@@ -188,8 +188,11 @@ try {
         # ships, and an optional feature is code the member ships when it is
         # asked for.
         #
-        # A feature is checked alone, so a member whose features are mutually
-        # exclusive still checks. A feature that does not build alone may be
+        # A feature is checked alone, so the code behind it is held to the
+        # floor on its own. A member whose features cannot be enabled together
+        # is failed by the combination check above, which names the
+        # combination; what this check adds is the feature that cannot be
+        # enabled on its own. A feature that does not build alone may be
         # one that only builds in combination with another, and a member with
         # one is checked with the group of its optional features instead: the
         # group is the configuration that holds every optional feature at once,
