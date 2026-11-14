@@ -239,12 +239,12 @@ fails with `AlreadyExists` after earlier phases have changed dst.
 
 `ensure_mkdir_targets_free` closes that gap before the rename pass, which is the
 first filesystem change. It derives the same mkdir candidates `build_plan` will:
-src directories that the post-rename `dm` does not hold (a lowercase pair in
-insensitive mode, because the rename collapses those), and stats each candidate
-and every strict prefix on disk. An existing directory is fine; a non-directory
-is refused unless it is a planned `fix_dirs` entry, which runs before the
-nested mkdir. Every strict ancestor of a src directory is itself a src
-directory, so the blocker is normally its own candidate. `dm` is deliberately
+src directories that the post-rename `dm` does not hold (a pair the path key
+merges in insensitive mode, because the rename collapses those), and stats each
+candidate and every strict prefix on disk. An existing directory is fine; a
+non-directory is refused unless it is a planned `fix_dirs` entry, which runs
+before the nested mkdir. Every strict ancestor of a src directory is itself a
+src directory, so the blocker is normally its own candidate. `dm` is deliberately
 not widened to retain non-directory ancestors: that would make the planner
 delete an entry the filter promised to leave alone.
 
