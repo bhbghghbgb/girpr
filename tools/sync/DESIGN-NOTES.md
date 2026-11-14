@@ -291,16 +291,21 @@ canonicalizes a dangling link (`NotFound`, exit 3) — or, with equal content an
 no copy, the run exits 0 leaving the link dangling and the next walk aborts.
 
 `spare_link_storage` answers this at plan time, in both modes, from the disk.
-For every `dm` file link that `src` also has as a file (so the link stays), it
-walks the `read_link` chain. An intermediate link is part of the chain and is
-spared too. Every link **component** of the target path is spared as well — the
-walk's alias spelling (`link/x`) and the canonical one (`real/x`) both, because
-the delete plan may name either — and every spared entry goes through
-`keep_path`, so all its ancestor directories are spared with it as well. A final
-target inside `dst` that `src` does not have is the link's content: it is dropped
-from `delete_files`, from the diff's `extra` bucket (so the printed record and
-the action name the same set), and from `rmdir` together with every directory
-above it. A final target `src` **does** have is one inode carrying two mirrored
+**The dst root is resolved at plan time**, before the pass decides anything —
+and it is resolved whether or not the tree holds a kept link: every path under
+it is compared with the canonical root, so a root that cannot be resolved
+leaves the whole plan unanswerable, and the pass refuses it there rather than
+letting a run act on a plan it could not check. For every `dm` file link that
+`src` also has as a file (so the link stays), it walks the `read_link` chain. An
+intermediate link is part of the chain and is spared too. Every link
+**component** of the target path is spared as well — the walk's alias spelling
+(`link/x`) and the canonical one (`real/x`) both, because the delete plan may
+name either — and every spared entry goes through `keep_path`, so all its
+ancestor directories are spared with it as well. A final target inside `dst`
+that `src` does not have is the link's content: it is dropped from
+`delete_files`, from the diff's `extra` bucket (so the printed record and the
+action name the same set), and from `rmdir` together with every directory above
+it. A final target `src` **does** have is one inode carrying two mirrored
 paths; if either end is planned for copy, the plan is refused before any change,
 because one file cannot hold two contents and the parallel copy phase could
 interleave them. A target the plan replaces with a directory is refused for the
