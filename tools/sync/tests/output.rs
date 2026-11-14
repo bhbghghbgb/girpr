@@ -17,6 +17,7 @@ mod common;
 
 use common::{TempDir, parse_ndjson, strip_ansi, summary_of, sync_mtime, temp_root, wfile};
 use girsync::hash::AlgoSet;
+use girsync::scan::HEARTBEAT_ENTRIES;
 use serde_json::Value;
 use std::path::Path;
 
@@ -825,9 +826,9 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 /// them apart.
 ///
 /// The walk's own **heartbeat** is here too, and it is the walk's count and
-/// not the map's: it reports the entries it has pushed, every two thousand, so
-/// the tree has to be big enough to reach it. The excluded file is in that
-/// count — the walk does not know what the run excludes.
+/// not the map's: it reports the entries it has pushed, every heartbeat
+/// period, so the tree has to be big enough to reach it. The excluded file is
+/// in that count — the walk does not know what the run excludes.
 ///
 /// The map's counters are in the "effective" events, and there are **two** of
 /// them: one per phase, and they are told apart by the field only the second
@@ -837,9 +838,9 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     let t = temp_root("out_walk_progress");
     let dir = t.subdir("tree");
-    // Two thousand entries, so the walk's heartbeat fires exactly once: it
-    // reports every two thousand entries it has pushed.
-    for i in 0..1999 {
+    // As many entries as the walk's heartbeat period, so the heartbeat fires
+    // exactly once: it reports every period's worth of entries it has pushed.
+    for i in 0..HEARTBEAT_ENTRIES - 1 {
         wfile(&dir, &format!("f{i:04}.txt"), b"x");
     }
     // The last of them is the one the run excludes.
@@ -904,12 +905,12 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     assert_eq!(
         heartbeats.len(),
         1,
-        "the walk reports its progress every two thousand entries, so a tree of \
-         two thousand has one heartbeat: {}",
+        "the walk reports its progress every heartbeat period, so a tree of \
+         one period has one heartbeat: {}",
         serde_json::to_string(&logged).unwrap()
     );
     assert_eq!(
-        heartbeats[0]["fields"]["entries"], 2000,
+        heartbeats[0]["fields"]["entries"], HEARTBEAT_ENTRIES,
         "the heartbeat counts the entries the walk pushed, the excluded file \
          included"
     );
@@ -933,7 +934,9 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         .collect();
     assert_eq!(
         totals,
-        [1999u64, 2000].into_iter().collect(),
+        [(HEARTBEAT_ENTRIES - 1) as u64, HEARTBEAT_ENTRIES as u64]
+            .into_iter()
+            .collect(),
         "the first phase counts every entry the walk saw and the second only \
          what the map kept"
     );
@@ -948,7 +951,7 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         serde_json::to_string(&logged).unwrap()
     );
     assert_eq!(
-        effective[0]["fields"]["live"], 2000,
+        effective[0]["fields"]["live"], HEARTBEAT_ENTRIES,
         "the map starts from every entry the walk saw"
     );
 

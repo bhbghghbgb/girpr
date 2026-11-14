@@ -6,6 +6,16 @@ use tracing::{debug, info, trace};
 
 use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 
+/// How many entries the walk pushes between two heartbeats.
+///
+/// The heartbeat is the walk's own progress report: it says how many entries
+/// the walk has pushed so far, every so often, so a long walk is visibly
+/// alive. The period is a number rather than a rule, and it is named here so
+/// that the walk and the case that pins it agree in one place: a tree of
+/// exactly this many entries produces exactly one heartbeat, and a tree of
+/// fewer produces none.
+pub const HEARTBEAT_ENTRIES: usize = 2000;
+
 /// One entry as found on disk, before any cache consultation.
 ///
 /// Paths are relative to the walk root, and a caller that needs an absolute path
@@ -105,7 +115,8 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     false
                 };
-                // Progress: trace every entry (file log), debug heartbeat every 2000.
+                // Progress: trace every entry (file log), debug heartbeat every
+                // HEARTBEAT_ENTRIES.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {
@@ -129,7 +140,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
-                if out.len() % 2000 == 0 {
+                if out.len() % HEARTBEAT_ENTRIES == 0 {
                     debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress");
                 }
             }
