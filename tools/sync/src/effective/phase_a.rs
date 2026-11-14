@@ -403,6 +403,16 @@ pub fn scan_stat_only(
     // write handle would make a dry run report `pruned = 0` over a tree a real run
     // prunes, i.e. it would answer a different question.
     //
+    // The key set the prune works from: the index's, when the index was built,
+    // and the cache's otherwise.
+    //
+    // The two answer the same question — "which rows exist?" — so the scan
+    // reads the table's keys once: a scan that missed a path exactly would
+    // otherwise walk them twice, once for the index and once here. The views
+    // differ by this run's own writes, which are live paths and are never
+    // pruned, and by this run's adoptions, which are excluded below, so the
+    // rows this drops are the same either way.
+    //
     // Reading through the batch handle when there is one is not required for
     // correctness: every key this run has written is a live key, and a live key is
     // never pruned, so the batch's pending writes cannot change the set. It does
@@ -413,18 +423,24 @@ pub fn scan_stat_only(
     // the entire `entries` table, hash map by hash map, to answer it. The
     // alternate-case index above reads this table's keys for the same reason;
     // neither pass decodes a row it does not need.
-    let cached_keys = match batch.as_mut() {
-        Some(w) => w.load_keys()?,
-        None => cache.load_keys()?,
+    let cached_keys = match alt_index.take() {
+        Some(index) => index.keys,
+        None => match batch.as_mut() {
+            Some(w) => w.load_keys()?,
+            None => cache.load_keys()?,
+        },
     };
     // An adopted key was renamed, not pruned. A real run's batch has already
     // dropped it, but a dry run only decided to, so it is still in this
     // pre-adoption snapshot; without the exclusion it would be counted once as
     // a prune and once as the rename it actually is.
-    let stale: Vec<String> = cached_keys
+    //
+    // The stale keys are borrowed rather than copied: the key set is alive
+    // here, and a copy of every stale path is an allocation per stale row.
+    let stale: Vec<&str> = cached_keys
         .iter()
         .filter(|rel| !live_set.contains(rel.as_str()) && !adopted_keys.contains(rel.as_str()))
-        .cloned()
+        .map(|rel| rel.as_str())
         .collect();
     let pruned = stale.len();
     for rel in &stale {
