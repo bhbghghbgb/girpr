@@ -9,7 +9,8 @@
 //! - [`build`] — the [`Plan`] work list and [`build_plan`], pure over the maps
 //! - [`link`] — link storage, alias resolution, and the on-disk/dst spellings
 //! - [`safety`] — the plan-time guards (`ensure_*_safe`, `spare_link_storage`)
-//! - [`records`] — the [`records::Summary`], [`dry_run_records`] and [`summary_record`]
+//! - [`records`] — the [`records::Summary`], [`dry_run_records`] and
+//!   [`summary_record`]
 //!
 //! All `pub(super)` names that lived in `crate::commands::sync::plan` before
 //! this split still resolve here; this module only moves code into focused
