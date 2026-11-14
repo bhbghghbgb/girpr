@@ -1585,7 +1585,7 @@ opts in by naming it.
 | `GIRSYNC_TEST_FAIL_FLUSH=<rel>` | the flush after that copy's write fails, so the copy fails at the flush rather than at the write |
 | `GIRSYNC_TEST_NO_FSYNC=1` | the per-file `sync_all` after a copy is skipped — the runner sets it for the whole suite |
 | `GIRSYNC_TEST_FAIL_RENAME=<rel>` | the case-fixing rename of `<rel>` fails before the temporary is claimed |
-| `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the placeholder exists |
+| `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the file placeholder exists |
 | `GIRSYNC_TEST_FAIL_RENAME_STEP2=<rel>` | the same rename fails after step 1, so the entry is in the temporary |
 | `GIRSYNC_TEST_GATE_COPY=<wait>:<on>` | the copy of `<wait>` does not begin until the copy of `<on>` has **failed** |
 | `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the default batch of 50 |
