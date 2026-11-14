@@ -482,6 +482,88 @@ fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
     );
 }
 
+/// **The merge path replaces an entry under its own spelling too.**
+///
+/// `merge` is the other writer of the foreign arm, and it writes under the
+/// same rule `insert_named` does: an entry whose spelling the arm already
+/// holds is replaced where it stands, and a spelling the arm does not hold
+/// is added beside it.
+///
+/// The insert path is pinned on its own, and this is the other half. A rule
+/// that held on one writer and not the other would leave a row that answers
+/// one way after a merge and another way after an insert — and a merge is
+/// what every run that recomputed a digest does to the row it read.
+#[test]
+fn a_merge_replaces_a_foreign_entry_only_under_its_own_spelling() {
+    let mut d = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+
+    let mut other = DigestSet::default();
+    other.insert_named("md5", b"\x03\x03\x03\x03");
+    other.insert_named("MD5", b"\x04\x04\x04\x04");
+    other.insert_named("blake3", b"\x05\x05\x05\x05");
+
+    d.merge(&other);
+
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5", "blake3"],
+        "one entry per spelling: the two that were there are replaced where they stand, and the spelling that was not is added beside them"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(0).map(|(_, digest)| digest),
+        Some(&b"\x04\x04\x04\x04"[..]),
+        "the entry under `MD5` holds the digest that was merged into it"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(1).map(|(_, digest)| digest),
+        Some(&b"\x03\x03\x03\x03"[..]),
+        "and so does the one under `md5`"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(2).map(|(_, digest)| digest),
+        Some(&b"\x05\x05\x05\x05"[..]),
+        "the added spelling carries the digest it came with"
+    );
+}
+
+/// **Two spellings of one algorithm survive a merge.**
+///
+/// The arm holds one entry per spelling, and a merge writes the other
+/// side's entries in under the same rule `insert_named` does — so a merge
+/// can leave a row holding two spellings of one algorithm. Nothing about
+/// the merge collapses them: the two spellings are two entries, and the
+/// first of them answers, exactly as it does on the insert path.
+#[test]
+fn two_spellings_of_one_algorithm_survive_a_merge() {
+    let mut d = DigestSet::default();
+
+    let mut other = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    other.insert_named("MD5", b"\x01\x01\x01\x01");
+    other.insert_named("md5", b"\x02\x02\x02\x02");
+
+    d.merge(&other);
+
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "the merge carries both spellings across, in the order they were written"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(&b"\x01\x01\x01\x01"[..]),
+        "and the first of them answers"
+    );
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: neither entry is this algorithm's digest"
+    );
+}
+
 /// **First match wins, and the answer is a property of the row.**
 ///
 /// Two entries can name the same algorithm — `MD5` and `md5`, both with a

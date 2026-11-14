@@ -406,7 +406,11 @@ being `const` would not compile there, and the context is in the crate
 rather than in its tests, so a build that does not build the tests holds
 it too;
 `a_foreign_entry_is_replaced_only_under_its_own_spelling` for the arm
-holding one entry per spelling, and
+holding one entry per spelling,
+`a_merge_replaces_a_foreign_entry_only_under_its_own_spelling` for the merge
+path writing under the same rule, and
+`two_spellings_of_one_algorithm_survive_a_merge` for a row that still holds
+two spellings of one algorithm after a merge;
 `the_first_of_two_entries_that_name_one_algorithm_answers` for the first
 match that wins; `a_known_name_with_the_wrong_length_routes_to_foreign`
 for the routing rule; and `tests/why/disagreement.rs`, whose fixtures give
