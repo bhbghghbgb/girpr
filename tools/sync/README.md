@@ -1619,12 +1619,14 @@ them; `--dry-run` costs the same again.
   error names the record (its path says which folder), the folder to run that fix
   on (spelled out, so the command can be pasted as it stands), the count, the
   paths and the mode that failed.
-- **A size-changed cache row can get stuck.** Editing a file's length drops its digests
-  (a stale row's are all suspect), and a size difference settles the pair for free — so
-  nothing ever rehashes it and the row stays stat-only permanently, describing content
-  it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
-  undecided set. Worth knowing because the row looks healthy — it has the right size and
-  mtime.
+- **A stat-only row can get stuck.** A row whose stat changed arrives with its digests
+  dropped (a stale row's are all suspect), and while a stat difference settles the pair
+  for free — a size difference, or an mtime one — nothing ever rehashes it, so the row
+  stays stat-only, describing content it cannot verify. The repair is the flag that
+  distrusts the field doing the settling: `--no-trust-size` for a size difference,
+  `--no-trust-mtime` for an mtime one, and either acts only when the distrusted field
+  is the *only* difference. Worth knowing because the row looks healthy — it has the
+  right size and mtime.
 - **`hashes_differ` is silent, and silence is not the same claim as "equal".** An empty
   result means *"no difference detected"*, which is not the same claim as
   *"identical"* — it is safe only while every pair reaching it has a digest to compare,

@@ -807,10 +807,13 @@ run and re-copies — so it self-heals, but the run that did it reports no error
 This is the price of not re-reading src, and it is recorded in `README.md`'s
 "What a copy costs" and in `copy_one`'s own doc.
 
-**A stat-only row can get stuck.** A size-changed row arrives in phase A with its
-digests dropped, and a size difference settles the pair for free, so nothing ever
-rehashes it. `--no-trust-size` is the repair. The row looks healthy — right size,
-right mtime — which is what makes it worth stating.
+**A stat-only row can get stuck.** A row whose stat changed arrives in phase A with
+its digests dropped, and while a stat difference settles the pair for free — a size
+difference, or an mtime one — nothing ever rehashes it, so the row stays stat-only.
+The repair is the flag that distrusts the field doing the settling:
+`--no-trust-size` for a size difference, `--no-trust-mtime` for an mtime one, and
+either acts only when the distrusted field is the *only* difference. The row looks
+healthy — right size, right mtime — which is what makes it worth stating.
 
 **A conversion a killed run left behind stays in the folder.** The converter
 writes the new cache into a temporary beside the destination and moves it onto
