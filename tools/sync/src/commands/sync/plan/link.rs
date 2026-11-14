@@ -331,8 +331,8 @@ pub(super) fn spare_link_components(
 /// Folded key → the map's spelling, for a Windows filesystem that matches
 /// names case-insensitively.
 ///
-/// The fold is the path key's — ASCII case only — and the map's keys are
-/// matched under it, so a non-ASCII case variant is not a match here either.
+/// The fold is the path key's — ASCII case only — so this index finds a map
+/// key whose spelling differs from the wanted one in ASCII case alone.
 ///
 /// Two `dm` keys cannot differ only by case (the walk's mixed-case check is
 /// fatal and the rename pass collapses them), so the mapping is unambiguous.
