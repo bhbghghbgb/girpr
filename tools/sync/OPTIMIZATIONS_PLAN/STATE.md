@@ -677,11 +677,25 @@ reviews:
     head: 5b6fdf3b
     result: F121 kept (50e81f06); F122 kept (2115d14e, 5a5cb7a2); F125 kept (c4f93a7f); F126 kept (6c16cf00); F127 kept (20b42517); F129 kept (a5b3b2c1, 9c327065); no fix or revert commits; 584 passed, 1 skipped, and the whole workspace at 2069 passed, 13 skipped; four mutation probes confirmed the new cases discriminate, and a mis-set gate was probed and failed that one copy loudly
     followups: [F198, F199]
-  - batch: M21
+  - batch: M49
     status: pending
-    tasks: [F200, F201, F202, F203, F204]
+    tasks: [F287, F288]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M50
+    status: pending
+    tasks: [F289]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M21
+    status: in_progress
+    tasks: [F200, F201, F202, F203, F204]
+    base: ead8e3bd
+    head: 6b15098a
     result: null
     followups: []
   - batch: M22
@@ -1900,33 +1914,33 @@ followups:
   - id: F200
     source: F138
     description: src/planner/pairs.rs still has the same src-lowered abbreviation F138 fixed in the other two files.
-    status: in_progress
+    status: pending_review
     batch: M21
-    commits: []
+    commits: [7e40bfb6]
   - id: F201
     source: F138
     description: The lk and lkey locals in diff/mod.rs, commands/sync/rename.rs and planner/pairs.rs still abbreviate lowercase key.
-    status: in_progress
+    status: pending_review
     batch: M21
-    commits: []
+    commits: [b8b98771]
   - id: F202
     source: F139
     description: src/effective/phase_a.rs still says the cached keys are indexed by lowercase, which is the ASCII-only fold wording in a file F139 did not list, though the index there is built with path_key.
-    status: in_progress
+    status: pending_review
     batch: M21
-    commits: []
+    commits: [c64275cf]
   - id: F203
     source: F141
     description: The design notes three-questions section names the path key, the identity rule and the disk spelling, but the now-named cache reservation is a fourth fold site the section does not mention.
-    status: in_progress
+    status: pending_review
     batch: M21
-    commits: []
+    commits: [cb20bfea]
   - id: F204
     source: F144
     description: on_disk_name recomputes the on-disk fold for every directory entry, one allocation per entry, and it could be hoisted out of the loop.
-    status: in_progress
+    status: pending_review
     batch: M21
-    commits: []
+    commits: [6b15098a]
   - id: F205
     source: F139
     description: effective/phase_a.rs still says the cached keys are indexed by lowercase for the ASCII-only fold, the same retired wording, outside that follow-up scope.
@@ -2432,6 +2446,31 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F278, already scheduled in M46
+  - id: F287
+    source: F204
+    description: The planner's lowercase pairing branch still computes the path key for every destination path, one allocation per path, where a borrowed comparison or a destination index would remove it.
+    status: pending
+    batch: M49
+    commits: []
+  - id: F288
+    source: F204
+    description: The remaining per-entry allocation in the disk listing is the fold of the candidate name, and a non-allocating comparison with an ASCII fast path would remove it.
+    status: pending
+    batch: M49
+    commits: []
+  - id: F289
+    source: F203
+    description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
+    status: pending
+    batch: M50
+    commits: []
+  - id: F290
+    source: F203
+    description: The cache-prefix helper's doc names the ASCII-case comparison without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F206, already scheduled in M22
 ```
 
 ## Human checklist
@@ -2464,6 +2503,12 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M21 review checkpoint opened: F200, F201, F202,
+  F203 and F204 `in_progress` → `pending_review`, commits `7e40bfb6`,
+  `b8b98771`, `c64275cf`, `cb20bfea`, `6b15098a`; review M21 `pending` →
+  `in_progress`, base `ead8e3bd`, head `6b15098a`. Follow-ups F287–F289
+  appended with batches `M49` and `M50`; F290 recorded as `skipped` as the
+  same item as F206.
 - 2026-11-14 — follow-up batch M21 started: F200, F201, F202, F203 and F204
   `pending` → `in_progress`; `active_batch: M20` → `M21`.
 - 2026-11-14 — review M20 `done`: F195, F196, F197 and F199 all kept, no fix
