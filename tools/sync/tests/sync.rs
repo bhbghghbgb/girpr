@@ -8,8 +8,8 @@ use girsync::rw::RwLimits;
 
 use common::{
     compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
-    log, parse_ndjson, recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update,
-    update_mem, wfile,
+    log, parse_ndjson, recs_of, rfile, strip_ansi, sync, sync_dry, sync_mem, sync_mtime, temp_root,
+    update, update_mem, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheOpen, TestCacheBackend, load_all_records, open_db};
 use girsync::{BackupPolicy, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
@@ -1783,6 +1783,39 @@ fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
         "the successful copy was announced and the failed ones were not: {recs:?}"
     );
     assert!(dst.join("zzz.bin").is_file(), "the successful copy landed");
+}
+
+/// **The failure a user reads is `copy <rel>: <cause>`, and it is exactly that.**
+///
+/// The reported failure reaches the user as one line: the copy that failed,
+/// and why it failed. That line is the tool's contract with whoever reads it,
+/// and a check for a substring does not pin it: a cause that grew a prefix, or
+/// a copy named by its full path rather than by its path inside the mirror,
+/// would pass a check for `copy mmm.bin` and change what the user reads.
+///
+/// The cause here is the injected one, which names no path of its own, so the
+/// whole line is fixed — the phase, the copy, the separator, and the cause,
+/// with nothing else in it.
+#[test]
+fn a_reported_copy_failure_is_the_copy_and_the_cause() {
+    let t = temp_root("copy_fail_text");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "mmm.bin", b"payload");
+
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_COPY", "mmm.bin")]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a failed copy is a failed run; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stderr.contains(r#"error="copy mmm.bin: test: injected copy failure for mmm.bin""#),
+        "the failure names the copy and the cause, and nothing else: {stderr}"
+    );
 }
 
 /// A case-only rename of a directory must move the subtree once, not try to
