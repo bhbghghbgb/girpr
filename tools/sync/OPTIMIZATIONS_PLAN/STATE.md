@@ -614,11 +614,25 @@ reviews:
     head: b08451c7
     result: F117 kept (e30e6c6f); F118 kept (13304c2f); F120 kept (1409bbf6); F140 kept (4c285d30); F145 kept (0f3609a7); F146 kept (b08451c7); no fix or revert commits; 578 passed without the feature and 592 with it, 1 skipped; the remedy was checked end to end by running it, and the renamed fixture was mutation-checked
     followups: [F189, F190, F191, F192]
-  - batch: M19
+  - batch: M43
     status: pending
-    tasks: [F193, F194, F198]
+    tasks: [F273, F274]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M44
+    status: pending
+    tasks: [F275]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M19
+    status: in_progress
+    tasks: [F193, F194, F198]
+    base: 7831eb0c
+    head: a3bff56e
     result: null
     followups: []
   - batch: M20
@@ -1816,15 +1830,15 @@ followups:
   - id: F193
     source: F126
     description: The README test-suite section still says the suite has one test-only switch of its own, GIRSYNC_TEST_CACHE=memory, while the crate now has several default-off hooks, FAIL_COPY, FAIL_FLUSH, FAIL_RENAME and GATE_COPY, that are listed nowhere.
-    status: in_progress
+    status: pending_review
     batch: M19
-    commits: []
+    commits: [1b0c1f92]
   - id: F194
     source: F126
     description: GIRSYNC_TEST_GATE_COPY splits on a colon, harmless for relative paths, but the constraint is stated only in the hook doc comment.
-    status: in_progress
+    status: pending_review
     batch: M19
-    commits: []
+    commits: [140b2db4]
   - id: F195
     source: F122
     description: walk_live's heartbeat period, 2000 entries, is a bare literal that a test now depends on; a named constant would let the code and the pin agree in one place.
@@ -1846,9 +1860,9 @@ followups:
   - id: F198
     source: F129
     description: The design notes Enforced by list for the verify names the canonical-order case but not the new error-event case, so the second channel's case is unlisted, the same gap F124 closed for the first one.
-    status: in_progress
+    status: pending_review
     batch: M19
-    commits: []
+    commits: [a3bff56e]
   - id: F199
     source: F122
     description: The two phases' progress totals are asserted as the set of two values, so the case does not say which phase reports the walk's count and which the map's.
@@ -2305,6 +2319,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the claim is in a commit message and history must not be rewritten; the README text itself is correct, and the false example is tracked as F266
+  - id: F273
+    source: F193
+    description: The workspace nextest configuration points at a source path that no longer exists, because the module was split into a directory, so the pointer a reader would follow leads nowhere.
+    status: pending
+    batch: M43
+    commits: []
+  - id: F274
+    source: F193
+    description: The three rename failure hooks are three separate variables where one variable with a stage value would match the shape of the copy and flush hooks; the asymmetry is undocumented.
+    status: pending
+    batch: M43
+    commits: []
+  - id: F275
+    source: F193
+    description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
+    status: pending
+    batch: M44
+    commits: []
 ```
 
 ## Human checklist
@@ -2337,6 +2369,10 @@ Newest first. One line per committed state change: date, task/review, from → t
 commit.
 
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
+- 2026-11-14 — follow-up batch M19 review checkpoint opened: F193, F194 and F198
+  `in_progress` → `pending_review`, commits `1b0c1f92`, `140b2db4`,
+  `a3bff56e`; review M19 `pending` → `in_progress`, base `7831eb0c`, head
+  `a3bff56e`. Follow-ups F273–F275 appended with batches `M43` and `M44`.
 - 2026-11-14 — follow-up batch M19 started: F193, F194 and F198 `pending` →
   `in_progress`; `active_batch: M18` → `M19`.
 - 2026-11-14 — review M18 `done`: F189 kept (f4b00295), F192 fixed
