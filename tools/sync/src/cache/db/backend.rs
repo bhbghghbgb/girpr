@@ -108,6 +108,11 @@ pub(in crate::cache) struct SharedCache {
     /// other handle on that file, and that handle's own fresh counter is
     /// already the cache's count.
     ///
+    /// **Where the filesystem can lock a file at all.** redb skips the lock
+    /// entirely on a filesystem that cannot lock one, so there another handle
+    /// can be open on the same file, and the count is then that handle's own
+    /// reads and nothing more.
+    ///
     /// A handle on the shared backend holds this very counter; the handle's
     /// side of it is `CacheDb::reads`.
     #[cfg(test)]
