@@ -46,7 +46,7 @@ struct Group {
 /// once and both passes answer from it.
 ///
 /// A folded key can hold *several* stale spellings, and the lookup asks how
-/// many there are, so this is not the key-shaped [`util::folded_keys`] one.
+/// many there are, so this is not the key-shaped [`crate::util::folded_keys`] one.
 struct AltIndex {
     /// Every cached key, as read.
     keys: Vec<String>,
