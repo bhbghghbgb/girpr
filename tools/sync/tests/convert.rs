@@ -578,6 +578,34 @@ fn a_usage_error_exits_three() {
     );
 }
 
+/// `--version` is refused: the converter declares no version.
+///
+/// The flag is an unknown one, so the run fails with the converter's own code
+/// like any other usage error, and no version line is printed anywhere.
+///
+/// This is the case that holds the refusal, and it is worth having because the
+/// refusal is not the only shape the flag could take: the error path treats a
+/// version request as an *answer* rather than a failure, so a converter that
+/// grew a version would print one and exit `0` — and nothing else in the suite
+/// would notice, because every other case in this file converts something.
+#[test]
+fn a_version_request_is_refused_and_prints_no_version() {
+    let (code, stdout, stderr) = run_converter(["--version"]);
+    assert_eq!(code, 3, "stderr: {stderr}");
+    assert!(
+        stderr.contains("--version"),
+        "the error names the flag it did not know: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "a refused version prints no version line on stdout: {stdout}"
+    );
+    assert!(
+        !stderr.contains(env!("CARGO_PKG_VERSION")),
+        "a refused version prints no version line at all: {stderr}"
+    );
+}
+
 /// Both positionals are required: the sled directory is read, and the redb
 /// file is what is written.
 #[test]
