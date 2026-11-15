@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M24
+active_batch: M25
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:46:00Z
+last_updated: 2026-11-15T01:46:35Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2067,13 +2067,13 @@ followups:
   - id: F216
     source: F159
     description: effective/phase_a.rs has an intra-doc link to util::folded_keys that does not resolve, because util is not in scope in that module; it was introduced after the survey that produced the seven named links and is the one warning left in the private-items doc build.
-    status: pending
+    status: in_progress
     batch: M25
     commits: []
   - id: F217
     source: F156
     description: cache/db/cachedb.rs's CacheDb::reads field doc opens with the same wording as SharedCache::reads; consistent today, but a second place to edit if the wording ever moves.
-    status: pending
+    status: in_progress
     batch: M25
     commits: []
   - id: F218
@@ -2675,6 +2675,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M25 started: F216 and F217 `pending` →
+  `in_progress`; `active_batch: M24` → `M25`.
 - 2026-11-15 — review M24 `done`: F212, F213, F214 and F215 all kept, no fix or
   revert commits; follow-ups F307–F309 appended with batch `M57`. F212–F215
   `pending_review` → `completed`.
