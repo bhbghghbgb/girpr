@@ -847,11 +847,13 @@ This is the price of not re-reading src, and it is recorded in `README.md`'s
 
 **A stat-only row can get stuck.** A row whose stat changed arrives in phase A with
 its digests dropped, and while a stat difference settles the pair for free — a size
-difference, or an mtime one — nothing ever rehashes it, so the row stays stat-only.
-The repair is the flag that distrusts the field doing the settling:
+difference, or an mtime one — no comparison rehashes it, so the row stays
+stat-only. Two repairs: the flag that distrusts the field doing the settling —
 `--no-trust-size` for a size difference, `--no-trust-mtime` for an mtime one, and
-either acts only when the distrusted field is the *only* difference. The row looks
-healthy — right size, right mtime — which is what makes it worth stating.
+either acts only when the distrusted field is the *only* difference — and
+`girsync update --dir <the folder>`, which rehashes every file and writes the
+digest back into the row. The row looks healthy — right size, right mtime — which
+is what makes it worth stating.
 
 **A conversion a killed run left behind stays in the folder.** The converter
 writes the new cache into a temporary beside the destination and moves it onto

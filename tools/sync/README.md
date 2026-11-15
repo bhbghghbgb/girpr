@@ -1717,12 +1717,13 @@ them; `--dry-run` costs the same again.
   paths and the mode that failed.
 - **A stat-only row can get stuck.** A row whose stat changed arrives with its digests
   dropped (a stale row's are all suspect), and while a stat difference settles the pair
-  for free — a size difference, or an mtime one — nothing ever rehashes it, so the row
-  stays stat-only, describing content it cannot verify. The repair is the flag that
-  distrusts the field doing the settling: `--no-trust-size` for a size difference,
-  `--no-trust-mtime` for an mtime one, and either acts only when the distrusted field
-  is the *only* difference. Worth knowing because the row looks healthy — it has the
-  right size and mtime.
+  for free — a size difference, or an mtime one — no comparison rehashes it, so the
+  row stays stat-only, describing content it cannot verify. Two repairs: the flag
+  that distrusts the field doing the settling — `--no-trust-size` for a size
+  difference, `--no-trust-mtime` for an mtime one, and either acts only when the
+  distrusted field is the *only* difference — and `girsync update --dir <the folder>`,
+  which rehashes every file and writes the digest back into the row. Worth knowing
+  because the row looks healthy — it has the right size and mtime.
 - **`hashes_differ` is silent, and silence is not the same claim as "equal".** An empty
   result means *"no difference detected"*, which is not the same claim as
   *"identical"* — it is safe only while every pair reaching it has a digest to compare,
