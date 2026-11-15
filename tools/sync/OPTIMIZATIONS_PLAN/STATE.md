@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M23
+active_batch: M24
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:27:52Z
+last_updated: 2026-11-15T01:28:36Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2032,25 +2032,25 @@ followups:
   - id: F212
     source: F151
     description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
-    status: pending
+    status: in_progress
     batch: M24
     commits: []
   - id: F213
     source: F151
     description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the four rows that spell the whole path for neither reason, though every path is correct.
-    status: pending
+    status: in_progress
     batch: M24
     commits: []
   - id: F214
     source: F150
     description: The stuck-row limit names the flag as the repair, but girsync update --dir <folder> also rehashes a stat-only row, and the README already names it as the fix for the neighbouring record case.
-    status: pending
+    status: in_progress
     batch: M24
     commits: []
   - id: F215
     source: F154
     description: The preamble first kind, state in the cache or the folder that nothing reclaims on its own, does not fit the directory-row limit, which the next prune does reclaim; the limit own body says so, the preamble does not.
-    status: pending
+    status: in_progress
     batch: M24
     commits: []
   - id: F216
@@ -2646,6 +2646,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M24 started: F212, F213, F214 and F215 `pending` →
+  `in_progress`; `active_batch: M23` → `M24`.
 - 2026-11-15 — review M23 `done`: F209, F210 and F211 all kept, no fix or
   revert commits; follow-up F304 appended with batch `M56`, F305 recorded as
   `skipped` as the same item as F266, and F306 recorded as `skipped` as the same
