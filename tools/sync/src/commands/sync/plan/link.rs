@@ -11,11 +11,11 @@
 //! already is the spelling, so that lookup asks nothing at all, and the two
 //! above are the whole of the disk-asking helpers there.
 //!
-//! They are plan-time only: no filesystem write happens here, only those
-//! `canonicalize`, `try_is_link` and `read_dir` (a Windows-only listing)
-//! probes, and they are asked to learn which paths a kept dst file link
+//! They are plan-time only: no filesystem write happens here, only the
+//! link-resolution probes [`DIRECT_QUESTIONS`](super::safety::DIRECT_QUESTIONS)
+//! names, and they are asked to learn which paths a kept dst file link
 //! depends on. The probes are made directly rather than through the guard
-//! seam — see [`Probes`](super::safety::Probes).
+//! seam.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};

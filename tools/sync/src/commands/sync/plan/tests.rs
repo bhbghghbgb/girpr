@@ -5,7 +5,7 @@ use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
-use super::safety::{PrefixStats, Probes, SystemProbes, disk_is_dir, ensure_shared_storage_safe};
+use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
 use crate::effective::EffRec;
@@ -121,7 +121,7 @@ impl Probes for TestProbes {
 
     fn is_dir(&self, path: &Path) -> io::Result<Option<bool>> {
         self.record(path)?;
-        disk_is_dir(path)
+        SystemProbes.is_dir(path)
     }
 }
 
