@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M33
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T10:42:50Z
+last_updated: 2026-11-15T12:49:57Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -644,10 +644,10 @@ reviews:
     result: F33 fixed (2bd29e74 corrects the design notes, which still justified the allocation-free comparison by reading the body); F34 kept (0d7f7646); F35 kept (4fb0741f); F41 fixed (929908a7 corrects the README cost claim, which named the wrong condition); 577 passed without the feature and 590 with it, 1 skipped; the const pin was verified to fail when the const is dropped and when the resolver allocates
     followups: [F172, F173, F174]
   - batch: M33
-    status: pending
+    status: in_progress
     tasks: [F243, F244]
-    base: null
-    head: null
+    base: c888a545
+    head: ba8570a6
     result: null
     followups: []
   - batch: M34
@@ -2382,15 +2382,15 @@ followups:
   - id: F243
     source: F177
     description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
-    status: in_progress
+    status: pending_review
     batch: M33
-    commits: []
+    commits: [93ab7621]
   - id: F244
     source: F175
     description: The help pin couples the converter test to the shared OutputFormat doc wording; a narrower pin over the converter own text would drop that coupling.
-    status: in_progress
+    status: pending_review
     batch: M33
-    commits: []
+    commits: [ba8570a6]
   - id: F245
     source: F176
     description: The MSRV fallback still covers a lone feature with the group only, so this feature needs another and this feature is broken alone remain indistinguishable there.
@@ -3088,6 +3088,11 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M33 review checkpoint opened: F243 and F244
+  `in_progress` → `pending_review`, commits `93ab7621`, `ba8570a6`; review M33
+  `pending` → `in_progress`, base `c888a545`, head `ba8570a6`. The batch's
+  "in progress" state commit landed after the batch's own commits, because the
+  implementing session held the tree while it worked.
 - 2026-11-15 — follow-up batch M33 started: F243 and F244 `pending` →
   `in_progress`; `active_batch: M32` → `M33`.
 - 2026-11-15 — review M32 `done`: F240, F241 and F242 all kept, no fix or revert
