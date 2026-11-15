@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M26
+active_batch: M27
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:53:00Z
+last_updated: 2026-11-15T02:54:44Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2130,19 +2130,19 @@ followups:
   - id: F222
     source: F160
     description: plan/safety.rs module doc still says the guards that run after the rename refuse a plan that is already one change in, which is also a real-run-only statement.
-    status: pending
+    status: in_progress
     batch: M27
     commits: []
   - id: F223
     source: F161
     description: ensure_hard_linked_targets_safe own doc does not say that its link count is a seam probe; that fact lives only in the seam doc.
-    status: pending
+    status: in_progress
     batch: M27
     commits: []
   - id: F224
     source: F161
     description: The seam list of the questions asked directly is kept in step by hand with the direct calls in safety.rs and plan/link.rs, and nothing pins it, so a new direct call could be added without the list noticing.
-    status: pending
+    status: in_progress
     batch: M27
     commits: []
   - id: F225
@@ -2751,6 +2751,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M27 started: F222, F223 and F224 `pending` →
+  `in_progress`; `active_batch: M26` → `M27`.
 - 2026-11-15 — review M26 `done`: F218 kept, F219 fixed (f26a1837, aa527d20,
   95cc2721), F220 kept, F221 kept; follow-ups F315–F317 appended with batch
   `M60`. F218–F221 `pending_review` → `completed`.
