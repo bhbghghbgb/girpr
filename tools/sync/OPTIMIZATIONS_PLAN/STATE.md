@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M37
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T16:51:39Z
+last_updated: 2026-11-15T17:28:15Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -777,10 +777,17 @@ reviews:
     result: F111 kept (335cda4b); F112 kept (1cac4f4b); F116 kept (839bcf84); F130 kept (0e73b57f); no fix or revert commits; 577 passed without the feature and 591 with it, 1 skipped; the reviewer drove the MSRV script with a stubbed cargo across five feature scenarios and found the fallback cannot hide a real failure
     followups: [F179, F180, F181, F183]
   - batch: M37
-    status: in_progress
+    status: done
     tasks: [F258, F259, F260]
     base: a91a091e
     head: e81da0f2
+    result: F258 kept (26f0ea58); F259 kept (53a51337); F260 kept (e81da0f2); no fix or revert commits; 613 passed without the feature and 630 with it, 1 skipped; the reviewer confirmed the label's text is unchanged for both kinds, that the compare harness's own label text did change but reaches only a coverage error that cannot fire there, and saw three mutations fail the new pins
+    followups: [F385]
+  - batch: M87
+    status: pending
+    tasks: [F381, F382, F385]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M38
@@ -2572,21 +2579,24 @@ followups:
   - id: F258
     source: F185
     description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
-    status: pending_review
+    status: completed
     batch: M37
     commits: [26f0ea58]
+    note: review M37 kept; the reviewer confirmed no inline label spelling remains in any test and that the harness label reaches only a coverage error that cannot fire for its fixtures
   - id: F259
     source: F185
     description: Nothing pins the spelling of side_label, although six harnesses now depend on it.
-    status: pending_review
+    status: completed
     batch: M37
     commits: [53a51337]
+    note: review M37 kept; the pin witnesses the wording and the side-versus-file distinction, and the reviewer reproduced two mutations that fail it
   - id: F260
     source: F191
     description: Side::cache_path and side_label answer different questions for a folder side, the cache file against the root, so a caller has to know which one it wants.
-    status: pending_review
+    status: completed
     batch: M37
     commits: [e81da0f2]
+    note: review M37 kept; the accessor had exactly one caller, which was the bug itself, and the reviewer confirmed the labels stay byte-identical
   - id: F261
     source: F188
     description: Repopulate::Nothing covers two different reasons, a folder side and a record that is not a folder cache, and the message cannot say which.
@@ -3346,6 +3356,12 @@ followups:
     status: pending
     batch: M88
     commits: []
+  - id: F385
+    source: F260
+    description: The side-versus-cache-file rule is stated in the two accessors' docs and enforced by a test, but DESIGN-NOTES.md has no do-not-merge-these-two-accessors entry of the kind it gives the sibling scan_stat_only and load_record_side_from rule, so a reader deciding to fold them would re-derive the reasoning from the code.
+    status: pending
+    batch: M87
+    commits: []
 ```
 
 ## Human checklist
@@ -3377,6 +3393,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M37 `done`: F258, F259 and F260 all kept, no fix or revert
+  commits; follow-up F385 appended with batch `M87`. F258–F260 `pending_review` →
+  `completed`.
 - 2026-11-15 — follow-up batch M37 review checkpoint opened: F258, F259 and F260
   `in_progress` → `pending_review`, commits `26f0ea58`, `53a51337`, `e81da0f2`;
   review M37 `pending` → `in_progress`, base `a91a091e`, head `e81da0f2`.
