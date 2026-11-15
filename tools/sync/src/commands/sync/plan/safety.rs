@@ -123,8 +123,9 @@ pub(super) struct DirectQuestion {
 /// the seam does not reach them: a test cannot fail one on demand, and a
 /// count of probes does not count it. This is the list of them, and it is
 /// kept in step with the code by the test that reads the direct calls out of
-/// the two files and compares them with it — so a call added without an entry
-/// here fails that test.
+/// the two files the guards live in (`safety.rs` and `plan/link.rs`) and
+/// compares them with it — so a call added without an entry here fails that
+/// test.
 ///
 /// The hard-link count is not one of them: it asks how many names a file has,
 /// not what a link resolves to, so it goes through the seam like the other
@@ -836,10 +837,20 @@ mod tests {
     /// backs.
     #[test]
     fn the_direct_disk_questions_are_the_ones_the_code_asks() {
-        let mut asked = direct_disk_calls("safety.rs", include_str!("safety.rs"))
-            .into_iter()
-            .chain(direct_disk_calls("link.rs", include_str!("link.rs")))
-            .collect::<Vec<_>>();
+        let files = [
+            ("safety.rs", include_str!("safety.rs")),
+            ("link.rs", include_str!("link.rs")),
+        ];
+        let mut asked = Vec::new();
+        for (file, src) in files {
+            let globs = glob_imports(&without_comments(src));
+            assert!(
+                globs.is_empty(),
+                "{file} imports a disk module by a glob, which brings names the scan \
+                 cannot resolve, so a call through one would be invisible: {globs:?}",
+            );
+            asked.extend(direct_disk_calls(file, src));
+        }
         asked.sort();
         let mut listed = DIRECT_QUESTIONS
             .iter()
@@ -853,6 +864,32 @@ mod tests {
              a question they no longer ask\nasked: {asked:?}\nlisted: {listed:?}\n{}",
             described(),
         );
+    }
+
+    /// The disk modules a file imports by a glob.
+    ///
+    /// A glob brings names the scan cannot resolve — it does not know what a
+    /// module holds — so a call through one would be invisible to it. The
+    /// scan refuses that shape rather than pretend to cover it.
+    fn glob_imports(code: &str) -> Vec<String> {
+        let mut globs = Vec::new();
+        for statement in use_statements(code) {
+            let body = statement
+                .trim_start_matches("use ")
+                .trim_end_matches(';')
+                .trim();
+            let Some(path) = body.strip_suffix("::*") else {
+                continue;
+            };
+            let segments: Vec<&str> = path.split("::").collect();
+            if segments.len() >= 2 {
+                let module = format!("{}::{}", segments[0], segments[1]);
+                if DISK_MODULES.contains(&module.as_str()) {
+                    globs.push(body.to_string());
+                }
+            }
+        }
+        globs
     }
 
     /// The list as it reads: each entry and what it asks the disk.
@@ -1086,6 +1123,12 @@ mod tests {
 
     /// The names the file imports from the modules that reach the disk, and
     /// the aliases those modules are imported under.
+    ///
+    /// A module can be reached under another name (`use std::fs as filesystem`
+    /// or `use std::fs::{self as fs, ..}`), and a call reaches it by that
+    /// name, so the alias is what the scan has to know: a module reached by
+    /// a name the scan does not hold would make every call through it
+    /// invisible.
     fn imported_disk_names(code: &str) -> (HashSet<String>, HashSet<String>) {
         let mut names = HashSet::new();
         let mut aliases = HashSet::new();
@@ -1094,6 +1137,15 @@ mod tests {
                 .trim_start_matches("use ")
                 .trim_end_matches(';')
                 .trim();
+            // `use std::fs as filesystem;` names the module under another
+            // name. The `as` inside a brace list belongs to a list item, so
+            // only an `as` outside the braces renames the module.
+            let (body, alias) = match body.split_once(" as ") {
+                Some((path, alias)) if !path.contains('{') && !alias.contains('{') => {
+                    (path.trim(), Some(alias.trim()))
+                }
+                _ => (body, None),
+            };
             let segments: Vec<&str> = body.split("::").collect();
             if segments.len() < 2 {
                 continue;
@@ -1105,18 +1157,29 @@ mod tests {
             let last = segments[segments.len() - 1];
             match last.strip_suffix('}').and_then(|s| s.strip_prefix('{')) {
                 Some(inner) => {
-                    for name in inner.split(',') {
-                        let name = name.trim();
-                        if !name.is_empty() {
-                            names.insert(name.to_string());
+                    for item in inner.split(',') {
+                        let item = item.trim();
+                        if item.is_empty() {
+                            continue;
+                        }
+                        let (item, alias) = match item.split_once(" as ") {
+                            Some((item, alias)) => (item.trim(), Some(alias.trim())),
+                            None => (item, None),
+                        };
+                        if item == "self" {
+                            // `self` is the module itself, under its own name
+                            // or under the alias the item gives it.
+                            aliases.insert(alias.unwrap_or(segments[1]).to_string());
+                        } else if item != "*" {
+                            names.insert(alias.unwrap_or(item).to_string());
                         }
                     }
                 }
                 None if segments.len() == 2 => {
-                    aliases.insert(last.to_string());
+                    aliases.insert(alias.unwrap_or(last).to_string());
                 }
                 None => {
-                    names.insert(last.to_string());
+                    names.insert(alias.unwrap_or(last).to_string());
                 }
             }
         }
@@ -1144,6 +1207,9 @@ mod tests {
 
     /// Whether a path reaches the disk.
     fn reaches_the_disk(path: &str, aliases: &HashSet<String>) -> bool {
+        // A path may be written with a leading `::`; the module it names is
+        // the same one either way.
+        let path = path.trim_start_matches("::");
         let segments: Vec<&str> = path.split("::").collect();
         if segments.len() >= 2 {
             let module = format!("{}::{}", segments[0], segments[1]);
