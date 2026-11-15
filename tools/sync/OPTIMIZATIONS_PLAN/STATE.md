@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M36
+active_batch: M37
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T16:22:55Z
+last_updated: 2026-11-15T16:28:34Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2558,19 +2558,19 @@ followups:
   - id: F258
     source: F185
     description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
-    status: pending
+    status: in_progress
     batch: M37
     commits: []
   - id: F259
     source: F185
     description: Nothing pins the spelling of side_label, although six harnesses now depend on it.
-    status: pending
+    status: in_progress
     batch: M37
     commits: []
   - id: F260
     source: F191
     description: Side::cache_path and side_label answer different questions for a folder side, the cache file against the root, so a caller has to know which one it wants.
-    status: pending
+    status: in_progress
     batch: M37
     commits: []
   - id: F261
@@ -3339,6 +3339,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M37 started: F258, F259 and F260 `pending` →
+  `in_progress`; `active_batch: M36` → `M37`.
 - 2026-11-15 — review M36 `done`: F254, F255, F256 and F257 all kept, no fix or
   revert commits; follow-ups F379 and F380 appended with batch `M86`.
   F254–F257 `pending_review` → `completed`.
