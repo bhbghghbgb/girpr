@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M32
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T10:24:23Z
+last_updated: 2026-11-15T10:42:50Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -602,10 +602,31 @@ reviews:
     result: null
     followups: []
   - batch: M32
-    status: in_progress
+    status: done
     tasks: [F240, F241, F242]
     base: 083c4739
     head: 8230e53e
+    result: F240 kept (537ee293); F241 kept (1dd21971); F242 kept (8230e53e); no fix or revert commits; 611 passed without the feature and 627 with it, 1 skipped; the reviewer confirmed the const block derives every answer from the vocabulary, that the ASCII-case spelling is still asked of the whole vocabulary at run time, and that alt_lookups moves only on an exact miss in insensitive mode
+    followups: [F347, F348, F349, F350, F351, F352]
+  - batch: M74
+    status: pending
+    tasks: [F347, F348, F349]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M75
+    status: pending
+    tasks: [F350, F351]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M76
+    status: pending
+    tasks: [F352]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M14
@@ -2340,21 +2361,24 @@ followups:
   - id: F240
     source: F172
     description: The const block answer list is a hand-written subset of HashAlg::ALL, so a third algorithm would be covered by the runtime resolver case but silently not by the const one.
-    status: pending_review
+    status: completed
     batch: M32
     commits: [537ee293]
+    note: review M32 kept; the reviewer confirmed the const block derives every answer from the vocabulary, that from_name itself is untouched, and that the discriminant comparison is the only const option on this toolchain
   - id: F241
     source: F174
     description: The index note that a run which only adds a file pays for the index holds only in insensitive mode, since in sensitive mode there is no alternate to look for and the index is never built, and the note does not say so.
-    status: pending_review
+    status: completed
     batch: M32
     commits: [1dd21971]
+    note: review M32 kept; the reviewer confirmed the index is created only in the insensitive arm and that the new sensitive-mode case fails when the mode is flipped
   - id: F242
     source: F174
     description: The new index case pins the index build through the entries-table read counter, so a prune that ever moved to the counting handle would change the asserted numbers for a reason unrelated to the index.
-    status: pending_review
+    status: completed
     batch: M32
     commits: [8230e53e]
+    note: review M32 kept; the reviewer confirmed alt_lookups moves only inside the index's adoptable, so it moves only on an exact miss in insensitive mode, and that no output changed
   - id: F243
     source: F177
     description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
@@ -2993,6 +3017,42 @@ followups:
     status: pending
     batch: M71
     commits: []
+  - id: F347
+    source: F240
+    description: The const block's doc says the ASCII-case spelling is the one answer this block cannot hold, whereas what it cannot hold is the derived one, since a hand-written uppercase literal would fit in a const block and writing one is what this change removed.
+    status: pending
+    batch: M74
+    commits: []
+  - id: F348
+    source: F240
+    description: HashAlg::ALL is a fixed-size array, so adding a variant to the enum does not force ALL to grow, and a variant left out of ALL would be uncovered by anything; a const assertion that the entries are in order would catch an entry replaced rather than appended.
+    status: pending
+    batch: M74
+    commits: []
+  - id: F349
+    source: F240
+    description: hash_names_fold_ascii_case_only and from_str_is_case_insensitive_without_help still spell md5 and sha256 by hand; they read as examples rather than as coverage, but a reader could take them for coverage.
+    status: pending
+    batch: M74
+    commits: []
+  - id: F350
+    source: F242
+    description: The scan's one pass over the entries table's keys, which the README still asserts, is no longer pinned by any case, since the converted case's read-count assertion was its only pin and pinning it that way is what made it fragile.
+    status: pending
+    batch: M75
+    commits: []
+  - id: F351
+    source: F242
+    description: ScanStats::alt_lookups is returned but not logged; the effective done phase a event could carry it, which is user-visible and would need a README line.
+    status: pending
+    batch: M75
+    commits: []
+  - id: F352
+    source: F242
+    description: cache/db/cachedb.rs's entries_read_count seam now has no phase-A user left; the other users, cachedb's own cases and commands/sync/rename.rs, remain.
+    status: pending
+    batch: M76
+    commits: []
 ```
 
 ## Human checklist
@@ -3028,6 +3088,11 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M32 `done`: F240, F241 and F242 all kept, no fix or revert
+  commits; follow-ups F347–F352 appended with batches `M74`, `M75` and `M76`.
+  F240–F242 `pending_review` → `completed`. The reviewer noted that the three
+  commit bodies use " - " where the crate's prose uses an em dash; the tree
+  keeps the em dash and later batches should use it in commit bodies too.
 - 2026-11-15 — follow-up batch M32 review checkpoint opened: F240, F241 and F242
   `in_progress` → `pending_review`, commits `537ee293`, `1dd21971`, `8230e53e`;
   review M32 `pending` → `in_progress`, base `083c4739`, head `8230e53e`.
