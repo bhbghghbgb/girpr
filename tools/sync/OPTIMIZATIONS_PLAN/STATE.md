@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M35
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:07:13Z
+last_updated: 2026-11-15T15:16:12Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -692,6 +692,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M83
+    status: pending
+    tasks: [F367, F368, F369]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M15
     status: done
     tasks: [F175, F176, F177, F178, F183]
@@ -700,10 +707,10 @@ reviews:
     result: F175 kept (b1610c1e); F176 fixed (e86a40aa states the rule in the script and the root README, since the old note said the opposite of what the new check does); F177 kept (493fce5b); F178 kept (b0081392); 588 passed without the feature and 603 with it, 1 skipped; the help pin was verified to fail when a doc comment is put back on Args
     followups: [F247, F248, F249]
   - batch: M35
-    status: pending
+    status: in_progress
     tasks: [F251, F252]
-    base: null
-    head: null
+    base: d3b4a295
+    head: c298eedc
     result: null
     followups: []
   - batch: M36
@@ -2473,15 +2480,15 @@ followups:
   - id: F251
     source: F179
     description: A member whose feature needs two other features at once, with no single partner building, is now failed; the script could report the building combination alongside the failure so the reader sees which configuration does build.
-    status: in_progress
+    status: pending_review
     batch: M35
-    commits: []
+    commits: [274d90e5]
   - id: F252
     source: F181
     description: Get-OptionalFeatures and Get-FeaturePairs compare feature names case-insensitively while cargo feature names are case-sensitive; harmless in practice, untidy in principle.
-    status: in_progress
+    status: pending_review
     batch: M35
-    commits: []
+    commits: [c298eedc]
   - id: F253
     source: F176
     description: The pair lookup reuses the combination results, so a member with many optional features pays for every subset of size two or more.
@@ -3180,6 +3187,24 @@ followups:
     batch: null
     commits: []
     note: skipped: documented in the script, the module and the README, and the shape it misses is named there too
+  - id: F367
+    source: F252
+    description: The metadata reader cannot hold case-differing feature names, since ConvertFrom-Json refuses a JSON object with two keys that differ only in case, so a member declaring alpha and Alpha fails at the metadata step rather than being modelled.
+    status: pending
+    batch: M83
+    commits: []
+  - id: F368
+    source: F251
+    description: The combination named beside a failing feature is the whole set, since the rules do not build the smaller combinations, so a member with many features whose failing feature needs only two of them is told about a wider configuration than it needs.
+    status: pending
+    batch: M83
+    commits: []
+  - id: F369
+    source: F251
+    description: A feature that needs two partners is failed even though the whole set builds; that is deliberate, since a feature alone is a configuration cargo allows, but it is a policy the rule states rather than a necessity.
+    status: pending
+    batch: M83
+    commits: []
 ```
 
 ## Human checklist
@@ -3215,6 +3240,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M35 review checkpoint opened: F251 and F252
+  `in_progress` → `pending_review`, commits `274d90e5`, `c298eedc`; review M35
+  `pending` → `in_progress`, base `d3b4a295`, head `c298eedc`.
 - 2026-11-15 — follow-up batch M35 started: F251 and F252 `pending` →
   `in_progress`; `active_batch: M34` → `M35`.
 - 2026-11-15 — review M34 `done`: F247 kept, F248 fixed (3546a457, 2d19bef1),
