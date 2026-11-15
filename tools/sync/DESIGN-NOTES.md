@@ -595,10 +595,13 @@ in and the one it picks the newest by — are the same one.
 The bound is applied **after** the cache is opened, and the open holds the
 cache file's exclusive lock until the run is done with the cache. redb takes
 that lock exclusively and does not wait for it, so at most one run is in its
-run phase for a folder's cache at a time. The bound also enumerates the folder
-once, at its start, so a copy published after that is not a candidate at all:
-a run that publishes while another run is bounding the folder is spared by
-the enumeration, not by a rule about ages.
+run phase for a folder's cache at a time — **where the filesystem can lock a
+file at all**. redb skips the lock entirely on a filesystem that cannot lock
+one, and there the exclusion is gone: the bound runs under no lock at all, and
+nothing says that another run is in its run phase for the folder. The bound
+also enumerates the folder once, at its start, so a copy published after that
+is not a candidate at all: a run that publishes while another run is bounding
+the folder is spared by the enumeration, not by a rule about ages.
 
 A cache that does **not** open is bounded as well, because the bound is about
 the folder and not about the open. The bound runs under the cache's own lock

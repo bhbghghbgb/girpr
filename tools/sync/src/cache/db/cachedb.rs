@@ -60,8 +60,10 @@ struct Preflight {
 /// **The entries-table open here is not one of the counted reads.** It opens
 /// the table to learn whether it is there and reads no row, and it runs on a
 /// raw [`Database`] before any [`CacheDb`] handle exists — so there is no
-/// counter here for it to move. The counted reads are the ones that fetch
-/// rows, and every one of them goes through `begin_entries_read`.
+/// counter here for it to move. The counted reads are the ones that go
+/// through `begin_entries_read`, and that is the whole of it: a counted read
+/// need not fetch a row's value — `entry_count` fetches nothing at all, and
+/// `load_keys` fetches the keys alone.
 fn preflight(db: &Database) -> Result<Preflight> {
     let txn = db.begin_read().context("begin read (meta)")?;
     let entries_present = match txn.open_table(ENTRIES) {
@@ -117,6 +119,12 @@ fn read_row(
 /// open fails with "Database already open"). All callers open, use, and drop
 /// sequentially — never hold two writable handles on one path. Read-only
 /// handles do not conflict with each other.
+///
+/// **A filesystem that cannot lock a file has none of that.** redb skips the
+/// lock entirely there, so the exclusion is not there either and another
+/// handle can be open on the same file. It is the filesystem the crate
+/// already knows: a copy published there carries no record of its own, the
+/// record being a lock as well.
 pub struct CacheDb {
     pub(super) db: Handle,
     /// The entries-table reads counted into the counter this handle holds.
@@ -152,6 +160,16 @@ impl CacheDb {
     /// other case: they share the file with each other, so each of those
     /// keeps its own count and reports only its own reads.
     ///
+    /// **The fresh counter is fresh per open.** It starts at zero every
+    /// time, so the count is the reads this handle has made since it opened,
+    /// and not the reads an earlier open made — the shared backend's counter
+    /// would carry those.
+    ///
+    /// **The exclusion is the lock's, and the lock may be absent.** redb
+    /// skips the lock entirely on a filesystem that cannot lock a file, so
+    /// there another handle can be open on the same file, and the count is
+    /// then this handle's own reads and nothing more.
+    ///
     /// The shared (test) backend is the one case where several handles are
     /// alive on one cache at once, and it hands them one counter between
     /// them rather than one each — see `with_shared_reads`.
@@ -173,7 +191,8 @@ impl CacheDb {
     /// A file-backed cache needs none of that: redb locks a writable
     /// database exclusively, so the read/write handle on a cache file is the
     /// only handle on it, and that handle's own fresh counter is already the
-    /// cache's count (see `with_handle`).
+    /// cache's count — for the reads it has made since it opened, and where
+    /// the filesystem can lock a file at all (see `with_handle`).
     #[cfg(test)]
     fn with_shared_reads(db: Handle, reads: Arc<AtomicU64>) -> Self {
         Self { db, reads }
@@ -483,6 +502,15 @@ impl CacheDb {
     /// other handle on that file and its own count is the cache's count.
     /// The read-only handles on a file share the file with each other, so
     /// each of those reports only its own reads.
+    ///
+    /// **Two things bound that answer.** A file-backed counter is **fresh
+    /// per open**: the handle starts at zero every time, so the number is the
+    /// reads this handle has made since it opened and not the reads an
+    /// earlier open made, which the shared counter would carry. And the
+    /// exclusion is **the lock's**: redb skips the lock entirely on a
+    /// filesystem that cannot lock a file, so there another handle can be
+    /// open on the same file, and the count is then this handle's own reads
+    /// and nothing more.
     ///
     /// A test seam, for the reason the counter exists at all: a read that
     /// costs one transaction whatever its length is a different thing from a
