@@ -335,15 +335,25 @@ feature that does not build on its own is checked with each of the other
 features instead — the feature together with one other, which is a
 configuration that has to build on its own — so a member whose features only
 build together is covered rather than failed. The features are checked in
-combination as well — every combination of them, the largest being every
-optional feature of the member enabled at once — so a combination that needs a
-newer Rust is caught even when each of its features builds on its own. A
+combination as well — each pair of them, and the whole set of them at once —
+so a combination that needs a newer Rust is caught even when each of its
+features builds on its own. Not every subset of the features is checked: the
+subsets of two or more of n features are 2^n - n - 1 of them, so a member with
+a dozen optional features would ask cargo for four thousand builds. The code
+a middle subset compiles is compiled by the whole set as well, and an
+incompatibility is caught by the pair that holds it or by the whole set. A
 combination that cannot be enabled together fails the member — cargo allows
 it, so it is a configuration a user can ask for — and the failure names the
 combination that does not build. It needs rustup and network access on the
 first run; after that the declared toolchains and the shared target directory
 make a run a few minutes of incremental builds. The `msrv` workflow runs the
 same script.
+
+The script's own feature rules live in `tests/scripts/msrv-features.ps1` and
+are checked by `tests/scripts/msrv-features.selftest.ps1`, which drives them
+with a synthetic member: no member of the workspace has two optional features
+today, so a real run never reaches the branch that checks a combination of
+them. The `msrv` workflow runs the self-test before the script.
 
 **Tools.** `tools/capture/` (`gircap`) records real artifact bundles for the
 bridge tests; `tools/sync/` (`girsync`) mirrors an old install into a working

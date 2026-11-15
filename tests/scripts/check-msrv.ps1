@@ -33,14 +33,23 @@ own, and one that does build is the partner the feature needs. A feature that
 builds with no one other feature is broken on its own and fails the member.
 The same check runs in the `msrv` workflow.
 
-The combinations of those features are checked too — every subset of two or
-more of them, with the same command and `--features <a,b>`, the largest being
-every optional feature of the member enabled at once. Cargo adds features up,
-so every combination is a configuration a user can ask for, and a combination
-can need a newer Rust than the features it is made of do: the checks above
-would not see that, because each of its parts builds on its own. A member whose
-features cannot be enabled together is failed by that check — the combination
-is one cargo allows, so it is a configuration that has to build.
+The combinations of those features are checked too — each pair of them, and
+the whole set of them at once — with the same command and `--features <a,b>`.
+Cargo adds features up, so every combination is a configuration a user can ask
+for, and a combination can need a newer Rust than the features it is made of
+do: the checks above would not see that, because each of its parts builds on
+its own. A member whose features cannot be enabled together is failed by that
+check — the combination is one cargo allows, so it is a configuration that has
+to build.
+
+**Not every subset of the features is checked.** The subsets of two or more of
+n features are 2^n - n - 1 of them, and a member with a dozen optional
+features would ask cargo for four thousand builds. What is checked is each
+feature alone, each pair of them, and the whole set at once, which is a
+quadratic in the number of features: the code a middle subset compiles is
+compiled by the whole set as well, and an incompatibility is caught by the pair
+that holds it or by the whole set. The rules, and the reason for them, are in
+`msrv-features.ps1`.
 
 Run it from anywhere; it works from the repository root:
 
@@ -60,67 +69,11 @@ $ErrorActionPreference = 'Stop'
 # only affects this script's scope, which ends with the run.
 $PSNativeCommandUseErrorActionPreference = $false
 
-# The features a package declares that its default feature set does not turn on.
-#
-# The list comes from `cargo metadata`, so it follows the manifests instead of
-# keeping a second one here. A package that declares nothing beyond its default
-# set has no code the default check misses, and the list is empty for it.
-#
-# `default` itself is not a feature to check: it is the set the first check
-# already builds, and a feature it turns on is built by that check too.
-function Get-OptionalFeatures($pkg) {
-    $features = $pkg.features
-    if ($null -eq $features) {
-        return @()
-    }
-    $declared = @($features.PSObject.Properties | ForEach-Object { $_.Name })
-    $default = $features.PSObject.Properties['default']
-    $enabled = if ($null -eq $default) { @() } else { @($default.Value) }
-    return @($declared | Where-Object { $_ -ne 'default' -and $enabled -notcontains $_ })
-}
-
-# The combinations of a member's optional features: every subset of two or
-# more of them.
-#
-# Cargo adds features up, so a user can ask for any combination of a member's
-# features, and each combination is a configuration that has to build. The
-# subsets are named in the order the features are declared, so the same
-# combination always has the same name — and the pairs are named the same way,
-# which is how the fallback below finds the pair that holds a feature.
-function Get-FeatureCombinations($features) {
-    $features = @($features)
-    $combinations = @()
-    for ($mask = 1; $mask -lt (1 -shl $features.Count); $mask++) {
-        $members = @()
-        for ($bit = 0; $bit -lt $features.Count; $bit++) {
-            if ($mask -band (1 -shl $bit)) {
-                $members += $features[$bit]
-            }
-        }
-        if ($members.Count -ge 2) {
-            $combinations += ,($members -join ',')
-        }
-    }
-    return $combinations
-}
-
-# The pairs that hold a feature: the feature together with one other optional
-# feature, in the order the features are declared.
-#
-# A pair is a combination of two features, so its result is one of the results
-# the combination check records.
-function Get-FeaturePairs($features, $feature) {
-    $features = @($features)
-    $pairs = @()
-    for ($i = 0; $i -lt $features.Count; $i++) {
-        for ($j = $i + 1; $j -lt $features.Count; $j++) {
-            if ($features[$i] -eq $feature -or $features[$j] -eq $feature) {
-                $pairs += ,(@($features[$i], $features[$j]) -join ',')
-            }
-        }
-    }
-    return $pairs
-}
+# The feature rules live in their own file, so that the self-test can drive
+# them with a synthetic member: no member of the workspace has two optional
+# features today, so a real run of this script never reaches the combination
+# branch, and the branch would otherwise be untested.
+. (Join-Path $PSScriptRoot 'msrv-features.ps1')
 
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 Push-Location $root
@@ -174,84 +127,19 @@ try {
             Write-Host "ok: $($pkg.name) builds with Rust $ver"
         }
 
-        # The optional features of this member.
-        $optional = @(Get-OptionalFeatures $pkg)
-
-        # The combinations of the optional features.
+        # The optional features of this member, and the configurations of them
+        # that are checked.
         #
-        # Each feature is checked on its own below, and a combination is a
-        # configuration a user can ask for as well — so a combination can need
-        # a newer Rust than the features it is made of do, and the checks
-        # below would not see that, because each of its parts builds on its
-        # own. Every subset of two or more of the features is checked here.
-        #
-        # A member whose features cannot be enabled together is failed by
-        # this: cargo allows the combination, so it is a configuration that
-        # has to build.
-        $combinationExit = @{}
-        foreach ($combination in @(Get-FeatureCombinations $optional)) {
-            & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $combination
-            $combinationCode = $LASTEXITCODE
-            $combinationExit[$combination] = $combinationCode
-            if ($combinationCode -eq 0) {
-                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $combination"
-                continue
-            }
-            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $combination (exit code $combinationCode)"
-            $failed += "$($pkg.name) ($ver, --features $combination, exit code $combinationCode)"
+        # The build is handed to the rule as a scriptblock, so that the rule
+        # can be driven without cargo. The build's own output goes to the
+        # host, so a failing build still says why it failed.
+        $check = {
+            param($features)
+            & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $features | Out-Host
+            $LASTEXITCODE
         }
-
-        # The code behind an optional feature is not in the check above, so it
-        # is checked on its own: a member's floor is the floor of every code it
-        # ships, and an optional feature is code the member ships when it is
-        # asked for.
-        #
-        # A feature is checked alone, so the code behind it is held to the
-        # floor on its own. A member whose features cannot be enabled together
-        # is failed by the combination check above, which names the
-        # combination; what this check adds is the feature that cannot be
-        # enabled on its own. A feature that does not build alone may be one
-        # that only builds in combination with another, and it is checked with
-        # each of the other features before the member is failed: the feature
-        # together with one other is a configuration that has to build on its
-        # own, and one that does build is the partner the feature needs.
-        #
-        # The pairs holding the feature are among the combinations checked
-        # above, so their results are looked up there rather than checked
-        # twice. A feature that builds with no one other feature is broken on
-        # its own: the whole optional set building says nothing about it,
-        # because every optional feature at once is a configuration of its own
-        # and not a partner the feature can be shown to need. A member with
-        # one optional feature has no pair at all, so a feature that does not
-        # build alone is a failure of its own.
-        foreach ($feature in $optional) {
-            & cargo "+$ver" check -p $pkg.name --all-targets --locked --features $feature
-            $featureExit = $LASTEXITCODE
-            if ($featureExit -eq 0) {
-                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $feature"
-                continue
-            }
-            # The feature does not build on its own. It may be one that only
-            # builds in combination with another, so the pairs holding it are
-            # looked at before the member is failed.
-            $pairs = @(Get-FeaturePairs $optional $feature)
-            $holding = $null
-            foreach ($pair in $pairs) {
-                if ($combinationExit[$pair] -eq 0) {
-                    $holding = $pair
-                    break
-                }
-            }
-            if ($null -ne $holding) {
-                Write-Host "ok: $($pkg.name) builds with Rust $ver and --features $holding, which holds $feature"
-                continue
-            }
-            if ($pairs.Count -gt 0) {
-                Write-Host "    $feature does not build with any one other feature either"
-            }
-            Write-Host "FAIL: $($pkg.name) does not build with Rust $ver and --features $feature (exit code $featureExit)"
-            $failed += "$($pkg.name) ($ver, --features $feature, exit code $featureExit)"
-        }
+        $result = Invoke-MemberFeatureChecks -Pkg $pkg -Ver $ver -Check $check
+        $failed += @($result.Failures)
     }
 
     if ($failed.Count -gt 0) {
