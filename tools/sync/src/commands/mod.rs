@@ -61,6 +61,13 @@ pub(super) fn side_kind(side: &Side) -> &'static str {
 /// **Public, so that a caller outside the crate names a side the same way.**
 /// A test harness that builds the label itself keeps a second spelling of a
 /// rule the commands share, and the two drift the moment the wording changes.
+///
+/// **The wording is pinned, because the harnesses depend on it.** A label is
+/// `record <path>` or `folder <path>` — the word for what the side is, a space,
+/// and the side's own path — and `a_side_is_named_by_its_kind_and_its_own_path`
+/// in `tests/helpers.rs` holds that text. A rewording is therefore a deliberate
+/// change rather than a quiet one: the harnesses that build their labels
+/// through here cannot drift apart without the pin saying so.
 pub fn side_label(side: &Side) -> String {
     let path = match side {
         Side::Record(p) => p,

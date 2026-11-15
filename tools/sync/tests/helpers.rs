@@ -2,12 +2,13 @@
 
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{md5arg, opts, rw, scan, serial_rw, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
-use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
+use girsync::effective::{Side, SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
@@ -644,4 +645,29 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
         Some(real.as_slice())
     );
     drop(db);
+}
+
+/// **The one spelling of a side's label.**
+///
+/// Every harness builds its side labels through [`side_label`], so the wording
+/// is a contract with them: a change to it moves every one of them at once,
+/// and a harness that kept a label of its own would no longer say what the
+/// commands say.
+///
+/// The case holds the *text* — the word for what the side is, a space, and the
+/// side's own path — so a rewording fails here rather than quietly changing
+/// what every harness produces. The paths are spelled with a forward slash
+/// because a path prints as it is written, on either platform.
+#[test]
+fn a_side_is_named_by_its_kind_and_its_own_path() {
+    assert_eq!(
+        side_label(&Side::Folder(PathBuf::from("game"))),
+        "folder game",
+        "a folder side is named by the root the user pointed at"
+    );
+    assert_eq!(
+        side_label(&Side::Record(PathBuf::from("game/girpr-cache"))),
+        "record game/girpr-cache",
+        "a record side is named by the record's own path"
+    );
 }
