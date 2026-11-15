@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M26
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:18:21Z
+last_updated: 2026-11-15T02:29:50Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -441,10 +441,10 @@ reviews:
     result: null
     followups: []
   - batch: M26
-    status: pending
+    status: in_progress
     tasks: [F218, F219, F220, F221]
-    base: null
-    head: null
+    base: cb6bb33c
+    head: 82854f75
     result: null
     followups: []
   - batch: M11
@@ -2095,27 +2095,27 @@ followups:
   - id: F218
     source: F156
     description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
-    status: in_progress
+    status: pending_review
     batch: M26
-    commits: []
+    commits: [f26a1837]
   - id: F219
     source: F156
     description: redb skips its file lock entirely on a filesystem that cannot lock a file, so the exclusion the counter story rests on does not hold there; the crate acknowledges such filesystems elsewhere.
-    status: in_progress
+    status: pending_review
     batch: M26
-    commits: []
+    commits: [f26a1837]
   - id: F220
     source: F157
     description: The preflight new sentence calls the counted reads the ones that fetch rows, but entry_count and load_keys are counted too and fetch none, so begin_entries_read should stay the stated definition.
-    status: in_progress
+    status: pending_review
     batch: M26
-    commits: []
+    commits: [f26a1837]
   - id: F221
     source: F158
     description: The claim that three of the link helpers ask the disk counts on_disk_name, whose non-Windows version asks nothing at all.
-    status: in_progress
+    status: pending_review
     batch: M26
-    commits: []
+    commits: [82854f75]
   - id: F222
     source: F160
     description: plan/safety.rs module doc still says the guards that run after the rename refuse a plan that is already one change in, which is also a real-run-only statement.
@@ -2722,6 +2722,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M26 review checkpoint opened: F218, F219, F220 and
+  F221 `in_progress` → `pending_review`, commits `f26a1837`, `82854f75`; review
+  M26 `pending` → `in_progress`, base `cb6bb33c`, head `82854f75`.
 - 2026-11-15 — follow-up batch M26 started: F218, F219, F220 and F221 `pending` →
   `in_progress`; `active_batch: M25` → `M26`.
 - 2026-11-15 — review M25 `done`: F216 kept (d42a90fd), F217 fixed (0339f805,
