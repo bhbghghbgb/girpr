@@ -703,19 +703,24 @@ fn without_shared_value_wording(help: &str) -> String {
 
 /// The help output, pinned over the converter's own text.
 ///
-/// `clap` reads a doc comment on the argument struct as the command's
-/// `long_about`, and `--help` prints it **verbatim** — the `**` markers and
-/// the `#[command(version)]` attribute in it included, because `clap` does not
-/// render markdown. A note written for a source reader would then tell a user
-/// about an attribute they cannot type, so the struct carries no doc comment
-/// and this case is what holds it there.
+/// `clap` reads a **multi-paragraph** doc comment on the argument struct as
+/// the command's `long_about`, and `--help` prints it **verbatim** — the `**`
+/// markers and the `#[command(version)]` attribute in it included, because
+/// `clap` does not render markdown. A note written for a source reader would
+/// then tell a user about an attribute they cannot type, so the struct carries
+/// no doc comment and this case is what holds it there.
+///
+/// A single-paragraph doc comment is the command's short `about` instead, and
+/// the explicit `about` here overrides it, so such a note reaches neither
+/// `--help` nor `-h`: it prints nowhere, and there is nothing for this pin to
+/// hold.
 ///
 /// The pin is the whole text rather than a few names in it, so anything that
 /// reaches the help shows up as a difference: a paragraph of prose, a flag, a
 /// changed wording. The names the case above looks for would survive all of
-/// them. A doc comment on the argument struct reaches the help as the text at
-/// the top of it, and the top of it is pinned here, so a note put back on the
-/// struct shows up as a difference in the first line.
+/// them. A multi-paragraph doc comment on the argument struct reaches the help
+/// as the text at the top of it, and the top of it is pinned here, so a note
+/// put back on the struct shows up as a difference in the first line.
 ///
 /// One part of the help is not the converter's text, and it is cut away before
 /// the comparison: the *descriptions* of the accepted `--output` values. They
@@ -740,8 +745,8 @@ fn the_help_output_is_pinned() {
     assert_eq!(
         without_shared_value_wording(&text),
         EXPECTED_HELP,
-        "the help output is pinned: a doc comment on the argument struct would \
-         print here"
+        "the help output is pinned: a multi-paragraph doc comment on the \
+         argument struct would print here"
     );
 }
 
