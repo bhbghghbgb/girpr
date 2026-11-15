@@ -111,6 +111,23 @@ function Get-FeatureConfigurations($features) {
     return $configurations
 }
 
+# The exit code of a configuration that was built.
+#
+# A configuration that is not in the table was never built, so its exit code
+# is not known: the missing entry is not a build that failed. Reading it as
+# one would fail a member over a configuration cargo was never asked for, and
+# it would report the wrong reason for it, so the lookup refuses the missing
+# entry instead.
+#
+# The name it is given is the name the configuration carries, so a lookup
+# cannot ask for a spelling the check did not build.
+function Get-BuiltExitCode($exitCodes, $name, $member) {
+    if (-not $exitCodes.ContainsKey($name)) {
+        throw "the configuration '$name' of $member was never built, so its exit code is unknown"
+    }
+    return [int]$exitCodes[$name]
+}
+
 # Check a member's optional features and judge what came back.
 #
 # The build is handed in, so that the rule this file states can be driven
@@ -154,7 +171,9 @@ function Invoke-MemberFeatureChecks {
     $failures = @()
     # The exit code of every configuration of two or more features, keyed by
     # its name. The keys are compared exactly: a configuration is named after
-    # the features it holds, and cargo does not fold their case.
+    # the features it holds, and cargo does not fold their case. A lookup
+    # takes the name from the configuration it is about, so it cannot ask for
+    # a spelling the check did not build.
     $exitCodes = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 
     foreach ($configuration in $configurations) {
@@ -186,7 +205,7 @@ function Invoke-MemberFeatureChecks {
             if ($pair.Features.Count -ne 2) { continue }
             if ($pair.Features -cnotcontains $feature) { continue }
             $pairs++
-            if ($exitCodes[$pair.Name] -eq 0) {
+            if ((Get-BuiltExitCode $exitCodes $pair.Name $Pkg.name) -eq 0) {
                 $holding = $pair.Name
                 break
             }
@@ -207,7 +226,7 @@ function Invoke-MemberFeatureChecks {
         foreach ($held in $configurations) {
             if ($held.Features.Count -lt 3) { continue }
             if ($held.Features -cnotcontains $feature) { continue }
-            if ($exitCodes[$held.Name] -eq 0) {
+            if ((Get-BuiltExitCode $exitCodes $held.Name $Pkg.name) -eq 0) {
                 $combination = $held.Name
                 break
             }
