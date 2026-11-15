@@ -44,7 +44,24 @@ fn same_spelling(a: &str, b: &str) -> bool {
 /// row lives in a `HashMap` and `x != y` compares two unequal `Vec`s, reporting a
 /// difference. Refusing it instead would turn a corrupt row into a hard failure rather
 /// than a reported difference, which is not what this format has always done.
-#[derive(Clone, Default, PartialEq, Eq)]
+///
+/// ## The arm holds no room beyond its entries
+///
+/// The arm is a vector, and a vector grows in steps: a row that carries one
+/// unknown name holds room for four. Two things keep that from costing a
+/// caller anything it keeps:
+///
+/// - **A clone is sized for its length.** `Vec::clone` allocates exactly the
+///   length today, so a derive would give the same answer — but the claim
+///   this crate makes about a row is that it holds no more than it says, and
+///   it should not rest on what `std` happens to do with a vector's spare
+///   capacity. The clone is the row a caller keeps: the effective map holds
+///   one per path, for the whole phase.
+/// - **A finished row gives the room back.** The row the codec decoded and
+///   the row a merge built are finished when they are made, and both give
+///   the arm its room back there — not on every insert, which would be a
+///   reallocation per insert and the cost the vector was chosen to avoid.
+#[derive(Default, PartialEq, Eq)]
 pub struct DigestSet {
     pub(super) md5: Option<[u8; 16]>,
     pub(super) sha256: Option<[u8; 32]>,
@@ -56,7 +73,31 @@ pub struct DigestSet {
     /// the arm is not rebuilt around it. The boxed slice this replaced could
     /// only be written by rebuilding it, so every insert — a replacement as
     /// much as an addition — copied the whole arm and allocated a new one.
+    ///
+    /// The arm holds no room beyond its entries; see the type's docs.
     pub(super) foreign: Vec<(Box<str>, Vec<u8>)>,
+}
+
+/// A clone carries no room beyond the arm's entries.
+///
+/// Written out rather than derived, for the reason the type's docs give: the
+/// property is the crate's, and a derive would leave it resting on what
+/// `std` happens to do with a vector's spare capacity.
+impl Clone for DigestSet {
+    fn clone(&self) -> Self {
+        Self {
+            md5: self.md5,
+            sha256: self.sha256,
+            // Collected rather than cloned entry by entry: the iterator knows
+            // how many entries there are, so the vector is sized for exactly
+            // that many.
+            foreign: self
+                .foreign
+                .iter()
+                .map(|(name, digest)| (name.clone(), digest.clone()))
+                .collect(),
+        }
+    }
 }
 
 impl DigestSet {
@@ -71,6 +112,27 @@ impl DigestSet {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Give the arm back the room it is not using.
+    ///
+    /// **The arm holds no room beyond its entries.** A vector grows in steps,
+    /// so a row that carries one unknown name holds room for four; this is
+    /// the call that gives the room back.
+    ///
+    /// It is called where a row is *finished* — the row the codec decoded and
+    /// the row a merge built — because that is the only point at which the
+    /// arm's length is known to be final. Calling it on every insert would be
+    /// a reallocation per insert, which is the cost the vector was chosen to
+    /// avoid.
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.foreign.shrink_to_fit();
+    }
+
+    /// The arm's capacity, for a test that asks how much room it holds.
+    #[cfg(test)]
+    pub(crate) fn foreign_capacity(&self) -> usize {
+        self.foreign.capacity()
     }
 
     /// The digest for a known algorithm.
@@ -219,28 +281,32 @@ impl DigestSet {
         if let Some(d) = other.sha256 {
             self.sha256 = Some(d);
         }
-        if other.foreign.is_empty() {
-            // The common case, and the only one that has to do nothing at all:
-            // a row with no foreign entry is the overwhelmingly normal shape,
-            // and the loop below would walk the arm for nothing.
-            return;
-        }
-        // The arm is a vector, so each entry of `other` is written where it
-        // belongs: over the entry of the same name when the arm holds one,
-        // and at the end when it does not.
-        for (name, digest) in &other.foreign {
-            match self
-                .foreign
-                .iter_mut()
-                .find(|(n, _)| same_spelling(n, name))
-            {
-                Some((_, d)) => {
-                    d.clear();
-                    d.extend_from_slice(digest);
+        if !other.foreign.is_empty() {
+            // The arm is a vector, so each entry of `other` is written where it
+            // belongs: over the entry of the same name when the arm holds one,
+            // and at the end when it does not.
+            //
+            // The loop is skipped when `other` holds no foreign entry: a row
+            // with no foreign entry is the overwhelmingly normal shape, and
+            // the loop would walk the arm for nothing.
+            for (name, digest) in &other.foreign {
+                match self
+                    .foreign
+                    .iter_mut()
+                    .find(|(n, _)| same_spelling(n, name))
+                {
+                    Some((_, d)) => {
+                        d.clear();
+                        d.extend_from_slice(digest);
+                    }
+                    None => self.foreign.push((name.clone(), digest.clone())),
                 }
-                None => self.foreign.push((name.clone(), digest.clone())),
             }
         }
+        // The row is finished here, so the arm gives back the room it grew
+        // into: a vector grows in steps, and a row that carries one unknown
+        // name would otherwise hold room for four.
+        self.shrink_to_fit();
     }
 }
 

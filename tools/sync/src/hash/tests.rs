@@ -312,6 +312,52 @@ fn a_digest_set_is_eighty_bytes_and_allocates_nothing() {
     );
 }
 
+/// **The arm holds no room beyond its entries.**
+///
+/// A vector grows in steps, so a row that carries one unknown name would hold
+/// room for four. A clone is sized for its length instead, and that is the
+/// clone the crate's callers keep: the effective map holds one row per path
+/// for the whole phase.
+///
+/// The property is the crate's, not `std`'s: a `Vec::clone` that grew to
+/// preserve a vector's spare capacity would pass every other case here, and
+/// the rows would quietly cost four times what they say.
+#[test]
+fn a_cloned_row_holds_no_spare_capacity() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+
+    let cloned = d.clone();
+    assert_eq!(
+        cloned.foreign_capacity(),
+        cloned.foreign_iter().count(),
+        "a clone is sized for its length"
+    );
+    assert_eq!(cloned, d, "and it is the same row");
+}
+
+/// **A merged row holds no spare capacity either.** The merge is where a row
+/// is finished, so the arm gives the room it grew into back there — and the
+/// merge is the one place that grows the arm, since a name the other side
+/// holds and this one does not is added to it.
+#[test]
+fn a_merged_row_holds_no_spare_capacity() {
+    let mut prior = DigestSet::default();
+    prior.insert_named("blake3", &[7u8; 32]);
+
+    let mut other = DigestSet::default();
+    other.insert_named("sha3", &[9u8; 32]);
+
+    let mut row = prior.clone();
+    row.merge(&other);
+    assert_eq!(
+        row.foreign_capacity(),
+        row.foreign_iter().count(),
+        "the merged row holds no room beyond its entries"
+    );
+    assert_eq!(row.foreign_iter().count(), 2, "and both entries are there");
+}
+
 /// Round-trip through `insert_named` / `get` / `get_named`, for every subset of
 /// the known algorithms. The identity is `get` against `get_named` — a row that
 /// can be found one way and not the other is a row some caller will misread.
