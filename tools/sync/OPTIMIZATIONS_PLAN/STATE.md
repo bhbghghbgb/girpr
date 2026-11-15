@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M33
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T12:49:57Z
+last_updated: 2026-11-15T13:17:38Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -644,10 +644,24 @@ reviews:
     result: F33 fixed (2bd29e74 corrects the design notes, which still justified the allocation-free comparison by reading the body); F34 kept (0d7f7646); F35 kept (4fb0741f); F41 fixed (929908a7 corrects the README cost claim, which named the wrong condition); 577 passed without the feature and 590 with it, 1 skipped; the const pin was verified to fail when the const is dropped and when the resolver allocates
     followups: [F172, F173, F174]
   - batch: M33
-    status: in_progress
+    status: done
     tasks: [F243, F244]
     base: c888a545
-    head: ba8570a6
+    head: eefb96ca
+    result: F243 kept (93ab7621); F244 fixed (ba8570a6, eefb96ca corrects the pin's comment, which claimed that any doc comment on the argument struct reaches --help, true only of a multi-paragraph one on clap 4.6.7); 611 passed without the feature and 628 with it, 1 skipped; the reviewer added a version to the converter and saw the new case fail, and confirmed the narrowed pin still fails for a changed converter help text, a renamed accepted value and a multi-paragraph doc comment
+    followups: [F353, F354, F355, F356]
+  - batch: M78
+    status: pending
+    tasks: [F353, F354, F356]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M79
+    status: pending
+    tasks: [F355]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M34
@@ -2382,15 +2396,17 @@ followups:
   - id: F243
     source: F177
     description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
-    status: pending_review
+    status: completed
     batch: M33
     commits: [93ab7621]
+    note: review M33 kept; the reviewer added a version to the converter and saw the case fail, so the refusal is really held
   - id: F244
     source: F175
     description: The help pin couples the converter test to the shared OutputFormat doc wording; a narrower pin over the converter own text would drop that coupling.
-    status: pending_review
+    status: completed
     batch: M33
-    commits: [ba8570a6]
+    commits: [ba8570a6, eefb96ca]
+    note: review M33 fixed (eefb96ca corrects the pin's comment, which claimed that any doc comment on the argument struct reaches --help, true only of a multi-paragraph one)
   - id: F245
     source: F176
     description: The MSRV fallback still covers a lone feature with the group only, so this feature needs another and this feature is broken alone remain indistinguishable there.
@@ -3053,6 +3069,37 @@ followups:
     status: pending
     batch: M76
     commits: []
+  - id: F353
+    source: F244
+    description: The converter binary's own module doc states the same rule about a doc comment reaching --help without the multi-paragraph qualification, and should be aligned with the corrected test comment.
+    status: pending
+    batch: M78
+    commits: []
+  - id: F354
+    source: F244
+    description: without_shared_value_wording cuts every Possible values block rather than the --output one, so a future flag with its own value descriptions would have those cut too.
+    status: pending
+    batch: M78
+    commits: []
+  - id: F355
+    source: F243
+    description: The main girsync binary also declares no version, so girsync --version is an unknown flag too, and nothing in the suite pins that; the same shape as the converter's case, in the ungated target.
+    status: pending
+    batch: M79
+    commits: []
+  - id: F356
+    source: F244
+    description: The pinned help still contains the default marker, which comes from the shared enum's default variant's spelling, so renaming that variant would break the converter's pin.
+    status: pending
+    batch: M78
+    commits: []
+  - id: F357
+    source: F243
+    description: The no version line at all assertion checks stderr only, while a declared version would go to stdout.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the exit-code and stdout assertions already carry the refusal on their own, so there is nothing to change
 ```
 
 ## Human checklist
@@ -3088,6 +3135,10 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M33 `done`: F243 kept (93ab7621), F244 fixed (ba8570a6,
+  eefb96ca); follow-ups F353–F356 appended with batches `M78` and `M79`, and F357
+  recorded as `skipped` because the exit-code and stdout assertions already
+  carry the refusal. F243 and F244 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M33 review checkpoint opened: F243 and F244
   `in_progress` → `pending_review`, commits `93ab7621`, `ba8570a6`; review M33
   `pending` → `in_progress`, base `c888a545`, head `ba8570a6`. The batch's
