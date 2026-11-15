@@ -48,6 +48,11 @@ fn from_str_is_case_insensitive_without_help() {
 /// it, so the two have to agree about every name — including the ones neither
 /// knows. A resolver that folded more than the parser would let a stored name
 /// into an algorithm the command line would refuse.
+///
+/// **The whole vocabulary, not the names somebody thought of.** Every
+/// algorithm `HashAlg::ALL` holds is asked here, so an algorithm added to the
+/// list is covered without anything being written out again — which is the
+/// property the const case in `algo.rs` holds too, and holds the same way.
 #[test]
 fn the_name_resolver_agrees_with_the_parser() {
     for a in HashAlg::ALL {
@@ -76,11 +81,40 @@ fn the_name_resolver_agrees_with_the_parser() {
     );
 }
 
+/// **A name answers for its own algorithm and for no other.** The resolver
+/// answers "which algorithm does this name mean?", so the answer is a
+/// property of the name and not of the order the vocabulary happens to be
+/// written in: a name that meant two algorithms would be answered by
+/// whichever came first, and the other one would be unreachable.
+///
+/// The same rule the const case in `algo.rs` holds, asked here at runtime.
+#[test]
+fn a_name_answers_for_its_own_algorithm_and_for_no_other() {
+    for a in HashAlg::ALL {
+        for b in HashAlg::ALL {
+            if a == b {
+                continue;
+            }
+            assert_ne!(
+                HashAlg::from_name(b.as_str()),
+                Some(a),
+                "the name of one algorithm does not answer for another: {a:?} / {b:?}"
+            );
+        }
+    }
+}
+
 // The resolver's `const` context is pinned outside this module, in `algo.rs`:
 // a const context cannot allocate, and a resolver that stopped being `const`
 // would not compile there. The pin is in the crate rather than in its tests
 // so that it holds for every build, not only for the ones that build the
 // tests.
+//
+// **Its answers are derived from the whole vocabulary** — every algorithm
+// `HashAlg::ALL` holds — so an algorithm added to the list is covered there
+// without anything being written out again. What a const context cannot hold
+// is what this module's cases hold: the parser's refusal, and the ASCII-case
+// spelling of a name, which takes a string built at runtime.
 
 /// The ASCII-case fold, written out rather than borrowed from `std`.
 ///

@@ -129,17 +129,65 @@ impl HashAlg {
 ///
 /// The answers are checked in the same place, because a const context checks
 /// them without a runtime.
+///
+/// **The answers are derived from [`HashAlg::ALL`], not written out.** A
+/// list of answers written beside the vocabulary is a subset of it until the
+/// day somebody adds an algorithm: the runtime case would cover the new one
+/// and this one would not, and nothing would say so. So the whole vocabulary
+/// is asked here instead — every algorithm's own name answers for that
+/// algorithm, and no other algorithm's name does — and an algorithm added to
+/// the list is covered the moment it is added.
+///
+/// The two algorithms are told apart by their discriminants rather than with
+/// `==`, because a derived `PartialEq` is not a `const fn` and cannot become
+/// one: the comparison has to be a `const fn` before the context that holds
+/// it can be.
+///
+/// **The ASCII-case spelling is the one answer this block cannot hold.** A
+/// name in another case is a string built at runtime — `to_ascii_uppercase`
+/// allocates, and a `const fn` may not — so that answer is asked in the
+/// crate's tests, where it is asked of the whole vocabulary as well.
 const _: () = {
-    assert!(matches!(HashAlg::from_name("md5"), Some(HashAlg::Md5)));
-    assert!(matches!(HashAlg::from_name("MD5"), Some(HashAlg::Md5)));
-    assert!(matches!(
-        HashAlg::from_name("sha256"),
-        Some(HashAlg::Sha256)
-    ));
-    assert!(matches!(
-        HashAlg::from_name("SHA256"),
-        Some(HashAlg::Sha256)
-    ));
+    /// Every algorithm the vocabulary has, answered here.
+    ///
+    /// The whole of [`HashAlg::ALL`], asked twice over: once for the answer
+    /// each of its own names gives, and once for the answer every *other*
+    /// name gives — which must not be that algorithm, because the resolver
+    /// answers "which algorithm does this name mean", and two names meaning
+    /// one algorithm would make that answer a property of the order the
+    /// vocabulary is written in rather than of the name.
+    const fn every_algorithm_is_answered() {
+        let mut i = 0;
+        while i < HashAlg::ALL.len() {
+            let alg = HashAlg::ALL[i];
+            match HashAlg::from_name(alg.as_str()) {
+                Some(answered) => assert!(
+                    answered as u8 == alg as u8,
+                    "an algorithm's own name answers for that algorithm"
+                ),
+                None => panic!("an algorithm's own name answers for that algorithm"),
+            }
+            let mut j = 0;
+            while j < HashAlg::ALL.len() {
+                let other = HashAlg::ALL[j];
+                if other as u8 != alg as u8
+                    && let Some(answered) = HashAlg::from_name(other.as_str())
+                {
+                    assert!(
+                        answered as u8 != alg as u8,
+                        "and no other algorithm's name answers for it"
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+
+    every_algorithm_is_answered();
+    // The names this build does not know answer nothing: the empty one, and
+    // a name a newer build might have written into a cache — which is the
+    // case the cache's open vocabulary exists for.
     assert!(HashAlg::from_name("blake3").is_none());
     assert!(HashAlg::from_name("").is_none());
 };
