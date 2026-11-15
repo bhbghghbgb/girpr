@@ -189,6 +189,31 @@ impl<'a> CacheWrite<'a> {
         Ok(keys)
     }
 
+    /// Every key in this transaction, one at a time, decoding nothing.
+    ///
+    /// The streaming counterpart of [`load_keys`](Self::load_keys): the same
+    /// keys, from the same transaction, and **none of them copied out**. A
+    /// caller that wants to *keep* the key set wants
+    /// [`load_keys`](Self::load_keys); a caller that wants to *ask a question
+    /// of* it — "which of these rows are not live?" — wants this one, because
+    /// the answer is usually "none of them" and a `Vec<String>` with one
+    /// string per cached row is an allocation per row for that answer.
+    ///
+    /// The key is borrowed for the length of the call only, so a caller that
+    /// wants to keep one copies it then — and copies only the ones it keeps.
+    ///
+    /// It sees this transaction's own pending writes, exactly as
+    /// [`load_keys`](Self::load_keys) does, because both read the same
+    /// transaction.
+    ///
+    /// **The read is not a counted one.** The counter belongs to the read
+    /// handles, and this handle reads in its own write transaction.
+    pub fn visit_keys(&self, f: impl FnMut(&str) -> Result<()>) -> Result<()> {
+        let txn = self.txn.as_ref().context("write txn gone")?;
+        let tbl = txn.open_table(ENTRIES).context("open entries table")?;
+        crate::cache::db::visit_entry_keys(&tbl, f)
+    }
+
     fn maybe_commit(&mut self) -> Result<()> {
         // The time check runs on mutation, i.e. right after the (possibly
         // minutes-long) hash that produced this put — exactly when the
@@ -348,6 +373,48 @@ mod tests {
 
     fn keys_of(w: &CacheWrite) -> HashSet<String> {
         w.load_all().unwrap().into_keys().collect()
+    }
+
+    /// The batched streaming read sees **this transaction's own pending
+    /// writes**, exactly as `load_keys` does: the prune reads the key set
+    /// through the batch, and a key the batch has written and not yet
+    /// committed is a key the prune has to see.
+    ///
+    /// The batch's answer is the same set the collecting read gives, so the
+    /// two cannot disagree about which rows exist.
+    #[test]
+    fn a_batch_streams_its_own_uncommitted_keys() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let mut w = c.begin_write().unwrap();
+        let keys = |w: &CacheWrite| -> Vec<String> {
+            let mut v = Vec::new();
+            w.visit_keys(|k| {
+                v.push(k.to_string());
+                Ok(())
+            })
+            .unwrap();
+            v.sort();
+            v
+        };
+
+        assert!(keys(&w).is_empty(), "an empty table has no keys");
+
+        w.put("a", &file_rec()).unwrap();
+        assert_eq!(keys(&w), vec!["a".to_string()], "uncommitted, and visible");
+
+        w.put("b", &file_rec()).unwrap();
+        assert_eq!(
+            keys(&w),
+            vec!["a".to_string(), "b".to_string()],
+            "and the streaming read agrees with the collecting one"
+        );
+
+        w.remove("a").unwrap();
+        assert_eq!(
+            keys(&w),
+            vec!["b".to_string()],
+            "a removal is visible before it is committed too"
+        );
     }
 
     #[test]

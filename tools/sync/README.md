@@ -514,12 +514,13 @@ one is actually adopted, which is normally never. The index is built when a
 path misses exactly, so a scan in which every path is found in the cache
 under the spelling the disk uses never reads the keys for it at all. The
 prune that follows asks the same question of the keys — "which rows exist?" —
-and gets `load_keys`, which walks the table without decoding a single
-`FileRec`. In the default insensitive mode that is a full pass over the
-table's keys in one phase, and the scan makes that pass **once**: the index
-keeps the keys it read, and the prune works from the same set. The
-distinction the two questions are worth telling apart for is the difference
-between rebuilding a hash map of rows per file and not.
+and gets them one at a time, without decoding a single `FileRec` and without
+collecting them either: the only keys it keeps are the stale ones, and a scan
+that finds nothing stale keeps none. In the default insensitive mode that is a
+full pass over the table's keys in one phase, and the scan makes that pass
+**once**: the index keeps the keys it read, and the prune works from the same
+set. The distinction the two questions are worth telling apart for is the
+difference between rebuilding a hash map of rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
 rather than copied out of it. It exists so the prune can ask "is this row still

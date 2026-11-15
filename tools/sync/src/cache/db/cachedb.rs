@@ -62,8 +62,9 @@ struct Preflight {
 /// raw [`Database`] before any [`CacheDb`] handle exists — so there is no
 /// counter here for it to move. The counted reads are the ones that go
 /// through `begin_entries_read`, and that is the whole of it: a counted read
-/// need not fetch a row's value — `entry_count` fetches nothing at all, and
-/// `load_keys` fetches the keys alone.
+/// need not fetch a row's value — `entry_count` fetches nothing at all,
+/// `load_keys` fetches the keys alone, and `visit_keys` fetches them one at a
+/// time.
 fn preflight(db: &Database) -> Result<Preflight> {
     let txn = db.begin_read().context("begin read (meta)")?;
     let entries_present = match txn.open_table(ENTRIES) {
@@ -110,6 +111,28 @@ fn read_row(
         None => Ok(None),
         Some(g) => decode_rec(g.value()).map(Some),
     }
+}
+
+/// Every key in an open `entries` table, one at a time.
+///
+/// The same walk for a read handle and for a write handle, so a caller cannot
+/// get a different answer from [`CacheDb::visit_keys`] and
+/// [`CacheWrite::visit_keys`](crate::cache::CacheWrite::visit_keys) by
+/// accident: the batch is not a second reading of the table, it is the same
+/// reading of it.
+///
+/// **The key is borrowed, not copied.** It lives only as long as the call, so
+/// a caller that wants to keep one has to copy it — which is the point: the
+/// streaming read exists for the caller that does not want to keep any.
+pub(in crate::cache) fn visit_entry_keys(
+    tbl: &impl ReadableTable<&'static str, &'static [u8]>,
+    mut f: impl FnMut(&str) -> Result<()>,
+) -> Result<()> {
+    for kv in tbl.iter().context("iterate cache")? {
+        let (k, _v) = kv.context("read cache entry")?;
+        f(k.value())?;
+    }
+    Ok(())
 }
 
 /// An open redb cache file, read/write or read-only.
@@ -616,6 +639,10 @@ impl CacheDb {
     /// is. There is deliberately no way to get a key and its value from here: a
     /// caller that needs the value wants `load_all`, and one that does not
     /// should not be able to ask for half of it by accident.
+    ///
+    /// **A caller that does not want to keep the keys wants
+    /// [`visit_keys`](Self::visit_keys) instead**: the same keys, one at a
+    /// time, and none of them copied out.
     pub fn load_keys(&self) -> Result<Vec<String>> {
         let txn = self.begin_entries_read()?;
         let tbl = match txn.open_table(ENTRIES) {
@@ -629,6 +656,37 @@ impl CacheDb {
             keys.push(k.value().to_string());
         }
         Ok(keys)
+    }
+
+    /// Every cached path, one at a time, decoding nothing.
+    ///
+    /// The streaming counterpart of [`load_keys`](Self::load_keys): the same
+    /// keys, from the same one read transaction, and **none of them copied
+    /// out**. A caller that wants to *keep* the key set wants
+    /// [`load_keys`](Self::load_keys); a caller that wants to *ask a question
+    /// of* it — "which of these rows are not live?" — wants this one, because
+    /// the answer is usually "none of them" and a `Vec<String>` with one
+    /// string per cached row is an allocation per row for that answer.
+    ///
+    /// The key is borrowed for the length of the call only, so a caller that
+    /// wants to keep one copies it then — and copies only the ones it keeps.
+    ///
+    /// The answer is the same key set, and a missing table is still an empty
+    /// answer rather than an error — only the collecting is skipped. Order is
+    /// redb's business and is not part of what a caller may rely on;
+    /// membership is.
+    ///
+    /// **One read transaction, whatever the number of keys.** The count the
+    /// handle keeps moves by one, exactly as it does for
+    /// [`load_keys`](Self::load_keys).
+    pub fn visit_keys(&self, f: impl FnMut(&str) -> Result<()>) -> Result<()> {
+        let txn = self.begin_entries_read()?;
+        let tbl = match txn.open_table(ENTRIES) {
+            Ok(t) => t,
+            Err(e) if is_table_missing(&e) => return Ok(()),
+            Err(e) => bail!("open entries table: {e:#}"),
+        };
+        visit_entry_keys(&tbl, f)
     }
 
     /// Number of rows in the entries table, without decoding or allocating keys.
@@ -774,6 +832,96 @@ mod tests {
             "a removal is visible"
         );
         assert_eq!(c.load_keys().unwrap().len(), 3);
+    }
+
+    /// The streaming read answers exactly what the collecting one answers: the
+    /// same keys, and nothing else.
+    ///
+    /// Asserted as a set rather than a list, because the order is redb's
+    /// business and is not part of what a caller may rely on; what a caller may
+    /// rely on is the membership. Both kinds of row are in the fixture
+    /// deliberately: a dir row and a file row are different shapes, and a
+    /// key-only read that decoded (or skipped) one of them would still pass a
+    /// files-only fixture.
+    #[test]
+    fn visit_keys_answers_exactly_what_load_keys_would() {
+        let c = CacheDb::open_temp(true).unwrap();
+        let mut empty = Vec::new();
+        c.visit_keys(|k| {
+            empty.push(k.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(empty.is_empty(), "an empty table has no keys");
+
+        for rel in ["a.txt", "sub/b.bin", "z.txt"] {
+            c.put(rel, &file_rec()).unwrap();
+        }
+        c.put("a_dir", &FileRec::dir()).unwrap();
+
+        let mut streamed = Vec::new();
+        c.visit_keys(|k| {
+            streamed.push(k.to_string());
+            Ok(())
+        })
+        .unwrap();
+        let mut loaded = c.load_keys().unwrap();
+        streamed.sort();
+        loaded.sort();
+        assert_eq!(streamed, loaded, "the same keys, from the same table");
+
+        c.remove("a.txt").unwrap();
+        let mut after = Vec::new();
+        c.visit_keys(|k| {
+            after.push(k.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            !after.contains(&"a.txt".to_string()),
+            "a removal is visible to the streaming read too"
+        );
+        assert_eq!(after.len(), 3);
+    }
+
+    /// A cache with no `entries` table is a fresh cache, not a corrupt one:
+    /// the streaming read answers nothing rather than failing — and it costs
+    /// the one transaction every entries read costs, whatever the number of
+    /// keys.
+    #[test]
+    fn visit_keys_reads_a_missing_table_as_no_keys() {
+        let db = redb_builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let bare = CacheDb::open_writable(db);
+        let mut got = Vec::new();
+        bare.visit_keys(|k| {
+            got.push(k.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            got.is_empty(),
+            "a missing table is an empty answer, not an error"
+        );
+
+        let c = CacheDb::open_temp(true).unwrap();
+        for rel in ["a.txt", "b.txt", "c.txt"] {
+            c.put(rel, &file_rec()).unwrap();
+        }
+        let before = c.entries_read_count();
+        let mut seen = 0;
+        c.visit_keys(|_| {
+            seen += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen, 3, "every key is handed over");
+        assert_eq!(
+            c.entries_read_count() - before,
+            1,
+            "one read transaction, whatever the number of keys"
+        );
     }
 
     /// `entry_count` answers the same number as the key set it stands in for,

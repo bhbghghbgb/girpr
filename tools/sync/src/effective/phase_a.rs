@@ -438,25 +438,52 @@ pub fn scan_stat_only(
     // the entire `entries` table, hash map by hash map, to answer it. The
     // alternate-case index above reads this table's keys for the same reason;
     // neither pass decodes a row it does not need.
-    let cached_keys = match alt_index.take() {
-        Some(index) => index.keys,
-        None => match batch.as_mut() {
-            Some(w) => w.load_keys()?,
-            None => cache.load_keys()?,
-        },
-    };
-    // An adopted key was renamed, not pruned. A real run's batch has already
-    // dropped it, but a dry run only decided to, so it is still in this
-    // pre-adoption snapshot; without the exclusion it would be counted once as
-    // a prune and once as the rename it actually is.
     //
-    // The stale keys are borrowed rather than copied: the key set is alive
-    // here, and a copy of every stale path is an allocation per stale row.
-    let stale: Vec<&str> = cached_keys
-        .iter()
-        .filter(|rel| !live_set.contains(rel.as_str()) && !adopted_keys.contains(rel.as_str()))
-        .map(|rel| rel.as_str())
-        .collect();
+    // **The keys are streamed, not collected.** The question is "which rows
+    // exist?", and the answer is usually "none of them": a `Vec<String>` with
+    // one string per cached row is an allocation per row for a question that
+    // rarely has a row to say. So the cache hands the keys over one at a time,
+    // and the only ones this keeps are the stale ones — the rows to remove,
+    // of which there are few.
+    //
+    // The index's keys are the same set read a moment earlier, and the index
+    // holds them already, so the prune takes them from there rather than
+    // reading the table a second time. They are moved rather than copied, so
+    // the stale ones cost nothing to keep.
+    let mut stale: Vec<String> = Vec::new();
+    {
+        // The rule, in one place: a row is stale when its path is not live and
+        // was not adopted.
+        //
+        // An adopted key was renamed, not pruned. A real run's batch has already
+        // dropped it, but a dry run only decided to, so it is still in this
+        // pre-adoption snapshot; without the exclusion it would be counted once
+        // as a prune and once as the rename it actually is.
+        let is_stale = |rel: &str| !live_set.contains(rel) && !adopted_keys.contains(rel);
+        match alt_index.take() {
+            Some(index) => {
+                for rel in index.keys {
+                    if is_stale(&rel) {
+                        stale.push(rel);
+                    }
+                }
+            }
+            None => match batch.as_mut() {
+                Some(w) => w.visit_keys(|rel| {
+                    if is_stale(rel) {
+                        stale.push(rel.to_string());
+                    }
+                    Ok(())
+                })?,
+                None => cache.visit_keys(|rel| {
+                    if is_stale(rel) {
+                        stale.push(rel.to_string());
+                    }
+                    Ok(())
+                })?,
+            },
+        }
+    }
     let pruned = stale.len();
     for rel in &stale {
         trace!(rel = %rel, "prune cache");
