@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M34
+active_batch: M35
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:06:26Z
+last_updated: 2026-11-15T15:07:13Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2473,13 +2473,13 @@ followups:
   - id: F251
     source: F179
     description: A member whose feature needs two other features at once, with no single partner building, is now failed; the script could report the building combination alongside the failure so the reader sees which configuration does build.
-    status: pending
+    status: in_progress
     batch: M35
     commits: []
   - id: F252
     source: F181
     description: Get-OptionalFeatures and Get-FeaturePairs compare feature names case-insensitively while cargo feature names are case-sensitive; harmless in practice, untidy in principle.
-    status: pending
+    status: in_progress
     batch: M35
     commits: []
   - id: F253
@@ -3215,6 +3215,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M35 started: F251 and F252 `pending` →
+  `in_progress`; `active_batch: M34` → `M35`.
 - 2026-11-15 — review M34 `done`: F247 kept, F248 fixed (3546a457, 2d19bef1),
   F249 kept; follow-ups F358–F364 appended with batches `M80`, `M81` and `M82`,
   and F365 and F366 recorded as `skipped` (moot as written, and documented
