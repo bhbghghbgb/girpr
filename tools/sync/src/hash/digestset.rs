@@ -7,10 +7,22 @@ use super::algo::HashAlg;
 /// The foreign arm matches a name **exactly** — the spelling it was stored
 /// under and no other — so this is byte equality and nothing else.
 ///
-/// One comparison for both writers, so [`DigestSet::insert_named`] and
-/// [`DigestSet::merge`] cannot drift on what "the same name" means: the arm
-/// holds one entry per spelling, and a repeat of a spelling replaces that
-/// entry rather than adding a second one beside it.
+/// **This is the one place the rule is written.** Every place that matches a
+/// name against the arm comes through here: the lookup that finds a digest
+/// by name ([`DigestSet::get_named`]) and the two writers that put one there
+/// ([`DigestSet::insert_named`] and [`DigestSet::merge`]). So they cannot
+/// drift on what "the same name" means: the arm holds one entry per
+/// spelling, and a repeat of a spelling replaces that entry rather than
+/// adding a second one beside it.
+///
+/// A one-line helper earns its place for exactly that reason. Inlined, the
+/// rule would be spelled at three call sites, and a second spelling of a
+/// rule is a rule that can drift — and this one drifts quietly: one writer
+/// would replace the entry under a name and another would add a second one
+/// beside it, and the row would hold two entries under one name without
+/// anything saying so.
+///
+/// If the arm's match rule ever stops being exact, this is where it changes.
 fn same_spelling(a: &str, b: &str) -> bool {
     a == b
 }

@@ -808,6 +808,15 @@ plus `tests/rw_threads/limiter.rs`); leave them alone.
 codec* by design, so that a third kind breaks old binaries loudly instead of
 quietly. See the sixth invariant for why algorithms are not the same case.
 
+**Do not inline `same_spelling`.** It is a one-line wrapper over an equality
+comparison, and it stays because it is the one place the foreign arm's match
+rule is written: the lookup that finds a digest by name and the two writers
+that put one there all come through it. Inlined, the rule would be spelled at
+three call sites, and a second spelling of a rule is a rule that can drift —
+and this one drifts quietly, because a row that grew a second entry under one
+name still answers its lookups. If the arm's match rule ever stops being
+exact, this is where it changes.
+
 **Do not add `bitflags` (or any dependency) for `AlgoSet`.** `bitflags` is already
 in `Cargo.lock` transitively, so it would cost nothing to compile — which is
 exactly why it is worth refusing. `AlgoSet` is fifty lines of newtype whose `Debug`
