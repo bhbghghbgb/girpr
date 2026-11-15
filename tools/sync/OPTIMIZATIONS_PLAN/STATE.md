@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M27
+active_batch: M28
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T04:26:57Z
+last_updated: 2026-11-15T04:28:02Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2165,7 +2165,7 @@ followups:
   - id: F225
     source: F165
     description: CacheDb::reads field doc still says entries-table reads this cache has served, which the now-scoped method doc no longer supports for a file read-only handles, since each serves only its own reads.
-    status: pending
+    status: in_progress
     batch: M28
     commits: []
   - id: F226
@@ -2178,7 +2178,7 @@ followups:
   - id: F227
     source: F161
     description: The label link-resolution is loose for link_ancestor_above, which asks whether a link sits above a path rather than what anything resolves to, though the list that follows enumerates the direct questions exactly.
-    status: pending
+    status: in_progress
     batch: M28
     commits: []
   - id: F228
@@ -2804,6 +2804,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M28 started: F225 and F227 `pending` →
+  `in_progress`; `active_batch: M27` → `M28`.
 - 2026-11-15 — review M27 `done`: F222 kept, F223 kept, F224 fixed (32ef16cf,
   7e717ec5); follow-ups F318–F323 appended with batches `M61` and `M62`.
   F222–F224 `pending_review` → `completed`.
