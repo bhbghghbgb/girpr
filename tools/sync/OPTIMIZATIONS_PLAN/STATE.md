@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M25
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:46:35Z
+last_updated: 2026-11-15T02:00:12Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -420,10 +420,10 @@ reviews:
     result: F6 kept (27e6f74f); F28 kept (f841e1e8); F29 kept (e7264fba); F32 kept (601d7efe); F124 kept (746f94cb); no fix or revert commits; 572 passed without the feature and 585 with it, 1 skipped; the count was verified against the tree at twelve, not the eleven the follow-up text said
     followups: [F152, F153, F154]
   - batch: M25
-    status: pending
+    status: in_progress
     tasks: [F216, F217]
-    base: null
-    head: null
+    base: 9a395087
+    head: 0339f805
     result: null
     followups: []
   - batch: M26
@@ -2067,15 +2067,15 @@ followups:
   - id: F216
     source: F159
     description: effective/phase_a.rs has an intra-doc link to util::folded_keys that does not resolve, because util is not in scope in that module; it was introduced after the survey that produced the seven named links and is the one warning left in the private-items doc build.
-    status: in_progress
+    status: pending_review
     batch: M25
-    commits: []
+    commits: [d42a90fd]
   - id: F217
     source: F156
     description: cache/db/cachedb.rs's CacheDb::reads field doc opens with the same wording as SharedCache::reads; consistent today, but a second place to edit if the wording ever moves.
-    status: in_progress
+    status: pending_review
     batch: M25
-    commits: []
+    commits: [0339f805]
   - id: F218
     source: F156
     description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
@@ -2675,6 +2675,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M25 review checkpoint opened: F216 and F217
+  `in_progress` → `pending_review`, commits `d42a90fd`, `0339f805`; review M25
+  `pending` → `in_progress`, base `9a395087`, head `0339f805`.
 - 2026-11-15 — follow-up batch M25 started: F216 and F217 `pending` →
   `in_progress`; `active_batch: M24` → `M25`.
 - 2026-11-15 — review M24 `done`: F212, F213, F214 and F215 all kept, no fix or
