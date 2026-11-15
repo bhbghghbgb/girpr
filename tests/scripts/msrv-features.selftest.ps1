@@ -130,6 +130,15 @@ $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
 $featureFailures = @($result.Failures | Where-Object { $_ -like '*--features alpha, exit code*' })
 Assert-Equal 0 $featureFailures.Count 'a feature that builds with a partner is not failed'
 
+# The member does fail, over the combinations that did not build, and the
+# failure list names them: the feature is not among them, because its
+# partner covers it.
+Assert-Equal 3 $result.Failures.Count 'a combination that does not build fails the member'
+foreach ($combination in @('alpha,gamma', 'beta,gamma', 'alpha,beta,gamma')) {
+    $named = @($result.Failures | Where-Object { $_ -like "*--features $combination, exit code*" })
+    Assert-Equal 1 $named.Count "the failure names the combination $combination"
+}
+
 # The same member, with a pair that cannot be enabled together: cargo allows
 # the combination, so it is a configuration that has to build, and the member
 # fails with the combination named.
