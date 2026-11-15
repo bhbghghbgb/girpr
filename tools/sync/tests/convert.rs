@@ -8,6 +8,7 @@ mod common;
 use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
 use girsync::convert::CONVERT_TEMP_PREFIX;
+use girsync::report::OutputFormat;
 use md5::Md5;
 use sha2::Digest;
 use std::collections::HashMap;
@@ -655,53 +656,84 @@ fn the_help_exits_zero_and_documents_the_flags() {
     assert!(sled < redb, "the sled dir comes first: {stdout}");
 }
 
-/// The help text with the shared output format's own wording cut away.
+/// The converter's own command, as the help pin holds it.
 ///
-/// `clap` prints the doc comment of every accepted `--output` value under the
-/// flag, one line per value, and those descriptions belong to the shared
-/// `OutputFormat` enum rather than to this binary: what each format *means* is
-/// the crate's shared vocabulary, and a change to it must not break a pin that
-/// is about the converter.
+/// This is a **definition** and not a text, and that is the whole point of
+/// it: the case below renders it with clap and compares that rendering with
+/// the help the binary prints, so **both sides are laid out by the same
+/// clap**. What the comparison holds is therefore the converter's own
+/// command — its about, its arguments and flags, their descriptions, the
+/// values `--output` accepts and the default it takes — and none of clap's
+/// own words.
 ///
-/// The values themselves are kept, because they are what the flag accepts, and
-/// each line is cut at the first colon after the value's name — the
-/// descriptions hold colons of their own, so a description that names the
-/// records it renders has to be cut at the *first* one rather than the last.
-/// A description that wrapped onto a second line goes with the rest of the
-/// wording.
-fn without_shared_value_wording(help: &str) -> String {
-    let mut out: Vec<String> = Vec::new();
-    let mut in_values = false;
-    for line in help.lines() {
-        let trimmed = line.trim();
-        if trimmed == "Possible values:" {
-            in_values = true;
-            out.push(line.to_string());
-            continue;
-        }
-        if in_values {
-            if trimmed.is_empty() {
-                // The block ends here, and the default below it is the
-                // converter's own.
-                in_values = false;
-                out.push(line.to_string());
-                continue;
-            }
-            if let Some(rest) = trimmed.strip_prefix("- ") {
-                let name = rest.split_once(": ").map_or(rest, |(name, _)| name);
-                let indent = &line[..line.len() - line.trim_start().len()];
-                out.push(format!("{indent}- {name}"));
-                continue;
-            }
-            // A wrapped description: shared wording, and nothing else.
-            continue;
-        }
-        out.push(line.to_string());
-    }
-    out.join("\n")
+/// Clap's words are on both sides at once: the usage line, the `Arguments:`
+/// and `Options:` headers, the `Possible values:` line, the `[default: …]`
+/// marker, the print-help wording, and the layout itself. A deliberate clap
+/// bump moves all of them together, so the pin still holds and **nothing has
+/// to be updated by hand**: the golden is the converter's command, and a clap
+/// bump does not change the converter's command.
+///
+/// A change in the converter's own command moves one side only, and that is a
+/// difference: a flag added, removed or renamed, a description reworded, the
+/// about changed, the default changed.
+///
+/// The values `--output` accepts are read from the shared [`OutputFormat`]
+/// enum rather than written out here, so the shared wording is not a second
+/// copy of it. The enum's own descriptions are rendered on both sides, and a
+/// change to them moves both sides together — as a clap bump does.
+///
+/// The descriptions carry no trailing full stop, because clap's derive takes
+/// one off the doc comment it reads: `/// Legacy sled cache directory.` is
+/// rendered as `Legacy sled cache directory`.
+///
+/// The bin name is the executable's own spelling, because that is what clap
+/// prints in the usage line: the binary is invoked by path, and clap takes
+/// the file name of `argv[0]` for it.
+fn the_converter_command() -> clap::Command {
+    clap::Command::new("sled2redb")
+        .about("Convert a legacy sled cache directory into a redb cache file")
+        .arg(
+            clap::Arg::new("sled_dir")
+                .value_name("SLED_DIR")
+                .help("Legacy sled cache directory")
+                .required(true),
+        )
+        .arg(
+            clap::Arg::new("redb_path")
+                .value_name("REDB_PATH")
+                .help("Destination redb file")
+                .required(true),
+        )
+        .arg(
+            clap::Arg::new("force")
+                .long("force")
+                .action(clap::ArgAction::SetTrue)
+                .help("Replace an existing destination"),
+        )
+        .arg(
+            clap::Arg::new("output")
+                .long("output")
+                .value_name("OUTPUT")
+                .value_parser(clap::builder::EnumValueParser::<OutputFormat>::new())
+                .default_value("text")
+                .help("How the conversion record is rendered"),
+        )
+        .bin_name(format!("sled2redb{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// The help output, pinned over the converter's own text.
+/// The help as a comparison sees it.
+///
+/// Neither difference is what the pin is about: clap leaves trailing spaces
+/// on the blank line inside the possible values, and the rendered help ends
+/// where the printed one ends with a newline.
+fn normalize_help(help: &str) -> String {
+    help.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The help output, pinned over the converter's own command.
 ///
 /// `clap` reads a **multi-paragraph** doc comment on the argument struct as
 /// the command's `long_about`, and `--help` prints it **verbatim** — the `**`
@@ -715,71 +747,27 @@ fn without_shared_value_wording(help: &str) -> String {
 /// `--help` nor `-h`: it prints nowhere, and there is nothing for this pin to
 /// hold.
 ///
-/// The pin is the whole text rather than a few names in it, so anything that
-/// reaches the help shows up as a difference: a paragraph of prose, a flag, a
-/// changed wording. The names the case above looks for would survive all of
-/// them. A multi-paragraph doc comment on the argument struct reaches the help
-/// as the text at the top of it, and the top of it is pinned here, so a note
-/// put back on the struct shows up as a difference in the first line.
+/// The pin is the whole command rather than a few names in it, so anything
+/// that reaches the help shows up as a difference: a paragraph of prose, a
+/// flag, a changed wording. The names the case above looks for would survive
+/// all of them. A multi-paragraph doc comment on the argument struct reaches
+/// the help as the text at the top of it, and the top of it is pinned here, so
+/// a note put back on the struct shows up as a difference in the first line.
 ///
-/// One part of the help is not the converter's text, and it is cut away before
-/// the comparison: the *descriptions* of the accepted `--output` values. They
-/// are the doc comments of the shared `OutputFormat` enum, so they are the
-/// crate's shared vocabulary rather than this binary's — a change to them must
-/// not break a pin that is about the converter.
-///
-/// Two things are normalized before the comparison, and neither is what the
-/// pin is about: the program name, which carries the host's executable suffix
-/// (`sled2redb.exe` on Windows, `sled2redb` elsewhere), and the trailing
-/// spaces `clap` leaves on the blank line inside the possible values.
+/// The pin is a **definition** and not a text, so clap's own words are not
+/// held by it: the definition is rendered here, beside the binary's own
+/// rendering, and the two are compared. A deliberate clap bump changes both
+/// renderings together and the pin still holds — what a clap bump needs
+/// updated by hand is the converter's own command, and a clap bump does not
+/// change it.
 #[test]
 fn the_help_output_is_pinned() {
     let (code, stdout, stderr) = run_converter(["--help"]);
     assert_eq!(code, 0, "stderr: {stderr}");
-    let text = stdout
-        .replace("sled2redb.exe", "sled2redb")
-        .lines()
-        .map(str::trim_end)
-        .collect::<Vec<_>>()
-        .join("\n");
     assert_eq!(
-        without_shared_value_wording(&text),
-        EXPECTED_HELP,
-        "the help output is pinned: a multi-paragraph doc comment on the \
-         argument struct would print here"
+        normalize_help(&stdout),
+        normalize_help(&the_converter_command().render_long_help().to_string()),
+        "the help output is pinned: the converter's own command changed, or a \
+         multi-paragraph doc comment on the argument struct would print here"
     );
 }
-
-/// The help output of the converter, as `--help` prints it.
-///
-/// The program name is the host's spelling without the executable suffix, the
-/// trailing spaces are gone, and the accepted values are listed by name alone:
-/// the case above normalizes all three before it compares, and the wording the
-/// shared format's own descriptions carry is not the converter's to pin.
-const EXPECTED_HELP: &str = "\
-Convert a legacy sled cache directory into a redb cache file
-
-Usage: sled2redb [OPTIONS] <SLED_DIR> <REDB_PATH>
-
-Arguments:
-  <SLED_DIR>
-          Legacy sled cache directory
-
-  <REDB_PATH>
-          Destination redb file
-
-Options:
-      --force
-          Replace an existing destination
-
-      --output <OUTPUT>
-          How the conversion record is rendered
-
-          Possible values:
-          - text
-          - json
-
-          [default: text]
-
-  -h, --help
-          Print help (see a summary with '-h')";
