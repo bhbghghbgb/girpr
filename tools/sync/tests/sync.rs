@@ -670,8 +670,7 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     // `dir` — so the file moves first. Sorted by the exact key the order would
     // be the other way round, because `Dir` sorts before `data.txt` byte-wise.
     // A fixture whose names all started with the same case would have one
-    // order under both rules, and the assertion below would pass whichever of
-    // the two the pass used.
+    // order under both rules, and the case could not tell them apart.
     wfile(&src, "data.txt", b"payload");
     wfile(&dst, "Data.txt", b"payload");
     sync_mtime(&src.join("data.txt"), &dst.join("Data.txt"));
@@ -700,12 +699,19 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
         .map(|r| r["from"].as_str().expect("a rename names its source"))
         .collect();
     assert_eq!(renames, ["Data.txt", "dir"], "{recs:?}");
-    // The exact order, which is a different one: a pass that sorted on the
-    // exact src key would have moved the directory first, and the assertion
-    // above would not have held.
-    let mut exact = vec!["data.txt", "Dir"];
-    exact.sort();
-    assert_eq!(exact, vec!["Dir", "data.txt"]);
+    // The order the pass did **not** use, computed from the fixture's own
+    // names: the pairs sorted by their exact src spelling put the directory
+    // first, because `Dir` sorts before `data.txt` byte-wise. The order above
+    // is the folded one, so a pass that changed its rule would land on this
+    // one and fail the assertion — rather than the case passing whichever of
+    // the two the pass happened to use.
+    let mut exact = [("Data.txt", "data.txt"), ("dir", "Dir")];
+    exact.sort_by(|a, b| a.1.cmp(b.1));
+    let exact_order: Vec<&str> = exact.iter().map(|(dst, _)| *dst).collect();
+    assert_ne!(
+        renames, exact_order,
+        "the pass ordered by the exact src key, not the folded one"
+    );
     assert_eq!(rfile(&dst, "data.txt"), b"payload", "the rename happened");
     assert_eq!(rfile(&dst, "Dir/nested.txt"), b"nested");
     // The filesystem is case-insensitive here, so `dst.join("dir").exists()`
