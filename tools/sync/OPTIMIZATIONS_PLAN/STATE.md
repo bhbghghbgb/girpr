@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M31
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T09:18:11Z
+last_updated: 2026-11-15T09:43:34Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -574,10 +574,10 @@ reviews:
     result: F166 fixed (82fd8a95 corrects a doc that still called the arm a slice); F167 kept (6955810c); F168 kept (a095f412, 34293501); F169 kept (515bfa49); F170 kept (95a2d302, 4db5ab6a); F171 fixed (6236f9fa corrects the index doc); 585 passed without the feature and 599 with it, 1 skipped
     followups: [F232, F234]
   - batch: M31
-    status: pending
+    status: in_progress
     tasks: [F236]
-    base: null
-    head: null
+    base: 5dd484e6
+    head: 7864335e
     result: null
     followups: []
   - batch: M32
@@ -2291,9 +2291,9 @@ followups:
   - id: F236
     source: F173
     description: DigestSet::merge clones the other side's foreign entries, name and digest, into the arm; a merge that replaces an entry in place reuses the digest buffer, but an added entry allocates a fresh String and Vec, the same allocation the vector itself removed.
-    status: in_progress
+    status: pending_review
     batch: M31
-    commits: []
+    commits: [7864335e]
   - id: F237
     source: F168
     description: The prune still walks the whole key set every scan even when the index was built, because the filter over it is a full pass; the index could answer whether a row is live per key.
@@ -2945,6 +2945,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M31 review checkpoint opened: F236 `in_progress` →
+  `pending_review`, commit `7864335e`; review M31 `pending` → `in_progress`,
+  base `5dd484e6`, head `7864335e`.
 - 2026-11-15 — follow-up batch M31 started: F236 `pending` → `in_progress`;
   `active_batch: M30` → `M31`.
 - 2026-11-15 — review M30 `done`: F232 kept (3a52da69), F234 kept (b0a92f16); no
