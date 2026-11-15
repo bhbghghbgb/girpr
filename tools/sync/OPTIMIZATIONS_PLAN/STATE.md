@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M24
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:39:59Z
+last_updated: 2026-11-15T01:46:00Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -392,10 +392,17 @@ reviews:
     result: null
     followups: []
   - batch: M24
-    status: in_progress
+    status: done
     tasks: [F212, F213, F214, F215]
     base: 00894206
     head: 13120f7a
+    result: F212 kept (6c8cb53e); F213 kept (6c8cb53e); F214 kept (645829a9); F215 kept (13120f7a); no fix or revert commits; 598 passed, 1 skipped; the reviewer resolved all 48 table rows against the tree and confirmed the three-case rule covers exactly the six whole-path rows, that update rehashes a stat-only row through plan_one_side and merge_row, and that the five kinds cover the six limits in listing order
+    followups: [F307, F308, F309]
+  - batch: M57
+    status: pending
+    tasks: [F307, F308, F309]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M9
@@ -2032,27 +2039,31 @@ followups:
   - id: F212
     source: F151
     description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
-    status: pending_review
+    status: completed
     batch: M24
     commits: [6c8cb53e]
+    note: review M24 kept; the row now names mod.rs as the facade, the wording the other facade rows use, and a sweep of the tree found every source file named in the README
   - id: F213
     source: F151
     description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the four rows that spell the whole path for neither reason, though every path is correct.
-    status: pending_review
+    status: completed
     batch: M24
     commits: [6c8cb53e]
+    note: review M24 kept; the rule now has three cases and covers exactly the six whole-path rows, and every other row is a qualified src-relative path
   - id: F214
     source: F150
     description: The stuck-row limit names the flag as the repair, but girsync update --dir <folder> also rehashes a stat-only row, and the README already names it as the fix for the neighbouring record case.
-    status: pending_review
+    status: completed
     batch: M24
     commits: [645829a9]
+    note: review M24 kept; the reviewer traced update through plan_one_side and merge_row and confirmed the repopulate really rehashes a stat-only row and writes the digest back
   - id: F215
     source: F154
     description: The preamble first kind, state in the cache or the folder that nothing reclaims on its own, does not fit the directory-row limit, which the next prune does reclaim; the limit own body says so, the preamble does not.
-    status: pending_review
+    status: completed
     batch: M24
     commits: [13120f7a]
+    note: review M24 kept; the preamble now names five kinds and the reviewer confirmed they cover the six limits in listing order, none ungrouped and none twice
   - id: F216
     source: F159
     description: effective/phase_a.rs has an intra-doc link to util::folded_keys that does not resolve, because util is not in scope in that module; it was introduced after the survey that produced the seven named links and is the one warning left in the private-items doc build.
@@ -2615,6 +2626,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F213, already scheduled in M24, whose count has been updated to four rows
+  - id: F307
+    source: F213
+    description: The path rule's first case could say the row's own path, so a reader does not apply it to the bare file names inside a directory row's cell, since the commands/sync/plan/ row names link.rs too.
+    status: pending
+    batch: M57
+    commits: []
+  - id: F308
+    source: F214
+    description: The design notes' stuck-row limit still omits the README's describing content it cannot verify clause, so the two documents agree on the repair but not quite on the symptom.
+    status: pending
+    batch: M57
+    commits: []
+  - id: F309
+    source: F215
+    description: Only the design notes group the limits into kinds, so the README's Gotchas list has no counterpart that has to be kept in step with them.
+    status: pending
+    batch: M57
+    commits: []
 ```
 
 ## Human checklist
@@ -2646,6 +2675,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M24 `done`: F212, F213, F214 and F215 all kept, no fix or
+  revert commits; follow-ups F307–F309 appended with batch `M57`. F212–F215
+  `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M24 review checkpoint opened: F212, F213, F214 and
   F215 `in_progress` → `pending_review`, commits `6c8cb53e`, `645829a9`,
   `13120f7a`; review M24 `pending` → `in_progress`, base `00894206`, head
