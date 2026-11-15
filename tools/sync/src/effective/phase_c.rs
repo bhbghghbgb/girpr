@@ -234,15 +234,16 @@ pub fn resolve_folder(
         hashed: n_hashed,
         cache_hit: n_cache_hit,
         stat_only: n_stat_only,
-        // Phase A owns `files`, `dirs` and `pruned` — it is the only phase that
-        // walks the tree, so it is the only one that can count them. Carried
-        // across explicitly: a `..ScanStats::default()` here would silently
-        // reset `pruned` to 0 on every run, and the log line (which reads
-        // phase A directly) would then disagree with the returned stats.
+        // Phase A owns `files`, `dirs`, `pruned` and `alt_lookups` — it is the
+        // only phase that walks the tree, so it is the only one that can count
+        // them. Carried across explicitly: a `..ScanStats::default()` here would
+        // silently reset `pruned` to 0 on every run, and the log line (which
+        // reads phase A directly) would then disagree with the returned stats.
         files: phase_a.stats.files,
         dirs: phase_a.stats.dirs,
         pruned: phase_a.stats.pruned,
         live: phase_a.stats.live,
+        alt_lookups: phase_a.stats.alt_lookups,
     };
     // The message names the phase. The map is finished in two phases and each
     // of them says so, because the fields do not: only the phase that hashes

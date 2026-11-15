@@ -58,6 +58,19 @@ pub struct ScanStats {
     pub stat_only: usize,
     /// Cache rows dropped for paths no longer live (or now filtered out).
     pub pruned: usize,
+    /// Alternate-case lookups the scan made: the paths that missed exactly and
+    /// asked for a stale spelling.
+    ///
+    /// **Zero in sensitive mode**, where there is no alternate spelling to
+    /// look for and no index is built at all. In insensitive mode the count
+    /// says whether the index was built: it is built on the first lookup, so
+    /// a scan that made none never paid for it.
+    ///
+    /// The index's own count rather than the cache's read count, because the
+    /// cache counts every read of the entries table and a prune reads that
+    /// table too — so the read count would say something about the prune as
+    /// well as about the index.
+    pub alt_lookups: usize,
 }
 
 /// A side's map at one phase, plus the counters describing how it was built.

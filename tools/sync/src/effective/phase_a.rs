@@ -534,6 +534,16 @@ pub fn scan_stat_only(
             put_dir_row(w, prefix)?;
         }
     }
+    // The number of alternate-case lookups the scan made: the paths that
+    // missed exactly and asked for a stale spelling.
+    //
+    // **The index is built on the first of them**, so this count says whether
+    // the index was built: a scan that made none never built it, and a scan
+    // that made some paid for it whatever the spelling differences were.
+    // It is the index's own count rather than the cache's read count,
+    // because the cache's read count is moved by reads that have nothing to
+    // do with the index.
+    let alt_lookups = alt_index.as_ref().map(|index| index.lookups).unwrap_or(0);
     // Prune DB rows for files no longer on disk (or now excluded).
     //
     // The prune *decision* is an answer, not a side effect: how many rows this run
@@ -555,7 +565,14 @@ pub fn scan_stat_only(
     // Reading through the batch handle when there is one is not required for
     // correctness: every key this run has written is a live key, and a live key is
     // never pruned, so the batch's pending writes cannot change the set. It does
-    // change nothing about the *count* either way.
+    // change nothing about the *count of pruned rows* either way.
+    //
+    // **It does change what the cache's read counter says**, and that is why
+    // nothing pins the index through that counter: the batch handle's reads
+    // are not counted and the read handle's are, so a prune that moved to
+    // the read handle would move a number that has nothing to do with the
+    // index. The index's own count of lookups is what says the index was
+    // built.
     //
     // Keys, not records. Nothing below looks at a `FileRec` — the question is
     // only "does this row have a path on disk?" — and `load_all` would decode
@@ -629,6 +646,7 @@ pub fn scan_stat_only(
         cache_hit: 0,
         stat_only: 0,
         pruned,
+        alt_lookups,
     };
     // The message names the phase. The map is finished in two phases and each
     // of them says so, because the fields do not: only the phase that hashes
@@ -962,9 +980,14 @@ mod tests {
     ///
     /// The index costs a read of the whole key set, and a scan in which
     /// every path is found in the cache under the spelling the disk uses
-    /// never asks for one. The count of entries-table reads says whether the
-    /// scan paid for it: the index is one read of the key set, and a scan
-    /// that never misses must make none.
+    /// never asks for one. The scan's own count of alternate-case lookups
+    /// says whether the scan paid for it: the index is built on the first
+    /// lookup, so a scan that never misses must make none.
+    ///
+    /// **The count is the index's own**, not the cache's read count: the
+    /// cache counts every read of the entries table, and the prune reads that
+    /// table too, so a read count would say something about the prune as well
+    /// as about the index.
     #[test]
     fn the_alternate_index_is_built_only_when_a_lookup_needs_it() {
         let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index");
@@ -974,22 +997,18 @@ mod tests {
 
         // Nothing is cached, so the path misses exactly and the index is
         // built.
-        let before = db.entries_read_count();
-        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
         assert_eq!(
-            db.entries_read_count() - before,
-            1,
-            "the miss cost one read of the key set: the index"
+            scan.stats.alt_lookups, 1,
+            "the miss cost one lookup: the index was built for it"
         );
 
         // The cache now holds the key under the spelling the disk uses, so
         // the second scan finds it exactly and never asks for an alternate.
-        let before = db.entries_read_count();
-        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
         assert_eq!(
-            db.entries_read_count() - before,
-            0,
-            "no miss, no index, and no read of the key set either"
+            scan.stats.alt_lookups, 0,
+            "no miss, no lookup, and no index either"
         );
     }
 
@@ -1005,6 +1024,10 @@ mod tests {
     /// cached keys all match the spelling the disk uses still pays for the
     /// index when it adds a file, so "the cached keys match" is not the
     /// condition that saves the work.
+    ///
+    /// **In insensitive mode.** In sensitive mode there is no index to build
+    /// — there is no alternate spelling to look for — and the same run costs
+    /// nothing; that is the other case, below.
     #[test]
     fn a_run_that_only_adds_a_file_still_builds_the_index() {
         let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index_new");
@@ -1017,18 +1040,50 @@ mod tests {
         scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
 
         // The second scan finds it exactly and builds nothing.
-        let before = db.entries_read_count();
-        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
-        assert_eq!(db.entries_read_count() - before, 0, "no miss, no index");
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(scan.stats.alt_lookups, 0, "no miss, no index");
 
         // A new file misses exactly as well, and the miss builds the index.
         tree(&root, &[("b.txt", b"b")]);
-        let before = db.entries_read_count();
-        scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
         assert_eq!(
-            db.entries_read_count() - before,
-            1,
+            scan.stats.alt_lookups, 1,
             "the new path missed exactly, so the index was built: the miss was not about the case"
+        );
+    }
+
+    /// **A sensitive run never asks for an alternate.**
+    ///
+    /// The index exists to find a stale alternate-cased row, and in
+    /// sensitive mode there is no alternate to find: the cache's key is the
+    /// path, and a path that is not there is simply not there. So the scan
+    /// makes no lookup at all — not even for a path the cache has never
+    /// held, which is the shape that costs a lookup in insensitive mode.
+    ///
+    /// This is the other half of the note above the index: the price of a
+    /// miss is a price of the insensitive mode, and in sensitive mode there
+    /// is no index to pay for.
+    #[test]
+    fn a_sensitive_run_never_asks_for_an_alternate() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_index_sensitive");
+        tree(&root, &[("a.txt", b"a")]);
+        let db = CacheDb::open_temp(true).unwrap();
+        let common = opts(&[], &[]);
+
+        // Nothing is cached, so the path misses exactly — and a sensitive
+        // miss asks for nothing.
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            scan.stats.alt_lookups, 0,
+            "a sensitive miss asks for no alternate"
+        );
+
+        // A new file misses exactly as well, and still asks for nothing.
+        tree(&root, &[("b.txt", b"b")]);
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        assert_eq!(
+            scan.stats.alt_lookups, 0,
+            "and adding a file asks for no alternate either"
         );
     }
 
