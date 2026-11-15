@@ -293,10 +293,9 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
     let src_label = side_label(&src_side);
     let dst_label = side_label(&dst_side);
     // The repopulation each side would offer, for the same reason the labels
-    // are built here: both sides are folders, so neither has a record of its
-    // own to repopulate.
-    let src_folder = side_folder(&src_side);
-    let dst_folder = side_folder(&dst_side);
+    // are built here: the planner cannot work out where a side's cache lives.
+    let src_repopulate = side_folder(&src_side);
+    let dst_repopulate = side_folder(&dst_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
@@ -307,7 +306,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             // is the same one `compare` uses, and here it is vacuous.
             cap: SideCapability::for_folder(&src_db, src_mode),
             label: &src_label,
-            folder: src_folder,
+            repopulate: src_repopulate,
         },
         SideRequest {
             entries: &dst_a.map,
@@ -315,7 +314,7 @@ pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, dst_mode),
             label: &dst_label,
-            folder: dst_folder,
+            repopulate: dst_repopulate,
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

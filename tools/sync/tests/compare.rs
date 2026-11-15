@@ -121,7 +121,7 @@ fn effective_maps(
             no_trust: false,
             cap: so.cap,
             label: &s_label,
-            folder: side_folder(&s),
+            repopulate: side_folder(&s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -129,7 +129,7 @@ fn effective_maps(
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
-            folder: side_folder(&d),
+            repopulate: side_folder(&d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -603,7 +603,8 @@ fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
     );
 }
 
-/// **A record that is not a folder's cache is offered no repopulation.**
+/// **A record that is not a folder's cache is offered no repopulation, and is
+/// told why.**
 ///
 /// A `girpr-cache-backup-*` copy is a record as far as the tool is concerned —
 /// a comparison may be pointed at one — but no folder's `girpr-cache` is it, so
@@ -611,6 +612,9 @@ fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
 /// folder it happens to sit in: `girsync update --dir` there rebuilds that
 /// folder's *own* cache, which is a different file, and the user would be sent
 /// to fix the wrong thing.
+///
+/// And the message says so: a remedy list one line shorter is a question the
+/// user cannot answer from the list alone.
 #[test]
 fn a_backup_record_is_offered_no_repopulation() {
     let t = temp_root("cmp_backup_rec");
@@ -637,6 +641,10 @@ fn a_backup_record_is_offered_no_repopulation() {
     assert!(
         !msg.contains("girsync update"),
         "and offers no repopulation, because none would rebuild this file:\n{msg}"
+    );
+    assert!(
+        msg.contains("not a folder's own cache"),
+        "and says why there is none, so the shorter list is an answer:\n{msg}"
     );
     assert!(
         msg.contains("--hash-all-of none"),

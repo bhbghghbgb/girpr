@@ -631,8 +631,10 @@ one you can paste as it stands), a narrower request
 `girpr-cache-backup-*` copy is a record as far as the tool is concerned — a
 comparison may be pointed at one — but no folder's `girpr-cache` is it, so
 nothing the tool can run would rebuild it, and the error does not offer a
-repopulation that would rebuild a *different* file. The other two ways out are
-still named.
+repopulation that would rebuild a *different* file. It says so in the message
+— the record is not a folder's own cache, so nothing would rebuild it — rather
+than leaving the remedy list quietly one line shorter. The other two ways out
+are still named.
 
 **`--hash-any-of` is the fourth, and the one that needs no new work on the tree.**
 Where the record holds *some* of what you asked for, it reads one algorithm instead

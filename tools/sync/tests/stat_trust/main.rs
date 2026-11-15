@@ -189,7 +189,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
             no_trust: false,
             cap: s.cap,
             label: &s_label,
-            folder: side_folder(&s_side),
+            repopulate: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -197,7 +197,7 @@ fn hashed(src: &std::path::Path, dst: &std::path::Path, common: &CommonOpts) -> 
             no_trust: false,
             cap: d.cap,
             label: &d_label,
-            folder: side_folder(&d_side),
+            repopulate: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

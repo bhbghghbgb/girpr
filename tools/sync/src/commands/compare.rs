@@ -72,11 +72,11 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // as though it were borrowed from a temporary that has already gone.
     let s_label = side_label(&s);
     let d_label = side_label(&d);
-    // The folder a record side's cache lives in, for the same reason: the
-    // planner cannot work it out, and a coverage failure has to end with a
-    // command the user can paste.
-    let s_folder = side_folder(&s);
-    let d_folder = side_folder(&d);
+    // Where each side's cache lives, for the same reason: the planner cannot work
+    // it out, and a coverage failure has to end with a command the user can
+    // paste.
+    let s_repopulate = side_folder(&s);
+    let d_repopulate = side_folder(&d);
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
     // Both handles stay live across the plan and the resolve, which is sound only
     // because `ensure_distinct_sides` already ran: redb allows one writable
@@ -127,7 +127,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
-            folder: s_folder,
+            repopulate: s_repopulate,
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -135,7 +135,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
-            folder: d_folder,
+            repopulate: d_repopulate,
         },
         pairing,
         common.hash_mode,

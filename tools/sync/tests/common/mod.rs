@@ -721,7 +721,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
-            folder: side_folder(&src),
+            repopulate: side_folder(&src),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -729,7 +729,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
-            folder: side_folder(&dst),
+            repopulate: side_folder(&dst),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

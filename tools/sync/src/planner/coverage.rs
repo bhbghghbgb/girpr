@@ -25,12 +25,21 @@ use super::HashMode;
 /// which it is has not said enough: the remedy bullet is the one line in the
 /// message a user pastes, so a caller that forgot it would lose the remedy
 /// without saying so — which is the one thing this type is here to stop.
+///
+/// **The two cases are the two answers, and the message says which.** A side
+/// whose cache *is* a folder's own `girpr-cache` is rebuilt by
+/// `girsync update --dir` on that folder. A side that is a record of any other
+/// kind — a `girpr-cache-backup-*` copy, say — is rebuilt by nothing at all,
+/// and saying *that* is the difference between a user who knows why the remedy
+/// list is one line shorter and one who does not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Repopulate {
     /// The folder `girsync update --dir` rebuilds.
     Folder(PathBuf),
-    /// Nothing to repopulate: this side has no cache a repopulation could fix.
-    Nothing,
+    /// Nothing to repopulate: the side is a record that is not a folder's own
+    /// `girpr-cache`, so a repopulation of the folder it happens to sit in
+    /// would rebuild that folder's *own* cache — a different file.
+    NotAFolderCache,
 }
 
 /// A side that could not supply every digest the run required.
@@ -60,11 +69,11 @@ pub struct Coverage {
     /// the one who says which case this is.
     ///
     /// **Required, in two named cases.** [`Repopulate::Folder`] is the folder a
-    /// repopulation would run on and [`Repopulate::Nothing`] is a side that has
-    /// none. The field is not an `Option` because a caller that left it out
-    /// would lose the remedy bullet without saying so, and the bullet is the
+    /// repopulation would run on and [`Repopulate::NotAFolderCache`] is a side
+    /// that has none. The field is not an `Option` because a caller that left it
+    /// out would lose the remedy bullet without saying so, and the bullet is the
     /// one line in this message a user pastes.
-    pub folder: Repopulate,
+    pub repopulate: Repopulate,
     /// Which mode was asked for. Carried because the two modes fail differently and
     /// so are *remedied* differently — an all-of failure can be answered by asking
     /// for any one algorithm, which is the whole of `any-of`.
@@ -146,6 +155,17 @@ impl fmt::Display for Coverage {
              pair\nwould fall back to size+mtime and this run would report a confident answer \
              about\ncontent it never read."
         )?;
+        // Whether a repopulation would rebuild this side at all, said **before**
+        // the remedy list rather than inside it: a list that is one line shorter
+        // is a question the user cannot answer from the list alone, and the
+        // answer is not the user's to guess.
+        if let Repopulate::NotAFolderCache = &self.repopulate {
+            writeln!(
+                f,
+                "\nThis side is not a folder's own cache, so nothing would rebuild it: a \
+                 repopulation\nrebuilds a folder's own `girpr-cache`, which is a different file."
+            )?;
+        }
         // Remedies a user can act on without reading the rest of the message. Every
         // one of them names a flag that exists.
         writeln!(f, "\nTo answer this question, one of:")?;
@@ -182,7 +202,7 @@ impl fmt::Display for Coverage {
         }
         // The one remedy that names a path, so it is the one that has to be
         // copy-pasteable: the folder the caller named, never a placeholder.
-        if let Repopulate::Folder(folder) = &self.folder {
+        if let Repopulate::Folder(folder) = &self.repopulate {
             writeln!(
                 f,
                 "  - repopulate it, then run this again: girsync update --dir {}",
@@ -449,7 +469,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
-                folder: Repopulate::Folder(PathBuf::from("D:\\game\\old")),
+                repopulate: Repopulate::Folder(PathBuf::from("D:\\game\\old")),
                 mode: HashMode::AllOf,
                 missing: BTreeMap::from([(
                     "a.txt".to_string(),
@@ -488,15 +508,16 @@ mod tests {
     ///
     /// Two cases, and the second is the one that matters: a side that has
     /// nothing to repopulate offers **no** repopulation at all, rather than a
-    /// line with a placeholder in it that nobody can paste.
+    /// line with a placeholder in it that nobody can paste — and it *says* why,
+    /// so the shorter list is an answer rather than an absence.
     #[test]
-    fn the_repopulate_remedy_names_a_folder_or_is_not_offered() {
+    fn the_repopulate_remedy_names_a_folder_or_says_why_there_is_none() {
         use std::collections::BTreeMap;
 
-        let coverage = |folder: Repopulate| Coverage {
+        let coverage = |repopulate: Repopulate| Coverage {
             side: "src",
             label: "record D:\\game\\old\\girpr-cache".into(),
-            folder,
+            repopulate,
             mode: HashMode::AllOf,
             missing: BTreeMap::new(),
             coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 1usize))]),
@@ -515,10 +536,14 @@ mod tests {
             "and no placeholder is left in it:\n{named}"
         );
 
-        let unnamed = format!("{:#}", coverage(Repopulate::Nothing));
+        let unnamed = format!("{:#}", coverage(Repopulate::NotAFolderCache));
         assert!(
             !unnamed.contains("girsync update"),
             "a side with nothing to repopulate offers no repopulation:\n{unnamed}"
+        );
+        assert!(
+            unnamed.contains("This side is not a folder's own cache"),
+            "and the message says why there is none:\n{unnamed}"
         );
     }
 
@@ -534,7 +559,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
-                folder: Repopulate::Nothing,
+                repopulate: Repopulate::NotAFolderCache,
                 mode: HashMode::AllOf,
                 missing: BTreeMap::new(),
                 coverage: BTreeMap::from([

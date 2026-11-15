@@ -85,7 +85,7 @@ fn self_audit(dir: &Path) -> Run {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
-            folder: side_folder(&Side::Record(dir.join(CACHE_PREFIX))),
+            repopulate: side_folder(&Side::Record(dir.join(CACHE_PREFIX))),
         },
         SideRequest {
             entries: &disk_a.map,
@@ -93,7 +93,7 @@ fn self_audit(dir: &Path) -> Run {
             no_trust: false,
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
-            folder: side_folder(&Side::Folder(dir.to_path_buf())),
+            repopulate: side_folder(&Side::Folder(dir.to_path_buf())),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

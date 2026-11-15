@@ -58,7 +58,7 @@ use crate::diff::diff_maps;
 use crate::effective::{
     Side, SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
 };
-use crate::planner::{CasePairing, Repopulate, SideRequest, plan_pairs};
+use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
 use super::{report_and_finish, side_folder, side_label};
@@ -194,10 +194,12 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // repopulates — so the message ends with a command the user can paste.
     let rec_side = Side::Record(db_path.clone());
     let rec_label = side_label(&rec_side);
-    let disk_label = side_label(&Side::Folder(dir.clone()));
-    // The folder the record lives in, for the same reason the label is needed:
+    let disk_side = Side::Folder(dir.clone());
+    let disk_label = side_label(&disk_side);
+    // Where each side's cache lives, for the same reason the labels are needed:
     // the planner knows what a side can do, not where its cache is.
-    let rec_folder = side_folder(&rec_side);
+    let rec_repopulate = side_folder(&rec_side);
+    let disk_repopulate = side_folder(&disk_side);
     // The `?` stops the run before either side reads anything: a record that
     // cannot supply a requested digest must fail rather than let the pair fall
     // back to size+mtime, which for an audit means reporting "in step" about
@@ -215,7 +217,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
-            folder: rec_folder,
+            repopulate: rec_repopulate,
         },
         SideRequest {
             entries: &disk_a.map,
@@ -224,7 +226,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
             // A folder side can always backfill, so it is never the short one.
-            folder: Repopulate::Nothing,
+            repopulate: disk_repopulate,
         },
         pairing,
         common.hash_mode,

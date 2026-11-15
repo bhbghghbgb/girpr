@@ -50,9 +50,10 @@ pub struct SideRequest<'a> {
     /// cache lives, so this is the caller's one chance to say that too.
     ///
     /// **Required**: a side with no folder to repopulate says so, in
-    /// [`Repopulate::Nothing`], rather than leaving the field out. A caller
-    /// that forgot would otherwise lose the remedy bullet without saying so.
-    pub folder: Repopulate,
+    /// [`Repopulate::NotAFolderCache`], rather than leaving the field out. A
+    /// caller that forgot would otherwise lose the remedy bullet without saying
+    /// so.
+    pub repopulate: Repopulate,
 }
 
 /// Both sides' plans, from one decision.
@@ -361,7 +362,7 @@ pub fn plan_pairs(
             return Err(Coverage {
                 side: ["src", "dst"][idx],
                 label: req.label.to_string(),
-                folder: req.folder.clone(),
+                repopulate: req.repopulate.clone(),
                 mode,
                 missing: std::mem::take(&mut tally[idx].missing),
                 coverage: std::mem::take(&mut tally[idx].coverage),

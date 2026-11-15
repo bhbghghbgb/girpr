@@ -43,7 +43,7 @@ fn plan_both<'a>(
             no_trust: false,
             cap: so.cap,
             label: &s_label,
-            folder: side_folder(s),
+            repopulate: side_folder(s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -51,7 +51,7 @@ fn plan_both<'a>(
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
-            folder: side_folder(d),
+            repopulate: side_folder(d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
