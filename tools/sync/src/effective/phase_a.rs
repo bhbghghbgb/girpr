@@ -76,6 +76,10 @@ impl Group {
 
 /// The alternate-case index over the cached keys.
 ///
+/// **An insensitive-mode structure.** In sensitive mode there is no
+/// alternate spelling to look for, so no index is built at all: the cache's
+/// key is the path, and a path that is not there is simply not there.
+///
 /// The index has two shapes, and which one a run gets depends on how many
 /// lookups it makes.
 ///
@@ -339,9 +343,16 @@ pub fn scan_stat_only(
     // run makes more than one. See [`AltIndex`].
     //
     // What triggers the build is a path that misses exactly, not a spelling
-    // that differs: a path the cache has never held misses exactly too. So a
-    // run that only adds a file pays for the index as well, even though no
-    // spelling differs anywhere — the miss was about the path being new.
+    // that differs: a path the cache has never held misses exactly too. So in
+    // insensitive mode a run that only adds a file pays for the index as
+    // well, even though no spelling differs anywhere — the miss was about
+    // the path being new.
+    //
+    // **In sensitive mode there is no index at all**, and so no such price.
+    // There is no alternate spelling to look for: the cache's key is the
+    // path, and a path that is not there is simply not there. A miss costs
+    // nothing there, and the run that only adds a file is the cheapest shape
+    // a run has.
     //
     // The keys are the committed ones, read through the cache handle: the
     // scan's batch handle starts from the same committed state, and the rows

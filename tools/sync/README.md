@@ -512,8 +512,11 @@ reads the whole `entries` table's *keys*, to find a stale alternate-cased row
 for a path — the names are all it needs, and the row itself is read only when
 one is actually adopted, which is normally never. The index is built when a
 path misses exactly, so a scan in which every path is found in the cache
-under the spelling the disk uses never reads the keys for it at all. The
-prune that follows asks the same question of the keys — "which rows exist?" —
+under the spelling the disk uses never reads the keys for it at all. **That
+price is the insensitive mode's alone**: with `--case-sensitive` there is no
+alternate spelling to look for, so no index is built at all and a path that
+misses exactly costs nothing. The prune that follows asks the same question
+of the keys — "which rows exist?" —
 and gets them one at a time, without decoding a single `FileRec` and without
 collecting them either: the only keys it keeps are the stale ones, and a scan
 that finds nothing stale keeps none. In the default insensitive mode that is a
