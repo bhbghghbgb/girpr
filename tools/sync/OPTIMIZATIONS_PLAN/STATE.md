@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M29
+active_batch: M30
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T07:02:07Z
+last_updated: 2026-11-15T07:32:13Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2249,7 +2249,7 @@ followups:
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
-    status: pending
+    status: in_progress
     batch: M30
     commits: []
   - id: F233
@@ -2262,7 +2262,7 @@ followups:
   - id: F234
     source: F171
     description: The index still folds every cached key at the first exact-case miss, one folded spelling per key, even when a single lookup needs one group.
-    status: pending
+    status: in_progress
     batch: M30
     commits: []
   - id: F235
@@ -2911,6 +2911,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M30 started: F232 and F234 `pending` →
+  `in_progress`; `active_batch: M29` → `M30`.
 - 2026-11-15 — review M29 `done`: F228 kept, F229 kept, F230 fixed (fbf844bb,
   4d0c9a7e), F231 fixed (02b0a441, 2b305551); follow-ups F329–F333 appended with
   batches `M65`, `M66` and `M67`. F228–F231 `pending_review` → `completed`.
