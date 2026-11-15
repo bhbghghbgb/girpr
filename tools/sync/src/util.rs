@@ -93,6 +93,11 @@ fn has_cache_prefix(component: &str) -> bool {
 
 /// True when the final path component starts with `girpr-cache`, i.e. the path is
 /// a record (a DB directory) rather than a folder root.
+///
+/// **Published with its exact-name counterpart** [`is_cache_name`]. The two are
+/// one vocabulary — *a record* is any `girpr-cache*` name, and *a folder's own
+/// cache* is exactly `girpr-cache` — so a caller that can ask one can ask the
+/// other, and neither half is left to be spelled twice outside the crate.
 pub fn is_record_path(p: &Path) -> bool {
     p.file_name()
         .and_then(|s| s.to_str())
@@ -109,6 +114,18 @@ pub fn is_record_path(p: &Path) -> bool {
 /// The same spelling rule as that one: case is folded on Windows only, where
 /// the filesystem cannot tell `GIRPR-CACHE` from `girpr-cache`, and the two are
 /// different names elsewhere.
+///
+/// **Public, and published with its counterpart.** The two rules are one
+/// vocabulary, and the crate publishes both halves of it: the answer this rule
+/// decides is public too — [`crate::effective::Repopulate`] says whether a side
+/// is a folder's own cache or not — so a caller that can see the answer can ask
+/// the rule behind it. Publishing one half and hiding the other would leave an
+/// outside caller to spell this half out again, and this is the half whose
+/// spelling is easy to get wrong: the fold is ASCII, and it applies on Windows
+/// only.
+///
+/// The rule has one caller today, [`crate::effective::side_folder`], which
+/// decides from it whether a side has a folder to repopulate at all.
 pub fn is_cache_name(p: &Path) -> bool {
     p.file_name().and_then(|s| s.to_str()).is_some_and(|name| {
         #[cfg(windows)]
