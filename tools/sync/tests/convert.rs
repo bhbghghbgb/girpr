@@ -5,6 +5,7 @@
 
 mod common;
 
+use clap::ValueEnum;
 use common::{log, parse_ndjson, rw, temp_root};
 use girsync::cache::{load_all_records, open_db};
 use girsync::convert::CONVERT_TEMP_PREFIX;
@@ -662,9 +663,8 @@ fn the_help_exits_zero_and_documents_the_flags() {
 /// it: the case below renders it with clap and compares that rendering with
 /// the help the binary prints, so **both sides are laid out by the same
 /// clap**. What the comparison holds is therefore the converter's own
-/// command — its about, its arguments and flags, their descriptions, the
-/// values `--output` accepts and the default it takes — and none of clap's
-/// own words.
+/// command — its about, its arguments and flags, their descriptions and the
+/// default it takes — and none of clap's own words.
 ///
 /// Clap's words are on both sides at once: the usage line, the `Arguments:`
 /// and `Options:` headers, the `Possible values:` line, the `[default: …]`
@@ -680,7 +680,9 @@ fn the_help_exits_zero_and_documents_the_flags() {
 /// The values `--output` accepts are read from the shared [`OutputFormat`]
 /// enum rather than written out here, so the shared wording is not a second
 /// copy of it. The enum's own descriptions are rendered on both sides, and a
-/// change to them moves both sides together — as a clap bump does.
+/// change to them moves both sides together — as a clap bump does. The names
+/// of the values are what a user types, and they are pinned by name beside
+/// the comparison.
 ///
 /// The descriptions carry no trailing full stop, because clap's derive takes
 /// one off the doc comment it reads: `/// Legacy sled cache directory.` is
@@ -769,5 +771,23 @@ fn the_help_output_is_pinned() {
         normalize_help(&the_converter_command().render_long_help().to_string()),
         "the help output is pinned: the converter's own command changed, or a \
          multi-paragraph doc comment on the argument struct would print here"
+    );
+
+    // The values the flag accepts are what a user types, so they are pinned
+    // by name: the shared enum's wording is not the converter's, but the
+    // spellings it accepts are.
+    let accepted: Vec<String> = OutputFormat::value_variants()
+        .iter()
+        .map(|variant| {
+            clap::ValueEnum::to_possible_value(variant)
+                .expect("every value of the enum is a possible value")
+                .get_name()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        accepted,
+        ["text", "json"],
+        "the values --output accepts are pinned by name"
     );
 }
