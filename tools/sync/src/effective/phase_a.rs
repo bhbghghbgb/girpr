@@ -22,6 +22,16 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 /// the other is the stale one — and a group of three or more is never
 /// adopted, so it needs nothing but its count.
 ///
+/// **The second spelling is what keeps the rule free of an invariant.** A
+/// lookup that reaches a group has already missed the disk's own spelling
+/// exactly, so the cache holds no row under it and the group cannot hold it
+/// either — that is the usual shape, but it is not a rule this leans on: a
+/// group of two answers for whichever of its two spellings is not the
+/// disk's own, so the answer is the same whether or not the disk's own is
+/// among them. Were that invariant ever stated as load-bearing, the second
+/// spelling could go and a group of two would be two stale spellings,
+/// adopted by nothing.
+///
 /// A group holds **where** its spellings are rather than copies of them, so a
 /// folded key costs no allocation of its own: the index holds the keys it was
 /// built from, and a group names up to two places in them.
@@ -31,6 +41,11 @@ struct Group {
     /// Where the group's first spelling is in the key set.
     first: usize,
     /// Where the group's second spelling is, when the group holds two.
+    ///
+    /// **Kept so the rule does not lean on the disk's own spelling never
+    /// being in a group.** A lookup does not normally reach such a group —
+    /// the exact lookup missed, so the cache holds no row under it — but the
+    /// rule answers that case anyway rather than resting on it.
     second: Option<usize>,
 }
 
@@ -97,7 +112,10 @@ impl AltIndex {
     ///
     /// A lookup does not normally reach a group that holds the disk's own
     /// spelling — the exact lookup missed, so the cache holds no row under
-    /// it — but the rule does not lean on that.
+    /// it — but the rule does not lean on that: a group of two answers for
+    /// whichever of its two spellings is not the disk's own, and a group of
+    /// one answers for its only spelling unless that one is the disk's own.
+    /// The shape is pinned by a case of its own.
     fn adoptable(&self, folded: &str, disk: &str) -> Option<&str> {
         let group = self.groups.get(folded)?;
         let first = self.keys[group.first].as_str();
@@ -958,6 +976,13 @@ mod tests {
     /// than the disk's own. The shapes are the ones a group can have — one
     /// spelling, two, three — and the disk's own spelling may be one of
     /// them or none of them.
+    ///
+    /// **The disk's own spelling being in the group is a case a lookup does
+    /// not normally reach**, and the rule answers it anyway: the group names
+    /// its second spelling so that the answer does not depend on the disk's
+    /// own never being among them. The two spellings are therefore named
+    /// both ways round here, and the case where neither is the disk's own is
+    /// named too.
     #[test]
     fn a_group_is_adopted_only_when_exactly_one_spelling_is_stale() {
         let index = fold_alternates(
