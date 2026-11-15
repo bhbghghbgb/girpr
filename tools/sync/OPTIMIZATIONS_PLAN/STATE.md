@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M39
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T18:24:51Z
+last_updated: 2026-11-15T18:36:06Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -811,11 +811,25 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M39
+  - batch: M91
     status: pending
-    tasks: [F263, F264, F265]
+    tasks: [F392, F393]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M92
+    status: pending
+    tasks: [F391]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M39
+    status: in_progress
+    tasks: [F263, F264, F265]
+    base: bb57d8fe
+    head: 28a1a18b
     result: null
     followups: []
   - batch: M17
@@ -2628,21 +2642,21 @@ followups:
   - id: F263
     source: F190
     description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
-    status: in_progress
+    status: pending_review
     batch: M39
-    commits: []
+    commits: [ec4566db]
   - id: F264
     source: F186
     description: The added assertion in the rename fixture sorts a vector the test itself builds, so it states the fixture property rather than the program one and can only fail if the fixture is edited.
-    status: in_progress
+    status: pending_review
     batch: M39
-    commits: []
+    commits: [1c363bbb]
   - id: F265
     source: F190
     description: The README Gotchas bullet still says the error names the folder to run that fix on, which now holds only for a record that is a folder own cache, while the new paragraph above states the exception.
-    status: in_progress
+    status: pending_review
     batch: M39
-    commits: []
+    commits: [28a1a18b]
   - id: F266
     source: F189
     description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
@@ -3410,6 +3424,24 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F263, already scheduled in M39"
+  - id: F391
+    source: F264
+    description: src/commands/sync/rename.rs's unit test the_rename_order_is_by_the_folded_key has the same shape the rename finding names, sorting a vector the test itself builds and asserting the literal.
+    status: pending
+    batch: M92
+    commits: []
+  - id: F392
+    source: F263
+    description: is_record_path is public with no out-of-crate caller either; if the crate ever wants the util surface narrowed, that is the pair to decide together.
+    status: pending
+    batch: M91
+    commits: []
+  - id: F393
+    source: F263
+    description: The util module publishes helpers no outside caller uses, so a stated policy for the module's surface would settle these in one place rather than one at a time.
+    status: pending
+    batch: M91
+    commits: []
 ```
 
 ## Human checklist
@@ -3441,6 +3473,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M39 review checkpoint opened: F263, F264 and F265
+  `in_progress` → `pending_review`, commits `ec4566db`, `1c363bbb`, `28a1a18b`;
+  review M39 `pending` → `in_progress`, base `bb57d8fe`, head `28a1a18b`.
 - 2026-11-15 — follow-up batch M39 started: F263, F264 and F265 `pending` →
   `in_progress`; `active_batch: M38` → `M39`.
 - 2026-11-15 — review M38 `done`: F261 and F262 both kept, no fix or revert
