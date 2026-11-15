@@ -623,6 +623,10 @@ holding it, and the lock is exactly what says so. Only a cache that cannot be
 opened at all — not even for reading — has no lock to take, and the bound
 runs without one there.
 
+**A filesystem that cannot lock a file has no lock to take either.** The lock
+cannot be taken there, so the bound runs without one there as well, and
+nothing says that another run is in its run phase for the folder.
+
 The bound also never removes the copy the run applying it published: that run
 is the one reporting the copy. The count is made up from the next copy in age
 order instead, so the folder ends within its bound — but only while there are
