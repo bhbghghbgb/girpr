@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M29
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T04:40:08Z
+last_updated: 2026-11-15T05:08:36Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -518,10 +518,10 @@ reviews:
     result: F36 kept (fb7fdc23); F37 kept (773d1c53); F38 kept (f398aa2a); F39 kept (779de219); F40 kept (0d49c077); no fix or revert commits; 572 passed, 1 skipped; the reviewer enumerated every direct filesystem call reachable from the guards and found the seam list complete
     followups: [F160, F161, F162, F163, F164, F165]
   - batch: M29
-    status: pending
+    status: in_progress
     tasks: [F228, F229, F230, F231]
-    base: null
-    head: null
+    base: 058c2c24
+    head: 02b0a441
     result: null
     followups: []
   - batch: M30
@@ -2200,27 +2200,27 @@ followups:
   - id: F228
     source: F168
     description: The prune still materialises the whole key set, a Vec of Strings with one string per cached row; a streaming key API on CacheDb and CacheWrite would remove that allocation on every scan, and it needs the cache module rather than phase A.
-    status: in_progress
+    status: pending_review
     batch: M29
-    commits: []
+    commits: [8ed05795]
   - id: F229
     source: F166
     description: DigestSet.foreign is a Vec now, so its capacity can exceed its length after growth and every clone of a row clones that capacity.
-    status: in_progress
+    status: pending_review
     batch: M29
-    commits: []
+    commits: [75fb6c4b]
   - id: F230
     source: F169
     description: same_spelling is a one-line wrapper over an equality comparison; it is the single place to change if the arm match rule ever stops being exact.
-    status: in_progress
+    status: pending_review
     batch: M29
-    commits: []
+    commits: [fbf844bb]
   - id: F231
     source: F171
     description: The group second spelling exists so the rule does not depend on the disk own spelling never being in a group, a case a lookup cannot normally reach; if that invariant is ever stated as load-bearing, the second spelling could go.
-    status: in_progress
+    status: pending_review
     batch: M29
-    commits: []
+    commits: [02b0a441]
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
@@ -2856,6 +2856,10 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M29 review checkpoint opened: F228, F229, F230 and
+  F231 `in_progress` → `pending_review`, commits `8ed05795`, `75fb6c4b`,
+  `fbf844bb`, `02b0a441`; review M29 `pending` → `in_progress`, base `058c2c24`,
+  head `02b0a441`.
 - 2026-11-15 — follow-up batch M29 started: F228, F229, F230 and F231 `pending` →
   `in_progress`; `active_batch: M28` → `M29`.
 - 2026-11-15 — review M28 `done`: F225 kept with no commit, the reviewer judged
