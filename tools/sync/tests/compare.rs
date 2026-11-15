@@ -9,7 +9,7 @@ use common::{
     recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
-use girsync::commands::side_folder;
+use girsync::commands::{side_folder, side_label};
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
@@ -109,8 +109,11 @@ fn effective_maps(
     let mut do_ = open_side(&d, &common, mode).unwrap();
     // Labels only so a coverage error can name a side; these fixtures are both
     // folders and fully covered, so it never fires.
-    let s_label = format!("{}", s.cache_path().display());
-    let d_label = format!("{}", d.cache_path().display());
+    //
+    // Built by the same helper the commands use, so this harness cannot keep a
+    // second spelling of how a side is named.
+    let s_label = side_label(&s);
+    let d_label = side_label(&d);
     let plans = plan_pairs(
         SideRequest {
             entries: &so.phase_a.map,
