@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M23
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:15:26Z
+last_updated: 2026-11-15T01:27:52Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -378,10 +378,17 @@ reviews:
     result: F132 kept (0fa1a663); F133 kept (c9a512e8); F134 kept (72d9e889); F136 kept (339c0957); no fix or revert commits; 572 passed, 1 skipped; the identity comparison verified byte-for-byte unchanged and the two case-fold rules still disagree
     followups: [F144, F145, F146]
   - batch: M23
-    status: in_progress
+    status: done
     tasks: [F209, F210, F211]
     base: 983e70bf
     head: 986fa9a0
+    result: F209 kept (aaed2ebd, e03f21ab); F210 kept (aaed2ebd); F211 kept (986fa9a0); no fix or revert commits; 598 passed without the feature and 614 with it, 1 skipped; the reviewer confirmed the retired spelling survives only in the three places that deny it and in the one historical statement, which is still true, and saw both new cases fail when the rename and the guard were undone
+    followups: [F304]
+  - batch: M56
+    status: pending
+    tasks: [F304]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M24
@@ -2004,21 +2011,24 @@ followups:
   - id: F209
     source: F147
     description: The nonexistent --hash none still names a flag in source rather than in documents, in src/hash/set.rs module doc, parse_hash_list doc and the user-facing refusal, src/hash/algo.rs, src/effective, src/planner, src/commands/update.rs, src/commands/sync/apply/copy.rs and several test files; the set.rs refusal is user-visible text and the sharpest instance.
-    status: pending_review
+    status: completed
     batch: M23
     commits: [aaed2ebd, e03f21ab]
+    note: review M23 kept; the retired spelling survives only where a case denies it and in the one historical statement, which the reviewer confirmed is still true
   - id: F210
     source: F147
     description: src/hash/set.rs module doc still says the --hash and --hash-any-of parsers, stale in the same way.
-    status: pending_review
+    status: completed
     batch: M23
     commits: [aaed2ebd]
+    note: review M23 kept; the module doc now names the two parsers the file holds
   - id: F211
     source: F151
     description: The README source table still has no row for src/commands/sync/plan/tests.rs, an inline test module; cosmetic, and the surrounding prose covers inline test modules.
-    status: pending_review
+    status: completed
     batch: M23
     commits: [986fa9a0]
+    note: review M23 kept; the row follows the table's own whole-path rule, which the same rule already applied to the sibling src/hash/tests.rs row
   - id: F212
     source: F151
     description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
@@ -2027,7 +2037,7 @@ followups:
     commits: []
   - id: F213
     source: F151
-    description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the three new rows that spell the whole path for neither reason, though every path is correct.
+    description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the four rows that spell the whole path for neither reason, though every path is correct.
     status: pending
     batch: M24
     commits: []
@@ -2585,6 +2595,26 @@ followups:
     status: pending
     batch: M55
     commits: []
+  - id: F304
+    source: F210
+    description: The new parse_any_of doc says the refusal is made there so it does not point a user who typed --hash-any-of at a flag they did not, while the message itself names --hash-all-of none as the remedy, a wording that reads as a contradiction on a quick pass.
+    status: pending
+    batch: M56
+    commits: []
+  - id: F305
+    source: F209
+    description: The crate still spells --hash-any-of sha256 md5 with two algorithms in one occurrence in the README, the design notes, the CLI definition and the coverage remedy, a spelling the parser rejects, so the two spellings now coexist after this batch.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F266, already scheduled in M40
+  - id: F306
+    source: F211
+    description: The new source-table row is a whole-path row, so the table path rule now has one more whole-path row to account for than the three it counted.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F213, already scheduled in M24, whose count has been updated to four rows
 ```
 
 ## Human checklist
@@ -2616,6 +2646,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M23 `done`: F209, F210 and F211 all kept, no fix or
+  revert commits; follow-up F304 appended with batch `M56`, F305 recorded as
+  `skipped` as the same item as F266, and F306 recorded as `skipped` as the same
+  item as F213, whose count was updated to four rows. F209, F210 and F211
+  `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M23 review checkpoint opened: F209, F210 and F211
   `in_progress` → `pending_review`, commits `aaed2ebd`, `e03f21ab`, `986fa9a0`;
   review M23 `pending` → `in_progress`, base `983e70bf`, head `986fa9a0`.
