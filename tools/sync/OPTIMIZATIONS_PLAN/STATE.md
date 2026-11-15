@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M31
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T09:43:34Z
+last_updated: 2026-11-15T09:58:32Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -574,10 +574,31 @@ reviews:
     result: F166 fixed (82fd8a95 corrects a doc that still called the arm a slice); F167 kept (6955810c); F168 kept (a095f412, 34293501); F169 kept (515bfa49); F170 kept (95a2d302, 4db5ab6a); F171 fixed (6236f9fa corrects the index doc); 585 passed without the feature and 599 with it, 1 skipped
     followups: [F232, F234]
   - batch: M31
-    status: in_progress
+    status: done
     tasks: [F236]
     base: 5dd484e6
     head: 7864335e
+    result: F236 kept (7864335e); no fix or revert commits; 609 passed without the feature and 625 with it, 1 skipped; the reviewer ran the pre-change merge and the new one side by side over 20,000 random row pairs with identical slots, names, digests and arm capacity, and saw the new case fail when the clone was restored
+    followups: [F345, F346]
+  - batch: M71
+    status: pending
+    tasks: [F334, F335, F337]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M72
+    status: pending
+    tasks: [F336, F341, F343, F344]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M73
+    status: pending
+    tasks: [F345, F346]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M32
@@ -2291,9 +2312,10 @@ followups:
   - id: F236
     source: F173
     description: DigestSet::merge clones the other side's foreign entries, name and digest, into the arm; a merge that replaces an entry in place reuses the digest buffer, but an added entry allocates a fresh String and Vec, the same allocation the vector itself removed.
-    status: pending_review
+    status: completed
     batch: M31
     commits: [7864335e]
+    note: review M31 kept; the reviewer confirmed every merge caller hands over a row it drops, and that the new case fails when the clone is restored
   - id: F237
     source: F168
     description: The prune still walks the whole key set every scan even when the index was built, because the filter over it is a full pass; the index could answer whether a row is live per key.
@@ -2910,6 +2932,67 @@ followups:
     status: pending
     batch: M70
     commits: []
+  - id: F341
+    source: F232
+    description: The oracle's independence from std is a source-level property that no behavioural case can catch, and the crate has a precedent for a source-scanning case in the plan safety module.
+    status: pending
+    batch: M72
+    commits: []
+  - id: F342
+    source: F234
+    description: The folded index's map keys are still one owned String per distinct folded key; the hash-of-the-folded-bytes route was rejected because a collision would merge two distinct folded spellings and could adopt the wrong row.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same cost as F336, the index's own per-row string, already scheduled in M72
+  - id: F343
+    source: F234
+    description: The index still copies the whole key set on the first miss, so a streaming first lookup would avoid that copy too, at the price of a second table pass for the prune.
+    status: pending
+    batch: M72
+    commits: []
+  - id: F344
+    source: F234
+    description: The prune's key set is still an owned Vec of Strings when the index is built, one allocation per cached row for keys the index holds.
+    status: pending
+    batch: M72
+    commits: []
+  - id: F345
+    source: F236
+    description: The new prose in DigestSet::merge claims a replacement allocates nothing, but extend_from_slice reallocates when the new digest is longer than the arm's buffer, and the crate's own insert_named words the same claim as when it is big enough, so the two writers' wording now drifts.
+    status: pending
+    batch: M73
+    commits: []
+  - id: F346
+    source: F236
+    description: The merge's foreign-add path is not reached by the crate's own runs, since Digests::finish fills the known slots only, so the two allocations it removes are not on a run's hot path; the allocation the merge path actually pays is the prior row's clone in merge_row.
+    status: pending
+    batch: M73
+    commits: []
+  - id: F334
+    source: F228
+    description: The apply-phase prunes still materialise the whole key set with load_keys and remove while walking it; they could stream and keep only the rows to remove.
+    status: pending
+    batch: M71
+    commits: []
+  - id: F335
+    source: F228
+    description: The rename re-key still collects the whole key set before reading the moved rows; it needs the pairs anyway, so the win is smaller.
+    status: pending
+    batch: M71
+    commits: []
+  - id: F336
+    source: F234
+    description: The alternate-case index still owns one String per cached row whenever it is built, since it names positions in them and hands a spelling back, so the key set's per-row allocation survives a run that misses a path exactly.
+    status: pending
+    batch: M72
+    commits: []
+  - id: F337
+    source: F228
+    description: A write handle cannot remove rows while streaming, since the callback borrows the handle; a prune-as-you-stream method would remove that collection, at the price of a cache-specific API.
+    status: pending
+    batch: M71
+    commits: []
 ```
 
 ## Human checklist
@@ -2945,6 +3028,11 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M31 `done`: F236 kept (7864335e); no fix or revert commits;
+  follow-ups F345 and F346 appended with batch `M73`. The candidate follow-ups
+  reported by the M29 and M30 implementing sessions were appended at the same
+  time as F334–F337 (F341–F344), with batches `M71` and `M72`; F342 recorded as
+  `skipped` as the same cost as F336. F236 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M31 review checkpoint opened: F236 `in_progress` →
   `pending_review`, commit `7864335e`; review M31 `pending` → `in_progress`,
   base `5dd484e6`, head `7864335e`.
