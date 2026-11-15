@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M37
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T16:28:34Z
+last_updated: 2026-11-15T16:51:39Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -748,6 +748,20 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M87
+    status: pending
+    tasks: [F381, F382]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M88
+    status: pending
+    tasks: [F383, F384]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M16
     status: done
     tasks: [F179, F180, F181]
@@ -763,10 +777,10 @@ reviews:
     result: F111 kept (335cda4b); F112 kept (1cac4f4b); F116 kept (839bcf84); F130 kept (0e73b57f); no fix or revert commits; 577 passed without the feature and 591 with it, 1 skipped; the reviewer drove the MSRV script with a stubbed cargo across five feature scenarios and found the fallback cannot hide a real failure
     followups: [F179, F180, F181, F183]
   - batch: M37
-    status: pending
+    status: in_progress
     tasks: [F258, F259, F260]
-    base: null
-    head: null
+    base: a91a091e
+    head: e81da0f2
     result: null
     followups: []
   - batch: M38
@@ -2558,21 +2572,21 @@ followups:
   - id: F258
     source: F185
     description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
-    status: in_progress
+    status: pending_review
     batch: M37
-    commits: []
+    commits: [26f0ea58]
   - id: F259
     source: F185
     description: Nothing pins the spelling of side_label, although six harnesses now depend on it.
-    status: in_progress
+    status: pending_review
     batch: M37
-    commits: []
+    commits: [53a51337]
   - id: F260
     source: F191
     description: Side::cache_path and side_label answer different questions for a folder side, the cache file against the root, so a caller has to know which one it wants.
-    status: in_progress
+    status: pending_review
     batch: M37
-    commits: []
+    commits: [e81da0f2]
   - id: F261
     source: F188
     description: Repopulate::Nothing covers two different reasons, a folder side and a record that is not a folder cache, and the message cannot say which.
@@ -3308,6 +3322,30 @@ followups:
     status: pending
     batch: M86
     commits: []
+  - id: F381
+    source: F260
+    description: Side::cache_file now has no caller in the crate, since its only one was the harness that built its own label; it is kept as documented public API, but the crate could decide to drop it and let callers join the cache prefix themselves.
+    status: pending
+    batch: M87
+    commits: []
+  - id: F382
+    source: F260
+    description: src/cache/open.rs's remove_cache_path still says path for a cache file, where the crate now says cache file for a side's file; the vocabulary could be aligned, or deliberately left since that function names a path it removes.
+    status: pending
+    batch: M87
+    commits: []
+  - id: F383
+    source: F260
+    description: SideRequest::label in the planner and Coverage::label still describe the label as a record or folder path, while it is now the kind word plus the side's own path.
+    status: pending
+    batch: M88
+    commits: []
+  - id: F384
+    source: F259
+    description: tests/compare_self.rs pins the record-side wording inside a coverage message, while the folder-side wording is only pinned by the new case, so that message-level pin could be widened to both kinds.
+    status: pending
+    batch: M88
+    commits: []
 ```
 
 ## Human checklist
@@ -3339,6 +3377,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M37 review checkpoint opened: F258, F259 and F260
+  `in_progress` → `pending_review`, commits `26f0ea58`, `53a51337`, `e81da0f2`;
+  review M37 `pending` → `in_progress`, base `a91a091e`, head `e81da0f2`.
 - 2026-11-15 — follow-up batch M37 started: F258, F259 and F260 `pending` →
   `in_progress`; `active_batch: M36` → `M37`.
 - 2026-11-15 — review M36 `done`: F254, F255, F256 and F257 all kept, no fix or
