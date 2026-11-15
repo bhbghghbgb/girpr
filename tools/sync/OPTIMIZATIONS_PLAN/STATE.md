@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M38
+active_batch: M39
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T18:24:05Z
+last_updated: 2026-11-15T18:24:51Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2628,19 +2628,19 @@ followups:
   - id: F263
     source: F190
     description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
-    status: pending
+    status: in_progress
     batch: M39
     commits: []
   - id: F264
     source: F186
     description: The added assertion in the rename fixture sorts a vector the test itself builds, so it states the fixture property rather than the program one and can only fail if the fixture is edited.
-    status: pending
+    status: in_progress
     batch: M39
     commits: []
   - id: F265
     source: F190
     description: The README Gotchas bullet still says the error names the folder to run that fix on, which now holds only for a record that is a folder own cache, while the new paragraph above states the exception.
-    status: pending
+    status: in_progress
     batch: M39
     commits: []
   - id: F266
@@ -3441,6 +3441,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M39 started: F263, F264 and F265 `pending` →
+  `in_progress`; `active_batch: M38` → `M39`.
 - 2026-11-15 — review M38 `done`: F261 and F262 both kept, no fix or revert
   commits; follow-up F389 appended with batch `M90`, and F388 and F390 recorded
   as `skipped` as the same items as F265 and F263. F261 and F262
