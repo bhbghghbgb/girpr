@@ -11,6 +11,8 @@ on:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - 'tests/scripts/check-msrv.ps1'
+      - 'tests/scripts/msrv-features.ps1'
+      - 'tests/scripts/msrv-features.selftest.ps1'
       - '.github/workflows/msrv.yml'
   pull_request:
     paths:
@@ -18,6 +20,8 @@ on:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
       - 'tests/scripts/check-msrv.ps1'
+      - 'tests/scripts/msrv-features.ps1'
+      - 'tests/scripts/msrv-features.selftest.ps1'
       - '.github/workflows/msrv.yml'
 
 permissions:
@@ -40,6 +44,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-all-crates: 'true'
+      - name: Check the MSRV script's own feature rules
+        shell: pwsh
+        # No member of the workspace has two optional features, so the branch
+        # that checks a combination of them is driven with a synthetic member
+        # instead of a real one.
+        run: ./tests/scripts/msrv-features.selftest.ps1
       - name: Check every member at its declared rust-version
         shell: pwsh
         run: ./tests/scripts/check-msrv.ps1
