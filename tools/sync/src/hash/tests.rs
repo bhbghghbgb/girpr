@@ -90,6 +90,11 @@ fn the_name_resolver_agrees_with_the_parser() {
 /// a change in `std`'s rule would change the oracle along with it and the
 /// case would follow `std` instead of catching it.
 ///
+/// **Both halves of the oracle belong to the crate**: the comparison made
+/// here, and the classification of a byte that the fold rests on (see
+/// [`ascii_lower`] and [`is_ascii_upper`]). A half borrowed from `std` is a
+/// half that follows `std`, and a case is an oracle only if all of it is.
+///
 /// This is the rule the resolver is meant to implement: fold the ASCII case
 /// of each byte, compare every other byte exactly. Folding ASCII case does
 /// not change a string's length, so the lengths are compared first.
@@ -102,12 +107,29 @@ fn ascii_case_eq(a: &str, b: &str) -> bool {
 
 /// One byte, folded to lower case if it is an ASCII upper-case letter.
 ///
-/// The fold is written out rather than borrowed. `to_ascii_lowercase` would
-/// do, and clippy would go further and suggest the comparison the oracle
-/// must not use: an ASCII upper-case letter is 32 above its lower-case
-/// counterpart, and every other byte is itself.
+/// The fold is written out rather than borrowed, and so is the
+/// classification it rests on: an ASCII upper-case letter is 32 above its
+/// lower-case counterpart, and every other byte is itself.
+///
+/// `to_ascii_lowercase` would do the fold, and `is_ascii_uppercase` would
+/// do the classification. Neither is used, because the oracle must not
+/// borrow `std`'s rule for either half: a `std` that changed which bytes
+/// count as upper-case would then be followed by the oracle and by the
+/// resolver at once, and the case would agree with `std` instead of
+/// catching it.
 fn ascii_lower(b: u8) -> u8 {
-    if b.is_ascii_uppercase() { b + 32 } else { b }
+    if is_ascii_upper(b) { b + 32 } else { b }
+}
+
+/// Is this byte an ASCII upper-case letter?
+///
+/// The rule, written out: the 26 bytes from `A` to `Z`, and nothing else.
+///
+/// Clippy would rather this were `is_ascii_uppercase` — the very call the
+/// oracle must not make — so the lint is refused here rather than obeyed.
+#[allow(clippy::manual_is_ascii_check)]
+fn is_ascii_upper(b: u8) -> bool {
+    (b'A'..=b'Z').contains(&b)
 }
 
 /// **The resolver folds exactly as the ASCII-case comparison does.**
@@ -117,9 +139,14 @@ fn ascii_lower(b: u8) -> u8 {
 /// This case is the check that the resolver's fold is the rule it is meant
 /// to be, and the oracle is that rule written out — so a `std` that grew a
 /// Unicode case mapping shows up here instead of being followed by both
-/// sides at once. The names are the awkward ones — every ASCII case of a
-/// supported name, names nobody supports, the empty name, a name with a
-/// space in it, and the Kelvin-sign lookalike.
+/// sides at once.
+///
+/// **The oracle is the crate's own in both halves**: the comparison it makes
+/// and the classification of a byte it folds are written out rather than
+/// borrowed, so a `std` that changed *either* of them shows up here too.
+/// The names are the awkward ones — every ASCII case of a supported name,
+/// names nobody supports, the empty name, a name with a space in it, and
+/// the Kelvin-sign lookalike.
 #[test]
 fn the_resolver_folds_exactly_as_the_ascii_case_comparison_does() {
     for name in [
@@ -148,6 +175,29 @@ fn the_resolver_folds_exactly_as_the_ascii_case_comparison_does() {
             .find(|a| ascii_case_eq(a.as_str(), name));
         assert_eq!(HashAlg::from_name(name), want, "the name {name:?}");
     }
+}
+
+/// **The oracle's own rule, over the bytes it decides.**
+///
+/// The oracle is the crate's answer to "which bytes fold", so the answer is
+/// written out here as well as in the code that uses it: the 26 ASCII
+/// letters fold to their lower-case counterparts, and every other byte is
+/// itself. The boundaries are the ones a reader would get wrong — `@` and
+/// `[` are ASCII but not letters, and a byte outside ASCII is not a letter
+/// either.
+#[test]
+fn the_oracle_folds_ascii_letters_and_nothing_else() {
+    assert_eq!(ascii_lower(b'A'), b'a', "the first letter");
+    assert_eq!(ascii_lower(b'Z'), b'z', "the last one");
+    assert_eq!(ascii_lower(b'a'), b'a', "a lower-case letter is itself");
+    assert_eq!(ascii_lower(b'@'), b'@', "ASCII, but not a letter");
+    assert_eq!(ascii_lower(b'['), b'[', "ASCII, and just above the letters");
+    assert_eq!(ascii_lower(b'0'), b'0', "a digit is not a letter");
+    assert_eq!(
+        ascii_lower(0xC4),
+        0xC4,
+        "and a byte outside ASCII is not a letter either"
+    );
 }
 
 /// Folding is ASCII-only, the same rule the path key and `HashAlg`'s parser
