@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M33
+active_batch: M34
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T13:17:38Z
+last_updated: 2026-11-15T13:19:21Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2424,19 +2424,19 @@ followups:
   - id: F247
     source: F175
     description: The pinned help text also carries clap own boilerplate, the possible-values line, the default marker and the print-help wording, so a deliberate clap bump will need the golden text updated by hand.
-    status: pending
+    status: in_progress
     batch: M34
     commits: []
   - id: F248
     source: F176
     description: The number of cargo invocations grows as two to the n minus one for a member with n optional features, so a member with many features would make the gate slow.
-    status: pending
+    status: in_progress
     batch: M34
     commits: []
   - id: F249
     source: F176
     description: No member in the workspace has two optional features today, girsync has one, so the combination branch is never exercised by a real run of the script.
-    status: pending
+    status: in_progress
     batch: M34
     commits: []
   - id: F250
@@ -3135,6 +3135,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M34 started: F247, F248 and F249 `pending` →
+  `in_progress`; `active_batch: M33` → `M34`.
 - 2026-11-15 — review M33 `done`: F243 kept (93ab7621), F244 fixed (ba8570a6,
   eefb96ca); follow-ups F353–F356 appended with batches `M78` and `M79`, and F357
   recorded as `skipped` because the exit-code and stdout assertions already
