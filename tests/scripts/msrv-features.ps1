@@ -129,14 +129,14 @@ function Get-FeatureConfigurations($features) {
 # A feature that does not build on its own is not failed straight away: it may
 # be one that only builds in combination with another, and it is looked at
 # with each pair that holds it before the member is failed. A feature that
-# builds with no one other feature is broken on its own — the whole optional
-# set building says nothing about it, because every optional feature at once
-# is a configuration of its own and not a partner the feature can be shown to
-# need.
+# builds with no one other feature is broken on its own — and so is one that
+# needs two partners at once, because no single partner builds with it
+# either: the whole optional set building says nothing about it, because
+# every optional feature at once is a configuration of its own and not a
+# partner the feature can be shown to need.
 #
-# A feature that needs two partners at once is in the same shape: no single
-# partner builds with it, and the member is failed over the feature. The
-# combination that does build it is named in the failure, because a reader
+# A feature that needs two partners at once is failed over the feature, and
+# the combination that does build it is named in the failure, because a reader
 # holding such a feature has to be told which configuration to try. The whole
 # set of the member's features is one of the configurations that is built, so
 # the script knows whether it holds: the failure names it when it does.
