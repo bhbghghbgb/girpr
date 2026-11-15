@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M35
+active_batch: M36
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:23:45Z
+last_updated: 2026-11-15T15:24:27Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2516,25 +2516,25 @@ followups:
   - id: F254
     source: F179
     description: The new rule needs exactly one partner, so a feature that compiles only with two partners together is failed by the feature check as well, and the description broken on its own does not name that case.
-    status: pending
+    status: in_progress
     batch: M36
     commits: []
   - id: F255
     source: F179
     description: Get-FeaturePairs re-derives the combination name with its own join instead of taking it from Get-FeatureCombinations, and an absent key is read as did not build, so the lookup silently depends on the combination check naming staying byte-identical.
-    status: pending
+    status: in_progress
     batch: M36
     commits: []
   - id: F256
     source: F179
     description: The MSRV fallback rule has no committed regression test, since the synthetic workspaces that exercise it live outside the tree, so a later edit to the fallback would only be caught by hand.
-    status: pending
+    status: in_progress
     batch: M36
     commits: []
   - id: F257
     source: F180
     description: A member whose optional features include a mutually exclusive pair is still failed by the combination check, which predates this batch; the failure list now names the combinations alone.
-    status: pending
+    status: in_progress
     batch: M36
     commits: []
   - id: F258
@@ -3285,6 +3285,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M36 started: F254, F255, F256 and F257 `pending` →
+  `in_progress`; `active_batch: M35` → `M36`.
 - 2026-11-15 — the YAML block was repaired so it parses: 81 values with an
   unquoted colon were quoted, and the review M16 entry's follow-ups line that
   had swallowed the M4 batch header was split back into two lines. The block
