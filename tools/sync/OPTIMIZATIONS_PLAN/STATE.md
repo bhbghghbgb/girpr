@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M34
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T13:50:30Z
+last_updated: 2026-11-15T15:06:26Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -665,10 +665,31 @@ reviews:
     result: null
     followups: []
   - batch: M34
-    status: in_progress
+    status: done
     tasks: [F247, F248, F249]
     base: f8af1203
-    head: 3edc3d5e
+    head: 2d19bef1
+    result: F247 kept (6572e643, 3edc3d5e); F248 fixed (3546a457, 2d19bef1 carries the shape the whole set cannot see into the README, which had repeated the reason without the exception); F249 kept (c11652be); 611 passed without the feature and 628 with it, 1 skipped; the reviewer enumerated the old and new configuration sets (n=4: 15 to 11, n=8: 255 to 37, n=12: 4095 to 79), saw the help pin fail for six mutations and pass under a patched clap, and saw the self-test fail for four broken rules
+    followups: [F358, F359, F360, F361, F362, F363, F364]
+  - batch: M80
+    status: pending
+    tasks: [F358, F359, F360]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M81
+    status: pending
+    tasks: [F361, F362]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M82
+    status: pending
+    tasks: [F363, F364]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M15
@@ -2424,21 +2445,24 @@ followups:
   - id: F247
     source: F175
     description: The pinned help text also carries clap own boilerplate, the possible-values line, the default marker and the print-help wording, so a deliberate clap bump will need the golden text updated by hand.
-    status: pending_review
+    status: completed
     batch: M34
     commits: [6572e643, 3edc3d5e]
+    note: review M34 kept; the golden holds no clap boilerplate, and the reviewer saw the pin fail for six mutations and pass under a patched clap_builder
   - id: F248
     source: F176
     description: The number of cargo invocations grows as two to the n minus one for a member with n optional features, so a member with many features would make the gate slow.
-    status: pending_review
+    status: completed
     batch: M34
-    commits: [3546a457]
+    commits: [3546a457, 2d19bef1]
+    note: review M34 fixed (2d19bef1 carries the shape the whole set cannot see into the README, which had repeated the reason without the exception)
   - id: F249
     source: F176
     description: No member in the workspace has two optional features today, girsync has one, so the combination branch is never exercised by a real run of the script.
-    status: pending_review
+    status: completed
     batch: M34
     commits: [c11652be]
+    note: review M34 kept; the reviewer saw the self-test fail when the whole set is dropped, the holding-pair test inverted, the pair's exit code ignored and the loop order swapped
   - id: F250
     source: F177
     description: The converter refusal of --version is stated in two documents but no case pins the exit code 3, so adding the version attribute later would not fail anything.
@@ -3100,6 +3124,62 @@ followups:
     batch: null
     commits: []
     note: skipped: the exit-code and stdout assertions already carry the refusal on their own, so there is nothing to change
+  - id: F358
+    source: F249
+    description: The script's rules live outside the crate's test suite; a Rust test that runs the self-test under cargo nextest, skipping where pwsh is absent, would put them under the usual gate.
+    status: pending
+    batch: M80
+    commits: []
+  - id: F359
+    source: F249
+    description: Only the feature branch is injectable: the toolchain probe and the per-member default check are still untested.
+    status: pending
+    batch: M80
+    commits: []
+  - id: F360
+    source: F248
+    description: The feature checks now build through a scriptblock, so cargo's output goes through Out-Host and the CI log shows cargo's stderr before its stdout.
+    status: pending
+    batch: M80
+    commits: []
+  - id: F361
+    source: F247
+    description: The accepted-value names are pinned by an assertion inside the help pin's case rather than in a case of its own, so a value rename is reported under the render pin's test name.
+    status: pending
+    batch: M81
+    commits: []
+  - id: F362
+    source: F247
+    description: The golden is a hand-written mirror of the bin target's derive definition, so the converter's command is now written twice and the pin is the only thing keeping the two in step.
+    status: pending
+    batch: M81
+    commits: []
+  - id: F363
+    source: F248
+    description: The whole-set configuration exists only from three features up, since with two the pair is the whole set, which is correct but leaves that case implicit in the rules.
+    status: pending
+    batch: M82
+    commits: []
+  - id: F364
+    source: F249
+    description: The self-test prints the rules' own FAIL lines for its negative cases, so a green CI log contains FAIL lines.
+    status: pending
+    batch: M82
+    commits: []
+  - id: F365
+    source: F248
+    description: The pair lookup re-derived a pair's name and read an absent key as did not build.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: moot as written, since the plan now holds the names and every pair is checked before it is read
+  - id: F366
+    source: F248
+    description: Middle-sized subsets are no longer checked, so a member with four or more optional features that needs a newer Rust in exactly one subset would not be caught.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: documented in the script, the module and the README, and the shape it misses is named there too
 ```
 
 ## Human checklist
@@ -3135,6 +3215,10 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M34 `done`: F247 kept, F248 fixed (3546a457, 2d19bef1),
+  F249 kept; follow-ups F358–F364 appended with batches `M80`, `M81` and `M82`,
+  and F365 and F366 recorded as `skipped` (moot as written, and documented
+  where a reader will find it). F247–F249 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M34 review checkpoint opened: F247, F248 and F249
   `in_progress` → `pending_review`, commits `6572e643`, `3546a457`, `c11652be`,
   `3edc3d5e`; review M34 `pending` → `in_progress`, base `f8af1203`, head
