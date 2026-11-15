@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M38
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T17:32:51Z
+last_updated: 2026-11-15T18:11:52Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -762,6 +762,13 @@ reviews:
     head: null
     result: null
     followups: []
+  - batch: M89
+    status: pending
+    tasks: [F386, F387]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M16
     status: done
     tasks: [F179, F180, F181]
@@ -791,10 +798,10 @@ reviews:
     result: null
     followups: []
   - batch: M38
-    status: pending
+    status: in_progress
     tasks: [F261, F262]
-    base: null
-    head: null
+    base: 1abfc980
+    head: 5f86beca
     result: null
     followups: []
   - batch: M39
@@ -2600,15 +2607,15 @@ followups:
   - id: F261
     source: F188
     description: Repopulate::Nothing covers two different reasons, a folder side and a record that is not a folder cache, and the message cannot say which.
-    status: in_progress
+    status: pending_review
     batch: M38
-    commits: []
+    commits: [2ca98413]
   - id: F262
     source: F188
     description: The Repopulate type lives in planner::coverage while the rule that fills it lives in commands::side_folder, so one rule is split across two layers.
-    status: in_progress
+    status: pending_review
     batch: M38
-    commits: []
+    commits: [5f86beca]
   - id: F263
     source: F190
     description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
@@ -3362,6 +3369,25 @@ followups:
     status: pending
     batch: M87
     commits: []
+  - id: F386
+    source: F262
+    description: side_label still lives in commands while its sibling side_folder now lives in effective::side, so the two side-description rules are in two places.
+    status: pending
+    batch: M89
+    commits: []
+  - id: F387
+    source: F262
+    description: Coverage is not re-exported at the crate root, so Repopulate is not either; if a caller outside the crate is expected to build a Coverage by hand, both would want a root re-export.
+    status: pending
+    batch: M89
+    commits: []
+  - id: F388
+    source: F261
+    description: The README Gotchas bullet still claims the error names the folder to run the fix on, which holds only for a record that is a folder's own cache.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F265, already scheduled in M39"
 ```
 
 ## Human checklist
@@ -3393,6 +3419,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M38 review checkpoint opened: F261 and F262
+  `in_progress` → `pending_review`, commits `2ca98413`, `5f86beca`; review M38
+  `pending` → `in_progress`, base `1abfc980`, head `5f86beca`.
 - 2026-11-15 — follow-up batch M38 started: F261 and F262 `pending` →
   `in_progress`; `active_batch: M37` → `M38`.
 - 2026-11-15 — review M37 `done`: F258, F259 and F260 all kept, no fix or revert
