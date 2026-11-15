@@ -35,6 +35,7 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 /// A group holds **where** its spellings are rather than copies of them, so a
 /// folded key costs no allocation of its own: the index holds the keys it was
 /// built from, and a group names up to two places in them.
+#[derive(Clone, Copy)]
 struct Group {
     /// How many cached spellings fold to this key.
     count: usize,
@@ -49,16 +50,54 @@ struct Group {
     second: Option<usize>,
 }
 
-/// The alternate-case index over the cached keys: a folded spelling → the
-/// cached spellings under it.
+impl Group {
+    /// A group holding one spelling: the one at `at`.
+    fn one(at: usize) -> Self {
+        Group {
+            count: 1,
+            first: at,
+            second: None,
+        }
+    }
+
+    /// The spelling at `at` joins the group.
+    ///
+    /// **The second spelling is the last one recorded.** A group of two is
+    /// adopted for whichever of its two spellings is not the disk's own, and
+    /// a group of three or more is never adopted, so a third spelling has
+    /// nothing left to say.
+    fn add(&mut self, at: usize) {
+        self.count += 1;
+        if self.count == 2 {
+            self.second = Some(at);
+        }
+    }
+}
+
+/// The alternate-case index over the cached keys.
 ///
-/// Every cached key contributes one folded spelling, so building it costs a
-/// copy of every key in the cache. The scan builds it only when a lookup
-/// needs it — see the index's own note in [`scan_stat_only`].
+/// The index has two shapes, and which one a run gets depends on how many
+/// lookups it makes.
 ///
-/// The key set is **kept**, and not only folded: the prune asks the cache the
-/// same question — "which rows exist?" — so the scan reads the table's keys
-/// once and both passes answer from it.
+/// **A first lookup compares the keys and keeps nothing.** The question is
+/// "which cached spellings fold to the disk's own spelling?", and a cached
+/// key belongs to the answer exactly when its own fold matches — nothing
+/// else decides that, so the whole key set has to be looked at. What the
+/// lookup does not have to do is *keep* a fold of every key: the folded
+/// spelling of the whole key set is an allocation per cached row for an
+/// answer one lookup asks once, so the first lookup compares the keys
+/// against the target as it goes and keeps nothing but the group it found.
+///
+/// **A second lookup builds the folded index.** Two lookups say the run
+/// makes more than one, and then the folded spellings are worth their
+/// price: every key's fold is materialised once, and every later lookup is
+/// a map read. A run that asks one question pays for one comparison pass
+/// and no folded spelling at all; a run that asks many pays for one folded
+/// index and no comparison pass per question.
+///
+/// The key set is **kept** either way, and not only folded: the prune asks
+/// the cache the same question — "which rows exist?" — so the scan reads the
+/// table's keys once and both passes answer from it.
 ///
 /// A folded key can hold *several* stale spellings, and the lookup asks how
 /// many there are, so this is not the key-shaped [`crate::util::folded_keys`] one.
@@ -66,45 +105,83 @@ struct AltIndex {
     /// Every cached key, as read.
     keys: Vec<String>,
     /// Folded spelling → the cached spellings under it.
-    groups: HashMap<String, Group>,
-}
-
-/// The alternate-case index over the given keys.
-///
-/// The groups hold **where** their spellings are rather than copies of them:
-/// a group is a count and up to two places in the key set. A folded key
-/// therefore costs a folded spelling and nothing else — where the index used
-/// to allocate a vector of spellings for every folded key it met, and a
-/// group with several stale spellings was the shape it met most.
-fn fold_alternates(keys: Vec<String>) -> AltIndex {
-    let mut groups: HashMap<String, Group> = HashMap::new();
-    for (at, key) in keys.iter().enumerate() {
-        let folded = path_key(key);
-        match groups.get_mut(&folded) {
-            None => {
-                groups.insert(
-                    folded,
-                    Group {
-                        count: 1,
-                        first: at,
-                        second: None,
-                    },
-                );
-            }
-            Some(group) => {
-                group.count += 1;
-                if group.count == 2 {
-                    group.second = Some(at);
-                }
-            }
-        }
-    }
-    AltIndex { keys, groups }
+    ///
+    /// `None` until a second lookup asks for it.
+    groups: Option<HashMap<String, Group>>,
+    /// How many lookups the index has answered.
+    ///
+    /// The count is what says a second lookup is coming.
+    lookups: usize,
 }
 
 impl AltIndex {
-    /// The stale spelling under `folded`, if the group holds exactly one
-    /// spelling that is not the disk's own.
+    /// The index over the given keys, with nothing folded yet.
+    fn new(keys: Vec<String>) -> Self {
+        AltIndex {
+            keys,
+            groups: None,
+            lookups: 0,
+        }
+    }
+
+    /// The folded spelling → the cached spellings under it.
+    ///
+    /// The groups hold **where** their spellings are rather than copies of
+    /// them: a group is a count and up to two places in the key set. A
+    /// folded key therefore costs a folded spelling and nothing else — where
+    /// the index used to allocate a vector of spellings for every folded key
+    /// it met, and a group with several stale spellings was the shape it met
+    /// most.
+    fn fold_groups(keys: &[String]) -> HashMap<String, Group> {
+        let mut groups: HashMap<String, Group> = HashMap::new();
+        for (at, key) in keys.iter().enumerate() {
+            let folded = path_key(key);
+            match groups.get_mut(&folded) {
+                None => {
+                    groups.insert(folded, Group::one(at));
+                }
+                Some(group) => group.add(at),
+            }
+        }
+        groups
+    }
+
+    /// The folded index over the keys.
+    ///
+    /// Built when a second lookup asks for it, and built once: the keys are
+    /// already held, so folding them again would be a second copy of the
+    /// key set rather than a fold of it.
+    fn build_groups(&mut self) {
+        if self.groups.is_none() {
+            self.groups = Some(Self::fold_groups(&self.keys));
+        }
+    }
+
+    /// The group under the disk's own spelling, found by comparing the keys
+    /// one at a time.
+    ///
+    /// **The same question the folded index answers, without the index.** A
+    /// cached key belongs to the group when it folds to the same path key as
+    /// the disk's spelling, and the fold is ASCII case only: two spellings
+    /// that fold alike are one key, and every other byte is compared
+    /// exactly. The fold is *compared* here rather than applied, so no key is
+    /// copied and nothing is allocated for the answer.
+    fn scan_group(keys: &[String], disk: &str) -> Option<Group> {
+        let mut group: Option<Group> = None;
+        for (at, key) in keys.iter().enumerate() {
+            if !key.eq_ignore_ascii_case(disk) {
+                continue;
+            }
+            match &mut group {
+                None => group = Some(Group::one(at)),
+                Some(group) => group.add(at),
+            }
+        }
+        group
+    }
+
+    /// The stale spelling under the disk's own spelling, if the group holds
+    /// exactly one spelling that is not the disk's own.
     ///
     /// The disk's own spelling is the one the walk found, so a group that
     /// holds it holds no stale spelling at all, and a group that holds it
@@ -118,8 +195,18 @@ impl AltIndex {
     /// a group of two whose disk's own is neither of them is two stale
     /// spellings and is adopted by nothing. The shape is pinned by a case of
     /// its own.
-    fn adoptable(&self, folded: &str, disk: &str) -> Option<&str> {
-        let group = self.groups.get(folded)?;
+    fn adoptable(&mut self, disk: &str) -> Option<&str> {
+        self.lookups += 1;
+        // The second lookup says this run makes more than one, so the folded
+        // index is built now: the comparison the first lookup made is not
+        // made again, and every later lookup is a map read.
+        if self.lookups > 1 {
+            self.build_groups();
+        }
+        let group = match &self.groups {
+            Some(groups) => *groups.get(&path_key(disk))?,
+            None => Self::scan_group(&self.keys, disk)?,
+        };
         let first = self.keys[group.first].as_str();
         match group.count {
             1 => (first != disk).then_some(first),
@@ -243,8 +330,13 @@ pub fn scan_stat_only(
     // when a stale alternate is actually adopted, which is normally rare. So
     // the index is built on first use rather than up front: a scan in which
     // every path is found in the cache under the spelling the disk uses
-    // never asks for one, and building the index for it costs a folded
-    // spelling per cached row — a price paid for nothing on that path.
+    // never asks for one, and reading the whole key set for it is a price
+    // paid for nothing on that path.
+    //
+    // The folded spellings are a second step, and a run that asks one
+    // question never reaches it: the first lookup compares the keys against
+    // its target and keeps nothing, and a second lookup is what says the
+    // run makes more than one. See [`AltIndex`].
     //
     // What triggers the build is a path that misses exactly, not a spelling
     // that differs: a path the cache has never held misses exactly too. So a
@@ -304,18 +396,19 @@ pub fn scan_stat_only(
                 // Exact-case miss in insensitive mode: adopt the single stale
                 // alternate-cased entry as the cache candidate (disk name wins).
                 None if !case_sensitive => {
-                    // The index is built here, on the first miss: a scan that
+                    // The index is read here, on the first miss: a scan that
                     // never misses never pays for it.
                     if alt_index.is_none() {
-                        alt_index = Some(fold_alternates(cache.load_keys()?));
+                        alt_index = Some(AltIndex::new(cache.load_keys()?));
                     }
                     // The one stale spelling this group offers, if it offers
                     // exactly one: the group is adopted only when a single
                     // spelling other than the disk's own is left, so nothing
                     // is collected to make the count.
-                    let stale = alt_index
-                        .as_ref()
-                        .and_then(|index| index.adoptable(&path_key(&e.rel), &e.rel));
+                    let stale = match alt_index.as_mut() {
+                        Some(index) => index.adoptable(&e.rel),
+                        None => None,
+                    };
                     match stale {
                         Some(old) => {
                             let rec = match batch.as_mut() {
@@ -856,7 +949,7 @@ mod tests {
 
     /// **The alternate-case index is built when a lookup needs it.**
     ///
-    /// The index costs a folded spelling per cached row, and a scan in which
+    /// The index costs a read of the whole key set, and a scan in which
     /// every path is found in the cache under the spelling the disk uses
     /// never asks for one. The count of entries-table reads says whether the
     /// scan paid for it: the index is one read of the key set, and a scan
@@ -985,36 +1078,130 @@ mod tests {
     /// own never being among them. The two spellings are therefore named
     /// both ways round here, and the case where neither is the disk's own is
     /// named too.
+    ///
+    /// Every case is asked of the index twice: once of an index that has
+    /// folded nothing, which answers by comparing the keys, and once of an
+    /// index whose folded index is built, which answers from the map. The
+    /// two have to agree, or the answer a run gets would depend on how many
+    /// questions it had already asked.
     #[test]
     fn a_group_is_adopted_only_when_exactly_one_spelling_is_stale() {
-        let index = fold_alternates(
-            [
-                "A.txt", "B.txt", "c.txt", "C.txt", "e.txt", "f.txt", "F.txt", "f.TXT",
-            ]
-            .map(str::to_string)
-            .to_vec(),
-        );
-
         // One spelling in the group, and it is not the disk's own: it is the
         // stale one, and it is offered.
-        assert_eq!(index.adoptable("a.txt", "a.txt"), Some("A.txt"));
-        assert_eq!(index.adoptable("b.txt", "b.txt"), Some("B.txt"));
+        assert_eq!(adopted_spelling("a.txt").as_deref(), Some("A.txt"));
+        assert_eq!(adopted_spelling("b.txt").as_deref(), Some("B.txt"));
 
         // The disk's own spelling is the only one in the group: nothing is
         // stale, so nothing is offered.
-        assert_eq!(index.adoptable("e.txt", "e.txt"), None);
+        assert_eq!(adopted_spelling("e.txt").as_deref(), None);
 
         // Two spellings in the group, and the disk's own is one of them: the
         // other is the stale one.
-        assert_eq!(index.adoptable("c.txt", "c.txt"), Some("C.txt"));
-        assert_eq!(index.adoptable("c.txt", "C.txt"), Some("c.txt"));
+        assert_eq!(adopted_spelling("c.txt").as_deref(), Some("C.txt"));
+        assert_eq!(adopted_spelling("C.txt").as_deref(), Some("c.txt"));
 
         // Two spellings in the group, and the disk's own is neither: both are
         // stale, and a group with two stale spellings is not adopted.
-        assert_eq!(index.adoptable("c.txt", "z.txt"), None);
+        assert_eq!(adopted_spelling("c.TXT").as_deref(), None);
 
         // Three spellings in the group: at least two are stale, so none of
         // them is offered.
-        assert_eq!(index.adoptable("f.txt", "f.txt"), None);
+        assert_eq!(adopted_spelling("f.txt").as_deref(), None);
+    }
+
+    /// The keys the group cases run on.
+    const GROUP_KEYS: [&str; 8] = [
+        "A.txt", "B.txt", "c.txt", "C.txt", "e.txt", "f.txt", "F.txt", "f.TXT",
+    ];
+
+    /// The index over [`GROUP_KEYS`], with nothing folded yet.
+    fn group_index() -> AltIndex {
+        AltIndex::new(GROUP_KEYS.iter().map(|k| k.to_string()).collect())
+    }
+
+    /// The stale spelling the index offers for the disk's own spelling.
+    ///
+    /// Asked of an index that has folded nothing and of one whose folded
+    /// index is built: the comparison the first lookup makes and the map
+    /// the later ones read answer one question, so they have to answer it
+    /// the same way.
+    fn adopted_spelling(disk: &str) -> Option<String> {
+        let mut compared = group_index();
+        let first = compared.adoptable(disk).map(str::to_string);
+        let mut folded = group_index();
+        folded.build_groups();
+        let second = folded.adoptable(disk).map(str::to_string);
+        assert_eq!(first, second, "the two answers for {disk:?}");
+        first
+    }
+
+    /// **One lookup folds nothing, and the second one folds everything.**
+    ///
+    /// A group is a property of the whole key set: a cached key belongs to
+    /// it exactly when its own fold matches, and nothing else decides that,
+    /// so every key is looked at either way. What the first lookup does not
+    /// do is *keep* a fold of every key — a folded spelling per cached row
+    /// for an answer one lookup asks once. The second lookup says the run
+    /// makes more than one question, and then the folded index is worth its
+    /// price: every key's fold is materialised once and every later lookup
+    /// is a map read.
+    #[test]
+    fn one_lookup_folds_nothing_and_the_second_one_folds_the_key_set() {
+        let mut index = group_index();
+        assert!(
+            index.groups.is_none(),
+            "nothing is folded before the first lookup"
+        );
+        let _ = index.adoptable("a.txt");
+        assert!(
+            index.groups.is_none(),
+            "the first lookup compares the keys and keeps no fold of them"
+        );
+        let _ = index.adoptable("b.txt");
+        assert!(
+            index.groups.is_some(),
+            "the second lookup says there are more, so the folded index is built"
+        );
+    }
+
+    /// **A second stale alternate is adopted the same way.**
+    ///
+    /// The first lookup compares the keys and the second one reads the
+    /// folded index, so a run with two stale alternates answers the second
+    /// one the other way round. Both have to be adopted the same way, or the
+    /// answer would depend on how many questions the run had already asked.
+    #[test]
+    fn a_second_stale_alternate_is_adopted_the_same_way() {
+        let root = girpr_tempdir::TempDir::new("girsync_phase_a", "alt_adopt_two");
+        tree(&root, &[("a.txt", b"a"), ("b.txt", b"b")]);
+        let db = CacheDb::open_temp(false).unwrap();
+        let common = insensitive(opts(&[], &[]));
+
+        // A row under each file's other spelling, with a digest in it and the
+        // file's own stat, so it is carried whole.
+        for (cached, disk) in [("A.txt", "a.txt"), ("B.txt", "b.txt")] {
+            let meta = std::fs::metadata(root.join(disk)).unwrap();
+            let mut hashes = DigestSet::default();
+            hashes.insert_named("md5", &[7u8; 16]);
+            db.put(
+                cached,
+                &FileRec {
+                    kind: "file".into(),
+                    size: meta.len(),
+                    mtime_ns: crate::util::mtime_ns_of(&meta),
+                    hashes,
+                },
+            )
+            .unwrap();
+        }
+
+        let scan = scan_stat_only(&root, &db, &common, ScanMode::new(false, false)).unwrap();
+        for disk in ["a.txt", "b.txt"] {
+            assert_eq!(
+                scan.map[disk].cached.get_named("md5"),
+                Some(&[7u8; 16][..]),
+                "the adopted row's digest is carried under the disk's spelling: {disk}"
+            );
+        }
     }
 }
