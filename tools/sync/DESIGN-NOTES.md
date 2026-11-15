@@ -821,13 +821,13 @@ look fine, only the verdict is wrong.
 
 ## Known limits, deliberately not fixed
 
-They are four kinds of thing: state in the cache or the folder that nothing
-reclaims on its own, a race the run cannot win, a limit on what the host can
-create, and an approximation of the filesystem's own case table. Every one of
-them is stated in `README.md` where a reader meets it — the host-coverage one
-in the suite's own section, since it is about the test suite rather than about
-a run. Recorded here so a reader deciding whether to "fix" one knows what the
-trade was.
+They are five kinds of thing: state in the cache that the next run reclaims, a
+race the run cannot win, state in the cache or the folder that nothing reclaims
+on its own, a limit on what the host can create, and an approximation of the
+filesystem's own case table. Every one of them is stated in `README.md` where a
+reader meets it — the host-coverage one in the suite's own section, since it is
+about the test suite rather than about a run. Recorded here so a reader deciding
+whether to "fix" one knows what the trade was.
 
 **A row for a directory created and removed in one run survives until the next
 prune.** Reachable only with `--case-sensitive` on a case-insensitive filesystem:
