@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M24
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T01:28:36Z
+last_updated: 2026-11-15T01:39:59Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -392,10 +392,10 @@ reviews:
     result: null
     followups: []
   - batch: M24
-    status: pending
+    status: in_progress
     tasks: [F212, F213, F214, F215]
-    base: null
-    head: null
+    base: 00894206
+    head: 13120f7a
     result: null
     followups: []
   - batch: M9
@@ -2032,27 +2032,27 @@ followups:
   - id: F212
     source: F151
     description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
-    status: in_progress
+    status: pending_review
     batch: M24
-    commits: []
+    commits: [6c8cb53e]
   - id: F213
     source: F151
     description: The table path rule, relative to src/ unless the bare name is ambiguous or the file sits outside the module tree, does not cover the four rows that spell the whole path for neither reason, though every path is correct.
-    status: in_progress
+    status: pending_review
     batch: M24
-    commits: []
+    commits: [6c8cb53e]
   - id: F214
     source: F150
     description: The stuck-row limit names the flag as the repair, but girsync update --dir <folder> also rehashes a stat-only row, and the README already names it as the fix for the neighbouring record case.
-    status: in_progress
+    status: pending_review
     batch: M24
-    commits: []
+    commits: [645829a9]
   - id: F215
     source: F154
     description: The preamble first kind, state in the cache or the folder that nothing reclaims on its own, does not fit the directory-row limit, which the next prune does reclaim; the limit own body says so, the preamble does not.
-    status: in_progress
+    status: pending_review
     batch: M24
-    commits: []
+    commits: [13120f7a]
   - id: F216
     source: F159
     description: effective/phase_a.rs has an intra-doc link to util::folded_keys that does not resolve, because util is not in scope in that module; it was introduced after the survey that produced the seven named links and is the one warning left in the private-items doc build.
@@ -2646,6 +2646,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M24 review checkpoint opened: F212, F213, F214 and
+  F215 `in_progress` → `pending_review`, commits `6c8cb53e`, `645829a9`,
+  `13120f7a`; review M24 `pending` → `in_progress`, base `00894206`, head
+  `13120f7a`.
 - 2026-11-15 — follow-up batch M24 started: F212, F213, F214 and F215 `pending` →
   `in_progress`; `active_batch: M23` → `M24`.
 - 2026-11-15 — review M23 `done`: F209, F210 and F211 all kept, no fix or
