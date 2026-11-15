@@ -26,9 +26,9 @@ use super::entry::{ScanStats, SideEntry, SideScan, merge_row, put_dir_row, stat_
 /// lookup that reaches a group has already missed the disk's own spelling
 /// exactly, so the cache holds no row under it and the group cannot hold it
 /// either — that is the usual shape, but it is not a rule this leans on: a
-/// group of two answers for whichever of its two spellings is not the
-/// disk's own, so the answer is the same whether or not the disk's own is
-/// among them. Were that invariant ever stated as load-bearing, the second
+/// group of two is adopted for whichever of its two spellings is not the
+/// disk's own, and the rule can only tell which one that is because it
+/// holds both. Were that invariant ever stated as load-bearing, the second
 /// spelling could go and a group of two would be two stale spellings,
 /// adopted by nothing.
 ///
@@ -113,9 +113,11 @@ impl AltIndex {
     /// A lookup does not normally reach a group that holds the disk's own
     /// spelling — the exact lookup missed, so the cache holds no row under
     /// it — but the rule does not lean on that: a group of two answers for
-    /// whichever of its two spellings is not the disk's own, and a group of
-    /// one answers for its only spelling unless that one is the disk's own.
-    /// The shape is pinned by a case of its own.
+    /// whichever of its two spellings is not the disk's own, a group of one
+    /// answers for its only spelling unless that one is the disk's own, and
+    /// a group of two whose disk's own is neither of them is two stale
+    /// spellings and is adopted by nothing. The shape is pinned by a case of
+    /// its own.
     fn adoptable(&self, folded: &str, disk: &str) -> Option<&str> {
         let group = self.groups.get(folded)?;
         let first = self.keys[group.first].as_str();
