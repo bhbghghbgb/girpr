@@ -91,6 +91,11 @@ pub struct DigestSet {
     /// only be written by rebuilding it, so every insert — a replacement as
     /// much as an addition — copied the whole arm and allocated a new one.
     ///
+    /// **The arm owns its entries.** A name is a boxed string and a digest a
+    /// byte vector, both heap buffers the row holds, and a merge that adds
+    /// an entry takes the other row's entry over rather than copying it.
+    /// See [`DigestSet::merge`].
+    ///
     /// The arm holds no room beyond its entries; see the type's docs.
     pub(super) foreign: Vec<(Box<str>, Vec<u8>)>,
 }
@@ -287,37 +292,58 @@ impl DigestSet {
     /// Fold `other` in, with **`other` winning** on every name both hold.
     ///
     /// That direction is the merge-write rule, and it is what `merge_row` relies on:
-    /// it clones the prior row into `self` and passes this run's computed digests as
-    /// `other`, so a recomputed digest replaces the prior one while everything the
-    /// prior row held that this run did not compute rides along.
+    /// it clones the prior row into `self` and hands this run's computed digests
+    /// over as `other`, so a recomputed digest replaces the prior one while
+    /// everything the prior row held that this run did not compute rides along.
     /// See `crate::effective::merge_row`.
-    pub fn merge(&mut self, other: &DigestSet) {
+    ///
+    /// **`other` is taken over, not borrowed.** The arm owns its entries — a
+    /// name is a boxed string and a digest a byte vector, both heap buffers —
+    /// so a name `other` holds and this one does not is *added* by moving the
+    /// other side's entry in: the added entry is the other side's entry, and
+    /// it costs no allocation at all. A name both hold is replaced where it
+    /// stands, and the arm's own digest buffer is refilled from the other's
+    /// bytes, so a replacement costs no allocation either.
+    ///
+    /// The insert path ([`Self::insert_named`]) has to copy, because it is
+    /// handed a name and a digest it does not own. The merge path is the one
+    /// place where the crate holds the other whole row, so it need not.
+    ///
+    /// The rule that says *which* entry is written is the arm's own and is
+    /// unchanged: an entry is replaced only under the spelling it was stored
+    /// with, and a spelling the arm does not hold is added beside the others.
+    /// See `same_spelling`.
+    pub fn merge(&mut self, other: DigestSet) {
         if let Some(d) = other.md5 {
             self.md5 = Some(d);
         }
         if let Some(d) = other.sha256 {
             self.sha256 = Some(d);
         }
-        if !other.foreign.is_empty() {
-            // The arm is a vector, so each entry of `other` is written where it
-            // belongs: over the entry of the same name when the arm holds one,
-            // and at the end when it does not.
-            //
-            // The loop is skipped when `other` holds no foreign entry: a row
-            // with no foreign entry is the overwhelmingly normal shape, and
-            // the loop would walk the arm for nothing.
-            for (name, digest) in &other.foreign {
-                match self
-                    .foreign
-                    .iter_mut()
-                    .find(|(n, _)| same_spelling(n, name))
-                {
-                    Some((_, d)) => {
-                        d.clear();
-                        d.extend_from_slice(digest);
-                    }
-                    None => self.foreign.push((name.clone(), digest.clone())),
+        // The arm is a vector, so each entry of `other` is written where it
+        // belongs: over the entry of the same name when the arm holds one,
+        // and at the end when it does not.
+        //
+        // `other` is consumed, so an entry that is added is moved in and the
+        // arm keeps the buffers it came with: no name is copied and no digest
+        // is copied. A row with no foreign entry is the overwhelmingly normal
+        // shape, and the loop then does nothing at all.
+        for (name, digest) in other.foreign {
+            // The entry is found by position rather than by reference, so the
+            // name is free to be moved into the arm below.
+            let at = self
+                .foreign
+                .iter()
+                .position(|(n, _)| same_spelling(n, &name));
+            match at {
+                Some(i) => {
+                    // The arm's own digest buffer is reused, so replacing a
+                    // digest allocates nothing.
+                    let (_, d) = &mut self.foreign[i];
+                    d.clear();
+                    d.extend_from_slice(&digest);
                 }
+                None => self.foreign.push((name, digest)),
             }
         }
         // The row is finished here, so the arm gives back the room it grew

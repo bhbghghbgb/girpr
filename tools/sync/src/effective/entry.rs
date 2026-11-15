@@ -180,8 +180,12 @@ pub(super) fn merge_row(
             // `merge` folds `other` into `self` with `other` winning. That is the shape
             // wanted here: the prior row is `self` and this run's computed digests are
             // `other` — computed replaces, everything else rides along.
+            //
+            // The computed row is handed over rather than borrowed: the merge
+            // takes the other row's foreign entries into the merged row, and
+            // this row is read once and dropped.
             let mut merged = c.hashes.clone();
-            merged.merge(&computed);
+            merged.merge(computed);
             merged
         }
         None => computed,

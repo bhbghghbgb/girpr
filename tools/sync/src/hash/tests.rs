@@ -399,13 +399,50 @@ fn a_merged_row_holds_no_spare_capacity() {
     other.insert_named("sha3", &[9u8; 32]);
 
     let mut row = prior.clone();
-    row.merge(&other);
+    row.merge(other);
     assert_eq!(
         row.foreign_capacity(),
         row.foreign_iter().count(),
         "the merged row holds no room beyond its entries"
     );
     assert_eq!(row.foreign_iter().count(), 2, "and both entries are there");
+}
+
+/// **An entry the merge adds is taken over, not copied.**
+///
+/// The arm owns its entries: a name is a boxed string and a digest a byte
+/// vector, and both are heap buffers the row holds. A name the other row
+/// holds and the arm does not is *added* to the arm, and the merge takes the
+/// other row over — so the added entry is the other side's entry, buffers and
+/// all, and it costs no allocation.
+///
+/// The witness is the buffers themselves. A copy would have allocated fresh
+/// ones while the other side's were still alive, so the two could not be at
+/// the same address.
+#[test]
+fn an_added_entry_is_the_other_rows_entry_and_not_a_copy() {
+    let mut other = DigestSet::default();
+    other.insert_named("blake3", &[7u8; 32]);
+
+    let (name_at, digest_at) = {
+        let (name, digest) = &other.foreign[0];
+        (name.as_ptr(), digest.as_ptr())
+    };
+
+    let mut row = DigestSet::default();
+    row.merge(other);
+
+    let (name, digest) = &row.foreign[0];
+    assert_eq!(
+        name.as_ptr(),
+        name_at,
+        "the name buffer is the one the other row held"
+    );
+    assert_eq!(
+        digest.as_ptr(),
+        digest_at,
+        "and so is the digest's: the entry was taken over, not copied"
+    );
 }
 
 /// Round-trip through `insert_named` / `get` / `get_named`, for every subset of
@@ -601,7 +638,7 @@ fn a_merge_replaces_a_foreign_entry_only_under_its_own_spelling() {
     other.insert_named("MD5", b"\x04\x04\x04\x04");
     other.insert_named("blake3", b"\x05\x05\x05\x05");
 
-    d.merge(&other);
+    d.merge(other);
 
     assert_eq!(
         d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -641,7 +678,7 @@ fn two_spellings_of_one_algorithm_survive_a_merge() {
     other.insert_named("MD5", b"\x01\x01\x01\x01");
     other.insert_named("md5", b"\x02\x02\x02\x02");
 
-    d.merge(&other);
+    d.merge(other);
 
     assert_eq!(
         d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
@@ -826,7 +863,7 @@ fn merging_keeps_what_was_not_recomputed_and_prefers_what_was() {
     computed.insert_named("blake3", &[8u8; 32]);
 
     let mut row = prior.clone();
-    row.merge(&computed);
+    row.merge(computed);
 
     assert_eq!(
         row.get(HashAlg::Md5),
@@ -848,7 +885,7 @@ fn merging_keeps_what_was_not_recomputed_and_prefers_what_was() {
     // The other direction is the real invariant: merging something empty changes
     // nothing, which is what a `--hash-all-of none` scan writes.
     let mut untouched = prior.clone();
-    untouched.merge(&DigestSet::default());
+    untouched.merge(DigestSet::default());
     assert_eq!(untouched, prior);
 }
 
