@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M29
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T05:08:36Z
+last_updated: 2026-11-15T07:02:07Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -518,10 +518,31 @@ reviews:
     result: F36 kept (fb7fdc23); F37 kept (773d1c53); F38 kept (f398aa2a); F39 kept (779de219); F40 kept (0d49c077); no fix or revert commits; 572 passed, 1 skipped; the reviewer enumerated every direct filesystem call reachable from the guards and found the seam list complete
     followups: [F160, F161, F162, F163, F164, F165]
   - batch: M29
-    status: in_progress
+    status: done
     tasks: [F228, F229, F230, F231]
     base: 058c2c24
-    head: 02b0a441
+    head: 2b305551
+    result: F228 kept (8ed05795); F229 kept (75fb6c4b); F230 fixed (fbf844bb, 4d0c9a7e scopes the claim to the exact-match rule, since a known name is matched by the resolver's fold and not through the helper); F231 fixed (02b0a441, 2b305551 restates the rule, which the pinned case contradicts); 605 passed without the feature and 621 with it, 1 skipped; the reviewer checked the streaming prune's predicate and the read counts against the old code and confirmed the same rows go and the counts mean what they meant
+    followups: [F329, F330, F331, F332, F333]
+  - batch: M65
+    status: pending
+    tasks: [F329, F330]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M66
+    status: pending
+    tasks: [F331, F332]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M67
+    status: pending
+    tasks: [F333]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M30
@@ -2200,27 +2221,31 @@ followups:
   - id: F228
     source: F168
     description: The prune still materialises the whole key set, a Vec of Strings with one string per cached row; a streaming key API on CacheDb and CacheWrite would remove that allocation on every scan, and it needs the cache module rather than phase A.
-    status: pending_review
+    status: completed
     batch: M29
     commits: [8ed05795]
+    note: review M29 kept; the reviewer checked that the streaming prune applies the identical predicate to the identical key set, that the read counts did not move, and that the key borrow is held only for the iteration
   - id: F229
     source: F166
     description: DigestSet.foreign is a Vec now, so its capacity can exceed its length after growth and every clone of a row clones that capacity.
-    status: pending_review
+    status: completed
     batch: M29
     commits: [75fb6c4b]
+    note: review M29 kept; the reviewer confirmed with a standalone probe that a clone of a one-entry arm has capacity one on this toolchain, so the premise's second half did not hold, and that the change makes it true by construction
   - id: F230
     source: F169
     description: same_spelling is a one-line wrapper over an equality comparison; it is the single place to change if the arm match rule ever stops being exact.
-    status: pending_review
+    status: completed
     batch: M29
-    commits: [fbf844bb]
+    commits: [fbf844bb, 4d0c9a7e]
+    note: review M29 fixed (4d0c9a7e scopes the claim to the exact-match rule, since a known name is matched by the resolver's fold and not through the helper, which the crate's own invariants already state separately)
   - id: F231
     source: F171
     description: The group second spelling exists so the rule does not depend on the disk own spelling never being in a group, a case a lookup cannot normally reach; if that invariant is ever stated as load-bearing, the second spelling could go.
-    status: pending_review
+    status: completed
     batch: M29
-    commits: [02b0a441]
+    commits: [02b0a441, 2b305551]
+    note: review M29 fixed (2b305551 restates the rule, which the pinned case contradicts: a group of two that holds the disk's own yields the other spelling, a group of two that does not is adopted by nothing)
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
@@ -2821,6 +2846,36 @@ followups:
     status: pending
     batch: M64
     commits: []
+  - id: F329
+    source: F228
+    description: The streaming callback runs while the cache's read transaction is still open, so a callback that opened a write transaction on the same cache would block on redb's write lock; neither visit_keys doc says so.
+    status: pending
+    batch: M65
+    commits: []
+  - id: F330
+    source: F228
+    description: CacheWrite::load_keys now has no in-crate caller, since the prune streams instead, so it survives only as the collecting counterpart its own doc points new callers at.
+    status: pending
+    batch: M65
+    commits: []
+  - id: F331
+    source: F229
+    description: The no spare capacity property is pinned by tests but still leans on collect's sizing hint; building the arm with an explicit Vec::with_capacity(len) would make it exact by construction rather than by the iterator's hint.
+    status: pending
+    batch: M66
+    commits: []
+  - id: F332
+    source: F229
+    description: merge's shrink_to_fit costs one reallocation for every row carrying a foreign digest, on a path both phase A and phase C walk.
+    status: pending
+    batch: M66
+    commits: []
+  - id: F333
+    source: F231
+    description: The mixed-case guard is what keeps the disk's own spelling out of a group in practice, and the group docs do not name it, so a reader has to re-derive why the invariant holds today.
+    status: pending
+    batch: M67
+    commits: []
 ```
 
 ## Human checklist
@@ -2856,6 +2911,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M29 `done`: F228 kept, F229 kept, F230 fixed (fbf844bb,
+  4d0c9a7e), F231 fixed (02b0a441, 2b305551); follow-ups F329–F333 appended with
+  batches `M65`, `M66` and `M67`. F228–F231 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M29 review checkpoint opened: F228, F229, F230 and
   F231 `in_progress` → `pending_review`, commits `8ed05795`, `75fb6c4b`,
   `fbf844bb`, `02b0a441`; review M29 `pending` → `in_progress`, base `058c2c24`,
