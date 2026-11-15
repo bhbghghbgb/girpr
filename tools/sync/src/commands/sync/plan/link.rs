@@ -5,14 +5,14 @@
 //! and touch nothing. Two of them ask the disk as well, because the plan
 //! needs what only the disk can say — where a link's target sits inside dst
 //! ([`target_rel`]) and which of a target's prefixes are links
-//! ([`spare_link_components`], which asks the link-resolution primitive
+//! ([`spare_link_components`], which asks the link primitive
 //! [`try_is_link`]). On Windows a third does: [`on_disk_name`], which lists a
 //! directory to learn which spelling the OS would open. On POSIX the name
 //! already is the spelling, so that lookup asks nothing at all, and the two
 //! above are the whole of the disk-asking helpers there.
 //!
 //! They are plan-time only: no filesystem write happens here, only the
-//! link-resolution probes [`DIRECT_QUESTIONS`](super::safety::DIRECT_QUESTIONS)
+//! link probes [`DIRECT_QUESTIONS`](super::safety::DIRECT_QUESTIONS)
 //! names, and they are asked to learn which paths a kept dst file link
 //! depends on. The probes are made directly rather than through the guard
 //! seam.

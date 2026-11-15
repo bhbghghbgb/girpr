@@ -43,13 +43,13 @@ use super::link::{
 /// changes nothing, so there a refusal leaves dst as it was.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
-/// paths a plan touches. The **link-resolution** questions are asked of the
-/// disk directly, and [`DIRECT_QUESTIONS`] is the list of them: each entry
+/// paths a plan touches. The **link** questions are asked of the disk
+/// directly, and [`DIRECT_QUESTIONS`] is the list of them: each entry
 /// names the file that asks the question and the call it makes. The hard-link
-/// count is not one of them — it asks how many names a file has, not what a
-/// link resolves to — and it goes through the seam like the other plan
-/// questions. A test that counts probes counts the seam's questions and not
-/// those.
+/// count is not one of them — it asks how many names a file has, not whether
+/// a path is a link or where a target points — and it goes through the seam
+/// like the other plan questions. A test that counts probes counts the seam's
+/// questions and not those.
 ///
 /// What the bypass costs the seam is its reach: a question asked directly is
 /// neither counted nor failed on demand. Nothing else is lost with it — the
@@ -119,17 +119,16 @@ pub(super) struct DirectQuestion {
 
 /// The disk questions the plan-time guards ask directly.
 ///
-/// The link-resolution questions are asked of the disk where they arise, so
-/// the seam does not reach them: a test cannot fail one on demand, and a
-/// count of probes does not count it. This is the list of them, and it is
-/// kept in step with the code by the test that reads the direct calls out of
-/// the two files the guards live in (`safety.rs` and `plan/link.rs`) and
-/// compares them with it — so a call added without an entry here fails that
-/// test.
+/// The link questions are asked of the disk where they arise, so the seam
+/// does not reach them: a test cannot fail one on demand, and a count of
+/// probes does not count it. This is the list of them, and it is kept in step
+/// with the code by the test that reads the direct calls out of the two files
+/// the guards live in (`safety.rs` and `plan/link.rs`) and compares them with
+/// it — so a call added without an entry here fails that test.
 ///
 /// The hard-link count is not one of them: it asks how many names a file has,
-/// not what a link resolves to, so it goes through the seam like the other
-/// plan questions.
+/// not whether a path is a link or where a target points, so it goes through
+/// the seam like the other plan questions.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     DirectQuestion {
@@ -155,7 +154,7 @@ pub(super) const DIRECT_QUESTIONS: &[DirectQuestion] = &[
     DirectQuestion {
         file: "link.rs",
         call: "std::fs::read_dir",
-        asks: "which entry of a directory the OS would open (a Windows-only probe)",
+        asks: "which entry of a directory the OS would open, for a target's final component (a Windows-only probe)",
     },
     DirectQuestion {
         file: "link.rs",
@@ -559,8 +558,8 @@ pub(crate) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// **The link count is a seam probe.** It is asked through
 /// [`Probes::link_info`], like the other plan questions, so a test can make
 /// it fail on demand and count it. It asks how many names a file has, not
-/// what a link resolves to, which is why it is not one of the
-/// link-resolution questions the guards ask directly ([`DIRECT_QUESTIONS`]).
+/// whether a path is a link or where a target points, which is why it is not
+/// one of the link questions the guards ask directly ([`DIRECT_QUESTIONS`]).
 ///
 /// **Only a regular file is judged.** A directory at a copy destination is a
 /// type conflict that the copy phase removes before writing, so its inode is
