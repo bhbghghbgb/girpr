@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M38
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T18:11:52Z
+last_updated: 2026-11-15T18:24:05Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -798,10 +798,17 @@ reviews:
     result: null
     followups: []
   - batch: M38
-    status: in_progress
+    status: done
     tasks: [F261, F262]
     base: 1abfc980
     head: 5f86beca
+    result: F261 kept (2ca98413); F262 kept (5f86beca); no fix or revert commits; 613 passed without the feature and 630 with it, 1 skipped; the reviewer ran both message cases with the real binary and read what each prints, confirmed a folder side never reaches a rendered message, and checked the dependency direction, noting that the effective-to-planner edge in phase_c predates this batch
+    followups: [F389]
+  - batch: M90
+    status: pending
+    tasks: [F389]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M39
@@ -2607,15 +2614,17 @@ followups:
   - id: F261
     source: F188
     description: Repopulate::Nothing covers two different reasons, a folder side and a record that is not a folder cache, and the message cannot say which.
-    status: pending_review
+    status: completed
     batch: M38
     commits: [2ca98413]
+    note: review M38 kept; the reviewer ran both cases with the real binary and confirmed each reason now names itself and offers the right remedy
   - id: F262
     source: F188
     description: The Repopulate type lives in planner::coverage while the rule that fills it lives in commands::side_folder, so one rule is split across two layers.
-    status: pending_review
+    status: completed
     batch: M38
     commits: [5f86beca]
+    note: review M38 kept; the reviewer confirmed the planner still does not import the commands layer and that the crate-root re-export set is unchanged
   - id: F263
     source: F190
     description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
@@ -3388,6 +3397,19 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F265, already scheduled in M39"
+  - id: F389
+    source: F261
+    description: planner::fixtures and the hash_mode tests' plan() use Repopulate::NotAFolderCache for abstract synthetic sides that are neither a record nor a folder, so a fixture-triggered coverage message would say not a folder's own cache about a folder-ish side.
+    status: pending
+    batch: M90
+    commits: []
+  - id: F390
+    source: F262
+    description: util::is_cache_name is pub with no caller outside the crate, and its only in-crate caller is now effective::side rather than commands.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F263, already scheduled in M39"
 ```
 
 ## Human checklist
@@ -3419,6 +3441,13 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M38 `done`: F261 and F262 both kept, no fix or revert
+  commits; follow-up F389 appended with batch `M90`, and F388 and F390 recorded
+  as `skipped` as the same items as F265 and F263. F261 and F262
+  `pending_review` → `completed`. The reviewer noted that the plan's own state
+  commits name a batch, which the plan prescribes and which the crate's rule
+  against naming a batch in committed text does not cover, since the state file
+  lives in the plan directory and is deleted at the end.
 - 2026-11-15 — follow-up batch M38 review checkpoint opened: F261 and F262
   `in_progress` → `pending_review`, commits `2ca98413`, `5f86beca`; review M38
   `pending` → `in_progress`, base `1abfc980`, head `5f86beca`.
