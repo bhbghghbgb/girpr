@@ -57,11 +57,12 @@ use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
     Side, SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
+    side_folder,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
-use super::{report_and_finish, side_folder, side_label};
+use super::{report_and_finish, side_label};
 
 /// Audit `<dir>` against `<dir>/girpr-cache`. Returns the process exit code:
 /// `0` if the cache is in step, `4` if it has drifted.

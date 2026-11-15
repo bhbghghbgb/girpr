@@ -9,10 +9,11 @@ use common::{
     recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
+    side_folder,
 };
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, SideRequest, plan_pairs};

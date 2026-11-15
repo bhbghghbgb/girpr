@@ -54,7 +54,7 @@ mod stat_trust;
 #[cfg(test)]
 mod fixtures;
 
-pub use coverage::{Coverage, Repopulate};
+pub use coverage::Coverage;
 pub use pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
 pub use plan::{HashPlan, Required};
 pub use stat_trust::{DifferingFields, StatField, StatTrust};

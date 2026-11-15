@@ -14,11 +14,10 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-use crate::effective::{SideCapability, SideEntry};
+use crate::effective::{Repopulate, SideCapability, SideEntry};
 use crate::hash::{DigestSet, HashAlg};
 
 use super::HashMode;
-use super::coverage::Repopulate;
 use super::pairs::{CasePairing, PairPlan, SideRequest, plan_pairs};
 use super::stat_trust::StatTrust;
 

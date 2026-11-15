@@ -48,16 +48,17 @@ use std::path::Path;
 
 use common::{digests_of, log, opts, pair_mem, recs_of, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::diff_maps;
 use girsync::effective::{
-    EffRec, Side, SideCapability, SideEntry, classify, ensure_distinct_sides,
+    EffRec, Repopulate, Side, SideCapability, SideEntry, classify, ensure_distinct_sides,
     load_record_side_from, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
+    side_folder,
 };
 use girsync::hash::{AlgoSet, DigestSet, HashAlg};
 use girsync::planner::{
-    CasePairing, HashMode, PairPlan, Repopulate, Required, SideRequest, StatTrust, plan_pairs,
+    CasePairing, HashMode, PairPlan, Required, SideRequest, StatTrust, plan_pairs,
 };
 use girsync::rw::RwSide;
 use girsync::{CommonOpts, cmd_compare, cmd_update};

@@ -12,35 +12,11 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::PathBuf;
 
+use crate::effective::Repopulate;
 use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
-
-/// Where a repopulation of a side would run.
-///
-/// **Two cases, named rather than left to an `Option`.** "This side has nothing
-/// to repopulate" is a fact about the side, and a caller that has not said
-/// which it is has not said enough: the remedy bullet is the one line in the
-/// message a user pastes, so a caller that forgot it would lose the remedy
-/// without saying so — which is the one thing this type is here to stop.
-///
-/// **The two cases are the two answers, and the message says which.** A side
-/// whose cache *is* a folder's own `girpr-cache` is rebuilt by
-/// `girsync update --dir` on that folder. A side that is a record of any other
-/// kind — a `girpr-cache-backup-*` copy, say — is rebuilt by nothing at all,
-/// and saying *that* is the difference between a user who knows why the remedy
-/// list is one line shorter and one who does not.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Repopulate {
-    /// The folder `girsync update --dir` rebuilds.
-    Folder(PathBuf),
-    /// Nothing to repopulate: the side is a record that is not a folder's own
-    /// `girpr-cache`, so a repopulation of the folder it happens to sit in
-    /// would rebuild that folder's *own* cache — a different file.
-    NotAFolderCache,
-}
 
 /// A side that could not supply every digest the run required.
 ///

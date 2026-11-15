@@ -8,8 +8,10 @@
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
-use girsync::commands::{side_folder, side_label};
-use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::commands::side_label;
+use girsync::effective::{
+    SideScan, classify, ensure_distinct_sides, open_side, resolve_side, side_folder,
+};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;

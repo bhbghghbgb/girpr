@@ -65,9 +65,10 @@ use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::TestCacheBackend;
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
+use girsync::effective::side_folder;
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{

@@ -51,7 +51,8 @@ use common::{
     TempDir, age, log, opts, recs_of, serial_rw, sync_mtime, temp_root, update_mem, wfile,
 };
 use girsync::cache::TestCacheBackend;
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
+use girsync::effective::side_folder;
 use girsync::planner::{CasePairing, StatTrust};
 use girsync::{CommonOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 

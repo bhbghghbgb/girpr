@@ -7,11 +7,12 @@ use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
     classify, ensure_distinct_sides, open_side, resolve_side, resolve_sides_concurrently,
+    side_folder,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
-use super::{report_and_finish, side_folder, side_kind, side_label};
+use super::{report_and_finish, side_kind, side_label};
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.
 ///

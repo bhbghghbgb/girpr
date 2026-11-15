@@ -50,7 +50,7 @@ tree holds only in a test build (`#[cfg(test)]`), and a separate binary target
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
 | `effective/entry.rs` | the entries (`EffRec`, `SideEntry`, `SideScan`, `ScanStats`, `SideCapability`) and the cache write rule (`merge_row`) |
-| `effective/side.rs` | `Side`/`OpenSide`, `open_side`/`open_folder_cache`, `classify`, `ensure_distinct_sides`, `resolve_sides_concurrently` |
+| `effective/side.rs` | `Side`/`OpenSide`, `open_side`/`open_folder_cache`, `classify`, `ensure_distinct_sides`, `resolve_sides_concurrently`, and `Repopulate`/`side_folder`: where a side's cache lives, and so where a repopulation of it would run |
 | `effective/phase_a.rs` | phase A: `scan_stat_only` — walk + cache, never hashes |
 | `effective/phase_c.rs` | phase C: `resolve_folder`/`resolve_record`/`resolve_side` — hash what the plan asked for |
 | `effective/record.rs` | phase A for a record side: `load_record_side_from` |

@@ -109,7 +109,7 @@ use crate::config::{LogCtx, ScanMode, SyncOpts};
 use crate::diff::diff_maps;
 use crate::effective::{
     Side, SideCapability, SideEntry, classify, ensure_distinct_sides, open_folder_cache,
-    resolve_folder, resolve_sides_concurrently, scan_stat_only,
+    resolve_folder, resolve_sides_concurrently, scan_stat_only, side_folder,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::report::visit_verdict;
@@ -123,7 +123,7 @@ use plan::{
 };
 use rename::{RenameOutcome, rename_to_src_casing};
 
-use super::{side_folder, side_label};
+use super::side_label;
 
 /// Mirror `src` onto `dst`. Returns the process exit code.
 pub fn cmd_sync(opts: SyncOpts, log: &LogCtx) -> Result<i32> {

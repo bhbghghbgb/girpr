@@ -43,12 +43,13 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
+    side_folder,
 };
 use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};

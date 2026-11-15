@@ -10,12 +10,12 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 
-use crate::effective::{SideCapability, SideEntry};
+use crate::effective::{Repopulate, SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
 use crate::util::{folded_keys, path_key};
 
 use super::HashMode;
-use super::coverage::{Coverage, Repopulate};
+use super::coverage::Coverage;
 use super::plan::{HashPlan, plan_one};
 use super::stat_trust::StatTrust;
 

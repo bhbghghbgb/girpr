@@ -5,7 +5,8 @@
 //! cannot diverge between settings without this noticing.
 
 use super::*;
-use girsync::commands::{side_folder, side_label};
+use girsync::commands::side_label;
+use girsync::effective::side_folder;
 
 /// Remove both caches so the next resolution is a cold run over the *same* bytes.
 ///
