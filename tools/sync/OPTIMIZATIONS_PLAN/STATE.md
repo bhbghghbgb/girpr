@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M36
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:24:27Z
+last_updated: 2026-11-15T15:50:53Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -727,11 +727,18 @@ reviews:
     head: null
     result: null
     followups: []
-  - batch: M36
+  - batch: M85
     status: pending
-    tasks: [F254, F255, F256, F257]
+    tasks: [F375, F376, F377, F378]
     base: null
     head: null
+    result: null
+    followups: []
+  - batch: M36
+    status: in_progress
+    tasks: [F254, F255, F256, F257]
+    base: 8cbfed2b
+    head: 0dc95b09
     result: null
     followups: []
   - batch: M16
@@ -2516,27 +2523,27 @@ followups:
   - id: F254
     source: F179
     description: The new rule needs exactly one partner, so a feature that compiles only with two partners together is failed by the feature check as well, and the description broken on its own does not name that case.
-    status: in_progress
+    status: pending_review
     batch: M36
-    commits: []
+    commits: [ee82d44c]
   - id: F255
     source: F179
     description: Get-FeaturePairs re-derives the combination name with its own join instead of taking it from Get-FeatureCombinations, and an absent key is read as did not build, so the lookup silently depends on the combination check naming staying byte-identical.
-    status: in_progress
+    status: pending_review
     batch: M36
-    commits: []
+    commits: [07f0ef2a]
   - id: F256
     source: F179
     description: The MSRV fallback rule has no committed regression test, since the synthetic workspaces that exercise it live outside the tree, so a later edit to the fallback would only be caught by hand.
-    status: in_progress
+    status: pending_review
     batch: M36
-    commits: []
+    commits: [4693e6ff]
   - id: F257
     source: F180
     description: A member whose optional features include a mutually exclusive pair is still failed by the combination check, which predates this batch; the failure list now names the combinations alone.
-    status: in_progress
+    status: pending_review
     batch: M36
-    commits: []
+    commits: [bac52732, 0dc95b09]
   - id: F258
     source: F185
     description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
@@ -3254,6 +3261,30 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F367, already scheduled in M83"
+  - id: F375
+    source: F256
+    description: The toolchain-install fallback in check-msrv.ps1, installing an absent rust-version toolchain and refusing a probe failure that is not an absent toolchain, still has no committed test, since it needs a workspace whose declared rust-version is not installed.
+    status: pending
+    batch: M85
+    commits: []
+  - id: F376
+    source: F256
+    description: No committed case for a member that declares no default feature set, where every declared feature is then optional, nor for a member that declares no features at all.
+    status: pending
+    batch: M85
+    commits: []
+  - id: F377
+    source: F257
+    description: Middle subsets are never built, so a feature needing two partners is only named as building when the whole set builds; otherwise the failure says only that the feature does not build alone, with no configuration to try.
+    status: pending
+    batch: M85
+    commits: []
+  - id: F378
+    source: F257
+    description: The feature failure puts the combination inside the same parentheses as the exit code, so a parser splitting the list on the features flag can mis-read the feature name.
+    status: pending
+    batch: M85
+    commits: []
 ```
 
 ## Human checklist
@@ -3285,6 +3316,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M36 review checkpoint opened: F254, F255, F256 and
+  F257 `in_progress` → `pending_review`, commits `ee82d44c`, `07f0ef2a`,
+  `4693e6ff`, `bac52732`, `0dc95b09`; review M36 `pending` → `in_progress`,
+  base `8cbfed2b`, head `0dc95b09`.
 - 2026-11-15 — follow-up batch M36 started: F254, F255, F256 and F257 `pending` →
   `in_progress`; `active_batch: M35` → `M36`.
 - 2026-11-15 — the YAML block was repaired so it parses: 81 values with an
