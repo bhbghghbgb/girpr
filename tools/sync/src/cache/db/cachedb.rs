@@ -119,7 +119,7 @@ fn read_row(
 /// handles do not conflict with each other.
 pub struct CacheDb {
     pub(super) db: Handle,
-    /// The entries-table reads this cache has served.
+    /// The entries-table reads counted into the counter this handle holds.
     ///
     /// A test seam, and the reason the handle carries it rather than the
     /// caller: what a test needs to know is whether a read was **batched**,
