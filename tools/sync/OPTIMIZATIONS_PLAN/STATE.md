@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M28
+active_batch: M29
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T04:39:22Z
+last_updated: 2026-11-15T04:40:08Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2200,25 +2200,25 @@ followups:
   - id: F228
     source: F168
     description: The prune still materialises the whole key set, a Vec of Strings with one string per cached row; a streaming key API on CacheDb and CacheWrite would remove that allocation on every scan, and it needs the cache module rather than phase A.
-    status: pending
+    status: in_progress
     batch: M29
     commits: []
   - id: F229
     source: F166
     description: DigestSet.foreign is a Vec now, so its capacity can exceed its length after growth and every clone of a row clones that capacity.
-    status: pending
+    status: in_progress
     batch: M29
     commits: []
   - id: F230
     source: F169
     description: same_spelling is a one-line wrapper over an equality comparison; it is the single place to change if the arm match rule ever stops being exact.
-    status: pending
+    status: in_progress
     batch: M29
     commits: []
   - id: F231
     source: F171
     description: The group second spelling exists so the rule does not depend on the disk own spelling never being in a group, a case a lookup cannot normally reach; if that invariant is ever stated as load-bearing, the second spelling could go.
-    status: pending
+    status: in_progress
     batch: M29
     commits: []
   - id: F232
@@ -2856,6 +2856,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M29 started: F228, F229, F230 and F231 `pending` →
+  `in_progress`; `active_batch: M28` → `M29`.
 - 2026-11-15 — review M28 `done`: F225 kept with no commit, the reviewer judged
   the field doc true for all three handle kinds; F227 kept (f368ae29); follow-up
   F328 appended with batch `M64`. F225 and F227 `pending_review` → `completed`.
