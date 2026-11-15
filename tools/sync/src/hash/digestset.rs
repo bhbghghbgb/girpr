@@ -7,9 +7,13 @@ use super::algo::HashAlg;
 /// The foreign arm matches a name **exactly** — the spelling it was stored
 /// under and no other — so this is byte equality and nothing else.
 ///
-/// **This is the one place the rule is written.** Every place that matches a
-/// name against the arm comes through here: the lookup that finds a digest
-/// by name ([`DigestSet::get_named`]) and the two writers that put one there
+/// **This is the one place the exact-match rule is written.** The arm is
+/// matched by two rules and they answer different questions: a known
+/// algorithm is found under any ASCII-case spelling of its name, and an
+/// unknown name is matched exactly — this one. The three places that match a
+/// name against the arm exactly all come through here: the lookup that
+/// finds a digest by name ([`DigestSet::get_named`]) for a name no algorithm
+/// answers to, and the two writers that put one there
 /// ([`DigestSet::insert_named`] and [`DigestSet::merge`]). So they cannot
 /// drift on what "the same name" means: the arm holds one entry per
 /// spelling, and a repeat of a spelling replaces that entry rather than
@@ -22,7 +26,8 @@ use super::algo::HashAlg;
 /// beside it, and the row would hold two entries under one name without
 /// anything saying so.
 ///
-/// If the arm's match rule ever stops being exact, this is where it changes.
+/// If the arm's exact-match rule ever stops being exact, this is where it
+/// changes.
 fn same_spelling(a: &str, b: &str) -> bool {
     a == b
 }
