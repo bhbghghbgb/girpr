@@ -473,6 +473,12 @@ pub(crate) fn ensure_dirs_applicable(plan: &Plan, dm: &HashMap<String, EffRec>) 
 /// same disk state both modes read, so the two agree before either prints an
 /// action.
 ///
+/// **The link count is a seam probe.** It is asked through
+/// [`Probes::link_info`], like the other plan questions, so a test can make
+/// it fail on demand and count it. It asks how many names a file has, not
+/// what a link resolves to, which is why it is not one of the
+/// link-resolution questions the guards ask directly.
+///
 /// **Only a regular file is judged.** A directory at a copy destination is a
 /// type conflict that the copy phase removes before writing, so its inode is
 /// not truncated; on Unix its `nlink` is `2 + subdirectories`, and reading that
