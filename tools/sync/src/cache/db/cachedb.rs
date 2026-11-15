@@ -119,7 +119,7 @@ fn read_row(
 /// handles do not conflict with each other.
 pub struct CacheDb {
     pub(super) db: Handle,
-    /// Entries-table reads this cache has served.
+    /// The entries-table reads this cache has served.
     ///
     /// A test seam, and the reason the handle carries it rather than the
     /// caller: what a test needs to know is whether a read was **batched**,
@@ -130,6 +130,12 @@ pub struct CacheDb {
     /// The count is the **entries table's** reads and nothing else: a read
     /// of another table does not come through [`Self::begin_entries_read`],
     /// so it cannot move a number a test has pinned.
+    ///
+    /// **Which counter this field holds.** On the shared (test) backend it
+    /// is the cache's own — the counter `SharedCache::reads` names, shared
+    /// with every other handle on the path. A file-backed cache has none to
+    /// share, so this handle starts a fresh one; what a fresh count means
+    /// for the cache is `with_handle`'s to say.
     #[cfg(test)]
     reads: Arc<AtomicU64>,
 }

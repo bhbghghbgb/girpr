@@ -107,6 +107,9 @@ pub(in crate::cache) struct SharedCache {
     /// exclusively, so the read/write handle on a cache file excludes every
     /// other handle on that file, and that handle's own fresh counter is
     /// already the cache's count.
+    ///
+    /// A handle on the shared backend holds this very counter; the handle's
+    /// side of it is `CacheDb::reads`.
     #[cfg(test)]
     pub reads: Arc<AtomicU64>,
 }
