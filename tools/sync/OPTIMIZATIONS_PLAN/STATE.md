@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M28
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T04:28:02Z
+last_updated: 2026-11-15T04:34:30Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -483,8 +483,15 @@ reviews:
     result: null
     followups: []
   - batch: M28
-    status: pending
+    status: done
     tasks: [F225, F227]
+    base: 14aa3d3
+    head: f368ae29
+    result: F225 kept with no commit, since the field doc was already changed by 90d32f86 and says the reads counted into the counter this handle holds, which is true for a file read-only handle; F227 kept (f368ae29 names the direct questions by what they ask, and the machine-readable list's read_dir entry in step with the new label); 599 passed, 1 skipped
+    followups: [F324, F325]
+  - batch: M63
+    status: pending
+    tasks: [F324, F325]
     base: null
     head: null
     result: null
@@ -2165,9 +2172,10 @@ followups:
   - id: F225
     source: F165
     description: CacheDb::reads field doc still says entries-table reads this cache has served, which the now-scoped method doc no longer supports for a file read-only handles, since each serves only its own reads.
-    status: in_progress
+    status: completed
     batch: M28
     commits: []
+    note: already handled by 90d32f86, which changed the headline to the reads counted into the counter this handle holds; the implementer made no change and invented none
   - id: F226
     source: F160
     description: safety.rs module doc still reads the guards that run after the rename refuse a plan that is already one change in, which is a real-run statement since a dry run rename pass changes nothing.
@@ -2178,9 +2186,10 @@ followups:
   - id: F227
     source: F161
     description: The label link-resolution is loose for link_ancestor_above, which asks whether a link sits above a path rather than what anything resolves to, though the list that follows enumerates the direct questions exactly.
-    status: in_progress
+    status: completed
     batch: M28
-    commits: []
+    commits: [f368ae29]
+    note: review M28 kept; the group label is now link, and the read_dir entry of the machine-readable list was brought in step with it
   - id: F228
     source: F168
     description: The prune still materialises the whole key set, a Vec of Strings with one string per cached row; a streaming key API on CacheDb and CacheWrite would remove that allocation on every scan, and it needs the cache module rather than phase A.
@@ -2773,6 +2782,32 @@ followups:
     status: pending
     batch: M62
     commits: []
+  - id: F324
+    source: F227
+    description: The list's group membership exists only in prose; DirectQuestion carries file, call and asks but nothing that says which group a question belongs to, so a machine-readable consumer cannot recover it.
+    status: pending
+    batch: M63
+    commits: []
+  - id: F325
+    source: F227
+    description: The link_ancestor_above entry says the action for the plan action it guards; it could name the planned action explicitly, as the guard does.
+    status: pending
+    batch: M63
+    commits: []
+  - id: F326
+    source: F227
+    description: The check that keeps the list in step scans only safety.rs and plan/link.rs, so a direct disk call made from a third file of the plan module would not be seen.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F320, already scheduled in M62
+  - id: F327
+    source: F227
+    description: The scan recognises only std::fs, crate::link and crate::hardlink as disk-reaching modules, so a call through a newly added disk-reaching module would not be seen.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the same item as F321, already scheduled in M62
 ```
 
 ## Human checklist
@@ -2804,6 +2839,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M28 `done`: F225 kept with no commit, since 90d32f86 had
+  already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
+  appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
+  items as F320 and F321. F225 and F227 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M28 started: F225 and F227 `pending` →
   `in_progress`; `active_batch: M27` → `M28`.
 - 2026-11-15 — review M27 `done`: F222 kept, F223 kept, F224 fixed (32ef16cf,
