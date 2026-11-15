@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M32
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T09:59:12Z
+last_updated: 2026-11-15T10:24:23Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -602,10 +602,10 @@ reviews:
     result: null
     followups: []
   - batch: M32
-    status: pending
+    status: in_progress
     tasks: [F240, F241, F242]
-    base: null
-    head: null
+    base: 083c4739
+    head: 8230e53e
     result: null
     followups: []
   - batch: M14
@@ -2340,21 +2340,21 @@ followups:
   - id: F240
     source: F172
     description: The const block answer list is a hand-written subset of HashAlg::ALL, so a third algorithm would be covered by the runtime resolver case but silently not by the const one.
-    status: in_progress
+    status: pending_review
     batch: M32
-    commits: []
+    commits: [537ee293]
   - id: F241
     source: F174
     description: The index note that a run which only adds a file pays for the index holds only in insensitive mode, since in sensitive mode there is no alternate to look for and the index is never built, and the note does not say so.
-    status: in_progress
+    status: pending_review
     batch: M32
-    commits: []
+    commits: [1dd21971]
   - id: F242
     source: F174
     description: The new index case pins the index build through the entries-table read counter, so a prune that ever moved to the counting handle would change the asserted numbers for a reason unrelated to the index.
-    status: in_progress
+    status: pending_review
     batch: M32
-    commits: []
+    commits: [8230e53e]
   - id: F243
     source: F177
     description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
@@ -3028,6 +3028,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M32 review checkpoint opened: F240, F241 and F242
+  `in_progress` → `pending_review`, commits `537ee293`, `1dd21971`, `8230e53e`;
+  review M32 `pending` → `in_progress`, base `083c4739`, head `8230e53e`.
 - 2026-11-15 — follow-up batch M32 started: F240, F241 and F242 `pending` →
   `in_progress`; `active_batch: M31` → `M32`.
 - 2026-11-15 — review M31 `done`: F236 kept (7864335e); no fix or revert commits;
