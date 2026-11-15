@@ -655,7 +655,53 @@ fn the_help_exits_zero_and_documents_the_flags() {
     assert!(sled < redb, "the sled dir comes first: {stdout}");
 }
 
-/// The help output, pinned whole.
+/// The help text with the shared output format's own wording cut away.
+///
+/// `clap` prints the doc comment of every accepted `--output` value under the
+/// flag, one line per value, and those descriptions belong to the shared
+/// `OutputFormat` enum rather than to this binary: what each format *means* is
+/// the crate's shared vocabulary, and a change to it must not break a pin that
+/// is about the converter.
+///
+/// The values themselves are kept, because they are what the flag accepts, and
+/// each line is cut at the first colon after the value's name — the
+/// descriptions hold colons of their own, so a description that names the
+/// records it renders has to be cut at the *first* one rather than the last.
+/// A description that wrapped onto a second line goes with the rest of the
+/// wording.
+fn without_shared_value_wording(help: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    let mut in_values = false;
+    for line in help.lines() {
+        let trimmed = line.trim();
+        if trimmed == "Possible values:" {
+            in_values = true;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_values {
+            if trimmed.is_empty() {
+                // The block ends here, and the default below it is the
+                // converter's own.
+                in_values = false;
+                out.push(line.to_string());
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("- ") {
+                let name = rest.split_once(": ").map_or(rest, |(name, _)| name);
+                let indent = &line[..line.len() - line.trim_start().len()];
+                out.push(format!("{indent}- {name}"));
+                continue;
+            }
+            // A wrapped description: shared wording, and nothing else.
+            continue;
+        }
+        out.push(line.to_string());
+    }
+    out.join("\n")
+}
+
+/// The help output, pinned over the converter's own text.
 ///
 /// `clap` reads a doc comment on the argument struct as the command's
 /// `long_about`, and `--help` prints it **verbatim** — the `**` markers and
@@ -667,7 +713,15 @@ fn the_help_exits_zero_and_documents_the_flags() {
 /// The pin is the whole text rather than a few names in it, so anything that
 /// reaches the help shows up as a difference: a paragraph of prose, a flag, a
 /// changed wording. The names the case above looks for would survive all of
-/// them.
+/// them. A doc comment on the argument struct reaches the help as the text at
+/// the top of it, and the top of it is pinned here, so a note put back on the
+/// struct shows up as a difference in the first line.
+///
+/// One part of the help is not the converter's text, and it is cut away before
+/// the comparison: the *descriptions* of the accepted `--output` values. They
+/// are the doc comments of the shared `OutputFormat` enum, so they are the
+/// crate's shared vocabulary rather than this binary's — a change to them must
+/// not break a pin that is about the converter.
 ///
 /// Two things are normalized before the comparison, and neither is what the
 /// pin is about: the program name, which carries the host's executable suffix
@@ -684,7 +738,8 @@ fn the_help_output_is_pinned() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        text, EXPECTED_HELP,
+        without_shared_value_wording(&text),
+        EXPECTED_HELP,
         "the help output is pinned: a doc comment on the argument struct would \
          print here"
     );
@@ -692,9 +747,10 @@ fn the_help_output_is_pinned() {
 
 /// The help output of the converter, as `--help` prints it.
 ///
-/// The program name is the host's spelling without the executable suffix, and
-/// the trailing spaces are gone: the case above normalizes both before it
-/// compares.
+/// The program name is the host's spelling without the executable suffix, the
+/// trailing spaces are gone, and the accepted values are listed by name alone:
+/// the case above normalizes all three before it compares, and the wording the
+/// shared format's own descriptions carry is not the converter's to pin.
 const EXPECTED_HELP: &str = "\
 Convert a legacy sled cache directory into a redb cache file
 
@@ -715,8 +771,8 @@ Options:
           How the conversion record is rendered
 
           Possible values:
-          - text: One human-readable line per record: `MISSING a.txt`, `COPY a.txt`, `SUMMARY renamed=2 mkdir=1 ...`. The default, and the format the README's examples are written in
-          - json: One JSON object per line (NDJSON), same records, same order: `{\"event\":\"missing\",\"path\":\"a.txt\"}`
+          - text
+          - json
 
           [default: text]
 
