@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M35
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:16:12Z
+last_updated: 2026-11-15T15:23:45Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -669,7 +669,7 @@ reviews:
     tasks: [F247, F248, F249]
     base: f8af1203
     head: 2d19bef1
-    result: F247 kept (6572e643, 3edc3d5e); F248 fixed (3546a457, 2d19bef1 carries the shape the whole set cannot see into the README, which had repeated the reason without the exception); F249 kept (c11652be); 611 passed without the feature and 628 with it, 1 skipped; the reviewer enumerated the old and new configuration sets (n=4: 15 to 11, n=8: 255 to 37, n=12: 4095 to 79), saw the help pin fail for six mutations and pass under a patched clap, and saw the self-test fail for four broken rules
+    result: F247 kept (6572e643, 3edc3d5e); F248 fixed (3546a457, 2d19bef1 carries the shape the whole set cannot see into the README, which had repeated the reason without the exception); F249 kept (c11652be); 611 passed without the feature and 628 with it, 1 skipped; the reviewer enumerated the old and new configuration sets (n=4 gives 11 of 15, n=8 gives 37 of 255, n=12 gives 79 of 4095), saw the help pin fail for six mutations and pass under a patched clap, and saw the self-test fail for four broken rules
     followups: [F358, F359, F360, F361, F362, F363, F364]
   - batch: M80
     status: pending
@@ -707,10 +707,24 @@ reviews:
     result: F175 kept (b1610c1e); F176 fixed (e86a40aa states the rule in the script and the root README, since the old note said the opposite of what the new check does); F177 kept (493fce5b); F178 kept (b0081392); 588 passed without the feature and 603 with it, 1 skipped; the help pin was verified to fail when a doc comment is put back on Args
     followups: [F247, F248, F249]
   - batch: M35
-    status: in_progress
+    status: done
     tasks: [F251, F252]
     base: d3b4a295
     head: c298eedc
+    result: F251 kept (274d90e5); F252 kept (c298eedc); no fix or revert commits; the script ran for real over all five members and the self-test passed; the reviewer confirmed the old rules returned an empty optional-feature list for a member with a feature named Default and no default, that the new rules return both, and that the named combination is one whose recorded exit code is zero
+    followups: [F370, F372, F373]
+  - batch: M83
+    status: pending
+    tasks: [F367, F368, F369, F370]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M84
+    status: pending
+    tasks: [F372, F373]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M36
@@ -726,7 +740,8 @@ reviews:
     base: 23a5974d
     head: 673b99b1
     result: F179 kept (c0348f54); F180 kept (c0348f54); F181 kept (673b99b1); no fix or revert commits; 588 passed, 1 skipped; the reviewer drove eight synthetic workspaces and saw the broken lone feature now fail where the old script reported it covered
-    followups: [F254, F255, F256, F257]  - batch: M4
+    followups: [F254, F255, F256, F257]
+  - batch: M4
     status: done
     tasks: [F111, F112, F116, F130]
     base: 25c832ec
@@ -980,11 +995,11 @@ followups:
     note: review B3 kept (f1b638e1); the repair commits the table it created instead of dropping the transaction, and adds an empty table only
   - id: F8
     source: T05
-    description: Plan bookkeeping only, not a code change: the T05 task file's design_notes pointer resolves to README.md, not to DESIGN-NOTES.md, which never mentions the cache's meta row.
+    description: "Plan bookkeeping only, not a code change: the T05 task file's design_notes pointer resolves to README.md, not to DESIGN-NOTES.md, which never mentions the cache's meta row."
     status: skipped
     batch: null
     commits: []
-    note: skipped: the only file it names is a task file in this plan directory, which is deleted at the end of the plan
+    note: "skipped: the only file it names is a task file in this plan directory, which is deleted at the end of the plan"
   - id: F9
     source: T08
     description: The comment above the ancestor walk says the directories above an entry are "part of the path the filter kept", which is exact for an included file but not for an included directory, whose own ancestors are pulled in without being kept; a sharper sentence would protect the map identity the fix-up exists to preserve.
@@ -1092,7 +1107,7 @@ followups:
     note: review B6 kept (b0342361); it is a re-export only, src/filter.rs is untouched and the old module path still resolves
   - id: F24
     source: T13
-    description: copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting.
+    description: "copy_one still carries both algos: AlgoSet and the requested: &[HashAlg] slice derived from it, and nothing prevents the two from drifting."
     status: completed
     batch: B5
     commits: [3f2d992e]
@@ -1164,7 +1179,7 @@ followups:
     commits: [0d7f7646]
   - id: F35
     source: F2
-    description: The "first match wins" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm.
+    description: "The \"first match wins\" rule is stated in the design notes but pinned by no test: no case holds two foreign entries that both resolve to one algorithm."
     status: completed
     batch: M3
     commits: [4fb0741f, 822254ab]
@@ -1200,7 +1215,7 @@ followups:
     commits: [0d49c077]
   - id: F41
     source: F10
-    description: The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs.
+    description: "The other half of the phase-A micro-note is still open: the alternate-key index still folds every cached key eagerly in insensitive mode, one extra String per cached key, even when no exact-case miss ever occurs."
     status: completed
     batch: M3
     commits: [dfa16d0b, 1f66fcc7, 929908a7]
@@ -1210,17 +1225,17 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the public type has no caller outside the crate, so no user is behind the ergonomic limit
+    note: "skipped: the public type has no caller outside the crate, so no user is behind the ergonomic limit"
   - id: F43
     source: F10
     description: The memo keeps one decision per visited directory, a hash insert per directory, so a run over a directory-heavy tree pays that on top of the directory index phase A already builds.
     status: skipped
     batch: null
     commits: []
-    note: skipped: this is the accepted trade-off of the memo, already measured as 1.4-3.4x faster than the plain rule with exclude patterns
+    note: "skipped: this is the accepted trade-off of the memo, already measured as 1.4-3.4x faster than the plain rule with exclude patterns"
   - id: F44
     source: F14
-    description: The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order.
+    description: "The copy verify's new canonical-order naming is unpinned: a_disagreement_between_the_two_digests_is_a_failure only ever lets one algorithm disagree, so nothing would fail if the iteration order went back to the request's flag order."
     status: completed
     batch: X2
     commits: [eaf252c5]
@@ -1294,7 +1309,7 @@ followups:
     commits: [ca4d5ae4, 3eeeb395]
   - id: F55
     source: F17
-    description: The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create.
+    description: "The legacy sled directory copy is not claimed atomically: the rename itself decides, and POSIX rename onto an existing empty directory succeeds, so exclusivity there is the rename rather than an exclusive create."
     status: completed
     batch: B21
     commits: [86467207, 3eeeb395]
@@ -1322,7 +1337,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same defect as F56, which is already scheduled; recording it twice would make the same fix look like two items
+    note: "skipped: the same defect as F56, which is already scheduled; recording it twice would make the same fix look like two items"
   - id: F60
     source: F53
     description: The record's body (pid=, started=) is written but never read, so nothing reports or checks which run holds a record.
@@ -1360,7 +1375,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: a directory has no file to lock, and the records are the protection that already exists there; the notes state the limit
+    note: "skipped: a directory has no file to lock, and the records are the protection that already exists there; the notes state the limit"
   - id: F68
     source: F54
     description: take_the_cache_lock opens the cache read+write, so a cache file that is not writable fails the open and the bound then runs without the lock, with a warning; the design notes spell out the directory case but not this one.
@@ -1373,7 +1388,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same kind of follow-up as F57, and the copy is reclaimed; only the record file lingers, and only on a filesystem that cannot lock a file
+    note: "skipped: the same kind of follow-up as F57, and the copy is reclaimed; only the record file lingers, and only on a filesystem that cannot lock a file"
   - id: F73
     source: F56
     description: The registry identifies the copy the run applying the bound published as the newest copy this process published in that list, so when the current run publishes nothing into that list, an earlier run's copy is still spared and the bound may keep an older copy in place of a newer one.
@@ -1406,7 +1421,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: not verifiable on this Windows host, and the outcome is a bounded degradation rather than a weakening
+    note: "skipped: not verifiable on this Windows host, and the outcome is a bounded degradation rather than a weakening"
   - id: F81
     source: F73
     description: A copy published by a run that never opens the folder's cache stays pending and is adopted, and spared, by the next run that opens that folder, so an older copy is kept in place of a newer one for one bound cycle.
@@ -1416,7 +1431,7 @@ followups:
     note: review B24 kept (ca6ad054, 7a04252e); the softened claim is true, and the registry is process-wide with one run per process, so the command line never meets the case
   - id: F82
     source: F74
-    description: The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case.
+    description: "The bound's exactly-N holds only while no copy in the folder is spoken for by a live run: such copies are skipped without spending the removal budget, so the folder can end with more than N, and the design notes' claim that the bound still holds the folder to its bound overstates it for that case."
     status: completed
     batch: B24
     commits: [0aeaa4a7, 3341ec24]
@@ -1442,7 +1457,7 @@ followups:
     note: review X7 kept (df7e2c36); a failed open copies the pending list into the spared list instead of taking it, so the copies keep waiting for the next run that opens the folder
   - id: F90
     source: F88
-    description: publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock.
+    description: "publish_file's no-link fallback has the same check-then-act shape: the identity check runs before the rename and is not repeated, so the residual window between the check and the rename is one syscall wide, reachable only where the filesystem can neither link nor lock."
     status: completed
     batch: Y1
     commits: [4a9178e7, 6bd5912c]
@@ -1458,23 +1473,23 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: a policy decision rather than a defect, and the current behaviour is now documented
+    note: "skipped: a policy decision rather than a defect, and the current behaviour is now documented"
   - id: F93
     source: F88
     description: A published directory copy of an empty legacy cache is indistinguishable from a claim to a bound; a marker would change the copy content, so it is a design question.
     status: skipped
     batch: null
     commits: []
-    note: skipped: a design question with a behaviour cost, not a defect
+    note: "skipped: a design question with a behaviour cost, not a defect"
   - id: F94
     source: F88
-    description: The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity.
+    description: "The retry path is still check-then-act: a claim taken away between the identity check and remove_dir remains removable, because a directory claim has no portable handle to remove by identity."
     status: completed
     batch: Y1
     commits: [4a9178e7]
   - id: F95
     source: F88
-    description: publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal.
+    description: "publish_file's no-link fallback has the same shape: it removes the claim file after a failed rename, guarded by the handle-based identity check but with the same gap before the removal."
     status: completed
     batch: Y1
     commits: [58a86fcd, 4a9178e7]
@@ -1497,21 +1512,21 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same kind as F90 and F95, and reachable only on an exotic filesystem; the limit is now documented
+    note: "skipped: the same kind as F90 and F95, and reachable only on an exotic filesystem; the limit is now documented"
   - id: F99
     source: F95
     description: drop_the_claim could take the removal call as a parameter instead of the NameClaim.is_dir flag, which would let the two claim kinds share one path without a new field.
     status: skipped
     batch: null
     commits: []
-    note: skipped: a code-shape preference with no behaviour cost
+    note: "skipped: a code-shape preference with no behaviour cost"
   - id: F100
     source: F96
     description: The bound's spare logic could distinguish the failed run's own copies from an earlier run's in the same process, which the registry knows, instead of sparing the whole waiting list, so a failed run does not over-spare an earlier run's copy.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the over-sparing is conservative, it spares more than needed and cannot lose a backup
+    note: "skipped: the over-sparing is conservative, it spares more than needed and cannot lose a backup"
   - id: F101
     source: F94
     description: The directory retry's window between dropping the claim and the second rename is not stated, and publish_dir's doc claims that a name taken in the meantime makes that rename fail, which holds only for a name with content in it, since a POSIX rename replaces an empty directory.
@@ -1537,49 +1552,49 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; a warning is new log output, a behaviour change, and the leftover is already documented
+    note: "skipped: the backup publish chain ends at this batch; a warning is new log output, a behaviour change, and the leftover is already documented"
   - id: F105
     source: F103
-    description: The bound cannot tell a leftover claim from a whole copy: it counts it towards the bound and may keep it in place of a whole copy; the bound could prefer removing an empty name under a published prefix.
+    description: "The bound cannot tell a leftover claim from a whole copy: it counts it towards the bound and may keep it in place of a whole copy; the bound could prefer removing an empty name under a published prefix."
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; preferring to remove an empty name is a change to the count rule, which is now documented
+    note: "skipped: the backup publish chain ends at this batch; preferring to remove an empty name is a change to the count rule, which is now documented"
   - id: F106
     source: F101
-    description: The directory retry's window is closable in principle: re-claiming the name with an exclusive create after dropping it would put the copy back onto a claim this run owns, closing the drop-to-rename window rather than only documenting it.
+    description: "The directory retry's window is closable in principle: re-claiming the name with an exclusive create after dropping it would put the copy back onto a claim this run owns, closing the drop-to-rename window rather than only documenting it."
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; re-claiming changes the publish protocol, and the window is reachable only where the filesystem cannot lock a file
+    note: "skipped: the backup publish chain ends at this batch; re-claiming changes the publish protocol, and the window is reachable only where the filesystem cannot lock a file"
   - id: F107
     source: F101
     description: publish_onto_the_claimed_name swallows the rename error when the name is gone, so it reads as a publish failure rather than the name having been taken; the two are not distinguished in the error the caller sees.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; distinguishing the two failures is a diagnostic nicety and the publish fails loudly either way
+    note: "skipped: the backup publish chain ends at this batch; distinguishing the two failures is a diagnostic nicety and the publish fails loudly either way"
   - id: F108
     source: F101
     description: The notes headline that the bound can only ever select a whole copy does not name the leftover-claim exception that the paragraph under it now gives.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; a wording consistency item in the same documents
+    note: "skipped: the backup publish chain ends at this batch; a wording consistency item in the same documents"
   - id: F109
     source: F101
     description: The module doc and the function docs order the three claim gaps differently from the notes, so the same three gaps are met in two orders.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; an ordering choice between two documents, not a defect
+    note: "skipped: the backup publish chain ends at this batch; an ordering choice between two documents, not a defect"
   - id: F110
     source: F103
     description: The README best-effort and leftover-claim paragraphs name only girpr-cache-backup-<ts>, where a leftover claim can also sit under girpr-cache-old-<ts>.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the backup publish chain ends at this batch; a wording completeness item in the same documents
+    note: "skipped: the backup publish chain ends at this batch; a wording completeness item in the same documents"
   - id: F111
     source: F31
     description: The MSRV script checks each optional feature alone, so a member whose feature only builds in combination with another would need the group enabled instead.
@@ -1588,7 +1603,7 @@ followups:
     commits: [335cda4b]
   - id: F112
     source: F25
-    description: A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test.
+    description: "A case in tools/sync/tests/convert.rs pinning the accepted argument forms, flags before the positionals and --output=json: the widening is documented but not pinned by a test."
     status: completed
     batch: M4
     commits: [1cac4f4b]
@@ -1598,21 +1613,21 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: a workspace-wide convention decision, outside this crate
+    note: "skipped: a workspace-wide convention decision, outside this crate"
   - id: F114
     source: F26
     description: The DisplayVersion arm in sled2redb error path stays unreachable until a version is declared.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the documented consequence of not declaring a version, which F26 deliberately kept
+    note: "skipped: the documented consequence of not declaring a version, which F26 deliberately kept"
   - id: F115
     source: F51
     description: A safe reclaim of a stale conversion temporary would need a liveness marker beside the name, a lock like the hold records; without one, any sweep can take a live conversion file.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same kind as the backup hold records, and F51 deliberately chose to document rather than reclaim
+    note: "skipped: the same kind as the backup hold records, and F51 deliberately chose to document rather than reclaim"
   - id: F116
     source: F26
     description: The Args doc comment is clap's long_about, so the note with its literal ** markers and the #[command(version)] attribute now appears in sled2redb --help; if it is meant for source readers only it belongs in the module doc rather than the struct's.
@@ -1637,7 +1652,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same defect as F111, which is already scheduled in Z1
+    note: "skipped: the same defect as F111, which is already scheduled in Z1"
   - id: F120
     source: F64
     description: The new paragraph in "Backups and failures" largely repeats the paragraph immediately above it, so the two could be merged.
@@ -1662,7 +1677,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: a cost trade-off with no defect, and the slower fixture is what gives the case its margin
+    note: "skipped: a cost trade-off with no defect, and the slower fixture is what gives the case its margin"
   - id: F124
     source: F44
     description: The design notes Enforced by list for the verify does not name the new canonical-order case, so a reader may expect it to be listed.
@@ -1683,7 +1698,7 @@ followups:
     commits: [6c16cf00]
   - id: F127
     source: F20
-    description: The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees.
+    description: "The reported failure is pinned by grepping stderr for substrings, so nothing pins the exact error text, copy <rel>: <cause>, a user actually sees."
     status: completed
     batch: M6
     commits: [20b42517]
@@ -1693,7 +1708,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: making the field private is an API decision already weighed in the crate surface batch, and the setter plus the doc make the correct use discoverable
+    note: "skipped: making the field private is an API decision already weighed in the crate surface batch, and the setter plus the doc make the correct use discoverable"
   - id: F129
     source: F44
     description: The new case pins the algorithm in the bail message, but the error event algo field, the other channel a parser could read, is unpinned.
@@ -1712,7 +1727,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: an editor convention rather than a defect, and the file now ends with one
+    note: "skipped: an editor convention rather than a defect, and the file now ends with one"
   - id: F132
     source: F22
     description: commands/sync/mod.rs still builds its two folder labels inline instead of the shared side_label; identical text today, but a second spelling of the same rule.
@@ -1737,7 +1752,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: renaming a public variant for no user-visible gain, and the design notes name the rule
+    note: "skipped: renaming a public variant for no user-visible gain, and the design notes name the rule"
   - id: F136
     source: F22
     description: The existing case assertion that the label resolves to the folder to run it on now holds only because the folder path is a prefix of the record path, so it is weaker than its comment claims.
@@ -1750,16 +1765,16 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: it mirrors the existing girpr_log re-export precedent, and narrowing the re-export to one type would be a second convention in the same block
+    note: "skipped: it mirrors the existing girpr_log re-export precedent, and narrowing the re-export to one type would be a second convention in the same block"
   - id: F138
     source: F133
-    description: Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs.
+    description: "Local names still abbreviate the fold as lower: slow and dlow in diff/mod.rs and commands/sync/rename.rs, and by_lower in rename.rs."
     status: completed
     batch: M7
     commits: [8e5f5bd0]
   - id: F139
     source: F133
-    description: The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs.
+    description: "The lowercase wording for the ASCII-only fold survives outside the three files: commands/sync/plan/safety.rs, commands/sync/plan/link.rs, and the test suites tests/lazy/compare.rs, tests/helpers.rs, tests/compare_self.rs, tests/sync_plan/table.rs and tests/sync_plan/main.rs."
     status: completed
     batch: M7
     commits: [4dd86821, 1148ad43, 10ec5297]
@@ -1781,14 +1796,14 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: inherent to the lossy conversion the identity rule is defined by, and it is documented
+    note: "skipped: inherent to the lossy conversion the identity rule is defined by, and it is documented"
   - id: F143
     source: F133
     description: The CasePairing::Lowercase variant still says lowercase although it folds ASCII case only.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F135, already recorded as skipped
+    note: "skipped: the same item as F135, already recorded as skipped"
   - id: F144
     source: F134
     description: commands/sync/plan/link.rs:219 still folds the on-disk lookup with an inline to_string_lossy().to_lowercase(), so after the identity fold was named there is one named Unicode fold and one anonymous Unicode fold that answer different questions, the on-disk rule being the third rule the design notes describe.
@@ -1809,13 +1824,13 @@ followups:
     commits: [b08451c7]
   - id: F147
     source: F29
-    description: Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none.
+    description: "Both documents use a flag that does not exist: README and DESIGN-NOTES name --hash none, while the CLI only has --hash-all-of and --hash-any-of, so the real spelling is --hash-all-of none."
     status: completed
     batch: M9
     commits: [91d626b5]
   - id: F148
     source: F29
-    description: The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it.
+    description: "The host-coverage limit is still README-absent: host coverage of the link cases, where Windows without developer mode refuses the symlink calls and the cases self-skip, is only in the design notes though the README audience meets it."
     status: completed
     batch: M9
     commits: [1f493787, 4a2acaea]
@@ -1861,7 +1876,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F151, already scheduled in M9
+    note: "skipped: the same item as F151, already scheduled in M9"
   - id: F156
     source: F39
     description: cache/db/backend.rs's SharedCache::reads doc and cachedb.rs's with_handle doc describe the same counter from the other side, and with_handle never says why the fresh counter is the cache's count for a file-backed cache.
@@ -2008,7 +2023,7 @@ followups:
     commits: [c0348f54]
   - id: F180
     source: F111
-    description: The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there.
+    description: "The opposite slip is possible in the MSRV script: a member that has both a combination-only feature and a mutually exclusive feature is still failed, because all optional features at once is not a configuration that builds there."
     status: completed
     batch: M16
     commits: [c0348f54]
@@ -2024,7 +2039,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the converter cases are feature-gated by design, so the pin runs where the converter runs
+    note: "skipped: the converter cases are feature-gated by design, so the pin runs where the converter runs"
   - id: F183
     source: F116
     description: The help case only asserts that --force, --output and the positional order appear, so nothing in the suite would fail if a doc comment were put back on Args and the note started printing in --help again.
@@ -2037,10 +2052,10 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F178, already scheduled in M15
+    note: "skipped: the same item as F178, already scheduled in M15"
   - id: F185
     source: F145
-    description: Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message.
+    description: "Five more test helpers still build a side label inline, with different wording, src <cache path> and dst <cache path>, rather than the shared spelling; the helper is public now, and the current form also renders as src: src <path> in a coverage message."
     status: completed
     batch: M17
     commits: [f0cd71f7]
@@ -2164,7 +2179,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F202, already scheduled in M21
+    note: "skipped: the same item as F202, already scheduled in M21"
   - id: F206
     source: F141
     description: has_cache_prefix's doc names ascii_case_eq without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
@@ -2308,7 +2323,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F222, already scheduled in M27
+    note: "skipped: the same item as F222, already scheduled in M27"
   - id: F227
     source: F161
     description: The label link-resolution is loose for link_ancestor_above, which asks whether a link sits above a path rather than what anything resolves to, though the list that follows enumerates the direct questions exactly.
@@ -2343,7 +2358,7 @@ followups:
     status: completed
     batch: M29
     commits: [02b0a441, 2b305551]
-    note: review M29 fixed (2b305551 restates the rule, which the pinned case contradicts: a group of two that holds the disk's own yields the other spelling, a group of two that does not is adopted by nothing)
+    note: "review M29 fixed (2b305551 restates the rule, which the pinned case contradicts: a group of two that holds the disk's own yields the other spelling, a group of two that does not is adopted by nothing)"
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
@@ -2357,7 +2372,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F228, already scheduled in M29
+    note: "skipped: the same item as F228, already scheduled in M29"
   - id: F234
     source: F171
     description: The index still folds every cached key at the first exact-case miss, one folded spelling per key, even when a single lookup needs one group.
@@ -2371,7 +2386,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F229, already scheduled in M29
+    note: "skipped: the same item as F229, already scheduled in M29"
   - id: F236
     source: F173
     description: DigestSet::merge clones the other side's foreign entries, name and digest, into the arm; a merge that replaces an entry in place reuses the digest buffer, but an added entry allocates a fresh String and Vec, the same allocation the vector itself removed.
@@ -2385,21 +2400,21 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F228, already scheduled in M29
+    note: "skipped: the same item as F228, already scheduled in M29"
   - id: F238
     source: F174
     description: phase_a.rs's AltIndex builds a folded String per cached key on first miss; a fold into the index's own arena, or a hash of the folded bytes, would avoid the per-key allocation on large caches.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F234, already scheduled in M30
+    note: "skipped: the same item as F234, already scheduled in M30"
   - id: F239
     source: F169
     description: The same_spelling helper in digestset.rs is now a one-line equality; it survives as the single place the rule is written, but it could be inlined with a comment if the crate prefers fewer indirections.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F230, already scheduled in M29
+    note: "skipped: the same item as F230, already scheduled in M29"
   - id: F240
     source: F172
     description: The const block answer list is a hand-written subset of HashAlg::ALL, so a third algorithm would be covered by the runtime resolver case but silently not by the const one.
@@ -2441,14 +2456,14 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F179, already scheduled in M16
+    note: "skipped: the same item as F179, already scheduled in M16"
   - id: F246
     source: F176
     description: The MSRV combination check cannot tell a combination that needs a newer Rust from one that does not build at all, so a member with mutually exclusive features is failed by the gate.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F180, already scheduled in M16
+    note: "skipped: the same item as F180, already scheduled in M16"
   - id: F247
     source: F175
     description: The pinned help text also carries clap own boilerplate, the possible-values line, the default marker and the print-help wording, so a deliberate clap bump will need the golden text updated by hand.
@@ -2476,26 +2491,28 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F243, already scheduled in M33
+    note: "skipped: the same item as F243, already scheduled in M33"
   - id: F251
     source: F179
     description: A member whose feature needs two other features at once, with no single partner building, is now failed; the script could report the building combination alongside the failure so the reader sees which configuration does build.
-    status: pending_review
+    status: completed
     batch: M35
     commits: [274d90e5]
+    note: review M35 kept; the reviewer confirmed the named configuration always has a recorded exit code of zero, so it can be neither one that was never built nor one that failed
   - id: F252
     source: F181
     description: Get-OptionalFeatures and Get-FeaturePairs compare feature names case-insensitively while cargo feature names are case-sensitive; harmless in practice, untidy in principle.
-    status: pending_review
+    status: completed
     batch: M35
     commits: [c298eedc]
+    note: review M35 kept; the reviewer extracted the old rules and confirmed they read the wrong property for a member with a feature named Default, so that member's optional features were never checked
   - id: F253
     source: F176
     description: The pair lookup reuses the combination results, so a member with many optional features pays for every subset of size two or more.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F248, already scheduled in M34
+    note: "skipped: the same item as F248, already scheduled in M34"
   - id: F254
     source: F179
     description: The new rule needs exactly one partner, so a feature that compiles only with two partners together is failed by the feature check as well, and the description broken on its own does not name that case.
@@ -2610,7 +2627,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the claim is in a commit message and history must not be rewritten; the README text itself is correct, and the false example is tracked as F266
+    note: "skipped: the claim is in a commit message and history must not be rewritten; the README text itself is correct, and the false example is tracked as F266"
   - id: F273
     source: F193
     description: The workspace nextest configuration points at a source path that no longer exists, because the module was split into a directory, so the pointer a reader would follow leads nowhere.
@@ -2695,7 +2712,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F278, already scheduled in M46
+    note: "skipped: the same item as F278, already scheduled in M46"
   - id: F287
     source: F204
     description: The planner's lowercase pairing branch still computes the path key for every destination path, one allocation per path, where a borrowed comparison or a destination index would remove it.
@@ -2720,7 +2737,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F206, already scheduled in M22
+    note: "skipped: the same item as F206, already scheduled in M22"
   - id: F291
     source: F203
     description: The new fourth fold site names the cache-prefix helper but not its exact-name counterpart, which states the same ASCII-only comparison.
@@ -2739,7 +2756,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F288, already scheduled in M49
+    note: "skipped: the same item as F288, already scheduled in M49"
   - id: F294
     source: F207
     description: The plan-safety module still names its folded index as if it held keys, though it maps a folded key to a value rather than being the key-shaped index the other modules name.
@@ -2812,14 +2829,14 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F266, already scheduled in M40
+    note: "skipped: the same item as F266, already scheduled in M40"
   - id: F306
     source: F211
     description: The new source-table row is a whole-path row, so the table path rule now has one more whole-path row to account for than the three it counted.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F213, already scheduled in M24, whose count has been updated to four rows
+    note: "skipped: the same item as F213, already scheduled in M24, whose count has been updated to four rows"
   - id: F307
     source: F213
     description: The path rule's first case could say the row's own path, so a reader does not apply it to the bare file names inside a directory row's cell, since the commands/sync/plan/ row names link.rs too.
@@ -2868,7 +2885,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the warnings are in the other crates of the workspace, outside the crate this plan covers
+    note: "skipped: the warnings are in the other crates of the workspace, outside the crate this plan covers"
   - id: F315
     source: F219
     description: src/cache/open.rs's in-code comment says the cache's own exclusive lock is held, so no other run is in its run phase for the folder, which is false on a filesystem that cannot lock a file, where redb skips the lock entirely.
@@ -2941,14 +2958,14 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F320, already scheduled in M62
+    note: "skipped: the same item as F320, already scheduled in M62"
   - id: F327
     source: F227
     description: The scan recognises only std::fs, crate::link and crate::hardlink as disk-reaching modules, so a call through a newly added disk-reaching module would not be seen.
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same item as F321, already scheduled in M62
+    note: "skipped: the same item as F321, already scheduled in M62"
   - id: F328
     source: F227
     description: The seam's own Probes::canonicalize, the canonical form of path with every link resolved, is itself a link question asked through the seam, while the Probes doc now says the link questions are asked directly and carves out only the hard-link count; the label's scope could name the dst-root resolution too.
@@ -3015,7 +3032,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the same cost as F336, the index's own per-row string, already scheduled in M72
+    note: "skipped: the same cost as F336, the index's own per-row string, already scheduled in M72"
   - id: F343
     source: F234
     description: The index still copies the whole key set on the first miss, so a streaming first lookup would avoid that copy too, at the price of a second table pass for the prune.
@@ -3130,7 +3147,7 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: the exit-code and stdout assertions already carry the refusal on their own, so there is nothing to change
+    note: "skipped: the exit-code and stdout assertions already carry the refusal on their own, so there is nothing to change"
   - id: F358
     source: F249
     description: The script's rules live outside the crate's test suite; a Rust test that runs the self-test under cargo nextest, skipping where pwsh is absent, would put them under the usual gate.
@@ -3139,7 +3156,7 @@ followups:
     commits: []
   - id: F359
     source: F249
-    description: Only the feature branch is injectable: the toolchain probe and the per-member default check are still untested.
+    description: "Only the feature branch is injectable: the toolchain probe and the per-member default check are still untested."
     status: pending
     batch: M80
     commits: []
@@ -3179,14 +3196,14 @@ followups:
     status: skipped
     batch: null
     commits: []
-    note: skipped: moot as written, since the plan now holds the names and every pair is checked before it is read
+    note: "skipped: moot as written, since the plan now holds the names and every pair is checked before it is read"
   - id: F366
     source: F248
     description: Middle-sized subsets are no longer checked, so a member with four or more optional features that needs a newer Rust in exactly one subset would not be caught.
     status: skipped
     batch: null
     commits: []
-    note: skipped: documented in the script, the module and the README, and the shape it misses is named there too
+    note: "skipped: documented in the script, the module and the README, and the shape it misses is named there too"
   - id: F367
     source: F252
     description: The metadata reader cannot hold case-differing feature names, since ConvertFrom-Json refuses a JSON object with two keys that differ only in case, so a member declaring alpha and Alpha fails at the metadata step rather than being modelled.
@@ -3205,6 +3222,38 @@ followups:
     status: pending
     batch: M83
     commits: []
+  - id: F370
+    source: F251
+    description: The README's new sentence says the two-partner failure names the combination that does build it, which is the whole set of the member's features, but when the whole set itself fails nothing is named beside the feature failure, so the sentence over-states the guarantee.
+    status: pending
+    batch: M83
+    commits: []
+  - id: F371
+    source: F251
+    description: Only singles, pairs and the whole set are built, so for a member with four or more optional features the minimal building combination is never built and cannot be named; the whole set is named instead.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F368, already scheduled in M83"
+  - id: F372
+    source: F252
+    description: The default-set lookup chooses the exact name default and then re-reads the value through the case-insensitive property indexer, so a features object holding both default and Default would read the wrong value; it is unreachable today, but selecting the property rather than the name would be exact.
+    status: pending
+    batch: M84
+    commits: []
+  - id: F373
+    source: F252
+    description: The ordinal exit-code map and the exact partner and combination containment have no self-test case, because neither a PowerShell hashtable nor the self-test's ordered dictionary can hold two feature names differing only in case.
+    status: pending
+    batch: M84
+    commits: []
+  - id: F374
+    source: F252
+    description: cargo metadata piped into ConvertFrom-Json refuses a features object whose keys differ only in case, although cargo accepts such a manifest, so a member declaring both default and Default kills the MSRV script at the metadata parse.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F367, already scheduled in M83"
 ```
 
 ## Human checklist
@@ -3236,10 +3285,19 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
-- 2026-11-15 — review M28 `done`: F225 kept with no commit, since 90d32f86 had
-  already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
-  appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
-  items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — the YAML block was repaired so it parses: 81 values with an
+  unquoted colon were quoted, and the review M16 entry's follow-ups line that
+  had swallowed the M4 batch header was split back into two lines. The block
+  had never parsed, so the file's own claim that it is the source of truth did
+  not hold.
+- 2026-11-15 — review M35 `done`: F251 kept (274d90e5), F252 kept (c298eedc); no
+  fix or revert commits; the script ran for real over all five members and the
+  self-test passed; the reviewer confirmed the old rules returned an empty
+  optional-feature list for a member with a feature named Default and no
+  default, that the new rules return both, and that the named combination is
+  one whose recorded exit code is zero. Follow-ups F370, F372 and F373 appended
+  with batches `M83` and `M84`; F371 and F374 recorded as `skipped` as the
+  same items as F368 and F367. F251 and F252 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M35 review checkpoint opened: F251 and F252
   `in_progress` → `pending_review`, commits `274d90e5`, `c298eedc`; review M35
   `pending` → `in_progress`, base `d3b4a295`, head `c298eedc`.
