@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M30
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T08:47:05Z
+last_updated: 2026-11-15T09:11:53Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -546,10 +546,24 @@ reviews:
     result: null
     followups: []
   - batch: M30
-    status: in_progress
+    status: done
     tasks: [F232, F234]
     base: 9c8ee02d
     head: b0a92f16
+    result: F232 kept (3a52da69); F234 kept (b0a92f16); no fix or revert commits; 608 passed without the feature and 624 with it, 1 skipped; the reviewer reproduced the old and new lookup side by side over 2,613,659 key-set and disk-spelling combinations with 0 mismatches, mutation-tested the new oracle case against ten wrong rules, and confirmed the clippy allow hides exactly one lint
+    followups: [F338, F339, F340]
+  - batch: M69
+    status: pending
+    tasks: [F338, F339]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M70
+    status: pending
+    tasks: [F340]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M13
@@ -2249,9 +2263,10 @@ followups:
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
-    status: pending_review
+    status: completed
     batch: M30
     commits: [3a52da69]
+    note: review M30 kept; the reviewer confirmed is_ascii_uppercase is gone from the code, that removing the clippy allow yields exactly one lint, and that the new case fails against ten wrong rules
   - id: F233
     source: F168
     description: The prune key set is still an owned Vec of Strings, one allocation per cached row for keys it only borrows, so a borrowed key view is the next step down that cost.
@@ -2262,9 +2277,10 @@ followups:
   - id: F234
     source: F171
     description: The index still folds every cached key at the first exact-case miss, one folded spelling per key, even when a single lookup needs one group.
-    status: pending_review
+    status: completed
     batch: M30
     commits: [b0a92f16]
+    note: review M30 kept; the reviewer compared the old and new lookup over 2,613,659 combinations with 0 mismatches and confirmed both paths build the group the same way
   - id: F235
     source: F166
     description: The arm keeps its capacity at the high-water mark after a replacement, where the old boxed slice was rebuilt to fit, so a row that once carried many foreign digests holds that capacity for life.
@@ -2876,6 +2892,24 @@ followups:
     status: pending
     batch: M67
     commits: []
+  - id: F338
+    source: F232
+    description: The design notes' Enforced by list for the digest-set invariant still names only the_resolver_folds_exactly_as_the_ascii_case_comparison_does, so the case that now pins the oracle's own classification is not listed.
+    status: pending
+    batch: M69
+    commits: []
+  - id: F339
+    source: F234
+    description: The README's alternate-case index paragraph still reads as though the whole index is built at the first exact-case miss and does not say that the folded groups are materialised only from the second lookup on.
+    status: pending
+    batch: M69
+    commits: []
+  - id: F340
+    source: F234
+    description: The path key's rule is now stated as a comparison in a second form, std::eq_ignore_ascii_case in phase_a against util::path_key's fold, with util::ascii_case_eq covering the Windows-only sites, so a cross-platform crate-owned comparison helper could hold the three together in one place.
+    status: pending
+    batch: M70
+    commits: []
 ```
 
 ## Human checklist
@@ -2911,6 +2945,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M30 `done`: F232 kept (3a52da69), F234 kept (b0a92f16); no
+  fix or revert commits; follow-ups F338–F340 appended with batches `M69` and
+  `M70`. F232 and F234 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M30 review checkpoint opened: F232 and F234
   `in_progress` → `pending_review`, commits `3a52da69`, `b0a92f16`; review M30
   `pending` → `in_progress`, base `9c8ee02d`, head `b0a92f16`.
