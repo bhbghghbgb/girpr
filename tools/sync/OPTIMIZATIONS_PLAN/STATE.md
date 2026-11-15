@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M26
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:29:50Z
+last_updated: 2026-11-15T02:53:00Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -441,10 +441,17 @@ reviews:
     result: null
     followups: []
   - batch: M26
-    status: in_progress
+    status: done
     tasks: [F218, F219, F220, F221]
     base: cb6bb33c
-    head: 82854f75
+    head: 95cc2721
+    result: F218 kept (f26a1837); F219 fixed (f26a1837, aa527d20 bounds the shared counter's exclusion too, 95cc2721 bounds the lock the bound takes where the disk cannot lock); F220 kept (f26a1837); F221 kept (82854f75); 598 passed, 1 skipped; the reviewer read redb 4.1.0 and confirmed the lock is skipped where the file cannot be locked, and saw no non-comment line changed in the range
+    followups: [F315, F316, F317]
+  - batch: M60
+    status: pending
+    tasks: [F315, F316, F317]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M11
@@ -2095,27 +2102,31 @@ followups:
   - id: F218
     source: F156
     description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
-    status: pending_review
+    status: completed
     batch: M26
     commits: [f26a1837]
+    note: review M26 kept; the fresh-per-open clause is in with_handle and entries_read_count, and the reviewer confirmed a file-backed handle never inherits an earlier open's reads
   - id: F219
     source: F156
     description: redb skips its file lock entirely on a filesystem that cannot lock a file, so the exclusion the counter story rests on does not hold there; the crate acknowledges such filesystems elsewhere.
-    status: pending_review
+    status: completed
     batch: M26
-    commits: [f26a1837]
+    commits: [f26a1837, aa527d20, 95cc2721]
+    note: review M26 fixed (aa527d20 bounds the shared counter's exclusion in backend.rs, 95cc2721 bounds the lock the bound takes in the design notes, since a cache that cannot be locked has no lock to take either)
   - id: F220
     source: F157
     description: The preflight new sentence calls the counted reads the ones that fetch rows, but entry_count and load_keys are counted too and fetch none, so begin_entries_read should stay the stated definition.
-    status: pending_review
+    status: completed
     batch: M26
     commits: [f26a1837]
+    note: review M26 kept; the preflight and begin_entries_read now agree, and the reviewer checked that entry_count and load_keys both go through begin_entries_read
   - id: F221
     source: F158
     description: The claim that three of the link helpers ask the disk counts on_disk_name, whose non-Windows version asks nothing at all.
-    status: pending_review
+    status: completed
     batch: M26
     commits: [82854f75]
+    note: review M26 kept; the module doc now says two helpers ask the disk on POSIX and three on Windows, and the reviewer checked each one against the code
   - id: F222
     source: F160
     description: plan/safety.rs module doc still says the guards that run after the rename refuse a plan that is already one change in, which is also a real-run-only statement.
@@ -2691,6 +2702,24 @@ followups:
     batch: null
     commits: []
     note: skipped: the warnings are in the other crates of the workspace, outside the crate this plan covers
+  - id: F315
+    source: F219
+    description: src/cache/open.rs's in-code comment says the cache's own exclusive lock is held, so no other run is in its run phase for the folder, which is false on a filesystem that cannot lock a file, where redb skips the lock entirely.
+    status: pending
+    batch: M60
+    commits: []
+  - id: F316
+    source: F219
+    description: retain_copies' doc says a folder with no lock to take has the copies a live run published there protected by the records beside them instead, which holds for a legacy sled directory but not on a filesystem that cannot lock a file, where the record is a lock and there is none.
+    status: pending
+    batch: M60
+    commits: []
+  - id: F317
+    source: F219
+    description: The README states the lock exclusion unconditionally in two places in the bound section, and its One cache per run bullet says a read/write open locks its file exclusively, with no mention of the filesystem that cannot lock one.
+    status: pending
+    batch: M60
+    commits: []
 ```
 
 ## Human checklist
@@ -2722,6 +2751,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M26 `done`: F218 kept, F219 fixed (f26a1837, aa527d20,
+  95cc2721), F220 kept, F221 kept; follow-ups F315–F317 appended with batch
+  `M60`. F218–F221 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M26 review checkpoint opened: F218, F219, F220 and
   F221 `in_progress` → `pending_review`, commits `f26a1837`, `82854f75`; review
   M26 `pending` → `in_progress`, base `cb6bb33c`, head `82854f75`.
