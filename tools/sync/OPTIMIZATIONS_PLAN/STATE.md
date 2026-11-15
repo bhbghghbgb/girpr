@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M30
+active_batch: M31
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T09:11:53Z
+last_updated: 2026-11-15T09:18:11Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2291,7 +2291,7 @@ followups:
   - id: F236
     source: F173
     description: DigestSet::merge clones the other side's foreign entries, name and digest, into the arm; a merge that replaces an entry in place reuses the digest buffer, but an added entry allocates a fresh String and Vec, the same allocation the vector itself removed.
-    status: pending
+    status: in_progress
     batch: M31
     commits: []
   - id: F237
@@ -2945,6 +2945,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M31 started: F236 `pending` → `in_progress`;
+  `active_batch: M30` → `M31`.
 - 2026-11-15 — review M30 `done`: F232 kept (3a52da69), F234 kept (b0a92f16); no
   fix or revert commits; follow-ups F338–F340 appended with batches `M69` and
   `M70`. F232 and F234 `pending_review` → `completed`.
