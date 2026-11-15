@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M30
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T07:32:13Z
+last_updated: 2026-11-15T08:47:05Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -546,10 +546,10 @@ reviews:
     result: null
     followups: []
   - batch: M30
-    status: pending
+    status: in_progress
     tasks: [F232, F234]
-    base: null
-    head: null
+    base: 9c8ee02d
+    head: b0a92f16
     result: null
     followups: []
   - batch: M13
@@ -2249,9 +2249,9 @@ followups:
   - id: F232
     source: F170
     description: The fold oracle letter test still comes from std is_ascii_uppercase, so written out rather than borrowed holds for the comparison but not for the classification of a byte.
-    status: in_progress
+    status: pending_review
     batch: M30
-    commits: []
+    commits: [3a52da69]
   - id: F233
     source: F168
     description: The prune key set is still an owned Vec of Strings, one allocation per cached row for keys it only borrows, so a borrowed key view is the next step down that cost.
@@ -2262,9 +2262,9 @@ followups:
   - id: F234
     source: F171
     description: The index still folds every cached key at the first exact-case miss, one folded spelling per key, even when a single lookup needs one group.
-    status: in_progress
+    status: pending_review
     batch: M30
-    commits: []
+    commits: [b0a92f16]
   - id: F235
     source: F166
     description: The arm keeps its capacity at the high-water mark after a replacement, where the old boxed slice was rebuilt to fit, so a row that once carried many foreign digests holds that capacity for life.
@@ -2911,6 +2911,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M30 review checkpoint opened: F232 and F234
+  `in_progress` → `pending_review`, commits `3a52da69`, `b0a92f16`; review M30
+  `pending` → `in_progress`, base `9c8ee02d`, head `b0a92f16`.
 - 2026-11-15 — follow-up batch M30 started: F232 and F234 `pending` →
   `in_progress`; `active_batch: M29` → `M30`.
 - 2026-11-15 — review M29 `done`: F228 kept, F229 kept, F230 fixed (fbf844bb,
