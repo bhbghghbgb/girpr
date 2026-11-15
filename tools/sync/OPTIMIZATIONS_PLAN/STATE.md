@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M27
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:54:44Z
+last_updated: 2026-11-15T03:52:44Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -462,10 +462,10 @@ reviews:
     result: F156 kept (6fc49e88); F157 kept (6603ecaf); F158 kept (dbc64313); F159 kept (880b1319, 2ce5c4cc); no fix or revert commits; 584 passed, 1 skipped; the private-items doc warnings went from 8 to 1, the one left being out of this batch scope
     followups: [F218, F219, F220, F221]
   - batch: M27
-    status: pending
+    status: in_progress
     tasks: [F222, F223, F224]
-    base: null
-    head: null
+    base: 36f93bdd
+    head: 32ef16cf
     result: null
     followups: []
   - batch: M28
@@ -2130,21 +2130,21 @@ followups:
   - id: F222
     source: F160
     description: plan/safety.rs module doc still says the guards that run after the rename refuse a plan that is already one change in, which is also a real-run-only statement.
-    status: in_progress
+    status: pending_review
     batch: M27
-    commits: []
+    commits: [b8ba41ec]
   - id: F223
     source: F161
     description: ensure_hard_linked_targets_safe own doc does not say that its link count is a seam probe; that fact lives only in the seam doc.
-    status: in_progress
+    status: pending_review
     batch: M27
-    commits: []
+    commits: [6643ccf7]
   - id: F224
     source: F161
     description: The seam list of the questions asked directly is kept in step by hand with the direct calls in safety.rs and plan/link.rs, and nothing pins it, so a new direct call could be added without the list noticing.
-    status: in_progress
+    status: pending_review
     batch: M27
-    commits: []
+    commits: [32ef16cf]
   - id: F225
     source: F165
     description: CacheDb::reads field doc still says entries-table reads this cache has served, which the now-scoped method doc no longer supports for a file read-only handles, since each serves only its own reads.
@@ -2751,6 +2751,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M27 review checkpoint opened: F222, F223 and F224
+  `in_progress` → `pending_review`, commits `b8ba41ec`, `6643ccf7`, `32ef16cf`;
+  review M27 `pending` → `in_progress`, base `36f93bdd`, head `32ef16cf`.
 - 2026-11-15 — follow-up batch M27 started: F222, F223 and F224 `pending` →
   `in_progress`; `active_batch: M26` → `M27`.
 - 2026-11-15 — review M26 `done`: F218 kept, F219 fixed (f26a1837, aa527d20,
