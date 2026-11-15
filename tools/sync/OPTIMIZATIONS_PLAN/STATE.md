@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M36
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T15:50:53Z
+last_updated: 2026-11-15T16:22:55Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -735,10 +735,17 @@ reviews:
     result: null
     followups: []
   - batch: M36
-    status: in_progress
+    status: done
     tasks: [F254, F255, F256, F257]
     base: 8cbfed2b
     head: 0dc95b09
+    result: F254 kept (ee82d44c); F255 kept (07f0ef2a); F256 kept (4693e6ff); F257 kept (bac52732, 0dc95b09); no fix or revert commits; 611 passed, 1 skipped, and the crate itself was untouched by the batch; the reviewer ran an exhaustive harness over every member shape of one to five optional features against every pass and fail assignment, 67,722 cases with 0 mismatches and 0 throws, so the refusal never fires and the failure lists are unchanged
+    followups: [F379, F380]
+  - batch: M86
+    status: pending
+    tasks: [F379, F380]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M16
@@ -2523,27 +2530,31 @@ followups:
   - id: F254
     source: F179
     description: The new rule needs exactly one partner, so a feature that compiles only with two partners together is failed by the feature check as well, and the description broken on its own does not name that case.
-    status: pending_review
+    status: completed
     batch: M36
     commits: [ee82d44c]
+    note: review M36 kept; the behavioural half was already in place from an earlier batch and the policy is recorded as deliberate elsewhere, so only the description was left
   - id: F255
     source: F179
     description: Get-FeaturePairs re-derives the combination name with its own join instead of taking it from Get-FeatureCombinations, and an absent key is read as did not build, so the lookup silently depends on the combination check naming staying byte-identical.
-    status: pending_review
+    status: completed
     batch: M36
     commits: [07f0ef2a]
+    note: review M36 kept; the named functions no longer exist, the missing-entry half did hold, and the reviewer confirmed the refusal is structurally unreachable for a real member
   - id: F256
     source: F179
     description: The MSRV fallback rule has no committed regression test, since the synthetic workspaces that exercise it live outside the tree, so a later edit to the fallback would only be caught by hand.
-    status: pending_review
+    status: completed
     batch: M36
     commits: [4693e6ff]
+    note: review M36 kept; the new case really distinguishes the rule, and the reviewer confirmed the ten cases are independent
   - id: F257
     source: F180
     description: A member whose optional features include a mutually exclusive pair is still failed by the combination check, which predates this batch; the failure list now names the combinations alone.
-    status: pending_review
+    status: completed
     batch: M36
     commits: [bac52732, 0dc95b09]
+    note: review M36 kept; the failure list is pinned to the combinations that failed, with no feature that a partner covers
   - id: F258
     source: F185
     description: tests/compare.rs still builds its two side labels inline, in a third wording, a bare cache path with no kind word; it was not among the files F185 named.
@@ -3285,6 +3296,18 @@ followups:
     status: pending
     batch: M85
     commits: []
+  - id: F379
+    source: F255
+    description: The refusal's own path has no committed case, since the flow builds every configuration of two or more features before the lookups, so only a direct call to the helper would pin that a missing entry is refused rather than read as a build that failed.
+    status: pending
+    batch: M86
+    commits: []
+  - id: F380
+    source: F255
+    description: The helper takes a configuration's name rather than the configuration, so the rule that a lookup cannot ask for a spelling the check did not build rests on the two call sites passing the configuration's own name rather than on the type.
+    status: pending
+    batch: M86
+    commits: []
 ```
 
 ## Human checklist
@@ -3316,6 +3339,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M36 `done`: F254, F255, F256 and F257 all kept, no fix or
+  revert commits; follow-ups F379 and F380 appended with batch `M86`.
+  F254–F257 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M36 review checkpoint opened: F254, F255, F256 and
   F257 `in_progress` → `pending_review`, commits `ee82d44c`, `07f0ef2a`,
   `4693e6ff`, `bac52732`, `0dc95b09`; review M36 `pending` → `in_progress`,
