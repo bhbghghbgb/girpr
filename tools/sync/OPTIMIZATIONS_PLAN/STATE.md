@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M34
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T13:19:21Z
+last_updated: 2026-11-15T13:50:30Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -665,10 +665,10 @@ reviews:
     result: null
     followups: []
   - batch: M34
-    status: pending
+    status: in_progress
     tasks: [F247, F248, F249]
-    base: null
-    head: null
+    base: f8af1203
+    head: 3edc3d5e
     result: null
     followups: []
   - batch: M15
@@ -2424,21 +2424,21 @@ followups:
   - id: F247
     source: F175
     description: The pinned help text also carries clap own boilerplate, the possible-values line, the default marker and the print-help wording, so a deliberate clap bump will need the golden text updated by hand.
-    status: in_progress
+    status: pending_review
     batch: M34
-    commits: []
+    commits: [6572e643, 3edc3d5e]
   - id: F248
     source: F176
     description: The number of cargo invocations grows as two to the n minus one for a member with n optional features, so a member with many features would make the gate slow.
-    status: in_progress
+    status: pending_review
     batch: M34
-    commits: []
+    commits: [3546a457]
   - id: F249
     source: F176
     description: No member in the workspace has two optional features today, girsync has one, so the combination branch is never exercised by a real run of the script.
-    status: in_progress
+    status: pending_review
     batch: M34
-    commits: []
+    commits: [c11652be]
   - id: F250
     source: F177
     description: The converter refusal of --version is stated in two documents but no case pins the exit code 3, so adding the version attribute later would not fail anything.
@@ -3135,6 +3135,10 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M34 review checkpoint opened: F247, F248 and F249
+  `in_progress` → `pending_review`, commits `6572e643`, `3546a457`, `c11652be`,
+  `3edc3d5e`; review M34 `pending` → `in_progress`, base `f8af1203`, head
+  `3edc3d5e`.
 - 2026-11-15 — follow-up batch M34 started: F247, F248 and F249 `pending` →
   `in_progress`; `active_batch: M33` → `M34`.
 - 2026-11-15 — review M33 `done`: F243 kept (93ab7621), F244 fixed (ba8570a6,
