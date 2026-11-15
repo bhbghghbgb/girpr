@@ -16,6 +16,8 @@ What is checked:
   middle-sized subsets are not among them;
 - a feature that does not build on its own but builds with a partner, which
   does not fail the member;
+- the same rule in a member whose whole set of features does not build, where
+  the partner is the only thing that can cover the feature;
 - a combination that cannot be enabled together, which does fail the member,
   and the failure names it;
 - a feature that is broken on its own, which fails the member;
@@ -110,9 +112,28 @@ $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
 Assert-Equal 'alpha,beta|alpha|beta' ($asked -join '|') 'the pair is built before the features on their own'
 Assert-Equal 0 $result.Failures.Count 'a feature that builds with a partner does not fail the member'
 
+# The same rule where it is harder to tell: a member whose whole set of
+# features does not build, because two of them cannot be enabled together.
+# The feature that builds only with a partner is still covered by that
+# partner — the whole set is not a partner it can be shown to need — so the
+# member is not failed over the feature.
+$member = New-SyntheticMember @('alpha', 'beta', 'gamma')
+$asked = [System.Collections.Generic.List[string]]::new()
+$build = New-FakeBuild @{
+    'alpha'            = 1
+    'alpha,beta'       = 0
+    'alpha,gamma'      = 1
+    'beta,gamma'       = 1
+    'alpha,beta,gamma' = 1
+} $asked
+$result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
+$featureFailures = @($result.Failures | Where-Object { $_ -like '*--features alpha, exit code*' })
+Assert-Equal 0 $featureFailures.Count 'a feature that builds with a partner is not failed'
+
 # The same member, with a pair that cannot be enabled together: cargo allows
 # the combination, so it is a configuration that has to build, and the member
 # fails with the combination named.
+$member = New-SyntheticMember @('alpha', 'beta')
 $asked = [System.Collections.Generic.List[string]]::new()
 $build = New-FakeBuild @{ 'alpha,beta' = 1 } $asked
 $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
@@ -121,6 +142,7 @@ Assert-True ($result.Failures[0].Contains('--features alpha,beta')) 'the failure
 
 # A feature that is broken on its own: it builds with no other feature either,
 # so the member fails over the combination and over the feature.
+$member = New-SyntheticMember @('alpha', 'beta')
 $asked = [System.Collections.Generic.List[string]]::new()
 $build = New-FakeBuild @{ 'alpha' = 1; 'alpha,beta' = 1 } $asked
 $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
