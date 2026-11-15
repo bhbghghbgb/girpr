@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M32
+active_batch: M33
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-15T10:42:50Z
 tasks:
@@ -2382,13 +2382,13 @@ followups:
   - id: F243
     source: F177
     description: No case pins that sled2redb --version exits 3; the README now documents it but the suite does not hold it.
-    status: pending
+    status: in_progress
     batch: M33
     commits: []
   - id: F244
     source: F175
     description: The help pin couples the converter test to the shared OutputFormat doc wording; a narrower pin over the converter own text would drop that coupling.
-    status: pending
+    status: in_progress
     batch: M33
     commits: []
   - id: F245
@@ -3088,6 +3088,8 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — follow-up batch M33 started: F243 and F244 `pending` →
+  `in_progress`; `active_batch: M32` → `M33`.
 - 2026-11-15 — review M32 `done`: F240, F241 and F242 all kept, no fix or revert
   commits; follow-ups F347–F352 appended with batches `M74`, `M75` and `M76`.
   F240–F242 `pending_review` → `completed`. The reviewer noted that the three
