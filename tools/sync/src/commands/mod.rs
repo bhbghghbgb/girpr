@@ -54,6 +54,12 @@ pub(super) fn side_kind(side: &Side) -> &'static str {
 /// nothing else, and two commands reading the same record name it the same
 /// way.
 ///
+/// **The side's own path, not the file its rows live in.** A folder side is
+/// named by the root the user pointed at, and its cache file is one file
+/// inside that root — so the two answers are different places on disk, and a
+/// label that named the file would send a reader to the wrong one. The path
+/// that goes into a label is [`Side::path`]; the file is [`Side::cache_file`].
+///
 /// Every command names its sides through here, including `sync`: its two sides
 /// are always folders, and the word beside a folder's path is `folder` there
 /// too.
@@ -69,11 +75,7 @@ pub(super) fn side_kind(side: &Side) -> &'static str {
 /// change rather than a quiet one: the harnesses that build their labels
 /// through here cannot drift apart without the pin saying so.
 pub fn side_label(side: &Side) -> String {
-    let path = match side {
-        Side::Record(p) => p,
-        Side::Folder(root) => root,
-    };
-    format!("{} {}", side_kind(side), path.display())
+    format!("{} {}", side_kind(side), side.path().display())
 }
 
 /// The folder a side's cache lives in, when it has one to repopulate.

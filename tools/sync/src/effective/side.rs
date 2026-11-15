@@ -27,9 +27,30 @@ pub enum Side {
 }
 
 impl Side {
-    /// The cache file this side reads from or writes to: a record side *is* its
-    /// cache, a folder side is backed by the `<root>/girpr-cache` inside it.
-    pub fn cache_path(&self) -> PathBuf {
+    /// The side's own path: the root a folder side is, the file a record side
+    /// is.
+    ///
+    /// **This is the side, not the file its rows live in.** A record side *is*
+    /// its cache file, so the two answers are the same there; a folder side is
+    /// a tree, and its cache file is one file inside it — see
+    /// [`Side::cache_file`].
+    pub fn path(&self) -> &Path {
+        match self {
+            Side::Record(p) => p.as_path(),
+            Side::Folder(root) => root.as_path(),
+        }
+    }
+
+    /// The cache **file** this side reads from or writes to: a record side *is*
+    /// its cache, a folder side is backed by the `<root>/girpr-cache` inside it.
+    ///
+    /// **This is the file, not the side.** A folder side is a tree and this is
+    /// one file inside it, so the two answers are different places on disk: a
+    /// caller that wants to *name* the side and reaches for this names the
+    /// file where the side was meant. Naming a side is
+    /// [`crate::commands::side_label`]'s job, and [`Side::path`] is the path
+    /// that goes into it.
+    pub fn cache_file(&self) -> PathBuf {
         match self {
             Side::Record(p) => p.clone(),
             Side::Folder(root) => root.join(CACHE_PREFIX),
@@ -293,4 +314,47 @@ where
             .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
         (src, dst)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::Side;
+    use crate::cache::CACHE_PREFIX;
+
+    /// **A record side *is* its cache file; a folder side is a tree that holds
+    /// one.**
+    ///
+    /// The two answers a caller can get — the side's own path, and the file its
+    /// rows live in — are the same for a record and differ for a folder, and
+    /// that difference is the whole reason they are two functions rather than
+    /// one. A folder's cache file is *inside* the side, so a caller that means
+    /// the side and takes the file names a different place on disk.
+    #[test]
+    fn a_side_s_own_path_and_its_cache_file_differ_for_a_folder() {
+        let record = Side::Record(PathBuf::from("game/girpr-cache"));
+        assert_eq!(
+            record.path(),
+            record.cache_file().as_path(),
+            "a record side is its own cache file"
+        );
+
+        let folder = Side::Folder(PathBuf::from("game"));
+        assert_eq!(
+            folder.path(),
+            Path::new("game"),
+            "a folder side is the root the user pointed at"
+        );
+        assert_eq!(
+            folder.cache_file(),
+            Path::new("game").join(CACHE_PREFIX),
+            "and its cache file is one file inside that root"
+        );
+        assert_ne!(
+            folder.path(),
+            folder.cache_file().as_path(),
+            "so the file is not the side"
+        );
+    }
 }
