@@ -3,8 +3,9 @@
 //! Every guard is a **fail-fast, plan-time** check: it refuses a plan before
 //! the apply phases run, so a dry run refuses exactly what a real run would.
 //! Only the mkdir preflight refuses before the run's first change to dst; the
-//! guards that run after the rename refuse a plan that is already one change
-//! in.
+//! guards that run after the rename refuse a plan that a real run is already
+//! one change into. A dry run's rename pass changes nothing, so there a
+//! refusal leaves dst as it was.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -37,9 +38,9 @@ use super::link::{
 /// It runs before the rename pass, which is the run's first change to dst.
 /// The guards that ask the disk after the rename — [`spare_link_storage`],
 /// [`ensure_link_safe`] and [`ensure_hard_linked_targets_safe`] — refuse a
-/// plan that is already one change in, so in a real run a refusal there does
-/// not leave dst as it was. A dry run performs no rename and changes
-/// nothing, so a refusal there leaves dst as it was.
+/// plan that a real run is already one change into, so in a real run a
+/// refusal there does not leave dst as it was. A dry run's rename pass
+/// changes nothing, so there a refusal leaves dst as it was.
 ///
 /// The seam covers the questions a guard asks about the dst root and about the
 /// paths a plan touches. The **link-resolution** questions are asked of the
