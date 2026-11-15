@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M25
+active_batch: M26
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:17:08Z
+last_updated: 2026-11-15T02:18:21Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2095,25 +2095,25 @@ followups:
   - id: F218
     source: F156
     description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
-    status: pending
+    status: in_progress
     batch: M26
     commits: []
   - id: F219
     source: F156
     description: redb skips its file lock entirely on a filesystem that cannot lock a file, so the exclusion the counter story rests on does not hold there; the crate acknowledges such filesystems elsewhere.
-    status: pending
+    status: in_progress
     batch: M26
     commits: []
   - id: F220
     source: F157
     description: The preflight new sentence calls the counted reads the ones that fetch rows, but entry_count and load_keys are counted too and fetch none, so begin_entries_read should stay the stated definition.
-    status: pending
+    status: in_progress
     batch: M26
     commits: []
   - id: F221
     source: F158
     description: The claim that three of the link helpers ask the disk counts on_disk_name, whose non-Windows version asks nothing at all.
-    status: pending
+    status: in_progress
     batch: M26
     commits: []
   - id: F222
@@ -2722,6 +2722,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M26 started: F218, F219, F220 and F221 `pending` →
+  `in_progress`; `active_batch: M25` → `M26`.
 - 2026-11-15 — review M25 `done`: F216 kept (d42a90fd), F217 fixed (0339f805,
   90d32f86); follow-ups F310–F313 appended with batches `M58` and `M59`, and
   F314 recorded as `skipped` because the warnings are in the other crates of the
