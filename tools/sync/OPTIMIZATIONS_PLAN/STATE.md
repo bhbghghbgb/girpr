@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M27
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T03:52:44Z
+last_updated: 2026-11-15T04:26:57Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -462,10 +462,24 @@ reviews:
     result: F156 kept (6fc49e88); F157 kept (6603ecaf); F158 kept (dbc64313); F159 kept (880b1319, 2ce5c4cc); no fix or revert commits; 584 passed, 1 skipped; the private-items doc warnings went from 8 to 1, the one left being out of this batch scope
     followups: [F218, F219, F220, F221]
   - batch: M27
-    status: in_progress
+    status: done
     tasks: [F222, F223, F224]
     base: 36f93bdd
-    head: 32ef16cf
+    head: 7e717ec5
+    result: F222 kept (b8ba41ec); F223 kept (6643ccf7); F224 fixed (32ef16cf, 7e717ec5 closes three spellings of the disk modules that defeated the scan and makes a glob import fail loudly); 599 passed, 1 skipped; the reviewer checked DIRECT_QUESTIONS against the code by hand and found every direct call named and nothing else, and ran eight probe scripts
+    followups: [F318, F319, F320, F321, F322, F323]
+  - batch: M61
+    status: pending
+    tasks: [F318, F319]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M62
+    status: pending
+    tasks: [F320, F321, F322, F323]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M28
@@ -2130,21 +2144,24 @@ followups:
   - id: F222
     source: F160
     description: plan/safety.rs module doc still says the guards that run after the rename refuse a plan that is already one change in, which is also a real-run-only statement.
-    status: pending_review
+    status: completed
     batch: M27
     commits: [b8ba41ec]
+    note: review M27 kept; the claim now says a real run, and the same false claim in the Probes trait doc was corrected with it
   - id: F223
     source: F161
     description: ensure_hard_linked_targets_safe own doc does not say that its link count is a seam probe; that fact lives only in the seam doc.
-    status: pending_review
+    status: completed
     batch: M27
     commits: [6643ccf7]
+    note: review M27 kept; the reviewer traced the count through probes.link_info to the hard-link info call and confirmed it asks a different question from the link-resolution ones
   - id: F224
     source: F161
     description: The seam list of the questions asked directly is kept in step by hand with the direct calls in safety.rs and plan/link.rs, and nothing pins it, so a new direct call could be added without the list noticing.
-    status: pending_review
+    status: completed
     batch: M27
-    commits: [32ef16cf]
+    commits: [32ef16cf, 7e717ec5]
+    note: review M27 fixed (7e717ec5 closes three spellings of the disk modules that defeated the scan and makes a glob import fail loudly); the reviewer checked the list by hand and ran eight probe scripts
   - id: F225
     source: F165
     description: CacheDb::reads field doc still says entries-table reads this cache has served, which the now-scoped method doc no longer supports for a file read-only handles, since each serves only its own reads.
@@ -2720,6 +2737,42 @@ followups:
     status: pending
     batch: M60
     commits: []
+  - id: F318
+    source: F222
+    description: ensure_link_safe's own doc still says it refuses before any apply phase changes anything, which is true of the apply phases but reads as before anything changes even though the rename has already changed dst in a real run.
+    status: pending
+    batch: M61
+    commits: []
+  - id: F319
+    source: F223
+    description: The hard-link probe answers with the link count and the inode identity, and the identity is what credits a planned removal, so it asks how many names a file has names only the half the refusal turns on.
+    status: pending
+    batch: M61
+    commits: []
+  - id: F320
+    source: F224
+    description: The scan covers only safety.rs and plan/link.rs, so a direct call made from a third file of the plan module would not be seen.
+    status: pending
+    batch: M62
+    commits: []
+  - id: F321
+    source: F224
+    description: The scan knows only std::fs, crate::link and crate::hardlink as disk-reaching modules, so a direct call to a newly added disk-reaching module would not be seen.
+    status: pending
+    batch: M62
+    commits: []
+  - id: F322
+    source: F224
+    description: The test compares the file and call pairs only, so the asks prose in each entry is unchecked and can drift from the code.
+    status: pending
+    batch: M62
+    commits: []
+  - id: F323
+    source: F224
+    description: The list's file field hardcodes two file names, so splitting the guards across a third file would need the field and the test's file list changed together.
+    status: pending
+    batch: M62
+    commits: []
 ```
 
 ## Human checklist
@@ -2751,6 +2804,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M27 `done`: F222 kept, F223 kept, F224 fixed (32ef16cf,
+  7e717ec5); follow-ups F318–F323 appended with batches `M61` and `M62`.
+  F222–F224 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M27 review checkpoint opened: F222, F223 and F224
   `in_progress` → `pending_review`, commits `b8ba41ec`, `6643ccf7`, `32ef16cf`;
   review M27 `pending` → `in_progress`, base `36f93bdd`, head `32ef16cf`.
