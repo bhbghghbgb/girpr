@@ -17,8 +17,11 @@ and drive the public API. Modules that carry more than one idea are split into
 directories (`mod.rs` is the facade re-exporting the same items, so no public
 path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
 tests travel with the code they exercise). A path in the table is relative to
-`src/`; a row spells the whole path where the bare name is ambiguous or the
-file sits outside the module tree.
+`src/`; a row spells the whole path — `src/…` — in three cases: a path
+relative to `src/` that is a bare name another file in the tree shares
+(`link.rs`, which the plan directory's own `link.rs` shares), a file the module
+tree holds only in a test build (`#[cfg(test)]`), and a separate binary target
+(`src/bin/sled2redb.rs`).
 
 | File | Responsibility |
 | --- | --- |
@@ -66,7 +69,7 @@ file sits outside the module tree.
 | `filter.rs` | the include/exclude globs, compiled once per run and matched with the run's case mode |
 | `src/link.rs` | what counts as a link (`try_is_link`), how to remove one without touching its target, and which ancestor of a path is one |
 | `hardlink.rs` | the hard-link metadata the copy guard asks for: the link count and the file identity (`nlink`/`dev`/`ino` on Unix, `GetFileInformationByHandle` on Windows) |
-| `hash/` | `algo.rs` (`HashAlg`), `set.rs` (`AlgoSet` and the flag parsers), `digestset.rs` (`DigestSet`: the digests one row carries), `stream.rs` (`Digests`, `hash_file`) |
+| `hash/` | `mod.rs` (the facade), `algo.rs` (`HashAlg`), `set.rs` (`AlgoSet` and the flag parsers), `digestset.rs` (`DigestSet`: the digests one row carries), `stream.rs` (`Digests`, `hash_file`) |
 | `src/hash/tests.rs` | the hash module's own cases: the algorithm names and the resolver that answers them, the flag parsers, and the three lookups into `DigestSet` |
 | `util.rs`, `logging.rs` | path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
 
