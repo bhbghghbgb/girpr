@@ -31,7 +31,10 @@ checked with each of the other features before the member is failed — the
 feature together with one other is a configuration that has to build on its
 own, and one that does build is the partner the feature needs. A feature that
 builds with no one other feature is broken on its own and fails the member.
-The same check runs in the `msrv` workflow.
+A feature that needs two partners at once is in that shape too, and the
+failure names the combination that does build it — the whole set of the
+member's features is one of the configurations that is built, so the script
+knows whether it holds. The same check runs in the `msrv` workflow.
 
 The combinations of those features are checked too — each pair of them, and
 the whole set of them at once — with the same command and `--features <a,b>`.

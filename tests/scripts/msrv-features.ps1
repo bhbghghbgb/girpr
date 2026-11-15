@@ -7,7 +7,7 @@
 # workspace has two optional features and the combination branch is therefore
 # never reached by a real run of the script.
 #
-# The three rules it states:
+# The four rules it states:
 #
 # - A member's optional features are the ones its default feature set does not
 #   turn on.
@@ -15,6 +15,9 @@
 #   them, and the whole set at once.
 # - A feature that does not build alone is not a failure when it builds with
 #   one other feature: that pair is the partner it needs.
+# - A feature that needs more than one partner at once has no single partner,
+#   so it fails on its own — and the failure names the combination that does
+#   build, so a reader is told which configuration to try.
 
 # The features a package declares that its default feature set does not turn on.
 #
@@ -122,6 +125,13 @@ function Get-FeatureConfigurations($features) {
 # is a configuration of its own and not a partner the feature can be shown to
 # need.
 #
+# A feature that needs two partners at once is in the same shape: no single
+# partner builds with it, and the member is failed over the feature. The
+# combination that does build it is named in the failure, because a reader
+# holding such a feature has to be told which configuration to try. The whole
+# set of the member's features is one of the configurations that is built, so
+# the script knows whether it holds: the failure names it when it does.
+#
 # The failures come back as an array of strings, one per failed configuration,
 # and the caller says them.
 function Invoke-MemberFeatureChecks {
@@ -178,8 +188,26 @@ function Invoke-MemberFeatureChecks {
         if ($pairs -gt 0) {
             Write-Host "    $feature does not build with any one other feature either"
         }
+        # A feature that needs two partners at once builds in a combination
+        # rather than in a pair, so no pair holds it. The combinations of
+        # three or more were built before the features on their own, and the
+        # whole set of the member's features is one of them, so the one that
+        # holds the feature and does build is known here.
+        $combination = $null
+        foreach ($held in $configurations) {
+            if ($held.Features.Count -lt 3) { continue }
+            if ($held.Features -notcontains $feature) { continue }
+            if ($exitCodes[$held.Name] -eq 0) {
+                $combination = $held.Name
+                break
+            }
+        }
+        if ($null -ne $combination) {
+            Write-Host "    $feature does build with --features $combination"
+        }
         Write-Host "FAIL: $($Pkg.name) does not build with Rust $Ver and --features $feature (exit code $code)"
-        $failures += "$($Pkg.name) ($Ver, --features $feature, exit code $code)"
+        $detail = if ($null -ne $combination) { "; builds with --features $combination" } else { '' }
+        $failures += "$($Pkg.name) ($Ver, --features $feature, exit code $code$detail)"
     }
 
     return [pscustomobject]@{ Failures = @($failures) }

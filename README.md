@@ -345,10 +345,13 @@ feature replaces that code, which is the one shape the whole set cannot see —
 and an incompatibility is caught by the pair that holds it or by the whole set.
 A combination that cannot be enabled together fails the member — cargo allows
 it, so it is a configuration a user can ask for — and the failure names the
-combination that does not build. It needs rustup and network access on the
-first run; after that the declared toolchains and the shared target directory
-make a run a few minutes of incremental builds. The `msrv` workflow runs the
-same script.
+combination that does not build. A feature that needs two partners at once —
+one that only builds when two others are on — has no single partner, so it
+fails on its own; that failure names the combination that does build it, which
+is the whole set of the member's features. It needs rustup and network access
+on the first run; after that the declared toolchains and the shared target
+directory make a run a few minutes of incremental builds. The `msrv` workflow
+runs the same script.
 
 The script's own feature rules live in `tests/scripts/msrv-features.ps1` and
 are checked by `tests/scripts/msrv-features.selftest.ps1`, which drives them

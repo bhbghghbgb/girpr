@@ -19,6 +19,8 @@ What is checked:
 - a combination that cannot be enabled together, which does fail the member,
   and the failure names it;
 - a feature that is broken on its own, which fails the member;
+- a feature that needs two partners at once, which fails on its own and whose
+  failure names the combination that does build;
 - a feature the default set turns on, which is not an optional feature at all.
 
 Run it from anywhere:
@@ -116,6 +118,24 @@ $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
 Assert-Equal 2 $result.Failures.Count 'a feature that is broken on its own fails the member'
 Assert-True ($result.Failures[0].Contains('--features alpha,beta, exit code')) 'the failure names the combination'
 Assert-True ($result.Failures[1].Contains('--features alpha, exit code')) 'the failure names the feature'
+
+# A feature that needs two partners at once: no pair holding it builds, so it
+# is broken on its own and the member fails over it — but the whole set does
+# build, and the failure names it, so a reader is told which configuration to
+# try.
+$member = New-SyntheticMember @('alpha', 'beta', 'gamma')
+$asked = [System.Collections.Generic.List[string]]::new()
+$build = New-FakeBuild @{
+    'alpha'           = 1
+    'alpha,beta'      = 1
+    'alpha,gamma'     = 1
+    'beta,gamma'      = 0
+    'alpha,beta,gamma' = 0
+} $asked
+$result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check $build
+$featureFailures = @($result.Failures | Where-Object { $_ -like '*--features alpha, exit code*' })
+Assert-Equal 1 $featureFailures.Count 'a feature that needs two partners fails on its own'
+Assert-True ($featureFailures[0].Contains('--features alpha,beta,gamma')) 'the failure names the combination that builds'
 
 # A member with one optional feature has no partner to be shown to need, so a
 # feature that does not build alone is a failure of its own.
