@@ -340,9 +340,10 @@ so a combination that needs a newer Rust is caught even when each of its
 features builds on its own. Not every subset of the features is checked: the
 subsets of two or more of n features are 2^n - n - 1 of them, so a member with
 a dozen optional features would ask cargo for four thousand builds. The code
-a middle subset compiles is compiled by the whole set as well, and an
-incompatibility is caught by the pair that holds it or by the whole set. A
-combination that cannot be enabled together fails the member — cargo allows
+a middle subset compiles is compiled by the whole set as well — unless another
+feature replaces that code, which is the one shape the whole set cannot see —
+and an incompatibility is caught by the pair that holds it or by the whole set.
+A combination that cannot be enabled together fails the member — cargo allows
 it, so it is a configuration a user can ask for — and the failure names the
 combination that does not build. It needs rustup and network access on the
 first run; after that the declared toolchains and the shared target directory
