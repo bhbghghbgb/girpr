@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M23
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-11T00:26:52Z
+last_updated: 2026-11-15T01:15:26Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -378,10 +378,10 @@ reviews:
     result: F132 kept (0fa1a663); F133 kept (c9a512e8); F134 kept (72d9e889); F136 kept (339c0957); no fix or revert commits; 572 passed, 1 skipped; the identity comparison verified byte-for-byte unchanged and the two case-fold rules still disagree
     followups: [F144, F145, F146]
   - batch: M23
-    status: pending
+    status: in_progress
     tasks: [F209, F210, F211]
-    base: null
-    head: null
+    base: 983e70bf
+    head: 986fa9a0
     result: null
     followups: []
   - batch: M24
@@ -2004,21 +2004,21 @@ followups:
   - id: F209
     source: F147
     description: The nonexistent --hash none still names a flag in source rather than in documents, in src/hash/set.rs module doc, parse_hash_list doc and the user-facing refusal, src/hash/algo.rs, src/effective, src/planner, src/commands/update.rs, src/commands/sync/apply/copy.rs and several test files; the set.rs refusal is user-visible text and the sharpest instance.
-    status: in_progress
+    status: pending_review
     batch: M23
-    commits: []
+    commits: [aaed2ebd, e03f21ab]
   - id: F210
     source: F147
     description: src/hash/set.rs module doc still says the --hash and --hash-any-of parsers, stale in the same way.
-    status: in_progress
+    status: pending_review
     batch: M23
-    commits: []
+    commits: [aaed2ebd]
   - id: F211
     source: F151
     description: The README source table still has no row for src/commands/sync/plan/tests.rs, an inline test module; cosmetic, and the surrounding prose covers inline test modules.
-    status: in_progress
+    status: pending_review
     batch: M23
-    commits: []
+    commits: [986fa9a0]
   - id: F212
     source: F151
     description: The hash/ row is the only directory row that does not name its facade, so src/hash/mod.rs is the one file in the tree with neither a row nor a mention.
@@ -2616,6 +2616,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — follow-up batch M23 review checkpoint opened: F209, F210 and F211
+  `in_progress` → `pending_review`, commits `aaed2ebd`, `e03f21ab`, `986fa9a0`;
+  review M23 `pending` → `in_progress`, base `983e70bf`, head `986fa9a0`.
 - 2026-11-14 — M4 retry: F111, F112, F116 and F130 `pending` → `in_progress`.
 - 2026-11-14 — follow-up batch M23 started: F209, F210 and F211 `pending` →
   `in_progress`; `active_batch: M22` → `M23`.
