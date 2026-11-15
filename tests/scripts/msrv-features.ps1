@@ -7,12 +7,15 @@
 # workspace has two optional features and the combination branch is therefore
 # never reached by a real run of the script.
 #
-# The four rules it states:
+# The five rules it states:
 #
 # - A member's optional features are the ones its default feature set does not
 #   turn on.
 # - The configurations that are checked are each feature alone, each pair of
 #   them, and the whole set at once.
+# - A configuration that does not build fails the member, and the failure
+#   names it: cargo allows the combination, so it is a configuration a user
+#   can ask for.
 # - A feature that does not build alone is not a failure when it builds with
 #   one other feature: that pair is the partner it needs.
 # - A feature that needs more than one partner at once has no single partner,
