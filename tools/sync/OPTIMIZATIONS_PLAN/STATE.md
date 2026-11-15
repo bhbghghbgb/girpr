@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M25
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T02:00:12Z
+last_updated: 2026-11-15T02:17:08Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -420,10 +420,24 @@ reviews:
     result: F6 kept (27e6f74f); F28 kept (f841e1e8); F29 kept (e7264fba); F32 kept (601d7efe); F124 kept (746f94cb); no fix or revert commits; 572 passed without the feature and 585 with it, 1 skipped; the count was verified against the tree at twelve, not the eleven the follow-up text said
     followups: [F152, F153, F154]
   - batch: M25
-    status: in_progress
+    status: done
     tasks: [F216, F217]
     base: 9a395087
-    head: 0339f805
+    head: 90d32f86
+    result: F216 kept (d42a90fd); F217 fixed (0339f805, 90d32f86 changes the field headline to what the field actually holds, since the shared sentence was false for a read-only handle on a file-backed cache); 598 passed, 1 skipped; the reviewer saw the one private-items warning before the fix and none after, and confirmed every changed line in the batch is a doc comment
+    followups: [F310, F311, F312, F313]
+  - batch: M58
+    status: pending
+    tasks: [F310, F311, F312]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M59
+    status: pending
+    tasks: [F313]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M26
@@ -2067,15 +2081,17 @@ followups:
   - id: F216
     source: F159
     description: effective/phase_a.rs has an intra-doc link to util::folded_keys that does not resolve, because util is not in scope in that module; it was introduced after the survey that produced the seven named links and is the one warning left in the private-items doc build.
-    status: pending_review
+    status: completed
     batch: M25
     commits: [d42a90fd]
+    note: review M25 kept; the link now points at the crate root, the private-items doc build went from one warning to none, and the rendered page carries a real hyperlink
   - id: F217
     source: F156
     description: cache/db/cachedb.rs's CacheDb::reads field doc opens with the same wording as SharedCache::reads; consistent today, but a second place to edit if the wording ever moves.
-    status: pending_review
+    status: completed
     batch: M25
-    commits: [0339f805]
+    commits: [0339f805, 90d32f86]
+    note: review M25 fixed (90d32f86 changes the field headline to the reads counted into the counter this handle holds, since the shared sentence was false for a read-only handle on a file-backed cache)
   - id: F218
     source: F156
     description: The claim that a file-backed cache reaches the same answer needs a clause saying the counter is fresh per open, since a file-backed handle starts from zero every time.
@@ -2644,6 +2660,37 @@ followups:
     status: pending
     batch: M57
     commits: []
+  - id: F310
+    source: F217
+    description: with_handle's closing sentence calls the shared backend the one case where several handles are alive on one cache at once, which contradicts the paragraph above it saying read-only handles on a file share the file with each other; what distinguishes the shared backend is the single counter, not the number of live handles.
+    status: pending
+    batch: M58
+    commits: []
+  - id: F311
+    source: F217
+    description: The rule that one counter is shared by every handle on a path is now spelled in four places, SharedCache::reads, CacheDb::reads, entries_read_count and with_shared_reads, so a change to it has four places to edit.
+    status: pending
+    batch: M58
+    commits: []
+  - id: F312
+    source: F217
+    description: The field's headline and its accessor entries_read_count now describe the same number in different words, and on the shared backend only the accessor's wording is the loose one.
+    status: pending
+    batch: M58
+    commits: []
+  - id: F313
+    source: F216
+    description: The same item is now spelled two ways in the tree, crate::util::folded_keys in the phase A doc link, but plain util::folded_keys in three prose mentions, in effective/phase_a.rs, commands/sync/plan/safety.rs and commands/sync/plan/link.rs.
+    status: pending
+    batch: M59
+    commits: []
+  - id: F314
+    source: F216
+    description: The workspace-wide private-items doc build still reports 16 warnings for girpr and 5 for gircap.
+    status: skipped
+    batch: null
+    commits: []
+    note: skipped: the warnings are in the other crates of the workspace, outside the crate this plan covers
 ```
 
 ## Human checklist
@@ -2675,6 +2722,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-15 — review M25 `done`: F216 kept (d42a90fd), F217 fixed (0339f805,
+  90d32f86); follow-ups F310–F313 appended with batches `M58` and `M59`, and
+  F314 recorded as `skipped` because the warnings are in the other crates of the
+  workspace. F216 and F217 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M25 review checkpoint opened: F216 and F217
   `in_progress` → `pending_review`, commits `d42a90fd`, `0339f805`; review M25
   `pending` → `in_progress`, base `9a395087`, head `0339f805`.
