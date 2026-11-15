@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M28
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T04:34:30Z
+last_updated: 2026-11-15T04:39:22Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -487,8 +487,15 @@ reviews:
     tasks: [F225, F227]
     base: 14aa3d3
     head: f368ae29
-    result: F225 kept with no commit, since the field doc was already changed by 90d32f86 and says the reads counted into the counter this handle holds, which is true for a file read-only handle; F227 kept (f368ae29 names the direct questions by what they ask, and the machine-readable list's read_dir entry in step with the new label); 599 passed, 1 skipped
-    followups: [F324, F325]
+    result: F225 kept with no commit, the reviewer judged the field doc true for a file read-only handle, the read/write file handle and the shared backend; F227 kept (f368ae29), the reviewer checked every asks string against its call site and found the only non-comment line changed to be the read_dir entry's asks string, which is read only in a test message; 599 passed, 1 skipped
+    followups: [F328]
+  - batch: M64
+    status: pending
+    tasks: [F328]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M63
     status: pending
     tasks: [F324, F325]
@@ -2175,7 +2182,7 @@ followups:
     status: completed
     batch: M28
     commits: []
-    note: already handled by 90d32f86, which changed the headline to the reads counted into the counter this handle holds; the implementer made no change and invented none
+    note: already handled by 90d32f86, which changed the headline to the reads counted into the counter this handle holds; the implementer made no change and invented none, and the reviewer judged the claim true for all three handle kinds
   - id: F226
     source: F160
     description: safety.rs module doc still reads the guards that run after the rename refuse a plan that is already one change in, which is a real-run statement since a dry run rename pass changes nothing.
@@ -2808,6 +2815,12 @@ followups:
     batch: null
     commits: []
     note: skipped: the same item as F321, already scheduled in M62
+  - id: F328
+    source: F227
+    description: The seam's own Probes::canonicalize, the canonical form of path with every link resolved, is itself a link question asked through the seam, while the Probes doc now says the link questions are asked directly and carves out only the hard-link count; the label's scope could name the dst-root resolution too.
+    status: pending
+    batch: M64
+    commits: []
 ```
 
 ## Human checklist
@@ -2843,6 +2856,9 @@ commit.
   already made the field doc true; F227 kept (f368ae29); follow-ups F324 and F325
   appended with batch `M63`, and F326 and F327 recorded as `skipped` as the same
   items as F320 and F321. F225 and F227 `pending_review` → `completed`.
+- 2026-11-15 — review M28 `done`: F225 kept with no commit, the reviewer judged
+  the field doc true for all three handle kinds; F227 kept (f368ae29); follow-up
+  F328 appended with batch `M64`. F225 and F227 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M28 started: F225 and F227 `pending` →
   `in_progress`; `active_batch: M27` → `M28`.
 - 2026-11-15 — review M27 `done`: F222 kept, F223 kept, F224 fixed (32ef16cf,
