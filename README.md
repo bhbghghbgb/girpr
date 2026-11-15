@@ -330,23 +330,25 @@ any missing toolchain through rustup, and runs
 `cargo +<rust-version> check -p <member> --all-targets --locked` for each one,
 so tests and benches are held to the same floor. A member's optional features
 are checked as well — the same command with `--features <feature>` — so the
-code that only builds when a feature is on is held to the same floor too. A
-feature that does not build on its own is checked with each of the other
-features instead — the feature together with one other, which is a
-configuration that has to build on its own — so a member whose features only
-build together is covered rather than failed. The features are checked in
-combination as well — each pair of them, and the whole set of them at once —
-so a combination that needs a newer Rust is caught even when each of its
-features builds on its own. Not every subset of the features is checked: the
-subsets of two or more of n features are 2^n - n - 1 of them, so a member with
-a dozen optional features would ask cargo for four thousand builds. The code
-a middle subset compiles is compiled by the whole set as well — unless another
-feature replaces that code, which is the one shape the whole set cannot see —
-and an incompatibility is caught by the pair that holds it or by the whole set.
-A combination that cannot be enabled together fails the member — cargo allows
-it, so it is a configuration a user can ask for — and the failure names the
-combination that does not build. A feature that needs two partners at once —
-one that only builds when two others are on — has no single partner, so it
+code that only builds when a feature is on is held to the same floor too. The
+feature names are compared the way cargo compares them — cargo's feature names
+are case-sensitive, so a feature named `Default` is an ordinary feature and not
+the set the default build turns on. A feature that does not build on its own
+is checked with each of the other features instead — the feature together with
+one other, which is a configuration that has to build on its own — so a member
+whose features only build together is covered rather than failed. The features
+are checked in combination as well — each pair of them, and the whole set of
+them at once — so a combination that needs a newer Rust is caught even when
+each of its features builds on its own. Not every subset of the features is
+checked: the subsets of two or more of n features are 2^n - n - 1 of them, so a
+member with a dozen optional features would ask cargo for four thousand builds.
+The code a middle subset compiles is compiled by the whole set as well — unless
+another feature replaces that code, which is the one shape the whole set cannot
+see — and an incompatibility is caught by the pair that holds it or by the whole
+set. A combination that cannot be enabled together fails the member — cargo
+allows it, so it is a configuration a user can ask for — and the failure names
+the combination that does not build. A feature that needs two partners at once
+— one that only builds when two others are on — has no single partner, so it
 fails on its own; that failure names the combination that does build it, which
 is the whole set of the member's features. It needs rustup and network access
 on the first run; after that the declared toolchains and the shared target

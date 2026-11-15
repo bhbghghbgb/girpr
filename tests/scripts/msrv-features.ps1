@@ -18,6 +18,13 @@
 # - A feature that needs more than one partner at once has no single partner,
 #   so it fails on its own — and the failure names the combination that does
 #   build, so a reader is told which configuration to try.
+#
+# The names are compared exactly, because cargo compares them exactly: cargo's
+# feature names are case-sensitive, so `default = ["alpha"]` turns on the
+# feature named `alpha` and not one named `Alpha`, and a feature named
+# `Default` is an ordinary feature rather than the set the default build turns
+# on. A comparison that folded the case would drop a feature cargo leaves off,
+# and the code behind it would never be held to the member's floor.
 
 # The features a package declares that its default feature set does not turn on.
 #
@@ -33,9 +40,11 @@ function Get-OptionalFeatures($pkg) {
         return @()
     }
     $declared = @($features.PSObject.Properties | ForEach-Object { $_.Name })
-    $default = $features.PSObject.Properties['default']
-    $enabled = if ($null -eq $default) { @() } else { @($default.Value) }
-    return @($declared | Where-Object { $_ -ne 'default' -and $enabled -notcontains $_ })
+    # The property lookup is case-insensitive, so the name of the default set
+    # is chosen here and the property is read by the name that was chosen.
+    $default = $declared | Where-Object { $_ -ceq 'default' }
+    $enabled = if ($null -eq $default) { @() } else { @($features.PSObject.Properties[$default].Value) }
+    return @($declared | Where-Object { $_ -cne 'default' -and $enabled -cnotcontains $_ })
 }
 
 # The configurations of a member's optional features that are checked: each
@@ -144,8 +153,9 @@ function Invoke-MemberFeatureChecks {
     $configurations = @(Get-FeatureConfigurations @(Get-OptionalFeatures $Pkg))
     $failures = @()
     # The exit code of every configuration of two or more features, keyed by
-    # its name.
-    $exitCodes = @{}
+    # its name. The keys are compared exactly: a configuration is named after
+    # the features it holds, and cargo does not fold their case.
+    $exitCodes = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
 
     foreach ($configuration in $configurations) {
         if ($configuration.Features.Count -lt 2) { continue }
@@ -174,7 +184,7 @@ function Invoke-MemberFeatureChecks {
         $pairs = 0
         foreach ($pair in $configurations) {
             if ($pair.Features.Count -ne 2) { continue }
-            if ($pair.Features -notcontains $feature) { continue }
+            if ($pair.Features -cnotcontains $feature) { continue }
             $pairs++
             if ($exitCodes[$pair.Name] -eq 0) {
                 $holding = $pair.Name
@@ -196,7 +206,7 @@ function Invoke-MemberFeatureChecks {
         $combination = $null
         foreach ($held in $configurations) {
             if ($held.Features.Count -lt 3) { continue }
-            if ($held.Features -notcontains $feature) { continue }
+            if ($held.Features -cnotcontains $feature) { continue }
             if ($exitCodes[$held.Name] -eq 0) {
                 $combination = $held.Name
                 break

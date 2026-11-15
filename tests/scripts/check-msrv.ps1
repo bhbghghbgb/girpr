@@ -23,7 +23,10 @@ default, and code behind a feature that is off by default is not in it — so a
 dependency or a syntax that only the optional code needs would raise the
 member's floor without anything here noticing. The feature list comes from
 `cargo metadata` too, so it follows the manifests rather than a second list
-kept here.
+kept here. The feature names are compared exactly, the way cargo compares
+them: cargo's feature names are case-sensitive, so the set the default build
+turns on is the feature named `default` and not one named `Default`, and a
+feature the default set names is the feature it spells.
 
 A feature that does not build on its own is not a failure straight away: it
 may be a feature that only builds in combination with another, and it is

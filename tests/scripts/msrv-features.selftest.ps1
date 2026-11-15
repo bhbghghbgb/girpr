@@ -21,7 +21,9 @@ What is checked:
 - a feature that is broken on its own, which fails the member;
 - a feature that needs two partners at once, which fails on its own and whose
   failure names the combination that does build;
-- a feature the default set turns on, which is not an optional feature at all.
+- a feature the default set turns on, which is not an optional feature at all;
+- a feature whose name differs from `default` only in case, which is an
+  ordinary feature and not the default set.
 
 Run it from anywhere:
 
@@ -68,14 +70,21 @@ function New-SyntheticMember($features) {
 # `$asked` is a list, so that a case can see every configuration the rule
 # checked, and in which order. A configuration the table does not name builds.
 #
+# The table is keyed exactly: the rules compare feature names the way cargo
+# does, so the harness must not answer for a name that is spelled differently.
+#
 # The closure is taken on the way out, because a scriptblock reaches for the
 # variables of the scope it runs in rather than the ones it was written in,
 # and this one is written in a function that has returned by the time it runs.
 function New-FakeBuild($answers, $asked) {
+    $table = [System.Collections.Hashtable]::new([System.StringComparer]::Ordinal)
+    foreach ($key in $answers.Keys) {
+        $table[$key] = $answers[$key]
+    }
     return {
         param($features)
         $null = $asked.Add($features)
-        if ($answers.ContainsKey($features)) { return $answers[$features] }
+        if ($table.ContainsKey($features)) { return $table[$features] }
         return 0
     }.GetNewClosure()
 }
@@ -165,5 +174,17 @@ $member = [pscustomobject]@{
 $asked = [System.Collections.Generic.List[string]]::new()
 $result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check (New-FakeBuild @{} $asked)
 Assert-Equal 'beta' ($asked -join '|') 'a feature the default set turns on is not checked again'
+
+# Cargo's feature names are case-sensitive, so a feature named `Default` is an
+# ordinary feature and not the set the default build turns on: it is checked
+# on its own, and the feature it names is an optional feature of its own.
+$member = [pscustomobject]@{
+    name         = 'synthetic'
+    rust_version = '1.89'
+    features     = [pscustomobject]@{ Default = @('alpha'); alpha = @() }
+}
+$asked = [System.Collections.Generic.List[string]]::new()
+$result = Invoke-MemberFeatureChecks -Pkg $member -Ver '1.89' -Check (New-FakeBuild @{} $asked)
+Assert-Equal 'Default,alpha|Default|alpha' ($asked -join '|') 'a feature named Default is an ordinary optional feature'
 
 Write-Host "ok: the MSRV script's feature rules hold for a synthetic member"
