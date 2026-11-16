@@ -343,13 +343,15 @@ impl Record {
 /// still there for the one case that needs it: a key that is *not* from this
 /// crate.
 fn push_json_key(out: &mut String, k: &str) {
-    out.push('"');
     if is_plain_ascii_json(k) {
+        out.push('"');
         out.push_str(k);
+        out.push('"');
     } else {
+        // `json_string` already returns a quoted literal; adding quotes here
+        // would double-quote the key and corrupt the line.
         out.push_str(&json_string(k));
     }
-    out.push('"');
 }
 
 /// Whether `s` can go into a JSON string literal unescaped.
