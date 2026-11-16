@@ -1307,7 +1307,7 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
   file; POSIX spellings stay exact. The converter's temporary is one of them
-  (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spelling of the
+  (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spellings of the
   same name when that one is taken), so a conversion that was killed
   leaves the tool's own residue behind rather than a file that looks like
   content.
