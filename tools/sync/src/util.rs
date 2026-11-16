@@ -1,4 +1,27 @@
 //! Small path, time, and filesystem helpers with no girsync-specific state.
+//!
+//! ## The published surface
+//!
+//! A rule is published when its answer is public; the comparison a rule is
+//! written in is not.
+//!
+//! - **identity** — [`same_path`] and [`path_within`]: whether two names open
+//!   the same place on disk, and whether one path lies inside another.
+//! - **keying** — [`path_key`], [`FoldedKey`] and [`folded_keys`]: which
+//!   bucket of a map a relative path belongs to, and the index over that
+//!   bucket. The answer is public —
+//!   [`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase) pairs
+//!   two sides by this key — so the rule behind that answer is published too
+//!   rather than left for a caller to spell out, because the ASCII-only fold
+//!   is the half of the rule that is easy to get wrong.
+//! - **the cache vocabulary** — [`is_record_path`], [`is_cache_name`] and
+//!   [`is_cache_rel`]: whether a path names the tool's own state. The answer
+//!   is public too: [`crate::effective::Repopulate`].
+//!
+//! The comparisons those rules are written in stay inside the crate: the
+//! component equality, the Unicode lowercase mapping, the ASCII-case
+//! comparison and the cache prefix. They are how a rule is written, not rules
+//! of their own.
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
@@ -321,11 +344,19 @@ pub(crate) fn unicode_case_eq(a: &OsStr, b: &OsStr) -> bool {
 /// compare every other byte exactly", so a non-ASCII case variant is
 /// deliberately a distinct key.
 ///
-/// This is a map key, not a containment check: [`component_eq`] and
-/// [`same_path`] own the filesystem-identity decision and keep their Unicode
-/// fallback for names outside ASCII. Callers use this where the run pairs paths
-/// case-insensitively.
-pub(crate) fn path_key(rel: &str) -> String {
+/// This is a map key, not a containment check: the component equality
+/// (`component_eq`) and [`same_path`] own the filesystem-identity decision and
+/// keep their Unicode fallback for names outside ASCII. Callers use this where
+/// the run pairs paths case-insensitively.
+///
+/// **Published, because the answer it decides is.** The pairing a run reports
+/// is [`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase),
+/// which pairs two sides by this key, so a caller that reads that pairing has
+/// to be able to ask the same question the same way. Publishing the rule is
+/// what keeps that caller from spelling the fold out again — and the fold is
+/// the half of the rule that is easy to get wrong, because a Unicode fold
+/// merges spellings the disk keeps apart.
+pub fn path_key(rel: &str) -> String {
     rel.to_ascii_lowercase()
 }
 
@@ -345,7 +376,12 @@ pub(crate) fn path_key(rel: &str) -> String {
 /// The fold is **not** the identity rule's: that one keeps a Unicode fallback
 /// because it asks whether two spellings open the same place on disk, which
 /// is a different question from the one a map key answers.
-pub(crate) struct FoldedKey<'a>(pub(crate) &'a str);
+///
+/// **Published with the rule it states.** It is the borrowed form of
+/// [`path_key`], and an index a caller builds over a map the crate gave it
+/// has to fold the way the crate folds; the borrowed form is the one that
+/// costs no allocation per path.
+pub struct FoldedKey<'a>(pub &'a str);
 
 impl Hash for FoldedKey<'_> {
     /// The fold, hashed the way the comparison states it: two paths that are
@@ -374,9 +410,9 @@ impl Eq for FoldedKey<'_> {}
 /// and no second copy of the tree's entries.
 ///
 /// **The index is unambiguous.** A mixed-case collision within one side is
-/// already fatal before any caller reaches here — [`check_mixed_case_keys`]
-/// rejects two spellings of one path — so a folded key names exactly one path
-/// per side.
+/// already fatal before any caller reaches here — the mixed-case guard
+/// (`check_mixed_case_keys`) rejects two spellings of one path — so a folded
+/// key names exactly one path per side.
 ///
 /// **It pairs nothing.** Which side a lookup resolves to, which direction a
 /// rename moves, and which spelling a record is written under all stay with
@@ -385,7 +421,14 @@ impl Eq for FoldedKey<'_> {}
 /// ([`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase)) and the
 /// diff pairs them after the rename pass has re-keyed dst
 /// ([`CasePairing::Exact`](crate::planner::CasePairing::Exact)).
-pub(crate) fn folded_keys<V>(map: &HashMap<String, V>) -> HashMap<String, (&String, &V)> {
+///
+/// **Published with the rule it indexes.** The answer this index serves is
+/// public — the pairing is
+/// [`CasePairing::Lowercase`](crate::planner::CasePairing::Lowercase) — so the
+/// index over the path key is published with it, and a caller that builds one
+/// over a map the crate gave it builds the crate's index rather than a shape
+/// of its own.
+pub fn folded_keys<V>(map: &HashMap<String, V>) -> HashMap<String, (&String, &V)> {
     map.iter().map(|(k, v)| (path_key(k), (k, v))).collect()
 }
 

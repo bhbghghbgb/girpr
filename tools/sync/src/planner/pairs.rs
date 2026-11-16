@@ -86,7 +86,7 @@ pub struct PairPlan {
 /// | [`Lowercase`](Self::Lowercase) | `a.txt` and `A.txt` are one path, spelled two ways | pairing what is on disk, before any rename |
 ///
 /// [`Lowercase`](Self::Lowercase) folds **ASCII case only**, the same key
-/// `path_key` builds: `Ärger.txt` and `ärger.txt`, or the Kelvin sign `\u{212A}`
+/// [`crate::util::path_key`] builds: `Ärger.txt` and `ärger.txt`, or the Kelvin sign `\u{212A}`
 /// and `k`, stay two paths. A non-ASCII name therefore pairs only with its
 /// byte-identical spelling. The fold deliberately does not reproduce a platform's
 /// Unicode case table; restricting it to ASCII means no two distinct non-ASCII
