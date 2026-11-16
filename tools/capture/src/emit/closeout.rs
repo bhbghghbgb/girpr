@@ -561,6 +561,30 @@ mod tests {
     }
 
     #[test]
+    fn a_late_difference_in_a_rewritten_file_fails_the_scoped_check_naming_it() {
+        // The failure the scoped pass exists to catch. We cannot mutate a file
+        // between the close-out's two scans without a seam in `close`, so the
+        // late change is made to the document `close` published: the same
+        // `a16_scoped` call `close` makes must then fail and name the path.
+        let root = scratch("late-difference");
+        seed(&root);
+        let closed = run(&root);
+
+        let before = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(before.0, "clean tree: {}", before.1);
+
+        std::fs::write(root.join("README.md"), b"changed after publication").unwrap();
+        let after = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(!after.0, "a late rewrite must not pass silently");
+        assert!(
+            after.1.contains("README.md"),
+            "the finding must name the rewritten file: {}",
+            after.1
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn two_passes_converge_and_the_pass_the_comment_claims_would_change_nothing() {
         // **The claim this module exists to make checkable.** `close`'s doc says
         // two passes converge exactly and that a third would find nothing new —
@@ -646,6 +670,11 @@ mod tests {
             "A16 must still state the file count it checked: {:?}",
             a16[0].actual
         );
+        assert!(
+            a16[0].actual.contains("carried from the first pass"),
+            "A16 must name the digests it did not re-hash: {:?}",
+            a16[0].actual
+        );
 
         // And it must be in the document on disk too, not only in the returned
         // struct — the two can diverge if the final write is ever skipped.
@@ -662,6 +691,64 @@ mod tests {
             ids.iter().filter(|i| **i == "A16").count(),
             1,
             "A16 on disk: {ids:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The row is drafted before the published document exists, so the only
+    /// proof that it speaks for that document is that the scoped check of the
+    /// published document returns the row's own words. This pins that identity,
+    /// and that the success path publishes once rather than three times.
+    #[test]
+    fn the_a16_row_reports_the_check_of_the_published_document() {
+        let root = scratch("published-checked");
+        seed(&root);
+        let closed = run(&root);
+
+        let a16 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A16")
+            .expect("an A16 row");
+        assert!(a16.ok, "{}", a16.actual);
+        assert!(
+            a16.actual.contains("carried from the first pass"),
+            "the row must state the scope it was checked under: {}",
+            a16.actual
+        );
+        assert!(
+            !a16.actual.contains("every digest re-hashed"),
+            "the row must not claim a second full pass: {}",
+            a16.actual
+        );
+
+        // The document on disk is the one the row speaks for: it is exactly
+        // the document returned to the caller, and checking it scoped yields
+        // the detail recorded in the row.
+        let on_disk: index::Checksums = serde_json::from_slice(
+            &std::fs::read(root.join("verify/checksums.json")).expect("published checksums"),
+        )
+        .expect("parse published checksums");
+        assert_eq!(
+            on_disk, closed.checksums,
+            "the returned document is not the one published"
+        );
+        let (ok, detail) = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(ok, "{detail}");
+        assert_eq!(
+            detail, a16.actual,
+            "the row must report this check's result"
+        );
+        assert_eq!(
+            closed
+                .written
+                .iter()
+                .filter(|p| p.as_str() == "verify/checksums.json")
+                .count(),
+            1,
+            "the success path must not republish the document"
         );
 
         let _ = std::fs::remove_dir_all(&root);

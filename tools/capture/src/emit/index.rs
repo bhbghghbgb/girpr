@@ -680,6 +680,102 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The scoped pass proves membership and the rewritten paths, and says so.
+    /// Its detail is the same string the close-out writes into the A16 row
+    /// before the published document exists, so a green check confirms the row
+    /// rather than contradicting it.
+    #[test]
+    fn a16_scoped_passes_a_clean_document_and_states_its_scope() {
+        let root = scratch("scoped-ok");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        let rewritten = ["verify/selfcheck.json", "README.md"];
+        let (ok, detail) = c.a16_scoped(&root, &rewritten);
+        assert!(ok, "{detail}");
+        assert_eq!(detail, scoped_pass_detail(c.file_count, &rewritten));
+        assert!(detail.contains("README.md"), "{detail}");
+        assert!(detail.contains("carried from the first pass"), "{detail}");
+        assert!(
+            !detail.contains("every digest re-hashed"),
+            "a scoped pass must not claim a second full re-hash: {detail}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// One rewritten file drifting from its recorded entry is a scoped failure
+    /// that names the path. The check re-hashes that file rather than trusting
+    /// the digest the second `scan_reusing` wrote for it.
+    #[test]
+    fn a16_scoped_fails_naming_the_rewritten_file_that_changed() {
+        let root = scratch("scoped-rewrite");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        // The late change is to one of the two rewritten paths, so the scoped
+        // half must re-hash it and report the disagreement.
+        std::fs::write(root.join("README.md"), b"CHANGED").unwrap();
+        let (ok, detail) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(!ok);
+        assert!(detail.contains("README.md"), "{detail}");
+        assert!(detail.contains("on disk"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file that appeared after the document was written is caught by the
+    /// membership half, even though it is not in `rewritten` and every recorded
+    /// digest still matches.
+    #[test]
+    fn a16_scoped_fails_naming_a_file_that_appeared_after_the_scan() {
+        let root = scratch("scoped-member");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        std::fs::write(root.join("surprise.bin"), b"s").unwrap();
+        let (ok, detail) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(!ok);
+        assert!(
+            detail.contains("surprise.bin") && detail.contains("not in"),
+            "{detail}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The scope is exact, not merely conservative: a path outside `rewritten`
+    /// is carried rather than re-hashed. Its digest was proved by the first
+    /// full pass and nothing wrote it between the passes, which is the saving
+    /// this check exists to keep.
+    #[test]
+    fn a16_scoped_carries_digests_outside_the_rewritten_list() {
+        let root = scratch("scoped-carry");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        std::fs::write(root.join("a.bin"), b"CHANGED").unwrap();
+        let (ok, _) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(
+            ok,
+            "a.bin was not rewritten, so its digest comes from the first pass"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Reusing a digest must produce **exactly** what re-hashing would have.
     ///
     /// This is the whole safety argument for `scan_reusing`, and it is only true
