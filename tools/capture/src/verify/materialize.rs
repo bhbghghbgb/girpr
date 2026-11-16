@@ -279,14 +279,37 @@ pub struct Pair {
 ///
 /// The two things this walk would otherwise redo per side are done once here:
 /// the index's references are grouped by file ([`ChunksByFile::build`]) and the
-/// decoded chunks are remembered ([`ChunkSource::memoizing`]).
+/// decoded chunks are remembered ([`ChunkSource::memoizing`]). Callers that also
+/// need the grouping for their own checks use [`rebuild_all_with`] so it is built
+/// once for the whole report.
 pub fn rebuild_all(
     root: &std::path::Path,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
     max_decompressed_bytes: u64,
 ) -> Result<Vec<Pair>, String> {
-    let by_file = ChunksByFile::build(index);
+    rebuild_all_with(
+        &ChunksByFile::build(index),
+        root,
+        index,
+        patchmaps,
+        max_decompressed_bytes,
+    )
+}
+
+/// [`rebuild_all`] with the index grouping supplied by its caller.
+///
+/// `verify` cross-checks each patchmap's plan against the same index references
+/// this rebuild uses. Building a second [`ChunksByFile`] for that would walk the
+/// whole index twice to answer what one grouping answers, so the caller builds
+/// it once and hands it to both.
+pub fn rebuild_all_with(
+    by_file: &ChunksByFile<'_>,
+    root: &std::path::Path,
+    index: &ChunkIndex,
+    patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
+    max_decompressed_bytes: u64,
+) -> Result<Vec<Pair>, String> {
     let src = ChunkSource::from_index(root, index, max_decompressed_bytes).memoizing();
     let mut names: Vec<&String> = patchmaps.keys().collect();
     names.sort();

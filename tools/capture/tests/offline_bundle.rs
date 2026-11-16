@@ -125,12 +125,13 @@ impl Bundle {
             Blob {
                 chunk: b.clone(),
                 raw: br,
+                // A chunk the old file already holds is REUSEd, not fetched:
+                // a real capture never puts it in `patch_fetch`.
                 refs: vec![
                     reference(OLD_TAG, DLL, Set::MaterializeOld, 64),
                     reference(NEW_TAG, DLL, Set::MaterializeNew, 64),
-                    reference(NEW_TAG, DLL, Set::PatchFetch, 64),
                 ],
-                sets: vec![Set::MaterializeOld, Set::MaterializeNew, Set::PatchFetch],
+                sets: vec![Set::MaterializeOld, Set::MaterializeNew],
             },
             Blob {
                 chunk: c.clone(),
@@ -215,7 +216,13 @@ impl Bundle {
                 file_tag: OLD_TAG.into(),
             }),
             chunk_id: c.id.clone(),
-            url: None,
+            // A capture always records the URL it would download a FETCH from;
+            // the shared chunks are REUSEd and need none.
+            url: if reuse_from.is_none() {
+                Some(format!("https://cdn.test/chunks/{}", c.id))
+            } else {
+                None
+            },
             compressed_size: c.compressed_size,
             uncompressed_size: c.uncompressed_size,
             uncompressed_md5: c.uncompressed_md5.clone(),

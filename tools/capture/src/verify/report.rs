@@ -178,7 +178,12 @@ pub fn reverify(bundle: Bundle) -> Report {
     // closed, and that is the single most important thing this command reports -
     // so it short-circuits: every row after this point would be about bytes that
     // do not exist.
-    let rebuilt = match super::materialize::rebuild_all(
+    // Group the index once. The rebuild needs it for both sides of every
+    // capture, and the plan/index cross-check below asks the same questions of
+    // the same references.
+    let by_file = super::materialize::ChunksByFile::build(&bundle.index);
+    let rebuilt = match super::materialize::rebuild_all_with(
+        &by_file,
         &root,
         &bundle.index,
         &bundle.patchmaps,
@@ -217,6 +222,11 @@ pub fn reverify(bundle: Bundle) -> Report {
             continue;
         };
         rows.extend(super::checks::check_pair(&root, p, map));
+        rows.extend(super::checks::check_plan_against_index(
+            map,
+            &by_file,
+            &bundle.index,
+        ));
     }
 
     // 4. The two claims that are about documents rather than blobs.
