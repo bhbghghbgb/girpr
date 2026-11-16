@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M52
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T10:39:45Z
+last_updated: 2026-11-16T11:03:25Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1267,8 +1267,22 @@ reviews:
     result: null
     followups: []
   - batch: M52
-    status: pending
+    status: in_progress
     tasks: [F295, F297]
+    base: 0bb18fb1
+    head: 0aedd172
+    result: null
+    followups: []
+  - batch: M133
+    status: pending
+    tasks: [F478, F480]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M134
+    status: pending
+    tasks: [F479]
     base: null
     head: null
     result: null
@@ -3167,9 +3181,9 @@ followups:
   - id: F295
     source: F206
     description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
-    status: in_progress
+    status: pending_review
     batch: M52
-    commits: []
+    commits: [7d4e184b]
   - id: F296
     source: F206
     description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
@@ -3180,9 +3194,9 @@ followups:
   - id: F297
     source: F208
     description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
-    status: in_progress
+    status: pending_review
     batch: M52
-    commits: []
+    commits: [0aedd172]
   - id: F298
     source: F208
     description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
@@ -4284,6 +4298,24 @@ followups:
     status: pending
     batch: M132
     commits: []
+  - id: F478
+    source: F295
+    description: The effective phase A's group scan and the hash-list parser still spell the ASCII-case comparison as the standard library's own comparison rather than asking the crate's one comparison.
+    status: pending
+    batch: M133
+    commits: []
+  - id: F479
+    source: F297
+    description: The Kelvin-sign pair is the other non-ASCII pair where the ASCII-only rule and the shared mapping disagree, the mapping merging a pair the disk keeps apart, and it is pinned at neither site.
+    status: pending
+    batch: M134
+    commits: []
+  - id: F480
+    source: F295
+    description: The digest-set module doc still says the crate's ASCII-case comparison states the cache reservation's comparison, which now understates it, since it states the crate's comparison and the reservation is one user of it.
+    status: pending
+    batch: M133
+    commits: []
 ```
 
 ## Human checklist
@@ -4315,6 +4347,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M52 review checkpoint opened: F295 and F297
+  `in_progress` → `pending_review`, commits `7d4e184b`, `0aedd172`; review M52
+  `pending` → `in_progress`, base `0bb18fb1`, head `0aedd172`.
 - 2026-11-16 — follow-up batch M52 started: F295 and F297 `pending` →
   `in_progress`; `active_batch: M51` → `M52`.
 - 2026-11-16 — review M51 `done`: F294 kept (51660f8f), F296 kept (0671b2d8,
