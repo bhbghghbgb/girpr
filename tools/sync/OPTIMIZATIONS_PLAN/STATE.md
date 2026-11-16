@@ -11,10 +11,10 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: followups-implement
+phase: followups-review
 active_batch: M139
 spawn: openchamber session.create (no agent or model specified, use defaults), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time, returnResult true
-last_updated: 2026-11-16T13:10:00Z
+last_updated: 2026-11-16T13:25:00Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1357,6 +1357,13 @@ reviews:
     head: 10ec5297
     result: F138 kept (8e5f5bd0); F139 fixed (10ec5297 names the path key fold in the design notes mkdir-candidate paragraph, which still used the retired wording); F141 kept (0d360416); F144 kept (5777bf8c); 584 passed, 1 skipped; the reviewer confirmed exactly three path fold sites remain and no fourth rule was created
     followups: [F206, F207, F208]
+  - batch: M139
+    status: in_progress
+    tasks: [F425]
+    base: c5b469e4
+    head: d9fc6d79
+    result: null
+    followups: []
 followups:
   - id: F1
     source: T01
@@ -4126,9 +4133,9 @@ followups:
   - id: F425
     source: F277
     description: The walk replaces a backslash with a slash on every host, so a POSIX file whose name starts with a backslash gets a relative path that begins with a slash, and joining that onto the destination root replaces the root, so the copy would land outside the destination.
-    status: pending
-    batch: M109
-    commits: []
+    status: pending_review
+    batch: M139
+    commits: [d9fc6d79]
   - id: F426
     source: F276
     description: The gate's report only appears when the copy phase runs, so a run with nothing to copy never consults the switch and a malformed value stays silent there; reading the switch once at command start would make the report unconditional.
@@ -4643,6 +4650,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M139 review checkpoint opened: F425
+  `pending` → `pending_review`, commit `d9fc6d79`; review M139 `pending` →
+  `in_progress`, base `c5b469e4`, head `d9fc6d79`. Phase `followups-implement`
+  → `followups-review`.
 - 2026-11-16 — follow-up evaluation for rollout close: 165 pending items
   `skipped` as generic/non-blocking improvements, F430 `skipped` as a duplicate
   merged into F425, and F425 kept as the one actual correctness bug (POSIX
