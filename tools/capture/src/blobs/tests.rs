@@ -398,6 +398,41 @@ fn the_index_role_lists_are_derived_from_the_blobs_that_carry_them() {
     }
 }
 
+/// The role lists are read from each blob's own `sets`, so the index built from
+/// a representative store is exactly the union of the wants' sets — including
+/// the blob that is retained for two roles. A blob with no roles is filed under
+/// none of them.
+#[test]
+fn build_derives_each_role_list_from_the_blobs_sets() {
+    let w = chunks::wants(&[pair()]);
+    assert!(
+        w.iter().any(|x| x.sets.len() > 1),
+        "the representative store must include a blob in two roles"
+    );
+    let index = ChunkIndex::build(Store::plan_only(&w));
+    for set in Set::ALL {
+        let expected: Vec<String> = w
+            .iter()
+            .filter(|x| x.sets.contains(&set))
+            .map(|x| x.chunk.id.clone())
+            .collect();
+        assert_eq!(index.sets[set.id()], expected, "{} role list", set.id());
+    }
+
+    let index = ChunkIndex::build(vec![IndexedBlob {
+        props: BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
+            id: "aaa".into(),
+            ..Default::default()
+        }),
+        referenced_by: Vec::new(),
+        sets: Vec::new(),
+    }]);
+    assert!(
+        index.sets.values().all(|ids| ids.is_empty()),
+        "a blob with no roles is in none of the role lists"
+    );
+}
+
 #[test]
 fn the_index_lists_blobs_sorted_by_id_so_two_runs_agree() {
     let w = chunks::wants(&[pair()]);

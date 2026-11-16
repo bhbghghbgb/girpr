@@ -707,6 +707,76 @@ fn the_rederived_ids_are_ones_this_command_actually_checks() {
     );
 }
 
+/// An assertion with only the fields `check_agreement` reads set.
+fn agreement_row(id: &str, ok: bool) -> crate::emit::selfcheck::Assertion {
+    crate::emit::selfcheck::Assertion {
+        id: id.to_string(),
+        assertion: String::new(),
+        subject: format!("subject-{id}"),
+        expected: String::new(),
+        actual: String::new(),
+        ok,
+    }
+}
+
+/// Compare recorded assertions with recomputed rows through a minimal bundle.
+fn agrees(
+    recorded: Vec<crate::emit::selfcheck::Assertion>,
+    recomputed: Vec<crate::emit::selfcheck::Assertion>,
+) -> bool {
+    let d = girpr_tempdir::TempDir::new("gircap-m9-agreement", "agreement");
+    write_minimal_bundle(&d, "cap");
+    let mut b = Bundle::open(&d).expect("a minimal bundle opens");
+    b.recorded.assertions = recorded;
+    check_agreement(&b, &recomputed)
+}
+
+/// The indexed check must keep the old per-id semantics exactly: `all` over the
+/// rows for an id, which is true for an id with no rows at all. That default is
+/// why a missing recomputed row counts as agreement rather than a failure.
+#[test]
+fn agreement_green_green_and_green_false_keep_the_old_directions() {
+    assert!(agrees(
+        vec![agreement_row("A6", true)],
+        vec![agreement_row("A6", true)]
+    ));
+    assert!(!agrees(
+        vec![agreement_row("A6", true)],
+        vec![agreement_row("A6", false)]
+    ));
+    // One direction only: a red recording that now holds is not a disagreement.
+    assert!(agrees(
+        vec![agreement_row("A6", false)],
+        vec![agreement_row("A6", false)]
+    ));
+    // An id this command does not re-derive is never compared.
+    assert!(agrees(
+        vec![agreement_row("A1", true)],
+        vec![agreement_row("A1", false)]
+    ));
+}
+
+#[test]
+fn a_missing_recomputed_id_counts_as_agreement() {
+    assert!(agrees(vec![agreement_row("A6", true)], vec![]));
+}
+
+#[test]
+fn one_red_row_among_several_for_one_id_disagrees() {
+    assert!(agrees(
+        vec![agreement_row("A6", true)],
+        vec![agreement_row("A6", true), agreement_row("A6", true)]
+    ));
+    assert!(!agrees(
+        vec![agreement_row("A6", true)],
+        vec![
+            agreement_row("A6", true),
+            agreement_row("A6", false),
+            agreement_row("A6", true),
+        ]
+    ));
+}
+
 /// A20 re-derives a patchmap's arithmetic from the patchmap, so it needs no
 /// API body - which is the whole reason it can live here.
 #[test]
