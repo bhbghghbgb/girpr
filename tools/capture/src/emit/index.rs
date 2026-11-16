@@ -215,16 +215,30 @@ pub struct FileEntry {
 /// between a capture that feels instant and one that does not. The writer is
 /// [`hash::DualDigest`] rather than a `Tee` defined here: one pass computes
 /// both digests, so a 90 MB artifact is not hashed twice.
+/// Read-buffer capacity for file digests.
+///
+/// Larger than the default `std::io::copy` buffer so a large blob needs fewer
+/// reads, while the bytes fed to [`hash::DualDigest`] — and so the digests —
+/// are unchanged. Applies to the reader only: `DualDigest` is the writer and
+/// needs no buffer of its own.
+const DIGEST_READ_CAPACITY: usize = 64 * 1024;
+
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let mut d = hash::DualDigest::new();
     match encoding {
-        crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut d)?,
-        // Streamed rather than buffered, for the same reason as above: a
-        // full manifest decode is several megabytes.
+        crate::hash::Encoding::Identity => {
+            let mut reader = std::io::BufReader::with_capacity(DIGEST_READ_CAPACITY, file);
+            std::io::copy(&mut reader, &mut d)?;
+        }
+        // Streamed rather than materialised, for the same reason as above: a
+        // full manifest decode is several megabytes. The compressed bytes still
+        // arrive through a 64 KiB read buffer; only the digest target is the
+        // decoder's decompressed output.
         crate::hash::Encoding::Gzip => {
-            let mut gz = flate2::read::GzDecoder::new(file);
-            std::io::copy(&mut gz, &mut d)?
+            let reader = std::io::BufReader::with_capacity(DIGEST_READ_CAPACITY, file);
+            let mut gz = flate2::read::GzDecoder::new(reader);
+            std::io::copy(&mut gz, &mut d)?;
         }
     };
     let d = d.finish();
@@ -632,12 +646,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The digest is streamed in 64 KiB blocks, so a file that is an exact
-    /// multiple of the block size has to come out the same as one that is not.
+    /// The digest reads through a 64 KiB buffer, so a file that is an exact
+    /// multiple of the buffer size has to come out the same as one that is not.
     #[test]
     fn a_file_exactly_one_block_long_digests_correctly() {
         let root = scratch("block");
-        let body = vec![7_u8; 64 * 1024];
+        let body = vec![7_u8; DIGEST_READ_CAPACITY];
         std::fs::write(root.join("a.bin"), &body).unwrap();
         let e = digest_file(&root.join("a.bin"), crate::hash::Encoding::Identity).unwrap();
         assert_eq!(e.md5, hash::md5_hex(&body));
