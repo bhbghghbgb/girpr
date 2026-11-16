@@ -90,7 +90,7 @@ until the main tasks and rework are done.
 | F-09 | P3-06 | docs/index cleanup (`src/blobs/mod.rs`) | `ChunkIndex` docs claim blobs are "ordered by id" (justifying binary search), but `build` does not sort; correctness relies on the fallback scan. Fix the doc or sort. Pre-existing, outside P3-06. | dropped: internal doc inconsistency, code correct via fallback scan, no user-visible effect |
 | F-10 | P3-08 | test/CI hardening (`emit::index::walk`, `verify::list`) | Six filesystem symlink tests self-skip on Windows; only unit-level containment coverage here. Run them in a Unix CI job or add an injectable canonicalize seam. | dropped: general test/CI hardening, Windows self-skip intentional, unit-level containment already exists |
 | F-11 | P3-08 | verify/list hardening (`src/verify/list.rs`, `child_dirs`) | `child_dirs` is still `pub` and uses `std::fs::metadata`; enforcement lives only in `list_with`, so a future non-test caller could bypass containment. Make it private or pass the canonical root into it. | dropped: speculative API-privacy hardening, enforcement already in the only real caller |
-| F-12 | P3-08 | future containment task (`src/verify/bundle.rs`) | `MANIFEST.json` is stat'ed with `metadata` (follows links) and read one-shot, so `list` can surface bytes from a symlinked manifest outside the root. Canonicalize/check the manifest path against the root before reading. Pre-existing, out of scope. | pending_review (FB-3) — commit 20807677 |
+| F-12 | P3-08 | future containment task (`src/verify/bundle.rs`) | `MANIFEST.json` is stat'ed with `metadata` (follows links) and read one-shot, so `list` can surface bytes from a symlinked manifest outside the root. Canonicalize/check the manifest path against the root before reading. Pre-existing, out of scope. | completed (FB-3) — commit 20807677 |
 
 ## Follow-up batches
 
@@ -100,7 +100,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 |---|---|---|---|
 | FB-1 | F-01 | done | Published `folders` count is always 0 in `diff/paths.diff.json`; one-spot fix, no behavioral risk. Highest value / lowest risk. Confirmed completed: count now truthful, document shape unchanged. |
 | FB-2 | F-04 | done | Selection ordinal collision can silently overwrite a patchmap in release; debug guard only detects. Sensitive — careful review. Confirmed: unified ordinals, decisions unchanged, pre-fix reproduction + release check green. |
-| FB-3 | F-12 | todo | Symlinked `MANIFEST.json` to outside the root is accepted and surfaces in `verify list`; verify other `probe_manifest` callers still work. |
+| FB-3 | F-12 | done | Symlinked `MANIFEST.json` to outside the root is accepted and surfaces in `verify list`; verify other `probe_manifest` callers still work. Confirmed: canonicalized check before read, helper reused, behavior preserved. |
 
 ## Notes
 
