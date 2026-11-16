@@ -18,7 +18,7 @@ use crate::cache::open::{
     is_table_missing, open_read_only, read_meta, read_meta_bytes, require_current_version,
 };
 use crate::cache::schema::{CACHE_VERSION, FileRec, Meta};
-use crate::cache::write::{CacheWrite, CommitLimits};
+use crate::cache::write::{CacheWrite, CommitLimits, CommitPolicy};
 use crate::cache::{ENTRIES, META_KEY, META_TBL};
 
 /// The `meta` row, decoded, in the read/write path's words.
@@ -266,8 +266,12 @@ impl CacheDb {
             }
         }
 
+        // The policy is resolved when the write starts, like every other
+        // write's. This one is a single transaction that commits once, so it
+        // has no thresholds to batch to and uses only the durability.
+        let policy = CommitPolicy::from_env();
         let mut txn = db.begin_write().context("begin write (meta)")?;
-        txn.set_durability(crate::cache::write_durability())
+        txn.set_durability(policy.durability())
             .context("set cache write durability")?;
         // A cache with a `meta` row but no entries table is not whole, and
         // the write path below is what repairs it. Opening the table creates
@@ -743,12 +747,21 @@ impl CacheDb {
     /// The thresholds are [`CommitLimits::default()`] with the test-only
     /// `GIRSYNC_TEST_COMMIT_*` overrides applied; use
     /// [`begin_write_with`](Self::begin_write_with) to choose them explicitly.
+    ///
+    /// **The write's commit policy is resolved here, once.** The thresholds
+    /// and the durability are read together when the handle opens, and every
+    /// transaction the handle commits uses them — so the handle's policy does
+    /// not change under it.
     pub fn begin_write(&self) -> Result<CacheWrite<'_>> {
         CacheWrite::new(self.writable()?)
     }
 
     /// Start a batched write handle with custom commit thresholds (see
     /// [`CommitLimits`]). Fails on a read-only cache.
+    ///
+    /// The durability is still the process's: the thresholds are the
+    /// caller's, and the rest of the policy is resolved with them, when the
+    /// handle opens.
     pub fn begin_write_with(&self, limits: CommitLimits) -> Result<CacheWrite<'_>> {
         CacheWrite::with_limits(self.writable()?, limits)
     }

@@ -3,6 +3,13 @@
 //! One write transaction per handle, committed on whichever of the three
 //! thresholds in [`CommitLimits`] trips first. Bulk phases use this instead of
 //! [`super::CacheDb::put`], which commits per call and would fsync per file.
+//!
+//! ## A write has one commit policy
+//!
+//! A write commits under a **policy**: the thresholds it batches to and the
+//! durability it commits with. The policy is resolved **once, when the write
+//! starts**, and it does not change while the write runs — see
+//! [`CommitPolicy`].
 
 use anyhow::{Context, Result};
 use redb::{Database, ReadableTable};
@@ -57,9 +64,10 @@ impl CommitLimits {
     /// [`COMMIT_BATCH`] rows, [`COMMIT_BYTES`] of content, or wait
     /// [`COMMIT_INTERVAL`]. `GIRSYNC_TEST_COMMIT_OPS`,
     /// `GIRSYNC_TEST_COMMIT_BYTES`, and `GIRSYNC_TEST_COMMIT_INTERVAL_MS`
-    /// (milliseconds) override the three thresholds instead. They are read when
-    /// a handle is opened, not on every mutation, and an unset or unparseable
-    /// value leaves the default in place.
+    /// (milliseconds) override the three thresholds instead. They are read
+    /// when a write starts — together with the durability, as one policy (see
+    /// [`CommitPolicy`]) — and not on every mutation, and an unset or
+    /// unparseable value leaves the default in place.
     ///
     /// Deliberately not CLI flags: they exist so a small fixture can make a
     /// commit observable, not to tune a real run.
@@ -75,6 +83,58 @@ impl CommitLimits {
             limits.max_interval = Duration::from_millis(ms);
         }
         limits
+    }
+}
+
+/// A write's commit policy: the thresholds it batches to, and the durability
+/// every transaction of it commits with.
+///
+/// **The two are resolved together, once, when the write starts.** The
+/// thresholds are the test-only `GIRSYNC_TEST_COMMIT_*` overrides and the
+/// durability is the test-only `GIRSYNC_TEST_DURABILITY` switch, and one
+/// function reads both, at one moment — so the two cannot disagree about
+/// when they were read, and a switch cannot answer for half of a policy.
+///
+/// **The policy does not change under a running write.** A handle that asked
+/// the environment again for each transaction it opens would commit some of
+/// its batches one way and the rest another: the durability switch exists to
+/// make a whole run's commits cheap, and a handle that changed its mind half
+/// way through would leave the run's own cache half durable and half not. So
+/// a handle keeps the policy it opened with, and every transaction it
+/// commits — including the ones it opens after a threshold trips — commits
+/// under it.
+pub(in crate::cache) struct CommitPolicy {
+    /// The thresholds a batched write commits on.
+    limits: CommitLimits,
+    /// The durability every transaction of the write commits with.
+    durability: redb::Durability,
+}
+
+impl CommitPolicy {
+    /// The policy of a write, with the test-only overrides applied.
+    ///
+    /// The thresholds and the durability are read here, together, once.
+    pub(in crate::cache) fn from_env() -> Self {
+        Self {
+            limits: CommitLimits::from_env(),
+            durability: super::write_durability(),
+        }
+    }
+
+    /// The policy of a write whose thresholds the caller chose.
+    ///
+    /// The durability is still the process's: it is read here, with the
+    /// thresholds, so a write's whole policy is decided in one place.
+    pub(in crate::cache) fn with_limits(limits: CommitLimits) -> Self {
+        Self {
+            limits,
+            durability: super::write_durability(),
+        }
+    }
+
+    /// The durability every transaction of this write commits with.
+    pub(in crate::cache) fn durability(&self) -> redb::Durability {
+        self.durability
     }
 }
 
@@ -102,7 +162,7 @@ fn env_limit<T: std::str::FromStr>(name: &str) -> Option<T> {
 pub struct CacheWrite<'a> {
     db: &'a Database,
     txn: Option<redb::WriteTransaction>,
-    limits: CommitLimits,
+    policy: CommitPolicy,
     pub(super) dirty: usize,
     pub(super) bytes_since_commit: u64,
     last_commit: Instant,
@@ -110,21 +170,38 @@ pub struct CacheWrite<'a> {
 
 impl<'a> CacheWrite<'a> {
     pub(super) fn new(db: &'a Database) -> Result<Self> {
-        Self::with_limits(db, CommitLimits::from_env())
+        Self::with_policy(db, CommitPolicy::from_env())
     }
 
     pub(super) fn with_limits(db: &'a Database, limits: CommitLimits) -> Result<Self> {
-        let mut txn = db.begin_write().context("begin write")?;
-        txn.set_durability(super::write_durability())
-            .context("set cache write durability")?;
-        Ok(Self {
+        Self::with_policy(db, CommitPolicy::with_limits(limits))
+    }
+
+    fn with_policy(db: &'a Database, policy: CommitPolicy) -> Result<Self> {
+        let mut w = Self {
             db,
-            txn: Some(txn),
-            limits,
+            txn: None,
+            policy,
             dirty: 0,
             bytes_since_commit: 0,
             last_commit: Instant::now(),
-        })
+        };
+        let txn = w.begin_txn()?;
+        w.txn = Some(txn);
+        Ok(w)
+    }
+
+    /// Open a write transaction under this handle's policy.
+    ///
+    /// **Every transaction a handle opens goes through here**, so the policy
+    /// is applied once and cannot be re-read by accident: the handle's
+    /// transactions all commit the same way, whichever of them opened the
+    /// write.
+    fn begin_txn(&mut self) -> Result<redb::WriteTransaction> {
+        let mut txn = self.db.begin_write().context("begin write")?;
+        txn.set_durability(self.policy.durability)
+            .context("set cache write durability")?;
+        Ok(txn)
     }
 
     pub fn get(&self, rel: &str) -> Result<Option<FileRec>> {
@@ -218,9 +295,9 @@ impl<'a> CacheWrite<'a> {
         // The time check runs on mutation, i.e. right after the (possibly
         // minutes-long) hash that produced this put — exactly when the
         // backlog of uncommitted work is largest.
-        if self.dirty >= self.limits.max_ops
-            || self.bytes_since_commit >= self.limits.max_bytes
-            || self.last_commit.elapsed() >= self.limits.max_interval
+        if self.dirty >= self.policy.limits.max_ops
+            || self.bytes_since_commit >= self.policy.limits.max_bytes
+            || self.last_commit.elapsed() >= self.policy.limits.max_interval
         {
             self.flush_txn()?;
         }
@@ -233,9 +310,9 @@ impl<'a> CacheWrite<'a> {
         let elapsed = self.last_commit.elapsed();
         let txn = self.txn.take().context("write txn gone")?;
         txn.commit().context("commit cache batch")?;
-        let mut txn = self.db.begin_write().context("begin write")?;
-        txn.set_durability(super::write_durability())
-            .context("set cache write durability")?;
+        // The next transaction is this handle's own: it commits under the
+        // policy the handle opened with, like the one before it.
+        let txn = self.begin_txn()?;
         self.txn = Some(txn);
         self.dirty = 0;
         self.bytes_since_commit = 0;
@@ -250,8 +327,8 @@ impl<'a> CacheWrite<'a> {
     }
 
     /// Commit all pending mutations. This is the `flush()` analogue: after
-    /// it returns, the mutations survive a process kill — unless the test-only
-    /// `GIRSYNC_TEST_DURABILITY=none` switch lowered the transaction's
+    /// it returns, the mutations survive a process kill — unless the
+    /// test-only `GIRSYNC_TEST_DURABILITY=none` switch lowered the write's
     /// durability. In that case they survive a clean exit (redb flushes on
     /// `Database` drop) but not a kill. Production always keeps
     /// [`Durability::Immediate`](redb::Durability::Immediate); see
@@ -300,6 +377,45 @@ mod tests {
             max_bytes: u64::MAX,
             max_interval: Duration::from_secs(3600),
         }
+    }
+
+    /// **A write's commit policy is decided when the write starts.**
+    ///
+    /// The durability switch is read once per write and not again while that
+    /// write runs: a batched write handle reads it when it opens, and the
+    /// transaction it opens after a threshold trips does not read it again. A
+    /// handle that asked the environment again for each of its transactions
+    /// would commit some of its batches one way and the rest another.
+    ///
+    /// The count is the switch's own: the policy is the only thing that
+    /// reads it, so the number of readings is the number of writes that
+    /// resolved a policy.
+    #[test]
+    fn a_write_reads_the_durability_switch_once_and_keeps_it() {
+        let c = CacheDb::open_temp(true).unwrap();
+
+        let before = crate::cache::durability_reads();
+        let mut w = c
+            .begin_write_with(CommitLimits {
+                max_ops: 1,
+                ..quiet_limits()
+            })
+            .unwrap();
+        assert_eq!(
+            crate::cache::durability_reads() - before,
+            1,
+            "the handle reads the switch once, when it opens"
+        );
+
+        // The op-count threshold trips on this put, so the handle commits and
+        // opens another transaction.
+        w.put("a", &file_rec()).unwrap();
+        assert_eq!(
+            crate::cache::durability_reads() - before,
+            1,
+            "the transaction the handle opened after the threshold does not read the switch again"
+        );
+        w.commit().unwrap();
     }
 
     #[test]
