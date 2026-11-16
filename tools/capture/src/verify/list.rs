@@ -210,7 +210,11 @@ pub fn child_dirs(
 /// `canonical_root`; `None` when it resolves outside the root or cannot be
 /// resolved at all (a broken link). Comparing canonical paths is what makes a
 /// symlinked root legitimate while a link that escapes it is rejected.
-fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
+///
+/// Shared with [`super::bundle`] so the one-shot manifest read applies the same
+/// rule as the walkers: a file reached through a link out of the root is not
+/// owned by that root.
+pub(super) fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
     let canonical = std::fs::canonicalize(path).ok()?;
     canonical.starts_with(canonical_root).then_some(canonical)
 }

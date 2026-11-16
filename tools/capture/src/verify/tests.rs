@@ -12,6 +12,17 @@ fn link_dir(target: &Path, link: &Path) -> bool {
     std::os::windows::fs::symlink_dir(target, link).is_ok()
 }
 
+/// Create a file link, with the same self-skip-on-denial pattern as
+/// [`link_dir`] for hosts (Windows without the privilege) that refuse it.
+#[cfg(unix)]
+fn link_file(target: &Path, link: &Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+#[cfg(windows)]
+fn link_file(target: &Path, link: &Path) -> bool {
+    std::os::windows::fs::symlink_file(target, link).is_ok()
+}
+
 #[test]
 fn opening_a_path_that_is_not_a_directory_says_what_the_flag_takes() {
     let e = Bundle::open(Path::new("E:/definitely/not/here")).unwrap_err();
@@ -280,6 +291,87 @@ fn a_symlinked_root_is_listed_as_its_target() {
     assert_eq!(index.bundles.len(), 1, "{index:?}");
     assert_eq!(index.bundles[0].path, "cap", "{index:?}");
     assert_eq!(index.bundles[0].capture_id, "linked_capture");
+}
+
+/// The containment decision is made on canonical paths, so it can be checked
+/// without any link privilege: a manifest under the root is contained, one
+/// under a different tree is not, and a path that does not resolve is not
+/// either. This is the decision the one-shot manifest read applies before it
+/// reads a byte.
+#[test]
+fn manifest_containment_accepts_inside_and_rejects_outside() {
+    let d = girpr_tempdir::TempDir::new("gircap-manifest-contain", "contain");
+    let root = d.join("root");
+    let outside = d.join("outside");
+    std::fs::create_dir_all(&root).expect("makes the root");
+    std::fs::create_dir_all(&outside).expect("makes the other tree");
+    let inside = root.join("MANIFEST.json");
+    let out = outside.join("MANIFEST.json");
+    std::fs::write(&inside, b"{}").expect("writes the inside manifest");
+    std::fs::write(&out, b"{}").expect("writes the outside manifest");
+
+    assert!(manifest_under_root(&root, &inside));
+    assert!(!manifest_under_root(&root, &out));
+    assert!(!manifest_under_root(&root, &root.join("gone")));
+}
+
+/// A `MANIFEST.json` that is a link to a tree outside the bundle is refused at
+/// open: `metadata` follows the link and sees a file, so containment has to be
+/// checked before the one-shot read surfaces bytes this root does not own.
+#[test]
+fn an_escaping_manifest_link_is_refused_at_open() {
+    let d = girpr_tempdir::TempDir::new("gircap-manifest-link-open", "escape");
+    let outside = girpr_tempdir::TempDir::new("gircap-manifest-link-target", "target");
+    write_minimal_bundle(&outside, "outside_capture");
+    let root = d.join("root");
+    std::fs::create_dir_all(&root).expect("makes the root");
+    if !link_file(&outside.join("MANIFEST.json"), &root.join("MANIFEST.json")) {
+        eprintln!("skipping escaping-manifest test: file symlinks unavailable on this host");
+        return;
+    }
+    let e = Bundle::open(&root).unwrap_err();
+    assert!(e.contains("MANIFEST.json"), "{e}");
+    assert!(e.contains("outside"), "the refusal names the escape: {e}");
+}
+
+/// And `list` does not surface those bytes either: a directory whose manifest
+/// links out of the root is stepped over, not listed as a bundle.
+#[test]
+fn a_manifest_link_outside_the_root_is_not_listed() {
+    let d = girpr_tempdir::TempDir::new("gircap-manifest-link-list", "escape");
+    let outside = girpr_tempdir::TempDir::new("gircap-manifest-link-list-target", "target");
+    write_minimal_bundle(&outside, "outside_capture");
+    let cap = d.join("cap");
+    std::fs::create_dir_all(&cap).expect("makes the directory");
+    if !link_file(&outside.join("MANIFEST.json"), &cap.join("MANIFEST.json")) {
+        eprintln!("skipping manifest link list test: file symlinks unavailable on this host");
+        return;
+    }
+    let index = list(&d).expect("lists");
+    assert!(
+        index.bundles.is_empty(),
+        "a manifest that links out of the root is not a bundle here: {index:?}"
+    );
+    assert!(index.unreadable.is_empty(), "{index:?}");
+}
+
+/// The rule is containment, not a blanket ban on links: a `MANIFEST.json` that
+/// links to a file still inside the root is read and the bundle is listed.
+#[test]
+fn a_manifest_link_inside_the_root_is_still_listed() {
+    let d = girpr_tempdir::TempDir::new("gircap-manifest-inner-link", "inner");
+    let cap = d.join("cap");
+    write_minimal_bundle(&cap, "inside_capture");
+    let stored = cap.join("manifest-stored.json");
+    std::fs::rename(cap.join("MANIFEST.json"), &stored)
+        .expect("moves the manifest inside the root");
+    if !link_file(&stored, &cap.join("MANIFEST.json")) {
+        eprintln!("skipping inner manifest link test: file symlinks unavailable on this host");
+        return;
+    }
+    let index = list(&d).expect("lists");
+    assert_eq!(index.bundles.len(), 1, "{index:?}");
+    assert_eq!(index.bundles[0].capture_id, "inside_capture");
 }
 
 /// The smallest directory `Bundle::open` accepts, written with the crate's own

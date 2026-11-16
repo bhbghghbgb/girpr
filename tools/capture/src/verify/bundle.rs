@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use super::list::canonical_under_root;
+
 use crate::assemble::PatchMap;
 use crate::blobs::ChunkIndex;
 use crate::emit::index::{Checksums, Manifest};
@@ -407,6 +409,23 @@ pub enum ManifestProbe {
     Version(u32),
 }
 
+/// Whether the manifest at `path` resolves inside `root`, the bundle root that
+/// holds it.
+///
+/// Both ends are canonicalized, so a symlinked root is legitimate — its
+/// canonical form is the target, and the manifest under it is contained — while
+/// a `MANIFEST.json` that is itself a link to a tree outside the root resolves
+/// elsewhere and is refused. This is the same decision the walkers make for
+/// directories and files, applied to the one document they do not descend
+/// through before reading. A path that cannot be resolved (a broken link, or a
+/// root that is gone) is not contained either.
+pub(super) fn manifest_under_root(root: &Path, manifest: &Path) -> bool {
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    canonical_under_root(&canonical_root, manifest).is_some()
+}
+
 /// Probe a `MANIFEST.json`, distinguishing absence from a read failure.
 ///
 /// **Nothing but the version.** The document is read as a JSON value rather
@@ -419,6 +438,14 @@ pub enum ManifestProbe {
 /// capture, or a directory that only looks like one — and says so. A document
 /// that could not be read at all is not the same fact: it is returned as
 /// `Err` naming the path and the I/O error, because a bundle may be behind it.
+///
+/// **The manifest is contained before it is read.** `metadata` follows links,
+/// so a symlinked `MANIFEST.json` pointing outside the bundle looks like an
+/// ordinary file here. Resolving it against its own directory first means a
+/// link out of the root is refused rather than surfacing bytes the root does
+/// not own — the same rule the recursive walkers apply to the files beneath a
+/// bundle. In `list` such a directory is simply stepped over; in
+/// [`Bundle::open`] the refusal is named by [`schema_version_of`].
 ///
 /// The reader is a parameter so [`list_with`] can inject a failing one; the
 /// only other caller passes [`std::fs::read`].
@@ -435,6 +462,17 @@ pub fn probe_manifest(
         // could not see, which is not the same as an empty one.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ManifestProbe::Missing),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    }
+    // `metadata` followed the link; check containment before reading the bytes.
+    // The root a manifest belongs to is the directory that holds it.
+    let contained = path
+        .parent()
+        .is_some_and(|root| manifest_under_root(root, path));
+    if !contained {
+        return Ok(ManifestProbe::NotABundle(format!(
+            "{}: MANIFEST.json resolves outside the bundle root; refused",
+            path.display()
+        )));
     }
     let raw = read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let value: serde_json::Value = match serde_json::from_slice(&raw) {
