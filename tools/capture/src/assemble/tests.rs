@@ -1230,6 +1230,74 @@ fn a_plan_cost_that_overflows_is_a_typed_error() {
     );
 }
 
+/// Direct writes size `out` from the declared target before the loop, so a
+/// hostile size must be a typed error rather than a huge allocation or a panic
+/// in `copy_from_slice`. Called on the flow directly to reach the sizing guard.
+#[test]
+fn a_patch_target_size_that_cannot_fit_a_buffer_is_an_error_not_a_panic() {
+    let pair = same_offset_pair();
+    let a = assemble_pair(&pair).expect("assembles");
+    let old = a.old.as_ref().expect("an old side");
+    let entries: Vec<&SophonChunkFile> = [&pair.old.as_ref().unwrap().entry].into();
+    let src = ChunkSource::from_memory(memory_of(&entries));
+    let classes = [Class::ReuseInPlace];
+    let input = AssemblyInput {
+        pair: &pair,
+        matching_field: "game",
+        classes: &classes,
+        sources: &sources(),
+        chunks: &src,
+    };
+
+    for size in [i64::MIN, -1, 1_i64 << 40, i64::MAX] {
+        let mut new_entry = pair.new.as_ref().unwrap().entry.clone();
+        new_entry.size = size;
+        let e = patch_flow(&input, &new_entry, old, "7.0.0", "7.1.0").unwrap_err();
+        assert!(
+            e.contains("past the") || e.contains("does not fit"),
+            "size {size}: {e}"
+        );
+    }
+}
+
+/// The identity map keeps the *first* old chunk with a given content, even when
+/// several old chunks share it — the choice stays the first offset, not the
+/// last one inserted and not whichever a hash table happens to yield.
+#[test]
+fn duplicate_old_identities_choose_the_first_offset() {
+    let pair = FilePair {
+        capture_id: "reuse_in_place".into(),
+        path: "blk".into(),
+        old: Some(OldFile {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            // The same content twice, at offsets 0 and 64.
+            entry: file("blk", vec![chunk(1, 0, 64), chunk(1, 64, 64)]),
+        }),
+        new: Some(NewFile {
+            tag: "7.1.0".into(),
+            build_id: "sMXGW2ll3Fuu".into(),
+            entry: file("blk", vec![chunk(2, 0, 64), chunk(1, 64, 64)]),
+        }),
+    };
+    let a = assemble_pair(&pair).expect("assembles");
+    let plan = a.map.plan.as_ref().unwrap();
+    let reused = plan
+        .iter()
+        .find(|e| e.decision == Decision::Reuse)
+        .expect("the shared identity is reused");
+    assert_eq!(
+        reused.source_range.as_ref().unwrap().start,
+        0,
+        "the first old occurrence wins, not the one already at offset 64"
+    );
+    assert_eq!(reused.target_range.start, 64);
+    assert!(
+        reused.is_moved(),
+        "it moves from the first slot to the second"
+    );
+}
+
 /// **K1.** `assemble` revalidates a hand-built manifest, so the same crafted
 /// `compressed_size` cannot bypass the capture's decode-boundary check.
 #[test]

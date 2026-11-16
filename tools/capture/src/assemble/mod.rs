@@ -27,6 +27,8 @@ use crate::blobs::chunks::FilePair;
 #[cfg(test)]
 use crate::select::Class;
 #[cfg(test)]
+use assembly::patch_flow;
+#[cfg(test)]
 use assembly::totals_for;
 #[cfg(test)]
 use ranges::{Layout, Range};

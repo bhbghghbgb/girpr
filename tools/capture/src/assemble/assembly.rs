@@ -259,7 +259,7 @@ pub fn assemble(input: &AssemblyInput<'_, '_>) -> Result<Assembled, String> {
 }
 
 /// The patch flow proper.
-fn patch_flow(
+pub(crate) fn patch_flow(
     input: &AssemblyInput<'_, '_>,
     new_entry: &SophonChunkFile,
     old: &FileResult,
