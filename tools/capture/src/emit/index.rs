@@ -659,6 +659,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// The 64 KiB read buffer must not change the bytes hashed: identity and
+    /// gzip digests agree with a direct hash of the intended bytes, both below
+    /// and above the buffer boundary, and gzip still digests the decompressed
+    /// body rather than the stored stream.
+    #[test]
+    fn digest_buffer_size_does_not_change_identity_or_gzip_digests() {
+        let root = scratch("digestbuf");
+        for (name, body) in [
+            ("small.bin", b"tiny".repeat(3)),
+            ("large.bin", vec![0x5A; DIGEST_READ_CAPACITY + 123]),
+        ] {
+            let path = root.join(name);
+            std::fs::write(&path, &body).unwrap();
+            let e = digest_file(&path, crate::hash::Encoding::Identity).unwrap();
+            assert_eq!(e.bytes, body.len() as u64, "{name}");
+            assert_eq!(e.md5, hash::md5_hex(&body), "{name}");
+            assert_eq!(e.sha256, hash::sha256_hex(&body), "{name}");
+            assert_eq!(e.encoding, crate::hash::Encoding::Identity, "{name}");
+        }
+        for (name, body) in [
+            ("small.gz", b"tiny".repeat(3)),
+            ("large.gz", vec![0x5A; DIGEST_READ_CAPACITY + 123]),
+        ] {
+            let path = root.join(name);
+            let stored = hash::gzip(&body).unwrap();
+            std::fs::write(&path, &stored).unwrap();
+            let e = digest_file(&path, crate::hash::Encoding::Gzip).unwrap();
+            assert_eq!(e.bytes, body.len() as u64, "{name}");
+            assert_eq!(e.md5, hash::md5_hex(&body), "{name}");
+            assert_eq!(e.sha256, hash::sha256_hex(&body), "{name}");
+            assert_eq!(e.encoding, crate::hash::Encoding::Gzip, "{name}");
+            assert_ne!(
+                e.md5,
+                hash::md5_hex(&stored),
+                "{name}: a gzip digest covers the body, not the stored bytes"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_walk_is_sorted_and_recursive() {
         let root = scratch("walk");
@@ -899,6 +939,49 @@ mod tests {
             "{detail}"
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A16's detail is exactly the first item of the exhaustive `findings`
+    /// list, even when several files have drifted. The early exit must not
+    /// reorder or skip findings: entries are re-hashed in path order and the
+    /// first mismatch still wins.
+    #[test]
+    fn a16_reports_the_first_of_several_digest_mismatches() {
+        let root = scratch("a16first");
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("b.bin"), b"b").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"CHANGED-A").unwrap();
+        std::fs::write(root.join("b.bin"), b"CHANGED-B").unwrap();
+
+        let all = c.findings(&root);
+        assert_eq!(all.len(), 2, "{all:?}");
+        let (ok, detail) = c.a16(&root);
+        assert!(!ok);
+        assert_eq!(detail, all[0], "A16 reports the head of the full list");
+        assert!(detail.contains("a.bin"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Findings come in a stable order: membership problems before any
+    /// per-entry re-hash. An extra file is therefore reported ahead of a
+    /// drifted digest even when the drifted file sorts first, and A16 takes
+    /// that head rather than the re-hash finding.
+    #[test]
+    fn findings_order_membership_before_rehash() {
+        let root = scratch("a16order");
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"CHANGED").unwrap();
+        std::fs::write(root.join("zz-extra.bin"), b"z").unwrap();
+
+        let all = c.findings(&root);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!(all[0].contains("zz-extra.bin"), "membership first: {all:?}");
+        assert!(all[1].contains("a.bin"), "re-hash second: {all:?}");
+        let (_, detail) = c.a16(&root);
+        assert_eq!(detail, all[0]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
