@@ -219,7 +219,7 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   for `effective done` finds both phases' done events.
 - **A record side reports neither the walk nor the phases.** It has no
   filesystem to walk and no bytes to hash, so it runs neither phase: it logs
-  `record side loaded` — carrying the number of rows it read — and no `scan`
+  `record side loaded` — carrying the number of rows it kept — and no `scan`
   event and no `effective` event at all. (`compare` also names the load
   itself, with `load record side`; `compare-self` opens the record read-only
   instead, with `cache opened read-only`.) So a grep for `effective done`
