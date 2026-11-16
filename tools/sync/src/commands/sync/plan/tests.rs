@@ -1,10 +1,10 @@
 use super::super::rename::DiskSpelling;
-#[cfg(windows)]
-use super::link::without_verbatim;
 use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
+#[cfg(windows)]
+use super::link::{on_disk_name, without_verbatim};
 use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
@@ -14,6 +14,8 @@ use crate::hash::DigestSet;
 use girpr_tempdir::TempDir;
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -934,6 +936,59 @@ fn a_case_differing_final_component_names_the_walk_entry() {
         target_rel(&dst.join("real/x.bin"), &root).unwrap(),
         Some("real/x.bin".to_string()),
         "the walk's own spelling is unchanged"
+    );
+}
+
+/// **The identity rule and the on-disk lookup agree on a non-ASCII
+/// spelling.**
+///
+/// The two sites ask different questions — one asks whether two spellings name
+/// the same place on disk, the other asks which directory entry the operating
+/// system would open — but they compare with one Unicode lowercase mapping, so
+/// they must not answer differently about the same pair of spellings.
+///
+/// The pair is the one the crate's other rule keeps apart: the ASCII-only path
+/// key folds `Ärger` and `ärger` into two keys, while these two sites say the
+/// two spellings are one place. That is where a second copy of the mapping
+/// would show up as a disagreement, so it is where the two sites are compared
+/// with each other.
+#[cfg(windows)]
+#[test]
+fn the_identity_rule_and_the_on_disk_lookup_agree_on_a_non_ascii_spelling() {
+    let t = TempDir::new("girsync_plan", "non_ascii_case");
+    let dir = t.subdir("dst");
+    std::fs::write(dir.join("Ärger.txt"), b"x").unwrap();
+
+    // The identity rule: two spellings, one place.
+    assert!(
+        crate::util::same_path(&dir.join("Ärger.txt"), &dir.join("ärger.txt")),
+        "Windows opens either spelling as the same file"
+    );
+
+    // The on-disk lookup: the entry the OS would open, asked for under the
+    // other spelling.
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("ärger.txt")).unwrap(),
+        Some(OsString::from("Ärger.txt")),
+        "the lookup names the entry the identity rule calls the same place"
+    );
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("Ärger.txt")).unwrap(),
+        Some(OsString::from("Ärger.txt")),
+        "and the walk's own spelling is unchanged"
+    );
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("other.txt")).unwrap(),
+        None,
+        "and a name the directory does not hold is still not found"
+    );
+
+    // The key keeps the two spellings apart: the disagreement these two
+    // sites are not part of.
+    assert_ne!(
+        crate::util::path_key("Ärger.txt"),
+        crate::util::path_key("ärger.txt"),
+        "the key folds ASCII case only, so a non-ASCII variant is a distinct key"
     );
 }
 

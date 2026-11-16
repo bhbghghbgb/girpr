@@ -182,7 +182,9 @@ for the planner's use of the key; and the `plan::tests` cases
 `a_case_differing_mirrored_target_is_refused`,
 `a_case_differing_terminal_is_spared_by_the_full_pass` and
 `a_case_differing_alias_is_spared_under_the_walk_key` for the on-disk lookup
-and the key side by side.
+and the key side by side, with
+`plan::tests::the_identity_rule_and_the_on_disk_lookup_agree_on_a_non_ascii_spelling`
+for the two sites that share the mapping, compared with each other.
 
 ### The cache's algorithm vocabulary is open; the request's is not
 
