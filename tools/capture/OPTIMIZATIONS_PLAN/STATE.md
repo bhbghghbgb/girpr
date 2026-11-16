@@ -16,7 +16,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P0-02 | Data-edge and bridge characterization tests | completed | b28655dc 00300863 | |
 | P0-03 | Verify-surface characterization tests | completed | 811ddc9f 5a00c3fb | |
 | P1-01 | Refuse identical resolved tags (A1) | pending_review | 82ca495f 0af07de5 | |
-| P1-02 | Carry encoding, not a `.gz` suffix (A2) | in_progress | | |
+| P1-02 | Carry encoding, not a `.gz` suffix (A2) | pending_review | 0360ca2a 82d03428 | |
 | P1-03 | Keep chunk URL suffixes (A5) | todo | | |
 | P1-04 | A14 scans `game/` on disk (A6) | todo | | |
 | P1-05 | A11 checks the declared side size (A7) | todo | | |
