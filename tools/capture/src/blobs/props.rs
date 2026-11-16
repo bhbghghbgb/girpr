@@ -350,15 +350,17 @@ impl BlobProps {
         })?;
         let mut reader = std::io::BufReader::new(file);
         let mut head = [0_u8; 4];
-        use std::io::Read as _;
-        let n = reader
-            .read(&mut head)
+        // A single `read` may return fewer than four bytes without being at EOF,
+        // which would make a valid frame look unframed. Fill the magic instead;
+        // `n` is then the real byte count whether the file ended early or not.
+        let n = hash::read_upto(&mut reader, &mut head)
             .map_err(|e| ApiError::shape("chunk", format!("{what}: reading the magic: {e}")))?;
-        if !hash::is_zstd(&head[..n]) {
+        if n < head.len() || !hash::is_zstd(&head) {
             // **A fetched body, not a failed fetch.** The rename has already
             // published the bytes; refusing here would leave the file on disk
             // while the index said "not stored". The row carries the digests the
-            // write computed and the real reason.
+            // write computed and the real reason — with the number of bytes that
+            // actually arrived when the magic itself is short.
             let why = Self::not_a_frame(&what, &head[..n]).to_string();
             return Ok(Self::undecodable_from_digests(compressed, chunk, why));
         }

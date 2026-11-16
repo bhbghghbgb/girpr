@@ -587,7 +587,10 @@ pub fn zstd_measure_from<R: std::io::Read>(
 }
 
 /// Fill `buf` up to its length, or as far as the reader gets. How many arrived.
-fn read_upto<R: std::io::Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+pub(crate) fn read_upto<R: std::io::Read>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
     let mut filled = 0;
     while filled < buf.len() {
         match reader.read(&mut buf[filled..])? {
