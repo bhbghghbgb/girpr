@@ -15,7 +15,7 @@
 //! a reader who wants "is anything missing?" reads `checksums.json`; a reader who
 //! wants "what did this run produce?" reads `files[]`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::selfcheck;
@@ -256,16 +256,51 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
 /// Sorted, because a list that depends on the filesystem's enumeration order
 /// makes two identical artifacts produce different documents — and this tool's
 /// whole claim is that the same world produces the same bundle.
+///
+/// **Every entry is resolved against the canonical root before it is used.**
+/// A directory is only descended into when its canonical path is inside the
+/// canonical root and has not been visited already, so a symlink or junction
+/// that points back up the tree cannot loop the walk and one that points
+/// outside cannot pull bytes from beyond the artifact into it. The same rule
+/// applies to files: a file whose canonical path is outside the root is not
+/// part of the artifact. Paths in the result stay relative to the `root`
+/// argument and keep its spelling, so a symlinked root (whose canonical form
+/// is its target) still yields an ordinary artifact-relative listing.
 pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    fn go(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    // Resolve the root once. A root that cannot be resolved fails here, just
+    // as it would fail at the first `read_dir` below. The canonical root is in
+    // the visited set from the start so a link back to the root is skipped.
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    visited.insert(canonical_root.clone());
+
+    fn go(
+        dir: &Path,
+        root: &Path,
+        canonical_root: &Path,
+        visited: &mut HashSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) -> std::io::Result<()> {
         let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
             .map(|e| e.map(|e| e.path()))
             .collect::<Result<_, _>>()?;
         entries.sort();
         for e in entries {
-            if e.is_dir() {
-                go(&e, root, out)?;
-            } else if e.is_file() {
+            // `is_dir`/`is_file` follow links, so resolve first: the canonical
+            // path is the only honest answer to "is this inside the artifact?".
+            // An entry that cannot be resolved is a broken link and, as before,
+            // contributes nothing to the walk.
+            let Some(canonical) = canonical_under_root(canonical_root, &e) else {
+                continue;
+            };
+            if canonical.is_dir() {
+                // A link to a directory already seen (the root included) is a
+                // cycle; descending again would revisit the same real tree.
+                if !visited.insert(canonical) {
+                    continue;
+                }
+                go(&e, root, canonical_root, visited, out)?;
+            } else if canonical.is_file() {
                 // Unreachable in practice — `read_dir` builds its entries by
                 // joining the rooted path it was given — and an `io::Error`
                 // anyway, matching every other function here. A `walk` that
@@ -284,8 +319,17 @@ pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
         Ok(())
     }
     let mut out = Vec::new();
-    go(root, root, &mut out)?;
+    go(root, root, &canonical_root, &mut visited, &mut out)?;
     Ok(out)
+}
+
+/// The canonical form of `path`, but only when it resolves inside
+/// `canonical_root`; `None` when it resolves outside the root or cannot be
+/// resolved at all (a broken link). Comparing canonical paths is what makes a
+/// symlinked root legitimate while a link that escapes it is rejected.
+fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    canonical.starts_with(canonical_root).then_some(canonical)
 }
 
 /// The `/`-separated form of an artifact-relative path.
