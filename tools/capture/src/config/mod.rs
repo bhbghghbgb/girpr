@@ -639,7 +639,7 @@ fn tag_shape_rule_inner(tag: &str, allow_device: bool) -> Option<(&'static str, 
     if tag.len() > 32 {
         return Some((
             "tag.too-long",
-            format!("{tag:?} is longer than 32 characters; that is not a version tag"),
+            format!("{tag:?} is longer than 32 bytes; that is not a version tag"),
         ));
     }
     if tag.chars().any(char::is_control) {
