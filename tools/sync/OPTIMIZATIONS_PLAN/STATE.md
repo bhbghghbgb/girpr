@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M53
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:29:53Z
+last_updated: 2026-11-16T11:36:42Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1295,10 +1295,17 @@ reviews:
     result: null
     followups: []
   - batch: M53
-    status: in_progress
+    status: done
     tasks: [F298, F301]
     base: 4134beca
     head: 3dc6d002
+    result: F298 kept (d821f722); F301 kept (3dc6d002); no fix or revert commits; 625 passed, 1 skipped; the reviewer confirmed both named users really reach the mapping, that the files are byte-identical once the doc lines are stripped, and that the public, private and all-features doc builds are clean
+    followups: [F487]
+  - batch: M136
+    status: pending
+    tasks: [F484, F485, F486]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M136
@@ -3216,9 +3223,10 @@ followups:
   - id: F298
     source: F208
     description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
-    status: pending_review
+    status: completed
     batch: M53
     commits: [d821f722]
+    note: review M53 kept; the reviewer confirmed both users really reach the mapping and that the approximation claim stays true for both
   - id: F299
     source: F208
     description: The design notes' fold section still says the on-disk lookup and the key sit side by side in one file, though the path key itself lives in the utility module.
@@ -3234,9 +3242,10 @@ followups:
   - id: F301
     source: F208
     description: The on-disk lookup's doc points at the shared mapping as plain code where the two neighbouring references use intra-doc links.
-    status: pending_review
+    status: completed
     batch: M53
     commits: [3dc6d002]
+    note: review M53 kept; the lookup's doc still states its own rule and does not claim the mapping answers its question by itself
   - id: F302
     source: F207
     description: The renamed indexes carry a keys suffix while the helper's own doc calls it the folded-key index, so the names do not match the wording exactly.
@@ -4353,13 +4362,13 @@ followups:
     note: "skipped: the same item as F478, whose description now names the three sites"
   - id: F484
     source: F301
-    description: The identity rule's doc still names the shared mapping in plain code where the crate's style elsewhere is an intra-doc link.
+    description: The identity rule's doc still names the shared mapping in plain code, and it cannot become a link, since that doc is compiled on every platform while the mapping is Windows-only and a link would break the POSIX doc build.
     status: pending
     batch: M136
     commits: []
   - id: F485
     source: F298
-    description: The shared mapping's doc names the on-disk spelling lookup without pointing at it, and the lookup is deep in the module tree, so a link would need the module path checked for resolvability first.
+    description: The shared mapping's doc names the on-disk lookup without pointing at it, and it cannot be linked, since the lookup's module is private and not nameable from the utility module, so the plain name has to stay.
     status: pending
     batch: M136
     commits: []
@@ -4369,6 +4378,20 @@ followups:
     status: pending
     batch: M136
     commits: []
+  - id: F487
+    source: F301
+    description: The body of the commit that linked the on-disk lookup says the lookup's doc named the comparison and the mapping in plain code, while the mapping was not named in that file before the change; the correction belongs in the review record only, since history may not be rewritten.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the defect is in a commit message and history must not be rewritten"
+  - id: F488
+    source: F301
+    description: The identity rule's doc still names the shared mapping in plain code, where the crate's style elsewhere is an intra-doc link.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F484, whose description now carries the reason a link cannot be used"
 ```
 
 ## Human checklist
@@ -4400,6 +4423,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M53 `done`: F298 kept (d821f722), F301 kept (3dc6d002); no
+  fix or revert commits; follow-up F487 recorded as `skipped` because the defect
+  is in a commit message and history must not be rewritten, and F488 recorded as
+  `skipped` as the same item as F484, whose description now carries the reason
+  a link cannot be used there. F298 and F301 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M53 review checkpoint opened: F298 and F301
   `in_progress` → `pending_review`, commits `d821f722`, `3dc6d002`; review M53
   `pending` → `in_progress`, base `4134beca`, head `3dc6d002`.
