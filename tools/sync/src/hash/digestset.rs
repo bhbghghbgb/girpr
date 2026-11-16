@@ -1,4 +1,19 @@
 //! [`DigestSet`]: the digests one cache row carries, as inline slots.
+//!
+//! ## The fold here is over a name, not over a path
+//!
+//! This module folds an **algorithm name** with an ASCII lowercase, and the
+//! fold answers one question: *does this stored name name this algorithm?* A
+//! row may hold `MD5` where the request says `md5`, and the lookup has to find
+//! it.
+//!
+//! **It is not one of the crate's path folds.** Those live in `crate::util`,
+//! and each of them answers a question about paths: `path_key` is the key
+//! every relative-path index uses and answers which bucket of a run's map a
+//! path belongs to, `component_eq` asks whether two spellings open the same
+//! place on disk, and `ascii_case_eq` states the cache reservation's
+//! comparison. The fold here has no path in it at all, so it states its own
+//! rule rather than borrowing one of theirs.
 
 use super::algo::HashAlg;
 
@@ -182,6 +197,10 @@ impl DigestSet {
     /// The `foreign` match is by **name**, not by spelling: a known algorithm is
     /// found under any ASCII-case spelling of its name, which is the same ASCII
     /// case rule the algorithm's own parser applies to the command line.
+    ///
+    /// The fold is over that name alone — it answers *does this stored name name
+    /// this algorithm?* — and it never touches a path. The crate's path folds
+    /// are elsewhere, in `crate::util`.
     pub fn get_algo(&self, a: HashAlg) -> Option<&[u8]> {
         self.get(a).or_else(|| self.foreign_known(a))
     }
@@ -213,8 +232,17 @@ impl DigestSet {
     /// The arm is scanned for the first entry whose **stored name names `a`**,
     /// and that entry's digest is returned. The stored name is compared with the
     /// algorithm's canonical spelling, folding ASCII case only — the same rule
-    /// the command line and the path key follow, and the same one
-    /// [`HashAlg`]'s own parser applies.
+    /// the command line follows, and the same one [`HashAlg`]'s own parser
+    /// applies.
+    ///
+    /// **The fold is over an algorithm name, and it answers one question:**
+    /// *does this stored name name this algorithm?* It is not one of the
+    /// crate's path folds, and it answers no question about paths: the path
+    /// key (`crate::util::path_key`) asks which bucket of a run's map a path
+    /// belongs to, the identity rule (`crate::util::component_eq`) asks whether
+    /// two spellings open the same place on disk, and the cache reservation's
+    /// comparison (`crate::util::ascii_case_eq`) asks whether a component is
+    /// one of the tool's own names. This one has no path in it.
     ///
     /// The comparison allocates nothing. It is the resolver's, and the
     /// resolver is a `const fn`: a const fn may not allocate, so the
