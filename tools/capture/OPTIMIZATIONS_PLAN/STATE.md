@@ -56,7 +56,7 @@ See `ORCHESTRATION.md` for the transition rules.
 |---|---|---|---|---|
 | RC-1 | P0-01..P0-03 | done | | |
 | RC-2 | P1-01..P1-06 | done | | |
-| RC-3 | P1-07..P1-12 | pending | | |
+| RC-3 | P1-07..P1-12 | in_progress | | |
 | RC-4 | P1-13..P1-18 | pending | | |
 | RC-5 | P2-01..P2-04 | pending | | |
 | RC-6 | P3-01..P3-02 | pending | | |
