@@ -14,9 +14,10 @@ use crate::rejections::RejectionsDocument;
 
 /// A bundle loaded from disk.
 ///
-/// Every document is read back through the same type it was written with, so a
-/// schema drift surfaces as a parse error naming the file rather than as a
-/// silently missing field.
+/// Every document is read back through the same type it was written with, and
+/// each one's schema version is checked before its full shape, so a schema
+/// drift surfaces at the file that caused it rather than as a silently missing
+/// field.
 #[derive(Debug, Clone)]
 pub struct Bundle {
     /// The bundle root, as given.
@@ -105,19 +106,24 @@ impl Bundle {
                 root.display(),
             ));
         }
+        // The manifest's version was checked above with its tailored refusal.
         let manifest: Manifest = read_json(&manifest_path)?;
-        let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
+        // Every other document carries its own version, checked before its full
+        // shape: a document written to another schema is refused at the file
+        // that caused it, not reported as a missing field at some consumer.
+        let index: ChunkIndex = read_versioned_json(&root.join("chunks/index.json"))?;
         // Arithmetic on the index's offsets and sizes is checked before any
         // command assembles a byte: a crafted `offset` must not reach
         // `Layout::of` as a panic. See `ChunkIndex::validate_arithmetic`.
         index.validate_arithmetic()?;
-        let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
-        let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
-        let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
+        let checksums: Checksums = read_versioned_json(&root.join("verify/checksums.json"))?;
+        let recorded: Selfcheck = read_versioned_json(&root.join("verify/selfcheck.json"))?;
+        let error_shapes: ErrorShapes = read_versioned_json(&root.join("api/error_shapes.json"))?;
         let error_responses: crate::http::ErrorResponses =
-            read_json(&root.join("api/error_responses.json"))?;
-        let rejections: RejectionsDocument = read_json(&root.join("diagnostics/rejections.json"))?;
-        let path_map: PathMapDocument = read_json(&root.join(crate::pathmap::DOCUMENT))?;
+            read_versioned_json(&root.join("api/error_responses.json"))?;
+        let rejections: RejectionsDocument =
+            read_versioned_json(&root.join("diagnostics/rejections.json"))?;
+        let path_map: PathMapDocument = read_versioned_json(&root.join(crate::pathmap::DOCUMENT))?;
         let patchmaps = read_patchmaps(root)?;
         // **The shape of every document-supplied path is checked at the door.**
         // `verify` is the command an operator runs on a bundle they may not have
@@ -208,7 +214,9 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
     let mut out = BTreeMap::new();
     let mut from: BTreeMap<String, PathBuf> = BTreeMap::new();
     for p in paths {
-        let map: PatchMap = read_json(&p)?;
+        // The version is checked per file, before its full shape, so a bad
+        // patchmap is named here rather than the directory it came from.
+        let map: PatchMap = read_versioned_json(&p)?;
         let id = map.capture_id.clone();
         if let Some(first) = from.get(&id) {
             return Err(format!(
@@ -321,6 +329,47 @@ fn validate_document_paths(
 /// work out which file the tool was reading.
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Read one JSON document whose schema version must match this build's.
+///
+/// The version is read **on its own, first**, exactly as [`schema_version_of`]
+/// does for `MANIFEST.json`: it is the diagnosis, and a field the current type
+/// expects but the document does not have is only a symptom of a version
+/// mismatch. Parsing the full type first would report the missing field and say
+/// nothing about the version that caused it, or — worse — apply current
+/// semantics to a document that means something else.
+///
+/// A document whose version is not this build's is refused naming the file, the
+/// version found and the version expected. A document with no readable version
+/// is refused too: every document this bundle requires carries one, so there is
+/// no safe default to fall back to.
+fn read_versioned_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    match value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+    {
+        Some(v) if v == u64::from(crate::SCHEMA_VERSION) => {}
+        Some(v) => {
+            return Err(format!(
+                "{}: schema version {v} is not the current {}; this document was \
+                 written by a different gircap schema and cannot be read safely",
+                path.display(),
+                crate::SCHEMA_VERSION
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{}: no schema_version; this document was not written by a gircap \
+                 build this reader understands",
+                path.display()
+            ));
+        }
+    }
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
