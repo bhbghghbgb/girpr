@@ -2089,6 +2089,11 @@ mod tests {
 
     /// A claim steps over a name that is already taken rather than taking it:
     /// the name is claimed, not chosen.
+    ///
+    /// The run of names is pinned one member at a time — the plain name, then
+    /// `_2`, then `_3` — so a change that kept the second spelling and
+    /// altered the ones after it fails here: the third claim is asked for by
+    /// name, and not merely for "some name that is not the second".
     #[test]
     fn a_claim_steps_over_a_taken_name() {
         let t = girpr_tempdir::TempDir::new("girsync_cache", "claim");
@@ -2097,7 +2102,8 @@ mod tests {
         let first = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
         assert_eq!(
             first.file_name().unwrap().to_string_lossy(),
-            format!("girpr-cache-backup-{STAMP}")
+            format!("girpr-cache-backup-{STAMP}"),
+            "the first claim takes the plain name"
         );
 
         let second = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
@@ -2106,7 +2112,16 @@ mod tests {
             format!("girpr-cache-backup-{STAMP}_2"),
             "the second claim takes the next name"
         );
+
+        let third = claim_sibling(&dir, "girpr-cache-backup-", STAMP, false).unwrap();
+        assert_eq!(
+            third.file_name().unwrap().to_string_lossy(),
+            format!("girpr-cache-backup-{STAMP}_3"),
+            "and the third takes the name after that"
+        );
+
         assert_ne!(first, second, "the two claims are two names");
+        assert_ne!(second, third, "and the third is a name of its own");
     }
 
     /// The same for a directory claim: a legacy sled cache is a directory, and
