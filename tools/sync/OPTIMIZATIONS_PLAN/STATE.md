@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M45
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T05:25:29Z
+last_updated: 2026-11-16T05:55:10Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -994,8 +994,22 @@ reviews:
     result: null
     followups: []
   - batch: M45
-    status: pending
+    status: in_progress
     tasks: [F276, F277]
+    base: 7f6a1649
+    head: 38e2a220
+    result: null
+    followups: []
+  - batch: M109
+    status: pending
+    tasks: [F425]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M110
+    status: pending
+    tasks: [F426, F427]
     base: null
     head: null
     result: null
@@ -2838,15 +2852,15 @@ followups:
   - id: F276
     source: F194
     description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
-    status: in_progress
+    status: pending_review
     batch: M45
-    commits: []
+    commits: [14e67a4a]
   - id: F277
     source: F194
     description: The relative-path check accepts shapes that were never spelled out, a Windows rooted path, a parent component and a trailing separator, and those name no copy and are therefore inert, so the check could name the shape it wants rather than only the ones it excludes.
-    status: in_progress
+    status: pending_review
     batch: M45
-    commits: []
+    commits: [de7cf1df, 38e2a220]
   - id: F278
     source: F197
     description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
@@ -3748,6 +3762,24 @@ followups:
     status: pending
     batch: M107
     commits: []
+  - id: F425
+    source: F277
+    description: The walk replaces a backslash with a slash on every host, so a POSIX file whose name starts with a backslash gets a relative path that begins with a slash, and joining that onto the destination root replaces the root, so the copy would land outside the destination.
+    status: pending
+    batch: M109
+    commits: []
+  - id: F426
+    source: F276
+    description: The gate's report only appears when the copy phase runs, so a run with nothing to copy never consults the switch and a malformed value stays silent there; reading the switch once at command start would make the report unconditional.
+    status: pending
+    batch: M110
+    commits: []
+  - id: F427
+    source: F276
+    description: The copy module has a log-capture test helper and the copy phase now has a second, smaller one, two spellings of the same helper.
+    status: pending
+    batch: M110
+    commits: []
 ```
 
 ## Human checklist
@@ -3779,6 +3811,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M45 review checkpoint opened: F276 and F277
+  `in_progress` → `pending_review`, commits `14e67a4a`, `de7cf1df`, `38e2a220`;
+  review M45 `pending` → `in_progress`, base `7f6a1649`, head `38e2a220`.
 - 2026-11-16 — follow-up batch M45 started: F276 and F277 `pending` →
   `in_progress`; `active_batch: M44` → `M45`.
 - 2026-11-16 — review M44 `done`: F275 kept (819da84b, f6878407); no fix or revert
