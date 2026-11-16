@@ -803,15 +803,15 @@ impl MatrixRow {
     ///
     /// Takes the string rather than a `&MatrixRow` because M9's `verify` has a
     /// status it read out of `MANIFEST.json` and no row to hang the answer on.
+    /// Delegates to the matrix model rather than spelling out the acceptable
+    /// states again: `parse` owns the wire vocabulary and `is_acceptable` owns
+    /// the all-four policy, so this answer cannot disagree with A17's row.
     /// Every state is acceptable: A17 is about the matrix being **complete**,
     /// and `over_budget` is a complete answer — "a candidate existed and this
     /// run's budget would not pay for it". The *requirement* is
     /// `--require-class`'s business, and it excludes `over_budget` on its own.
     pub fn ok_status(status: &str) -> bool {
-        matches!(
-            status,
-            "captured" | "covered_by" | "over_budget" | "unavailable"
-        )
+        crate::select::MatrixStatus::parse(status).is_some_and(|s| s.is_acceptable())
     }
 }
 
