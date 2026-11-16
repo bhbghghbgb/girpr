@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M49
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T09:05:14Z
+last_updated: 2026-11-16T09:27:56Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1162,10 +1162,24 @@ reviews:
     result: F121 kept (50e81f06); F122 kept (2115d14e, 5a5cb7a2); F125 kept (c4f93a7f); F126 kept (6c16cf00); F127 kept (20b42517); F129 kept (a5b3b2c1, 9c327065); no fix or revert commits; 584 passed, 1 skipped, and the whole workspace at 2069 passed, 13 skipped; four mutation probes confirmed the new cases discriminate, and a mis-set gate was probed and failed that one copy loudly
     followups: [F198, F199]
   - batch: M49
-    status: in_progress
+    status: done
     tasks: [F287, F288, F292]
     base: abe75c0d
-    head: 81a5ab95
+    head: 34196319
+    result: F287 kept (2580c671, 34196319 corrects the notes that shipped with it); F288 kept (5326a675, 34196319); F292 kept (5326a675); no fix or revert commits; 623 passed without the feature and 640 with it, 1 skipped, and the POSIX target still builds; the reviewer ran differential probes over thousands of corpus, sweep and fuzz pairs with no mismatch, and compared the base and head binaries end to end with identical records, exit codes and resulting trees
+    followups: [F459, F460]
+  - batch: M124
+    status: pending
+    tasks: [F459]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M125
+    status: pending
+    tasks: [F460]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M122
@@ -3048,15 +3062,17 @@ followups:
   - id: F287
     source: F204
     description: The planner's lowercase pairing branch still computes the path key for every destination path, one allocation per path, where a borrowed comparison or a destination index would remove it.
-    status: pending_review
+    status: completed
     batch: M49
-    commits: [2580c671]
+    commits: [2580c671, 34196319]
+    note: review M49 kept; the reviewer confirmed the borrowed key's hash is consistent with its equality over every corpus and fuzz pair, and that the two rules still keep the names apart
   - id: F288
     source: F204
     description: The remaining per-entry allocation in the disk listing is the fold of the candidate name, and a non-allocating comparison with an ASCII fast path would remove it.
-    status: pending_review
+    status: completed
     batch: M49
-    commits: [5326a675]
+    commits: [5326a675, 34196319]
+    note: review M49 kept; the reviewer ran an 81920-pair byte sweep and a 20000-pair fuzz sweep with no mismatch, and compared the base and head binaries end to end
   - id: F289
     source: F203
     description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
@@ -3079,9 +3095,10 @@ followups:
   - id: F292
     source: F204
     description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
-    status: pending_review
+    status: completed
     batch: M49
     commits: [5326a675]
+    note: review M49 kept; the eager fold is gone entirely and the exact-match early return still precedes any comparison
   - id: F293
     source: F204
     description: The remaining per-entry allocation in the disk listing is the candidate own fold, which a non-allocating comparison with an ASCII fast path would remove.
@@ -4100,6 +4117,18 @@ followups:
     status: pending
     batch: M123
     commits: []
+  - id: F459
+    source: F288
+    description: The identity rule's doc says the on-disk spelling lookup compares with the Unicode lowercase mapping, where the lookup now reaches that mapping through the shared comparison the site actually calls.
+    status: pending
+    batch: M124
+    commits: []
+  - id: F460
+    source: F287
+    description: The design notes' sentence about the on-disk lookup and the key sharing one file reads as if the path key lives in the link module, while it lives in the utility module and the link module holds a folded index built with it.
+    status: pending
+    batch: M125
+    commits: []
 ```
 
 ## Human checklist
@@ -4131,6 +4160,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M49 `done`: F287, F288 and F292 all kept, with a docs-only
+  fix commit 34196319 on top; no fix or revert commits; follow-ups F459 and F460
+  appended with batches `M124` and `M125`. F287, F288 and F292 `pending_review`
+  → `completed`.
 - 2026-11-16 — follow-up batch M49 review checkpoint opened: F287, F288 and F292
   `in_progress` → `pending_review`, commits `2580c671`, `5326a675`, `81a5ab95`;
   review M49 `pending` → `in_progress`, base `abe75c0d`, head `81a5ab95`.
