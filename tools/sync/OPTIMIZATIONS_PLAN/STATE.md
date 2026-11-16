@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M48
+active_batch: M49
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T08:33:07Z
+last_updated: 2026-11-16T08:39:11Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -3034,13 +3034,13 @@ followups:
   - id: F287
     source: F204
     description: The planner's lowercase pairing branch still computes the path key for every destination path, one allocation per path, where a borrowed comparison or a destination index would remove it.
-    status: pending
+    status: in_progress
     batch: M49
     commits: []
   - id: F288
     source: F204
     description: The remaining per-entry allocation in the disk listing is the fold of the candidate name, and a non-allocating comparison with an ASCII fast path would remove it.
-    status: pending
+    status: in_progress
     batch: M49
     commits: []
   - id: F289
@@ -3065,7 +3065,7 @@ followups:
   - id: F292
     source: F204
     description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
-    status: pending
+    status: in_progress
     batch: M49
     commits: []
   - id: F293
@@ -4081,6 +4081,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M49 started: F287, F288 and F292 `pending` →
+  `in_progress`; `active_batch: M48` → `M49`.
 - 2026-11-16 — review M48 `done`: F283 fixed (5a0a8400, 3c1b50bb), F284 fixed
   (fc00a27b, 0900c482), F285 kept (3fb7ae34); follow-ups F449–F451 appended with
   batches `M120` and `M121`, and F452 recorded as `skipped` because the mismatch
