@@ -314,11 +314,106 @@ fn gircap_exe() -> Option<PathBuf> {
     None
 }
 
-/// Start the four listeners over the bundle under test.
-async fn bridge() -> Bridge {
-    let bundle = bundle();
-    assert_bundle_verifies(&bundle).await;
-    Bridge::start(bundle).await
+// ---------------------------------------------------------------------------
+// the suite fixture: one verified bundle, one listener set
+// ---------------------------------------------------------------------------
+
+/// The one fixture every capture test in this process shares.
+///
+/// The bundle is read-only and immutable for the whole suite, so opening it,
+/// verifying it once with `gircap verify`, and binding the four listeners are
+/// suite-level work, not per-test work. The capture *records* are read here too
+/// (`bundle()` already parses `MANIFEST.json`, and `patchmaps()` is a one-time
+/// parse of the patchmaps), so a test reads them from here rather than from the
+/// disk again.
+///
+/// Per-capture state is deliberately **not** shared: each test still makes its
+/// own [`Scratch`] tree and runs its own pre-pass and real run, and each run
+/// still cleans up its own run lock. Only the immutable inputs and the replay
+/// server are shared.
+struct Suite {
+    bridge: Bridge,
+    patchmaps: Patchmaps,
+    /// The bridge's accept loops are `tokio::spawn`ed, so they belong to a
+    /// runtime. Every `#[tokio::test]` gets a runtime of its own, dropped when
+    /// that test ends; a bridge started on one test's runtime would be dead —
+    /// its sockets closed — by the time the next test used it. The bridge is
+    /// therefore started on this dedicated multi-thread runtime, which stays
+    /// alive (with the fixture) for the life of the process.
+    _runtime: tokio::runtime::Runtime,
+}
+
+/// Serialize the capture tests against the shared bridge in a single-process
+/// run. A request-log checkpoint marks where one run begins; it can only mark
+/// that boundary between runs, not between requests arriving concurrently from
+/// two tests. Under nextest each test has its own process and this lock is
+/// uncontended.
+static RUN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// One test's handle to the shared fixture.
+///
+/// The handle is per test even though the fixture is shared: each test gets its
+/// own scratch tree and runs its own pre-pass and real run through it.
+struct SuiteRun {
+    suite: &'static Suite,
+    /// Held for the whole test: see [`RUN_LOCK`].
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl SuiteRun {
+    fn bridge(&self) -> &Bridge {
+        &self.suite.bridge
+    }
+}
+
+/// The suite fixture, initialised once per process.
+///
+/// A process-wide `OnceCell` means "once per suite" under a single-process
+/// `cargo test` and "once per case" under nextest, where each test gets its own
+/// process. Both modes are correct: the fixture is immutable, so sharing it
+/// changes no per-capture assertion.
+async fn suite() -> &'static Suite {
+    static SUITE: tokio::sync::OnceCell<Suite> = tokio::sync::OnceCell::const_new();
+    SUITE
+        .get_or_init(|| async {
+            // The fixture needs a runtime that outlives the test runtimes, and
+            // `Runtime::block_on` cannot be called from inside an async
+            // context. Build it on a plain thread, off any test runtime.
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("build the bridge runtime");
+                let bundle = bundle();
+                runtime.block_on(assert_bundle_verifies(&bundle));
+                let patchmaps = patchmaps(&bundle);
+                let bridge = runtime.block_on(Bridge::start(bundle));
+                println!(
+                    "bridge fixture: verified {} and bound four listeners (once per process)",
+                    bridge.bundle().root.display()
+                );
+                tx.send(Suite {
+                    bridge,
+                    patchmaps,
+                    _runtime: runtime,
+                })
+                .expect("send the bridge fixture")
+            });
+            rx.recv().expect("initialise the bridge fixture")
+        })
+        .await
+}
+
+/// Take a per-test handle on the shared fixture.
+async fn suite_run() -> SuiteRun {
+    let guard = RUN_LOCK.lock().await;
+    let suite = suite().await;
+    SuiteRun {
+        suite,
+        _guard: guard,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +629,8 @@ fn capture_args(capture: &Capture) -> Vec<String> {
 ///
 /// **One run per capture**, always: a `download_bytes` total is only
 /// attributable to a single capture.
-async fn drive_capture(bridge: &Bridge, capture: &Capture) {
+async fn drive_capture(run: &SuiteRun, capture: &Capture) {
+    let bridge = run.bridge();
     let bundle = bridge.bundle().clone();
     let scratch = Scratch::new(&bundle, capture);
 
@@ -724,8 +820,8 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
 /// does not mention at all is a **missing prerequisite** and fails: this suite
 /// only runs deliberately, so it must never report "checked nothing" as a
 /// pass.
-async fn drive_named(bridge: &Bridge, id: &str) {
-    let records = patchmaps(bridge.bundle());
+async fn drive_named(run: &SuiteRun, id: &str) {
+    let records = &run.suite.patchmaps;
     let Some(capture) = records.capture_for_class(id).cloned() else {
         match records.matrix_class(id) {
             Some(m) if m.absent_by_record() => {
@@ -749,7 +845,7 @@ async fn drive_named(bridge: &Bridge, id: &str) {
             ),
         }
     };
-    drive_capture(bridge, &capture).await;
+    drive_capture(run, &capture).await;
 }
 
 macro_rules! capture_test {
@@ -758,8 +854,8 @@ macro_rules! capture_test {
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
-            let bridge = bridge().await;
-            drive_named(&bridge, $id).await;
+            let run = suite_run().await;
+            drive_named(&run, $id).await;
         }
     };
 }
