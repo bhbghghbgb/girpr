@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M43
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T04:40:26Z
+last_updated: 2026-11-16T04:48:45Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -945,10 +945,17 @@ reviews:
     result: F117 kept (e30e6c6f); F118 kept (13304c2f); F120 kept (1409bbf6); F140 kept (4c285d30); F145 kept (0f3609a7); F146 kept (b08451c7); no fix or revert commits; 578 passed without the feature and 592 with it, 1 skipped; the remedy was checked end to end by running it, and the renamed fixture was mutation-checked
     followups: [F189, F190, F191, F192]
   - batch: M43
-    status: in_progress
+    status: done
     tasks: [F273, F274]
     base: db97d9f0
     head: df01aaf7
+    result: F273 kept (c582a5b5); F274 kept (df01aaf7); no fix or revert commits; 616 passed for the crate and 2101 for the workspace, 13 skipped; the reviewer confirmed each of the three pointers lands on a file that exists and holds what the pointer says, and that all three failure points really leave something different behind
+    followups: [F419, F420]
+  - batch: M105
+    status: pending
+    tasks: [F419, F420]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M103
@@ -2796,15 +2803,17 @@ followups:
   - id: F273
     source: F193
     description: The workspace nextest configuration points at a source path that no longer exists, because the module was split into a directory, so the pointer a reader would follow leads nowhere.
-    status: pending_review
+    status: completed
     batch: M43
     commits: [c582a5b5]
+    note: review M43 kept; the reviewer confirmed each pointer lands on a file that exists and holds what the pointer says, and that no override filter was touched
   - id: F274
     source: F193
     description: The three rename failure hooks are three separate variables where one variable with a stage value would match the shape of the copy and flush hooks; the asymmetry is undocumented.
-    status: pending_review
+    status: completed
     batch: M43
     commits: [df01aaf7]
+    note: review M43 kept; every claim in the committed text is true of the code, including that the pass aborts at the first injected failure
   - id: F275
     source: F193
     description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
@@ -3688,6 +3697,18 @@ followups:
     batch: null
     commits: []
     note: "skipped: not a defect, the cases exist under their platform gate, and it was noted only as adjacent to the override check"
+  - id: F419
+    source: F274
+    description: The property that the rename pass aborts at the first injected failure is documented nowhere, so the design notes' separately-armable argument reads stronger than the code delivers.
+    status: pending
+    batch: M105
+    commits: []
+  - id: F420
+    source: F274
+    description: The design notes' list of what each stage leaves behind is loose for the step-1 stage, since the placeholder is removed by the cleanup and a directory stage leaves no placeholder at all, where the README and the code doc word it precisely.
+    status: pending
+    batch: M105
+    commits: []
 ```
 
 ## Human checklist
@@ -3719,6 +3740,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M43 `done`: F273 kept (c582a5b5), F274 kept (df01aaf7); no
+  fix or revert commits; follow-ups F419 and F420 appended with batch `M105`,
+  and F418 recorded as `skipped` as not a defect. F273 and F274 `pending_review`
+  → `completed`.
 - 2026-11-16 — follow-up batch M43 review checkpoint opened: F273 and F274
   `in_progress` → `pending_review`, commits `c582a5b5`, `df01aaf7`; review M43
   `pending` → `in_progress`, base `db97d9f0`, head `df01aaf7`.
