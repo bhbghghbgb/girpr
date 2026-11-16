@@ -357,9 +357,29 @@ impl Bridge {
         &self.served.bundle
     }
 
+    /// How many requests have been recorded so far.
+    ///
+    /// A test that shares its bridge with others captures this before its run
+    /// and passes the value as the `start` checkpoint to the `_since` methods,
+    /// so its assertions see only its own requests.
+    pub fn log_len(&self) -> usize {
+        self.served.log.lock().expect("request log").len()
+    }
+
     /// Everything the server has been asked for, in order.
     pub fn hits(&self) -> Vec<Hit> {
-        self.served.log.lock().expect("request log").clone()
+        self.hits_from(0)
+    }
+
+    /// The requests recorded at or after `start`, in order. One test's share
+    /// of a log shared with earlier tests in the same process.
+    pub fn hits_since(&self, start: usize) -> Vec<Hit> {
+        self.hits_from(start)
+    }
+
+    fn hits_from(&self, start: usize) -> Vec<Hit> {
+        let log = self.served.log.lock().expect("request log");
+        log.iter().skip(start).cloned().collect()
     }
 
     /// The chunk ids requested so far — the set `must_not_fetch` is checked
@@ -367,8 +387,16 @@ impl Bridge {
     /// which is what makes "asked once and 404'd" visible rather than "never
     /// asked".
     pub fn chunk_ids(&self) -> Vec<String> {
-        self.hits()
-            .into_iter()
+        Self::chunk_ids_from(self.hits())
+    }
+
+    /// The chunk ids recorded at or after `start`.
+    pub fn chunk_ids_since(&self, start: usize) -> Vec<String> {
+        Self::chunk_ids_from(self.hits_since(start))
+    }
+
+    fn chunk_ids_from(hits: Vec<Hit>) -> Vec<String> {
+        hits.into_iter()
             .filter(|h| h.kind == HitKind::Chunk)
             .map(|h| h.id)
             .collect()
@@ -377,8 +405,16 @@ impl Bridge {
     /// The `<build_id>` each chunk request carried, paired with its id. The
     /// `build_id` invariant (`docs/06` §4.1) is assertable from this.
     pub fn chunk_requests(&self) -> Vec<(String, String)> {
-        self.hits()
-            .into_iter()
+        Self::chunk_requests_from(self.hits())
+    }
+
+    /// The chunk requests recorded at or after `start`.
+    pub fn chunk_requests_since(&self, start: usize) -> Vec<(String, String)> {
+        Self::chunk_requests_from(self.hits_since(start))
+    }
+
+    fn chunk_requests_from(hits: Vec<Hit>) -> Vec<(String, String)> {
+        hits.into_iter()
             .filter(|h| h.kind == HitKind::Chunk)
             .map(|h| (h.build.unwrap_or_default(), h.id))
             .collect()

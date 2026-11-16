@@ -350,12 +350,14 @@ struct Suite {
 /// uncontended.
 static RUN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// One test's handle to the shared fixture.
+/// One test's checkpointed handle to the shared fixture.
 ///
 /// The handle is per test even though the fixture is shared: each test gets its
-/// own scratch tree and runs its own pre-pass and real run through it.
+/// own scratch tree and runs its own pre-pass and real run through it, and
+/// `start` marks where this test's requests begin in the shared log.
 struct SuiteRun {
     suite: &'static Suite,
+    start: usize,
     /// Held for the whole test: see [`RUN_LOCK`].
     _guard: tokio::sync::MutexGuard<'static, ()>,
 }
@@ -363,6 +365,12 @@ struct SuiteRun {
 impl SuiteRun {
     fn bridge(&self) -> &Bridge {
         &self.suite.bridge
+    }
+
+    /// The chunk ids this run asked for, not the ids earlier runs in this
+    /// process asked for.
+    fn chunk_ids(&self) -> Vec<String> {
+        self.bridge().chunk_ids_since(self.start)
     }
 }
 
@@ -406,11 +414,12 @@ async fn suite() -> &'static Suite {
         .await
 }
 
-/// Take a per-test handle on the shared fixture.
+/// Take a per-test handle on the shared fixture, checkpointing the request log.
 async fn suite_run() -> SuiteRun {
     let guard = RUN_LOCK.lock().await;
     let suite = suite().await;
     SuiteRun {
+        start: suite.bridge.log_len(),
         suite,
         _guard: guard,
     }
@@ -629,8 +638,8 @@ fn capture_args(capture: &Capture) -> Vec<String> {
 ///
 /// **One run per capture**, always: a `download_bytes` total is only
 /// attributable to a single capture.
-async fn drive_capture(run: &SuiteRun, capture: &Capture) {
-    let bridge = run.bridge();
+async fn drive_capture(handle: &SuiteRun, capture: &Capture) {
+    let bridge = handle.bridge();
     let bundle = bridge.bundle().clone();
     let scratch = Scratch::new(&bundle, capture);
 
@@ -759,7 +768,7 @@ async fn drive_capture(run: &SuiteRun, capture: &Capture) {
     // empty reuse map every chunk is fetched, `local_manifest` says
     // `unavailable`, and the byte total is the whole file instead of the
     // patch.
-    let asked: BTreeSet<String> = bridge.chunk_ids().into_iter().collect();
+    let asked: BTreeSet<String> = handle.chunk_ids().into_iter().collect();
     let want_fetch: BTreeSet<String> = capture.fetch_set().iter().map(|s| s.to_string()).collect();
     let want_reuse: BTreeSet<String> = capture.reuse_set().iter().map(|s| s.to_string()).collect();
     assert_eq!(
@@ -820,8 +829,8 @@ async fn drive_capture(run: &SuiteRun, capture: &Capture) {
 /// does not mention at all is a **missing prerequisite** and fails: this suite
 /// only runs deliberately, so it must never report "checked nothing" as a
 /// pass.
-async fn drive_named(run: &SuiteRun, id: &str) {
-    let records = &run.suite.patchmaps;
+async fn drive_named(handle: &SuiteRun, id: &str) {
+    let records = &handle.suite.patchmaps;
     let Some(capture) = records.capture_for_class(id).cloned() else {
         match records.matrix_class(id) {
             Some(m) if m.absent_by_record() => {
@@ -845,7 +854,7 @@ async fn drive_named(run: &SuiteRun, id: &str) {
             ),
         }
     };
-    drive_capture(run, &capture).await;
+    drive_capture(handle, &capture).await;
 }
 
 macro_rules! capture_test {
