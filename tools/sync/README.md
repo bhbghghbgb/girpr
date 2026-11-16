@@ -98,11 +98,17 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
+
+**Each occurrence of a hash flag names one algorithm**, and the flag is
+repeatable, so the synopsis above spells a request for two the way the parser
+takes it: `--hash-all-of md5 --hash-all-of sha256`. `--hash-all-of md5 sha256` —
+two values in one occurrence — is refused before the run starts. The default is
+`--hash-all-of md5` alone.
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
