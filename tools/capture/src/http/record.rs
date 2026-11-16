@@ -184,3 +184,28 @@ pub(crate) fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, Str
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+    /// A header with two values is collected into a `BTreeMap` keyed by name, so
+    /// the second `append` overwrites the first: one key, one value, the last
+    /// one seen. That is today's lossy behavior.
+    #[test]
+    fn currently_repeated_response_headers_keep_only_the_last_value() {
+        let name: HeaderName = "x-multi".parse().expect("header name");
+        let mut h = HeaderMap::new();
+        h.append(name.clone(), HeaderValue::from_static("first"));
+        h.append(name, HeaderValue::from_static("second"));
+
+        let map = header_map(&h);
+        assert_eq!(map.len(), 1, "one key, not one row per value");
+        assert_eq!(
+            map.get("x-multi").map(String::as_str),
+            Some("second"),
+            "the last value wins; the earlier one is dropped"
+        );
+    }
+}

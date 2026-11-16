@@ -57,6 +57,9 @@ const OLD_AUDIO_MANIFEST: &str =
     "manifest_0000000000000003_0000000000000000cccccccccccccccccccccccccccccccc";
 const NEW_AUDIO_MANIFEST: &str =
     "manifest_0000000000000004_0000000000000000dddddddddddddddddddddddddddd";
+/// A `game` id both builds can declare, for the shared-id index case.
+const SHARED_GAME_MANIFEST: &str =
+    "manifest_0000000000000005_0000000000000000eeeeeeeeeeeeeeeeeeeeeeee";
 
 /// The chunk the bundle carries.
 const CHUNK_ID: &str = "616e6fbbf0a97dc9_a21a4420161bca81a78f73b27bfa359a";
@@ -75,26 +78,37 @@ struct MiniBundle {
 impl MiniBundle {
     /// A mini-bundle that carries the **recorded failure shapes**.
     fn with_shapes() -> Self {
-        Self::build(Some(all_shapes()))
+        Self::build(Some(all_shapes()), [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST])
     }
 
     /// A mini-bundle that carries **one** recorded failure shape.
     fn with_one_shape() -> Self {
-        Self::build(Some(vec![shape(
-            "getbuild_unknown_tag",
-            "json",
-            200,
-            "application/json",
-            r#"{"data":null,"message":"not found","retcode":-202}"#,
-        )]))
+        Self::build(
+            Some(vec![shape(
+                "getbuild_unknown_tag",
+                "json",
+                200,
+                "application/json",
+                r#"{"data":null,"message":"not found","retcode":-202}"#,
+            )]),
+            [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST],
+        )
     }
 
     /// A mini-bundle that carries **no** recorded failure shapes.
     fn without_shapes() -> Self {
-        Self::build(None)
+        Self::build(None, [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST])
     }
 
-    fn build(shapes: Option<Vec<Shape>>) -> Self {
+    /// Both builds declare the same `game` id, for the shared-id index case.
+    fn with_shared_game_id() -> Self {
+        Self::build(
+            Some(all_shapes()),
+            [SHARED_GAME_MANIFEST, SHARED_GAME_MANIFEST],
+        )
+    }
+
+    fn build(shapes: Option<Vec<Shape>>, game_ids: [&str; 2]) -> Self {
         let guard = TempDir::new("girpr_artifact_server", "mini");
         let dir = guard.to_path_buf();
         std::fs::create_dir_all(dir.join("api")).expect("create api/");
@@ -163,11 +177,11 @@ impl MiniBundle {
         );
         write_json(
             &dir.join("api").join(format!("getBuild.{OLD_TAG}.json")),
-            &build_body(OLD_BUILD, OLD_TAG, OLD_GAME_MANIFEST, OLD_AUDIO_MANIFEST),
+            &build_body(OLD_BUILD, OLD_TAG, game_ids[0], OLD_AUDIO_MANIFEST),
         );
         write_json(
             &dir.join("api").join(format!("getBuild.{NEW_TAG}.json")),
-            &build_body(NEW_BUILD, NEW_TAG, NEW_GAME_MANIFEST, NEW_AUDIO_MANIFEST),
+            &build_body(NEW_BUILD, NEW_TAG, game_ids[1], NEW_AUDIO_MANIFEST),
         );
 
         // The carried archives: one per build, under the field the body's
@@ -618,6 +632,31 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
         ctype, "application/xml",
         "the measured blob 404 content-type"
     );
+}
+
+/// Both `getBuild` bodies declare the same `game` id. `Served::load` keys its
+/// index by id alone and rewrites the old tag first, so the new build's entry
+/// overwrites the old one: the id resolves to the newer build's tag and field
+/// archive. This pins today's lossy behavior — the older declaration is gone
+/// from the index entirely.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn currently_a_game_id_shared_by_both_builds_resolves_to_the_newer_one() {
+    let mini = MiniBundle::with_shared_game_id();
+    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
+
+    assert_eq!(
+        bridge.manifest_resolution(SHARED_GAME_MANIFEST),
+        Some((
+            NEW_TAG.to_string(),
+            "game".to_string(),
+            NEW_BUILD.to_string(),
+            true,
+        )),
+        "the new build is rewritten last and wins the id"
+    );
+    let mut ids = bridge.declared_manifest_ids();
+    ids.retain(|id| id == SHARED_GAME_MANIFEST);
+    assert_eq!(ids.len(), 1, "one id, not one per build");
 }
 
 /// The invariant `docs/06` §4.1 buys: **every blob request's `<build_id>` must
