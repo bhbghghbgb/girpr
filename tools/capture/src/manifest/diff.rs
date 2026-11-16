@@ -889,6 +889,69 @@ mod tests {
         );
     }
 
+    /// Fixture shape: one common file whose whole-file md5 differs between the
+    /// two tags, plus one folder entry that exists only in the new tag.
+    /// `diff_field` has no folder filter, so the folder is a normal `added` row;
+    /// `candidates` in turn admits it as an `added` candidate. This pins
+    /// today's behavior — a later policy may keep it in the diff but exclude it
+    /// from selection.
+    #[test]
+    fn currently_a_folder_entry_is_an_added_diff_row_and_an_added_candidate() {
+        let folder = SophonChunkFile {
+            file: "f/newdir".into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: "md5-dir".into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)])],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder,
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+
+        // The non-folder change is a normal `changed` row with a score.
+        let changed = d
+            .rows
+            .iter()
+            .find(|r| r.path == "data")
+            .expect("the changed row");
+        assert_eq!(changed.state, State::Changed);
+        assert!(changed.score.is_some());
+
+        // The folder is a normal `added` row, counted as an added file today.
+        let folder_row = d
+            .rows
+            .iter()
+            .find(|r| r.path == "f/newdir")
+            .expect("the folder row");
+        assert_eq!(folder_row.state, State::Added);
+        assert_eq!(folder_row.size, 0);
+        assert!(folder_row.score.is_none());
+        assert_eq!(d.counts.added, 1, "the folder is counted as one added file");
+
+        // Selection admits it as an `added` candidate — the folder-ness is
+        // already gone by the time the pool is built.
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        let folder_candidate = pool
+            .iter()
+            .find(|c| c.candidate.path == "f/newdir")
+            .expect("the folder is a candidate today");
+        assert_eq!(folder_candidate.candidate.state, State::Added);
+        assert_eq!(
+            folder_candidate.candidate.classes,
+            vec![crate::select::Class::Added]
+        );
+    }
+
     /// spec §5's formulas, computed by hand on the fixture above.
     #[test]
     fn reuse_moved_and_the_two_byte_totals_follow_section_five() {

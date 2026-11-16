@@ -439,6 +439,35 @@ fn a_url_needs_a_registered_tag_and_says_which_one_it_wanted() {
     assert_eq!(s.tags(), vec!["7.0.0", "7.1.0"]);
 }
 
+/// Fixture shape: a hand-built manifest whose `chunk_download` declares a
+/// non-empty `url_suffix`. `CapturedManifest::chunk_url` joins prefix/id/suffix,
+/// but `Sources` — the path chunk downloads actually use — keeps only the
+/// prefix and appends `/<id>`, so the suffix never reaches the URL. The
+/// empty-suffix control shows the two paths agree when there is nothing to
+/// drop.
+#[test]
+fn currently_sources_drops_a_nonempty_chunk_url_suffix() {
+    let mut m = CapturedManifest::empty("7.1.0", "game", vec![]);
+    m.meta.declared.chunk_download.url_prefix = "https://c/x".into();
+
+    // Control: no suffix — both paths yield the same URL.
+    m.meta.declared.chunk_download.url_suffix.clear();
+    assert_eq!(m.chunk_url("abc"), "https://c/x/abc");
+    assert_eq!(
+        Sources::from_manifests([&m]).url("7.1.0", "abc").unwrap(),
+        "https://c/x/abc"
+    );
+
+    // With a suffix, only `chunk_url` carries it; `Sources` stays suffix-less.
+    m.meta.declared.chunk_download.url_suffix = ".zst".into();
+    assert_eq!(m.chunk_url("abc"), "https://c/x/abc.zst");
+    assert_eq!(
+        Sources::from_manifests([&m]).url("7.1.0", "abc").unwrap(),
+        "https://c/x/abc",
+        "the download path drops the suffix"
+    );
+}
+
 #[test]
 fn plan_only_still_lists_every_chunk_and_its_roles() {
     let w = chunks::wants(&[pair()]);
