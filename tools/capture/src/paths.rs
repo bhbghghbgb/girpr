@@ -186,8 +186,20 @@ pub fn escape_component(component: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Borrowed(component)
 }
 
+/// Whether a component's on-disk spelling differs from its logical one.
+///
+/// The two conditions are exactly those under which [`escape_component`]
+/// returns `Cow::Owned`, so this predicate and the mapper cannot disagree about
+/// which components need escaping.
+fn component_needs_escaping(component: &str) -> bool {
+    is_windows_device_name(component) || component.contains('%')
+}
+
 /// Escape every component of a `/`-separated bundle path.
 pub fn escape_path(path: &str) -> String {
+    if !path.split('/').any(component_needs_escaping) {
+        return path.to_string();
+    }
     path.split('/')
         .map(|c| escape_component(c).into_owned())
         .collect::<Vec<_>>()
