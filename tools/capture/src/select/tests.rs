@@ -835,6 +835,7 @@ fn candidates_document_carries_the_columns_and_a_one_based_rank() {
         "total_cost",
         "classes",
         "rank",
+        "admission_rank",
     ] {
         assert!(cols.iter().any(|x| x == c), "missing {c}");
     }
@@ -842,9 +843,116 @@ fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["rank"], 1);
     assert_eq!(rows[1]["rank"], 2);
-    // Both have identical total_cost, so the path breaks the tie.
+    // `a` is cheaper, so the scoring order puts it first here; the pool agrees.
     assert_eq!(rows[0]["path"], "a");
+    assert_eq!(rows[0]["admission_rank"], 1);
+    assert_eq!(rows[1]["admission_rank"], 2);
     assert_eq!(rows[0]["classes"][0], Class::ReuseInPlace.id());
+}
+
+#[test]
+fn cost_tie_scoring_rank_and_admission_rank_can_differ() {
+    // Equal total_cost and field, so `by_cost` breaks the tie by `moved` desc
+    // (`b` first) while `candidates` breaks it by path (`a` first). The two
+    // ranks must therefore be swapped between the two published columns.
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "a",
+                State::Changed,
+                Some(scored("a", 40, (20, 20), (1, 0, 0), false)),
+                20,
+            ),
+            row(
+                "b",
+                State::Changed,
+                Some(scored("b", 40, (20, 20), (1, 0, 1), false)),
+                20,
+            ),
+        ],
+    )];
+
+    // Confirm the premise before checking the document that rests on it: the
+    // two comparators really do disagree about which of `a` / `b` comes first.
+    let scoring: Vec<String> = by_cost(&diffs).into_iter().map(|(_, s)| s.path).collect();
+    assert_eq!(scoring, vec!["b", "a"]);
+    let admission: Vec<String> = candidates(&diffs)
+        .into_iter()
+        .map(|c| c.candidate.path)
+        .collect();
+    assert_eq!(admission, vec!["a", "b"]);
+
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    // Rows stay in scoring order: `rank` climbs 1, 2; `admission_rank` does not.
+    assert_eq!(rows[0]["path"], "b");
+    assert_eq!(rows[0]["rank"], 1);
+    assert_eq!(rows[0]["admission_rank"], 2);
+    assert_eq!(rows[1]["path"], "a");
+    assert_eq!(rows[1]["rank"], 2);
+    assert_eq!(rows[1]["admission_rank"], 1);
+}
+
+#[test]
+fn every_common_row_carries_a_unique_admission_rank() {
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "a",
+                State::Changed,
+                Some(scored("a", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+            row(
+                "b",
+                State::Changed,
+                Some(scored("b", 40, (20, 20), (1, 0, 0), false)),
+                20,
+            ),
+            row(
+                "c",
+                State::Changed,
+                Some(scored("c", 60, (30, 30), (2, 1, 1), false)),
+                30,
+            ),
+        ],
+    )];
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    let mut ranks: Vec<u64> = rows
+        .iter()
+        .map(|r| {
+            r["admission_rank"]
+                .as_u64()
+                .expect("every common row has a numeric admission_rank")
+        })
+        .collect();
+    ranks.sort_unstable();
+    assert_eq!(ranks, vec![1, 2, 3], "unique paths carry unique ranks");
+}
+
+#[test]
+fn one_sided_rows_are_not_in_the_scoring_table() {
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "common",
+                State::Changed,
+                Some(scored("common", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+            row("added", State::Added, None, 50),
+            row("removed", State::Removed, None, 50),
+        ],
+    )];
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one-sided rows are not scoring rows");
+    assert_eq!(rows[0]["path"], "common");
 }
 
 #[test]
