@@ -328,8 +328,9 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
 /// approximation of the filesystem's own table rather than a copy of it: the
 /// lossy conversion also folds two distinct byte sequences that are not valid
 /// UTF-8 onto each other, since both become the replacement character. It is
-/// the approximation the identity rule has always made, and it is kept rather
-/// than guessed at.
+/// the approximation both of its users have always made — the identity rule's
+/// fallback and the on-disk lookup's comparison — and it is kept rather than
+/// guessed at.
 ///
 /// Windows only, because neither site folds case anywhere else: on POSIX the
 /// two spellings are distinct entries.
