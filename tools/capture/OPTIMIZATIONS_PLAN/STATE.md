@@ -21,7 +21,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-04 | A14 scans `game/` on disk (A6) | completed | c7dcbff9 35a94be2 | |
 | P1-05 | A11 checks the declared side size (A7) | completed | 12ad7888 d898d57e | |
 | P1-06 | Independently check published checksums (A8) | completed | 4dea01a6 bb9a7423 | |
-| P1-07 | Schema and path validation (A9) | in_progress | | |
+| P1-07 | Schema and path validation (A9) | pending_review | 6bed8f7d 646cd70b bf4b3592 | |
 | P1-08 | Cross-check patchmap plan and index (A10) | todo | | |
 | P1-09 | `list` descends past non-bundles (A11) | todo | | |
 | P1-10 | Explicit folder policy (A3) | todo | | |
