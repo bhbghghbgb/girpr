@@ -767,6 +767,28 @@ mod tests {
         assert_eq!(serde_json::to_string(&v).unwrap(), "42");
     }
 
+    /// A `u64` above `i64::MAX` must not wrap into a negative `Int`. The string
+    /// form is faithful and round-trips through `as_u64`.
+    #[test]
+    fn a_u64_above_i64_max_is_kept_as_a_faithful_string() {
+        let big = IntOrStr::from(u64::MAX);
+        assert_eq!(big, IntOrStr::Str("18446744073709551615".into()));
+        assert_eq!(big.as_u64(), Some(u64::MAX));
+        assert_eq!(big.as_i64(), None);
+        assert_eq!(
+            serde_json::to_string(&big).unwrap(),
+            r#""18446744073709551615""#
+        );
+    }
+
+    #[test]
+    fn a_u64_that_fits_i64_stays_an_int() {
+        let v = IntOrStr::from(i64::MAX as u64);
+        assert_eq!(v, IntOrStr::Int(i64::MAX));
+        assert_eq!(v.as_u64(), Some(i64::MAX as u64));
+        assert_eq!(serde_json::to_string(&v).unwrap(), i64::MAX.to_string());
+    }
+
     #[test]
     fn neither_form_is_coerced_into_the_other_on_the_way_out() {
         // The whole reason the type exists: re-serialising must not change the

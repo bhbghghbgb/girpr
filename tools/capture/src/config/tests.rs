@@ -376,6 +376,37 @@ fn a_tag_that_is_not_a_bare_version_string_is_refused() {
     }
 }
 
+/// The limit is 32 *bytes*, and the message says so. A 33-byte ASCII tag is
+/// refused; a 32-byte one passes.
+#[test]
+fn a_tag_longer_than_32_bytes_is_refused_with_byte_wording() {
+    let too_long = "7".repeat(33);
+    let problem = tag_shape_problem(&too_long).expect("33 bytes is too long");
+    assert!(problem.contains("32 bytes"), "{problem}");
+
+    let at_limit = "7".repeat(32);
+    assert_eq!(tag_shape_problem(&at_limit), None, "{at_limit:?}");
+}
+
+/// `len()` counts bytes, so 17 two-byte characters are 34 bytes and refused
+/// even though that is only 17 characters. The message must not claim the
+/// rule counts characters.
+#[test]
+fn a_multibyte_tag_is_counted_in_bytes_not_characters() {
+    let tag = "é".repeat(17);
+    assert_eq!(tag.len(), 34);
+    assert_eq!(tag.chars().count(), 17);
+
+    let problem = tag_shape_problem(&tag).expect("34 bytes is too long");
+    assert!(problem.contains("32 bytes"), "{problem}");
+    assert!(!problem.contains("characters"), "{problem}");
+
+    // 16 two-byte characters land exactly on the 32-byte limit and pass.
+    let at_limit = "é".repeat(16);
+    assert_eq!(at_limit.len(), 32);
+    assert_eq!(tag_shape_problem(&at_limit), None, "{at_limit:?}");
+}
+
 #[test]
 fn a_tag_cannot_name_a_path_on_either_separator_or_carry_a_drive_prefix() {
     // A tag is joined into the artifact directory raw. On Windows `\` is a
