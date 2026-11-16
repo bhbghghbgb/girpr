@@ -394,6 +394,12 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     let mut out: Vec<SizedCandidate> = Vec::new();
     for f in diffs {
         for row in &f.rows {
+            // A folder is a directory, not a file: the diff keeps its row so the
+            // counts and sidecars stay truthful, but it has no patch cost and
+            // must never become a file capture.
+            if row.is_folder {
+                continue;
+            }
             let shape = match &row.score {
                 Some(s) => Shape::from_row(row.state, s),
                 None => match row.state {
@@ -877,6 +883,9 @@ const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 ///
 /// Column-oriented so a reader can sort without re-parsing objects, and carrying
 /// `rank` so "why did it pick that?" has an answer without re-running anything.
+/// Only common *scored* paths appear here: one-sided paths have no patch cost to
+/// rank, and folder entries are directories rather than files, so neither is a
+/// row in this table.
 pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
     let rows: Vec<serde_json::Value> = by_cost(diffs)
         .into_iter()

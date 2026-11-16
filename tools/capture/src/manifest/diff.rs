@@ -904,12 +904,11 @@ mod tests {
 
     /// Fixture shape: one common file whose whole-file md5 differs between the
     /// two tags, plus one folder entry that exists only in the new tag.
-    /// `diff_field` has no folder filter, so the folder is a normal `added` row;
-    /// `candidates` in turn admits it as an `added` candidate. This pins
-    /// today's behavior — a later policy may keep it in the diff but exclude it
-    /// from selection.
+    /// The folder stays an `added` diff row so the counts remain truthful, but
+    /// it is flagged as a folder and `candidates` must not turn it into a file
+    /// capture.
     #[test]
-    fn currently_a_folder_entry_is_an_added_diff_row_and_an_added_candidate() {
+    fn a_folder_entry_is_an_added_diff_row_but_not_a_candidate() {
         let folder = SophonChunkFile {
             file: "f/newdir".into(),
             chunks: vec![],
@@ -939,8 +938,10 @@ mod tests {
             .expect("the changed row");
         assert_eq!(changed.state, State::Changed);
         assert!(changed.score.is_some());
+        assert!(!changed.is_folder);
 
-        // The folder is a normal `added` row, counted as an added file today.
+        // The folder stays an `added` row, counted as an added entry, but it is
+        // flagged as a folder rather than scored like a file.
         let folder_row = d
             .rows
             .iter()
@@ -949,19 +950,21 @@ mod tests {
         assert_eq!(folder_row.state, State::Added);
         assert_eq!(folder_row.size, 0);
         assert!(folder_row.score.is_none());
-        assert_eq!(d.counts.added, 1, "the folder is counted as one added file");
-
-        // Selection admits it as an `added` candidate — the folder-ness is
-        // already gone by the time the pool is built.
-        let pool = crate::select::candidates(std::slice::from_ref(&d));
-        let folder_candidate = pool
-            .iter()
-            .find(|c| c.candidate.path == "f/newdir")
-            .expect("the folder is a candidate today");
-        assert_eq!(folder_candidate.candidate.state, State::Added);
+        assert!(folder_row.is_folder);
         assert_eq!(
-            folder_candidate.candidate.classes,
-            vec![crate::select::Class::Added]
+            d.counts.added, 1,
+            "the folder is counted as one added entry"
+        );
+
+        // Selection must not turn it into a file candidate.
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        assert!(
+            pool.iter().all(|c| c.candidate.path != "f/newdir"),
+            "a folder must never become a SizedCandidate"
+        );
+        assert!(
+            pool.iter().any(|c| c.candidate.path == "data"),
+            "the real file is still a candidate"
         );
     }
 
