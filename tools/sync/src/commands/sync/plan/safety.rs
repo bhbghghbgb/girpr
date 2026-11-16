@@ -700,13 +700,15 @@ pub(crate) fn ensure_mkdir_targets_free(
 ) -> Result<()> {
     // The dst view the plan will see after the rename: exact keys in sensitive
     // mode, folded pairs otherwise. This index folds to a *value* rather than
-    // to a key, so it does not share the key-shaped `util::folded_keys` index.
-    let dst_folded: HashMap<String, &EffRec> = if case_sensitive {
+    // to a key, so it does not share the key-shaped `util::folded_keys` index,
+    // and it is named for what it holds: the dst's records, each under the
+    // folded key of its path.
+    let dst_folded_values: HashMap<String, &EffRec> = if case_sensitive {
         HashMap::new()
     } else {
         dm.iter().map(|(k, v)| (path_key(k), v)).collect()
     };
-    let paired = |rel: &str| dst_after_rename(rel, dm, &dst_folded, case_sensitive);
+    let paired = |rel: &str| dst_after_rename(rel, dm, &dst_folded_values, case_sensitive);
     // A src directory the plan will fix rather than mkdir, because dst holds a
     // file (or a file link) at the same path after the rename.
     let fixed: HashSet<&str> = sm
@@ -786,16 +788,19 @@ impl PrefixStats {
 }
 
 /// The dst entry a src path will pair with after the rename pass.
+///
+/// `folded_values` holds the dst's records under the folded key of their
+/// path: the value-shaped index, not the key-shaped one.
 fn dst_after_rename<'a>(
     rel: &str,
     dm: &'a HashMap<String, EffRec>,
-    folded: &'a HashMap<String, &'a EffRec>,
+    folded_values: &'a HashMap<String, &'a EffRec>,
     case_sensitive: bool,
 ) -> Option<&'a EffRec> {
     if case_sensitive {
         dm.get(rel)
     } else {
-        folded.get(&path_key(rel)).copied()
+        folded_values.get(&path_key(rel)).copied()
     }
 }
 
