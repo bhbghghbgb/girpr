@@ -54,7 +54,7 @@ See `ORCHESTRATION.md` for the transition rules.
 
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
-| RC-1 | P0-01..P0-03 | pending | | |
+| RC-1 | P0-01..P0-03 | in_progress | | |
 | RC-2 | P1-01..P1-06 | pending | | |
 | RC-3 | P1-07..P1-12 | pending | | |
 | RC-4 | P1-13..P1-18 | pending | | |
