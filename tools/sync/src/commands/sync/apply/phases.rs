@@ -268,7 +268,16 @@ impl<'a> Applier<'a> {
         // whichever worker happened to lose. The `COPY` lines were already emitted
         // above, as each copy completed, and the rows were already written.
         if let Some((idx, e)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
-            return Err(e).with_context(|| format!("copy {}", copy_at(plan, idx)));
+            // The index came from this loop over the plan's copies, so it
+            // names one of them. A plan that does not have it cannot have the
+            // report name a copy, and the failure in hand is the copy's own,
+            // so both are reported: the naming error says what went wrong and
+            // the copy's failure rides along as its cause.
+            let rel = match copy_at(plan, idx) {
+                Ok(rel) => rel,
+                Err(naming) => return Err(e.context(naming)),
+            };
+            return Err(e).with_context(|| format!("copy {rel}"));
         }
         let copied = copied.load(std::sync::atomic::Ordering::SeqCst);
         info!(copied, total = copy_total, "copy done");
@@ -671,8 +680,22 @@ fn keep_lowest_index(
 /// stated in one place, and pinned by a case of its own, so a plan whose order
 /// is not the order a reader would guess cannot make the report name a copy
 /// that did not fail.
-fn copy_at(plan: &Plan, index: usize) -> &str {
-    &plan.copy[index].rel
+///
+/// **An index that names no copy is an error and not a panic.** The index
+/// comes from this phase's own loop over the plan's copies, so it names one
+/// today; a plan and a phase that disagreed would otherwise take the run down
+/// with an index-out-of-bounds panic inside a worker, and the copy's own
+/// failure would be lost with it. The error names the index and the size of
+/// the list instead.
+fn copy_at(plan: &Plan, index: usize) -> Result<&str> {
+    plan.copy
+        .get(index)
+        .map(|item| item.rel.as_str())
+        .ok_or_else(|| {
+            let listed = plan.copy.len();
+            let noun = if listed == 1 { "copy" } else { "copies" };
+            anyhow!("the plan has no copy at index {index}: it lists {listed} {noun}")
+        })
 }
 
 /// Refuse a removal whose target's directory resolves inside `src`.
@@ -831,9 +854,18 @@ mod tests {
         };
 
         // Every index names its own copy, and nothing else.
-        assert_eq!(copy_at(&plan, 0), "aaa.bin");
-        assert_eq!(copy_at(&plan, 1), "mmm.bin");
-        assert_eq!(copy_at(&plan, 2), "zzz.bin");
+        assert_eq!(
+            copy_at(&plan, 0).expect("the first copy is named"),
+            "aaa.bin"
+        );
+        assert_eq!(
+            copy_at(&plan, 1).expect("the second copy is named"),
+            "mmm.bin"
+        );
+        assert_eq!(
+            copy_at(&plan, 2).expect("the third copy is named"),
+            "zzz.bin"
+        );
 
         // The failures arrive in the opposite order to the plan's, so the
         // report names the plan's first of them rather than the first to
@@ -843,11 +875,44 @@ mod tests {
         keep_lowest_index(&mut failure, 1, anyhow!("the second copy"));
         let (index, error) = failure.expect("a failure was recorded");
         assert_eq!(
-            copy_at(&plan, index),
+            copy_at(&plan, index).expect("the index names a copy"),
             "mmm.bin",
             "the report names the copy the plan lists first"
         );
         assert_eq!(error.to_string(), "the second copy", "and why it failed");
+    }
+
+    /// **An index that names no copy is an error, not a panic.**
+    ///
+    /// The index the phase reports comes from its own loop over the plan's
+    /// copies, so it names one today. A plan and a phase that disagreed would
+    /// otherwise take the whole run down with an index-out-of-bounds panic
+    /// inside a worker, and the copy's own failure would be lost with it — so
+    /// the helper says what is wrong instead, and names the index and the size
+    /// of the list.
+    #[test]
+    fn an_index_that_names_no_copy_is_an_error_rather_than_a_panic() {
+        let plan = Plan {
+            copy: vec![CopyItem {
+                rel: "aaa.bin".into(),
+                because: CopyBecause::Missing,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            copy_at(&plan, 0).expect("the first copy is named"),
+            "aaa.bin",
+            "an index the plan holds names that copy"
+        );
+
+        let err = copy_at(&plan, 1).expect_err("an index past the end names no copy");
+        let msg = err.to_string();
+        assert!(msg.contains("index 1"), "names the index: {msg}");
+        assert!(
+            msg.contains("1 copy"),
+            "names how many copies the plan holds: {msg}"
+        );
     }
 
     /// The removal guard compares the target's **resolved** directory with the
