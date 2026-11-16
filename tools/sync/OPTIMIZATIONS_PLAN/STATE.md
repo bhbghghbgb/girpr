@@ -3837,7 +3837,7 @@ followups:
     commits: []
   - id: F431
     source: F279
-    description: A record side's phase C writes no events at all, so the family is not symmetric across side kinds: a record side has a phase A with no events and no phase C events.
+    description: "A record side's phase C writes no events at all, so the family is not symmetric across side kinds: a record side has a phase A with no events and no phase C events."
     status: pending
     batch: M113
     commits: []
@@ -3891,6 +3891,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — the state file's YAML block was repaired again: a follow-up
+  description carrying an unquoted colon was quoted, which the block needs
+  whenever a description contains one.
 - 2026-11-16 — follow-up batch M46 review checkpoint opened: F278 and F279
   `in_progress` → `pending_review`, commits `f217e1ca`, `f92d995e`; review M46
   `pending` → `in_progress`, base `496bd819`, head `f92d995e`.
