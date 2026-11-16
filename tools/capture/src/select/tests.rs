@@ -1036,3 +1036,89 @@ fn capture_ids_are_the_class_then_the_ordinal() {
     assert_eq!(c.candidate.capture_id(Class::Identical, 0), "identical");
     assert_eq!(c.candidate.capture_id(Class::Identical, 2), "identical+2");
 }
+
+fn empty_selection() -> Selection {
+    Selection {
+        admitted: Vec::new(),
+        rejected: Vec::new(),
+        forced_skipped: Vec::new(),
+        forced_unscored: Vec::new(),
+        matrix: Vec::new(),
+        bytes_admitted: 0,
+        budget: Budget::unlimited(),
+    }
+}
+
+fn admission(id: &str) -> Admission {
+    Admission {
+        capture_id: id.into(),
+        primary_class: Class::Identical,
+        path: format!("path/{id}"),
+        matching_field: "game".into(),
+        state: State::Identical,
+        also_satisfies: Vec::new(),
+        budget_cost: 0,
+        patch_bytes: 0,
+    }
+}
+
+fn rejection(id: &str) -> Rejection {
+    Rejection {
+        capture_id: id.into(),
+        primary_class: Class::Identical,
+        path: format!("path/{id}"),
+        matching_field: "game".into(),
+        state: State::Identical,
+        budget_cost: 0,
+        reason: String::new(),
+    }
+}
+
+#[test]
+fn capture_ids_are_unique_in_a_normal_selection() {
+    let s = select(&all_six(), 1, Budget::unlimited(), &[]);
+    assert_eq!(s.admitted.len(), 6, "one capture per class");
+    debug_validate_unique_ids(&s).expect("one capture per class means unique, valid ids");
+}
+
+#[test]
+fn duplicate_admitted_capture_ids_are_reported() {
+    let mut s = empty_selection();
+    s.admitted.push(admission("identical"));
+    s.admitted.push(admission("identical"));
+    let err = debug_validate_unique_ids(&s).expect_err("two admissions claim one patchmap");
+    assert!(err.contains("duplicate admitted"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn duplicate_rejected_capture_ids_are_reported() {
+    let mut s = empty_selection();
+    s.rejected.push(rejection("identical"));
+    s.rejected.push(rejection("identical"));
+    let err = debug_validate_unique_ids(&s).expect_err("two rejections claim one id");
+    assert!(err.contains("duplicate rejected"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn an_admitted_id_may_not_equal_a_rejected_id() {
+    let mut s = empty_selection();
+    s.admitted.push(admission("identical"));
+    s.rejected.push(rejection("identical"));
+    let err =
+        debug_validate_unique_ids(&s).expect_err("the funded and the would-be capture collide");
+    assert!(err.contains("both admitted and rejected"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn capture_ids_must_be_single_file_stems() {
+    for bad in ["", "a/b", "a\\b", "a..b"] {
+        let mut s = empty_selection();
+        s.admitted.push(admission(bad));
+        let err =
+            debug_validate_unique_ids(&s).expect_err("an id that is not a single stem is refused");
+        assert!(err.contains("valid file stem"), "{err}");
+    }
+}

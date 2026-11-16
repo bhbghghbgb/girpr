@@ -865,6 +865,60 @@ pub fn select(
     }
 }
 
+/// Debug-only invariant for the ids that become `patchmaps/<id>.json` stems.
+///
+/// [`write_patchmap`](crate::emit::write_patchmap) names its file after a
+/// capture's id, so an id that repeats — or that carries a path separator or a
+/// parent traversal — makes two records claim one file and the later write
+/// silently replaces the earlier one. The per-class ordinals assigned in phase
+/// 0 and phase 1 are meant to prevent that; this checks the *result* rather
+/// than trusting the assignment, so a future budget or ordering change that
+/// breaks it is caught in a test or a debug run instead of in a bundle.
+///
+/// Returns the first problem it finds as a message; `Ok` means every admitted
+/// and rejected id is a valid single file stem and no id is claimed twice,
+/// either within one list or across the two.
+fn debug_validate_unique_ids(selection: &Selection) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    // A single, nonempty path component: no separator, no parent traversal.
+    // Anything else would escape `patchmaps/` or name a different file than
+    // the reader of the matrix expects.
+    fn check_stem(id: &str) -> Result<(), String> {
+        if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+            return Err(format!("`{id}` is not a valid file stem"));
+        }
+        Ok(())
+    }
+
+    let mut admitted_ids: HashSet<&str> = HashSet::new();
+    for a in &selection.admitted {
+        check_stem(&a.capture_id)?;
+        if !admitted_ids.insert(a.capture_id.as_str()) {
+            return Err(format!("duplicate admitted capture id `{}`", a.capture_id));
+        }
+    }
+
+    let mut rejected_ids: HashSet<&str> = HashSet::new();
+    for r in &selection.rejected {
+        check_stem(&r.capture_id)?;
+        if !rejected_ids.insert(r.capture_id.as_str()) {
+            return Err(format!("duplicate rejected capture id `{}`", r.capture_id));
+        }
+    }
+
+    // A rejected id is the one a path *would* have written. If it matches an
+    // admitted id, two records still describe the same patchmap even though
+    // only one of them was funded.
+    for id in &admitted_ids {
+        if rejected_ids.contains(id) {
+            return Err(format!("capture id `{id}` is both admitted and rejected"));
+        }
+    }
+
+    Ok(())
+}
+
 /// Why a class was not captured.
 ///
 /// The two cases read very differently to whoever gets the artifact: "this
