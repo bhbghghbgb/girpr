@@ -301,21 +301,59 @@ fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
     assert!(e.message().contains("must differ"), "{}", e.message());
 }
 
-/// That guard covers only two explicit flags. When both halves resolve from the
-/// branch and `main.tag` happens to equal `diff_tags[0]`, `select` has no
-/// equal-tag refusal of its own and returns two halves that name the same tag.
+/// The flag-level guard covers only two explicit flags. When both halves
+/// resolve from the branch and `main.tag` happens to equal `diff_tags[0]`,
+/// `select` must refuse the pair by name before a build id is asked for or a
+/// directory is named after the duplicated tag.
 #[test]
-fn currently_an_equal_resolved_tag_pair_keeps_both_halves() {
+fn an_equal_resolved_tag_pair_is_refused_naming_both_sources() {
     let mut b = branch();
     b.tag = b.diff_tags[0].clone();
     let p = pair_plan(None, None);
-    let v = VersionPair::select(&b, p.new_selector(), p.old_selector())
-        .expect("select does not refuse an equal resolved tag");
-    assert_eq!(v.tags(), ["7.0.0", "7.0.0"]);
-    assert_eq!(v.new.tag, v.old.tag);
+    let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+    assert!(
+        e.contains("main.tag") && e.contains("diff_tags[0]"),
+        "the message names both sources: {e}"
+    );
+    assert!(
+        e.contains("7.0.0") && e.contains("must differ"),
+        "the message names the resolved tag and the rule: {e}"
+    );
+}
+
+/// The flags fold case with `eq_ignore_ascii_case`, so the resolved halves do
+/// too: a case-only difference is one tag for the pair's purposes on both
+/// entry points.
+#[test]
+fn a_case_only_difference_is_refused_for_both_flags_and_resolved_pair() {
+    assert!(
+        plan(|a| {
+            a.new_tag = Some("7.0.0-RC".into());
+            a.old_tag = Some("7.0.0-rc".into());
+        })
+        .is_err()
+    );
+
+    let mut b = branch();
+    b.tag = "7.0.0-RC".into();
+    b.diff_tags[0] = "7.0.0-rc".into();
+    let p = pair_plan(None, None);
+    let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+    assert!(
+        e.contains("main.tag") && e.contains("diff_tags[0]"),
+        "the message names both sources: {e}"
+    );
+}
+
+/// The guard is about equality, not similarity: a real version step resolved
+/// from the branch still yields both halves, with their sources intact.
+#[test]
+fn a_different_resolved_pair_is_still_accepted() {
+    let p = pair_plan(None, None);
+    let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
+    assert_eq!(v.tags(), ["7.1.0", "7.0.0"]);
     assert_eq!(v.new.source, "main.tag");
     assert_eq!(v.old.source, "diff_tags[0]");
-    assert!(!v.new.resolved() && !v.old.resolved());
 }
 
 #[test]
