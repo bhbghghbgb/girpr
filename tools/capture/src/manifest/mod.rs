@@ -756,15 +756,21 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         }
         // A folder carries no bytes, so none of the byte-level properties apply
         // to it; counting one would report a violation on every folder entry and
-        // mean nothing.
+        // mean nothing. A non-folder with no chunks still runs these checks:
+        // with nothing to violate, `ascending` and `gapless` stay true, but the
+        // zero `chunk_bytes` is compared to `size`, so a file that claims bytes
+        // without any chunks is reported as a size mismatch. A zero-byte empty
+        // file (`size == 0`) stays clean.
         //
-        // `gapless` deliberately asks only whether the chunks *tile* — each one
-        // starting where the last ended. Whether they then reach `size` is
-        // `size_mismatch_files`, and folding it in here would double-count every
-        // disagreement and blur two properties into one counter. It is in fact
-        // redundant: with no gap, the cursor equals `Σ uncompressed_size`, so
-        // the extra clause could only ever fire when the length already did.
-        if e.is_folder || e.chunks.is_empty() {
+        // An empty chunk list is not additionally counted as non-gapless: there
+        // is no tiling to violate. `gapless` deliberately asks only whether the
+        // chunks *tile* — each one starting where the last ended. Whether they
+        // then reach `size` is `size_mismatch_files`, and folding it in here
+        // would double-count every disagreement and blur two properties into
+        // one counter. It is in fact redundant: with no gap, the cursor equals
+        // `Σ uncompressed_size`, so the extra clause could only ever fire when
+        // the length already did.
+        if e.is_folder {
             continue;
         }
         if !ascending {
