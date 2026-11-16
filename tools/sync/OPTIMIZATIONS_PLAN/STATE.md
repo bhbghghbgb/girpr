@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M51
+active_batch: M52
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T10:39:45Z
 tasks:
@@ -3167,7 +3167,7 @@ followups:
   - id: F295
     source: F206
     description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
-    status: pending
+    status: in_progress
     batch: M52
     commits: []
   - id: F296
@@ -3180,7 +3180,7 @@ followups:
   - id: F297
     source: F208
     description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
-    status: pending
+    status: in_progress
     batch: M52
     commits: []
   - id: F298
@@ -4315,6 +4315,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M52 started: F295 and F297 `pending` →
+  `in_progress`; `active_batch: M51` → `M52`.
 - 2026-11-16 — review M51 `done`: F294 kept (51660f8f), F296 kept (0671b2d8,
   b78aa1a3); no fix or revert commits; follow-ups F473–F477 appended with batch
   `M132`. F294 and F296 `pending_review` → `completed`.
