@@ -535,11 +535,10 @@ impl CopyGate {
 /// The gate a specification names, or `None` when it names none.
 ///
 /// **The value is two relative paths, split on the first colon.** Both halves
-/// name a path inside the mirror — relative to the root, `/`-separated, never
-/// absolute — and the split is unambiguous because the rule is checked here:
-/// a half that is empty, that is absolute, or that holds a colon of its own
-/// is not a path this run can copy, and the whole specification asks for no
-/// gate.
+/// name a path inside the mirror — the shape [`is_relative_path`] states — and
+/// the split is unambiguous because the rule is checked here: a half that is
+/// not such a path is not a path this run can copy, and the whole
+/// specification asks for no gate.
 ///
 /// That is worth being strict about, because a specification that names a
 /// copy no run can produce is not inert: the waiting copy would sit on the
