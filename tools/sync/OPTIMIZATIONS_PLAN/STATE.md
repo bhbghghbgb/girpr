@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M53
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:19:59Z
+last_updated: 2026-11-16T11:29:53Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1295,8 +1295,15 @@ reviews:
     result: null
     followups: []
   - batch: M53
-    status: pending
+    status: in_progress
     tasks: [F298, F301]
+    base: 4134beca
+    head: 3dc6d002
+    result: null
+    followups: []
+  - batch: M136
+    status: pending
+    tasks: [F484, F485, F486]
     base: null
     head: null
     result: null
@@ -3209,9 +3216,9 @@ followups:
   - id: F298
     source: F208
     description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
-    status: in_progress
+    status: pending_review
     batch: M53
-    commits: []
+    commits: [d821f722]
   - id: F299
     source: F208
     description: The design notes' fold section still says the on-disk lookup and the key sit side by side in one file, though the path key itself lives in the utility module.
@@ -3227,9 +3234,9 @@ followups:
   - id: F301
     source: F208
     description: The on-disk lookup's doc points at the shared mapping as plain code where the two neighbouring references use intra-doc links.
-    status: in_progress
+    status: pending_review
     batch: M53
-    commits: []
+    commits: [3dc6d002]
   - id: F302
     source: F207
     description: The renamed indexes carry a keys suffix while the helper's own doc calls it the folded-key index, so the names do not match the wording exactly.
@@ -4344,6 +4351,24 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F478, whose description now names the three sites"
+  - id: F484
+    source: F301
+    description: The identity rule's doc still names the shared mapping in plain code where the crate's style elsewhere is an intra-doc link.
+    status: pending
+    batch: M136
+    commits: []
+  - id: F485
+    source: F298
+    description: The shared mapping's doc names the on-disk spelling lookup without pointing at it, and the lookup is deep in the module tree, so a link would need the module path checked for resolvability first.
+    status: pending
+    batch: M136
+    commits: []
+  - id: F486
+    source: F298
+    description: The two case-fold comparison docs state the boundary with the path key's rule from opposite directions, so a reader arriving at either one has to walk to the other; one shared statement of the boundary would serve both.
+    status: pending
+    batch: M136
+    commits: []
 ```
 
 ## Human checklist
@@ -4375,6 +4400,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M53 review checkpoint opened: F298 and F301
+  `in_progress` → `pending_review`, commits `d821f722`, `3dc6d002`; review M53
+  `pending` → `in_progress`, base `4134beca`, head `3dc6d002`.
 - 2026-11-16 — follow-up batch M53 started: F298 and F301 `pending` →
   `in_progress`; `active_batch: M52` → `M53`.
 - 2026-11-16 — review M52 `done`: F295 kept (7d4e184b), F297 kept (0aedd172); no
