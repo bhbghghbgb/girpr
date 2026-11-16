@@ -142,7 +142,9 @@ because it is written into the folder the destination cache lives in. Every
 spelling of it is inside that namespace, so a conversion that is killed before
 it could clean up after itself therefore leaves tool state there, not a file
 the next run would mirror out of a source folder or delete as an extra in a
-destination one.
+destination one. **That family of names is bounded** — the plain name and the
+`_2` … `_1000` spellings, a thousand candidates in all — so a conversion that
+finds every one of them taken fails with exit `3` rather than trying forever.
 
 **Nothing reclaims that temporary.** The retention bound
 ([Backups and failures](#backups-and-failures)) ranges over a cache's
@@ -1034,6 +1036,16 @@ linked either, so its name is claimed with an exclusive create and the copy
 is renamed onto the claim: the name is briefly an *empty directory* until the
 rename lands.
 
+**A name of that shape that is taken is stepped over, not reused.** The copy
+is published under the next name of the family instead: `girpr-cache-backup-<ts>`
+and then its `girpr-cache-backup-<ts>_2`, `_3`, … spellings, and the same
+family of names for the `girpr-cache-old-…` snapshots and for the working
+`girpr-cache-partial-…` name. **That family of names is bounded** — the plain
+name and the `_2` … `_1000` suffixes, a thousand candidates in all — so a
+claim cannot spin forever over a pathological folder: a publish that finds
+every one of them taken fails loudly, and the run reports the failure rather
+than a backup that is not on disk.
+
 The claim is what keeps two runs off one name, and a bound that meets one
 cannot tell it from a published copy, so on a filesystem that cannot lock a
 file the claim can be taken away; a publish that finds its claim gone fails the
@@ -1310,7 +1322,8 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spellings of the
   same name when that one is taken), so a conversion that was killed
   leaves the tool's own residue behind rather than a file that looks like
-  content.
+  content. The family of those spellings is bounded, and stops at the
+  thousandth suffix.
   Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
   convert once with `sled2redb <old-dir> <new-file>` — the converter is behind
   the `convert` feature, see [Build features](#build-features)).

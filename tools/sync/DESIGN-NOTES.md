@@ -592,6 +592,17 @@ and the bound would take the newest of them away. The number is therefore read
 as a number, and the two orders the bound uses — the one it walks the copies
 in and the one it picks the newest by — are the same one.
 
+**The family of names has a limit of its own.** A name of that shape that is
+taken is stepped over rather than reused, so the published name is one of a
+family: the plain `girpr-cache-backup-<ts>` and its `_2`, `_3`, … spellings,
+up to the thousandth suffix — a thousand candidates in all. The limit is
+generous on purpose, because a candidate is only ever taken by a run that
+collided on the same microsecond; it is there so a pathological folder cannot
+spin the claim loop forever, not because the number is expected to be reached.
+A claim that finds no free name within the limit fails the run loudly rather
+than spinning: the run reports the failure rather than a backup that is not on
+disk.
+
 The bound is applied **after** the cache is opened, and the open holds the
 cache file's exclusive lock until the run is done with the cache. redb takes
 that lock exclusively and does not wait for it, so at most one run is in its
@@ -878,7 +889,10 @@ writes the new cache into a temporary beside the destination and moves it onto
 the destination only once it is whole, so a conversion that is killed leaves
 that temporary behind — `girpr-cache-convert-<pid>-<ts>.redb`, or
 `girpr-cache-convert-<pid>-<ts>_2.redb` and its `_3`, `_4`, … spellings when
-the plain one is taken. Nothing reclaims any of them: the retention bound
+the plain one is taken. That family of names is bounded as well: the plain
+name and the `_2` … `_1000` spellings, a thousand candidates in all, and a
+conversion that finds every one of them taken fails rather than trying
+forever. Nothing reclaims any of them: the retention bound
 ranges over a cache's published copies and not over these names, so a leftover
 stays in the folder until it is removed by hand.
 That is the same trade as the working copy a killed backup leaves, and for the
