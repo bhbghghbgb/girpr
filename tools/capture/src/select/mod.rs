@@ -617,15 +617,20 @@ pub fn select(
     let mut forced_skipped: Vec<String> = Vec::new();
     let mut forced_unscored: Vec<String> = Vec::new();
     let mut forced_rejected: Vec<Rejection> = Vec::new();
-    // **How many forced paths of each class have already taken an id.**
+    // **One ordinal sequence per class, shared by every path that can produce
+    // a capture id.** Phase 0 takes the first ordinals for forced paths, in the
+    // caller's order; phase 1 continues the same sequence when it picks wants,
+    // so a want can never claim an id a forced path already took. A forced path
+    // refused by the budget keeps its ordinal anyway — its rejection record
+    // still names the id that path would have written — and that is exactly the
+    // id a cheaper pick of the same class must not reuse. Assigning here, rather
+    // than at admission, is what lets the rejection record carry that id.
     //
-    // A forced path is admitted with ordinal zero only when it is the *first*
-    // forced path of its primary class. Two distinct paths that both answer
-    // `added` would share the id `added`, so the second `patchmaps/added.json`
-    // would replace the first while the run still reported two captures. The
-    // ordinal is assigned here rather than at admission so the rejection record
-    // carries the same id the path would have written.
-    let mut forced_ordinals: BTreeMap<Class, usize> = BTreeMap::new();
+    // Two distinct paths that both answer `added` cannot both be `added`: the
+    // second `patchmaps/added.json` would replace the first while the run still
+    // reported two captures. Numbering per class is what keeps their identities
+    // apart, in both the admitted and the rejected lists.
+    let mut ordinals: BTreeMap<Class, usize> = BTreeMap::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
@@ -644,8 +649,8 @@ pub fn select(
             forced_unscored.push(want.clone());
             continue;
         };
-        let nth = forced_ordinals.get(&primary).copied().unwrap_or(0);
-        forced_ordinals.insert(primary, nth + 1);
+        let nth = ordinals.get(&primary).copied().unwrap_or(0);
+        ordinals.insert(primary, nth + 1);
         let cost = c.budget_cost();
         if !budget.admits(cost) {
             // **Record and continue.** A `break` here would silently drop every
@@ -680,10 +685,12 @@ pub fn select(
     // already captured.
     //
     // The ordinal rides along because `capture_id` is `<class>` or `<class>+<n>`
-    // where `n` counts *within the class*. Phase 2 re-sorts these by cost, so
-    // the position a want is admitted at says nothing about which pick it was —
-    // `reuse_moved+7` would be a true statement about a global cost
-    // order and a useless one about `--per-class`.
+    // where `n` counts *within the class*. It continues phase 0's sequence for
+    // that class, so a want cannot claim an id a forced path already took —
+    // including one that was refused and lives on only as a rejection record.
+    // Phase 2 re-sorts these by cost, so the position a want is admitted at says
+    // nothing about which pick it was — `reuse_moved+7` would be a true
+    // statement about a global cost order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     // One entry per class, in `Class::REQUIRED_ORDER`: the row phase 3 will
     // resolve, and the answer the class had before the budget's verdict. The
@@ -745,6 +752,9 @@ pub fn select(
             continue;
         }
 
+        // `picked` counts this class's wants for the `--per-class` limit. The id
+        // ordinal instead continues phase 0's sequence for the class, so a want
+        // cannot take an id a forced path already claimed, funded or refused.
         let mut picked = 0_usize;
         for &i in candidates {
             if picked == per_class {
@@ -756,7 +766,9 @@ pub fn select(
             if !taken.insert(c.candidate.path.as_str()) {
                 continue;
             }
-            wants.push((class, picked, c.clone()));
+            let nth = ordinals.get(&class).copied().unwrap_or(0);
+            ordinals.insert(class, nth + 1);
+            wants.push((class, nth, c.clone()));
             picked += 1;
         }
 

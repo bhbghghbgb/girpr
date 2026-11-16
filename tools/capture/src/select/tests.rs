@@ -468,6 +468,41 @@ fn two_forced_paths_of_one_class_get_distinct_ids() {
     assert_eq!(added.path.as_deref(), Some("x/a"));
 }
 
+/// A forced path refused by the budget must not lend its `<class>` id to a
+/// cheaper pick of the same class that *is* funded.
+///
+/// The refused path is not in `taken` (only funded captures are), so phase 1
+/// still considers its class and can pick a cheaper sibling. With two ordinal
+/// counters — one for forced paths, one for wants — both paths claim `added`:
+/// the rejection record describes one patchmap while the funded capture writes
+/// another, and the two can overwrite each other in release builds. The ordinal
+/// has to be shared by every selection that could produce an id.
+#[test]
+fn a_refused_forced_path_and_a_funded_pick_do_not_share_an_id() {
+    let pool = candidates(&[field(
+        "game",
+        vec![
+            row("x/forced", State::Added, None, 500),
+            row("x/cheap", State::Added, None, 100),
+        ],
+    )]);
+    // Only `x/cheap` fits: the forced `x/forced` is refused in phase 0, then
+    // `x/cheap` is wanted for `added` and funded in phase 2.
+    let s = select(&pool, 1, Budget::capped(100), &["x/forced".into()]);
+
+    assert_eq!(s.paths(), vec!["x/cheap"], "the cheaper pick is funded");
+    let rejected: Vec<&str> = s.rejected.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(rejected, vec!["x/forced"], "the forced path is refused");
+
+    let admitted_id = &s.admitted[0].capture_id;
+    let rejected_id = &s.rejected[0].capture_id;
+    assert_ne!(
+        admitted_id, rejected_id,
+        "the funded capture and the rejection cannot claim one patchmap"
+    );
+    debug_validate_unique_ids(&s).expect("every id in the selection is unique");
+}
+
 /// A forced path the pool carries but which answers **no** class is
 /// recorded, not silently dropped.
 ///
