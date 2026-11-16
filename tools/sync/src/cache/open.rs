@@ -2090,8 +2090,8 @@ mod tests {
     /// A claim steps over a name that is already taken rather than taking it:
     /// the name is claimed, not chosen.
     ///
-    /// The run of names is pinned one member at a time — the plain name, then
-    /// `_2`, then `_3` — so a change that kept the second spelling and
+    /// The family of names is pinned one member at a time — the plain name,
+    /// then `_2`, then `_3` — so a change that kept the second spelling and
     /// altered the ones after it fails here: the third claim is asked for by
     /// name, and not merely for "some name that is not the second".
     #[test]
