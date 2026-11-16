@@ -272,4 +272,88 @@ mod tests {
         assert_eq!(doc.omitted, 0);
         assert!(doc.rejections.is_empty());
     }
+
+    #[test]
+    fn arrival_order_does_not_change_the_sample() {
+        const EXTRA: usize = 9;
+        let keys: Vec<String> = (0..(MAX_ROWS + EXTRA))
+            .map(|i| format!("value {:06}", i))
+            .collect();
+        let forward = Rejections::new();
+        let reverse = Rejections::new();
+        for key in &keys {
+            forward.record("source", key, "rule");
+        }
+        for key in keys.iter().rev() {
+            reverse.record("source", key, "rule");
+        }
+
+        let a = forward.document();
+        let b = reverse.document();
+        assert_eq!(a, b);
+        assert_eq!(a.rejections.len(), MAX_ROWS);
+        let retained: Vec<&str> = a.rejections.iter().map(|r| r.value.as_str()).collect();
+        let smallest: Vec<&str> = keys.iter().take(MAX_ROWS).map(String::as_str).collect();
+        assert_eq!(retained, smallest);
+        assert_eq!(a.total, MAX_ROWS as u64);
+        assert_eq!(a.omitted, EXTRA as u64);
+        assert_eq!(forward.len(), MAX_ROWS + EXTRA);
+        assert_eq!(reverse.len(), MAX_ROWS + EXTRA);
+    }
+
+    #[test]
+    fn a_smaller_key_displaces_the_largest_and_a_larger_key_is_omitted() {
+        let store = Rejections::new();
+        // Fill past the point where `k000000` and `k999999` sit, so one is
+        // smaller than the current maximum and the other is larger.
+        for i in 0..MAX_ROWS {
+            store.record("source", &format!("k{:06}", i + 1000), "rule");
+        }
+        let full = store.document();
+        let largest = full.rejections.last().unwrap().value.clone();
+
+        store.record("source", "k000000", "rule");
+        let smaller = store.document();
+        assert_eq!(smaller.rejections.len(), MAX_ROWS);
+        assert_eq!(smaller.rejections.first().unwrap().value, "k000000");
+        assert!(!smaller.rejections.iter().any(|r| r.value == largest));
+        assert_eq!(smaller.omitted, 1);
+
+        store.record("source", "k999999", "rule");
+        let larger = store.document();
+        assert_eq!(larger.rejections, smaller.rejections);
+        assert_eq!(larger.omitted, 2);
+        assert_eq!(store.len(), MAX_ROWS + 2);
+    }
+
+    #[test]
+    fn duplicate_keys_are_counted_without_changing_the_sample() {
+        let store = Rejections::new();
+        for i in 0..MAX_ROWS {
+            store.record("source", &format!("k{:06}", i), "rule");
+        }
+        let full = store.document();
+        // A repeat of a key already kept, even one smaller than the largest,
+        // must not displace a distinct row.
+        for _ in 0..3 {
+            store.record("source", "k000000", "rule");
+        }
+        let after = store.document();
+        assert_eq!(after.rejections, full.rejections);
+        assert_eq!(after.total, MAX_ROWS as u64);
+        assert_eq!(after.omitted, 3);
+        assert_eq!(store.len(), MAX_ROWS + 3);
+    }
+
+    #[test]
+    fn a_repeat_of_a_key_is_not_kept_twice_below_the_cap() {
+        let store = Rejections::new();
+        store.record("a", "1", "path.device");
+        store.record("a", "1", "path.device");
+        let doc = store.document();
+        assert_eq!(doc.rejections.len(), 1);
+        assert_eq!(doc.total, 1);
+        assert_eq!(doc.omitted, 1);
+        assert_eq!(store.len(), 2);
+    }
 }
