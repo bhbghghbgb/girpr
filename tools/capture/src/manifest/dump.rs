@@ -618,6 +618,73 @@ mod tests {
         );
     }
 
+    /// Distinct paths still sort by path when duplicates are present, and the
+    /// duplicate pair stays together in entry order with each row's own values.
+    #[test]
+    fn duplicates_and_distinct_paths_sort_by_path_with_an_entry_order_tie_break() {
+        let mut first = entry("b.txt", 10, 1, false);
+        first.md5 = "md5-first".into();
+        let mut second = entry("b.txt", 99, 3, true);
+        second.md5 = "md5-second".into();
+        let entries = vec![
+            first,
+            entry("a.txt", 5, 1, false),
+            second,
+            entry("c.txt", 7, 2, false),
+        ];
+        let rows = paths_tsv(&entries);
+        let lines: Vec<&str> = rows.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "a.txt\t5\tmd5-a.txt\t1\tfalse",
+                "b.txt\t10\tmd5-first\t1\tfalse",
+                "b.txt\t99\tmd5-second\t3\ttrue",
+                "c.txt\t7\tmd5-c.txt\t2\tfalse",
+            ]
+        );
+    }
+
+    /// The sidecar depends only on the entries, not on how they were collected:
+    /// repeated calls are byte-identical, and reversing two equal-path entries
+    /// reverses their rows while distinct paths stay path-sorted either way.
+    #[test]
+    fn sidecar_rows_are_deterministic_across_input_order() {
+        let mut a = entry("dup.txt", 10, 1, false);
+        a.md5 = "md5-a".into();
+        let mut b = entry("dup.txt", 99, 3, true);
+        b.md5 = "md5-b".into();
+        let distinct = entry("aaa.txt", 5, 1, false);
+
+        let forward = vec![a.clone(), b.clone(), distinct.clone()];
+        let reversed = vec![b, a, distinct];
+
+        // Same input, same bytes.
+        assert_eq!(paths_tsv(&forward), paths_tsv(&forward));
+
+        let forward_rows = paths_tsv(&forward);
+        let reversed_rows = paths_tsv(&reversed);
+        let f: Vec<&str> = forward_rows.lines().skip(1).collect();
+        let r: Vec<&str> = reversed_rows.lines().skip(1).collect();
+        // The distinct path leads both outputs; the equal-path rows follow
+        // entry order in each input.
+        assert_eq!(f[0], r[0], "distinct paths sort by path either way");
+        assert_eq!(
+            &f[1..],
+            &[
+                "dup.txt\t10\tmd5-a\t1\tfalse",
+                "dup.txt\t99\tmd5-b\t3\ttrue",
+            ]
+        );
+        assert_eq!(
+            &r[1..],
+            &[
+                "dup.txt\t99\tmd5-b\t3\ttrue",
+                "dup.txt\t10\tmd5-a\t1\tfalse",
+            ]
+        );
+    }
+
     /// `--manifest-detail paths-only`: the archive, the sidecar and the meta
     /// document all still land — a sidecar with no archive beside it describes
     /// nothing checkable — and only the multi-megabyte decode is dropped, with
