@@ -950,6 +950,33 @@ mod tests {
         assert_eq!(both, ids(&[removal_pair(), hoyo()]));
     }
 
+    /// The cached builder must produce exactly what the uncached one does: the
+    /// same `Want`s, in the same order, with the same cross-build shared chunk
+    /// merged into one blob. `hoyo()` carries that shared chunk; `removal_pair()`
+    /// is one-sided, so the set exercises both alignment and merging.
+    #[test]
+    fn wants_with_matches_wants_for_a_representative_set() {
+        let pairs = vec![hoyo(), removal_pair()];
+        let uncached = wants(&pairs);
+        let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+        let cached = wants_with(&pairs, &retentions);
+        assert_eq!(cached, uncached);
+        // Keep the test honest: the set really does contain a chunk declared by
+        // both builds, or this is not the case it claims to be about.
+        assert!(uncached.iter().any(|w| w.sources.len() == 2));
+    }
+
+    /// A retentions slice that is not index-aligned with `pairs` is a caller
+    /// bug. The debug assertion catches it instead of letting `zip` silently
+    /// truncate the store to the shorter slice.
+    #[test]
+    #[should_panic(expected = "one precomputed retention per pair, index-aligned")]
+    fn wants_with_rejects_a_mismatched_retention_count() {
+        let pairs = vec![hoyo(), removal_pair()];
+        let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+        wants_with(&pairs, &retentions[..1]);
+    }
+
     fn removal_pair() -> FilePair {
         FilePair {
             capture_id: "removed".into(),

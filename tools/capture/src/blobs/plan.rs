@@ -304,4 +304,23 @@ mod tests {
         check_byte_ceiling(1, Some(0)).expect_err("Some(0) is a ceiling of zero");
         check_byte_ceiling(0, Some(0)).expect("and zero fits in zero");
     }
+
+    /// The planning path hands the retentions it computed for A12 straight to
+    /// the want builder. There is no counter seam here, so the guarantee is
+    /// pinned by equality: the plan's wants must be exactly what an uncached
+    /// rebuild produces, or a mis-indexed cache would drop or duplicate a chunk.
+    #[test]
+    fn a_plan_uses_the_same_wants_as_an_uncached_rebuild() {
+        let (selection, manifests, fields) = identical_capture(1_000);
+        let planned = plan(
+            &fields, &manifests, &selection, "7.0.0", "7.1.0", None, false,
+        )
+        .expect("a legal plan");
+        let pairs = file_pairs(&selection, &fields, &manifests, "7.0.0", "7.1.0");
+        assert_eq!(
+            planned.wants,
+            crate::blobs::chunks::wants(&pairs),
+            "cached and uncached planning paths must agree byte-for-byte"
+        );
+    }
 }
