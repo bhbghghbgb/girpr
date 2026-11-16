@@ -617,10 +617,10 @@ few of them, the per-algorithm coverage, and the remedy. This is the commonest w
 to hit it and it is worth knowing:
 
 ```
-girsync update --dir src      # cache warm
-# a file appears in src
-girsync sync --src src --dst dst    # ...and leaves a stat-only row for it in src's cache
-girsync compare-self --dir src   # exit 3: 1 of 3 undecided paths uncovered
+girsync update --dir D:\game-old      # cache warm
+# a file appears in D:\game-old
+girsync sync --src D:\game-old --dst D:\game-live    # ...and leaves a stat-only row for it in D:\game-old's cache
+girsync compare-self --dir D:\game-old   # exit 3: 1 of 3 undecided paths uncovered
 ```
 
 The `sync` is not at fault. It decided that pair by presence, so it needed no
@@ -630,8 +630,8 @@ stat-equal pair the record cannot digest, and without this rule it would have
 exited **0**: `hashes_differ` skips an algorithm either side lacks, so the pair
 quietly falls back to the size+mtime that had already agreed and the audit reports
 the newcomer as in step. Three ways out, all named in the error: one command
-(`girsync update --dir src` — with the **folder spelled out**, so the line is
-one you can paste as it stands), a narrower request
+(`girsync update --dir D:\game-old` — with the **folder spelled out**, so the
+line is one you can paste as it stands), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
 `--hash-all-of none` for a stat-only audit.
 
@@ -649,7 +649,7 @@ Where the record holds *some* of what you asked for, it reads one algorithm inst
 of refusing:
 
 ```
-girsync compare-self --dir src --hash-any-of md5 --hash-any-of sha256
+girsync compare-self --dir D:\game-old --hash-any-of md5 --hash-any-of sha256
 ```
 
 An audit of an `--hash-all-of md5` record then succeeds wherever the record has md5,
@@ -1725,7 +1725,7 @@ them; `--dry-run` costs the same again.
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
-  it cannot compare content for that path. `girsync update --dir <the folder>` is
+  it cannot compare content for that path. `girsync update --dir D:\game-old` is
   the fix, or `--hash-any-of` if the record holds *some* of what you asked for; the
   error names the record (its path says which folder), the count, the paths and the
   mode that failed. **It names the folder to run that fix on only when the record
@@ -1740,7 +1740,7 @@ them; `--dry-run` costs the same again.
   row stays stat-only, describing content it cannot verify. Two repairs: the flag
   that distrusts the field doing the settling — `--no-trust-size` for a size
   difference, `--no-trust-mtime` for an mtime one, and either acts only when the
-  distrusted field is the *only* difference — and `girsync update --dir <the folder>`,
+  distrusted field is the *only* difference — and `girsync update --dir D:\game-old`,
   which rehashes every file and writes the digest back into the row. Worth knowing
   because the row looks healthy — it has the right size and mtime.
 - **`hashes_differ` is silent, and silence is not the same claim as "equal".** An empty
