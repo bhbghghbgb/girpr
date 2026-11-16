@@ -2,6 +2,7 @@ use super::*;
 use crate::blobs::Sources;
 use crate::blobs::chunks::{NewFile, OldFile};
 use crate::hash;
+use crate::manifest::CapturedManifest;
 use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
 /// `stored_path` comes out of `chunks/index.json`, which is a document in a
@@ -233,7 +234,7 @@ fn sources() -> Sources {
     ])
 }
 
-fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
+fn assemble_pair_with_sources(pair: &FilePair, sources: &Sources) -> Result<Assembled, String> {
     let entries: Vec<&SophonChunkFile> = [
         pair.old.as_ref().map(|o| &o.entry),
         pair.new.as_ref().map(|n| &n.entry),
@@ -247,9 +248,13 @@ fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
         pair,
         matching_field: "game",
         classes: &classes,
-        sources: &sources(),
+        sources,
         chunks: &src,
     })
+}
+
+fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
+    assemble_pair_with_sources(pair, &sources())
 }
 
 /// The measured shape: the file on disk is **longer** than the target and
@@ -482,6 +487,32 @@ fn every_fetch_entry_names_the_url_it_would_download() {
         assert!(u.starts_with("https://cdn/new/"), "{u}");
         assert!(u.ends_with(&e.chunk_id), "{u} does not name the chunk");
         assert!(e.source_range.is_none(), "a FETCH has no local source");
+    }
+}
+
+/// The suffix a source declares reaches `patchmap.plan[].url`, the recorded
+/// address a consumer downloads the chunk from — not just `Sources::url` in
+/// isolation.
+#[test]
+fn a_suffix_on_the_source_reaches_the_plan_url() {
+    let mut old = CapturedManifest::empty("7.0.0", "game", vec![]);
+    old.meta.declared.chunk_download.url_prefix = "https://cdn/old".into();
+    let mut new = CapturedManifest::empty("7.1.0", "game", vec![]);
+    new.meta.declared.chunk_download.url_prefix = "https://cdn/new".into();
+    new.meta.declared.chunk_download.url_suffix = ".zst".into();
+    let sources = Sources::from_manifests([&old, &new]);
+
+    let a = assemble_pair_with_sources(&same_offset_pair(), &sources).expect("assembles");
+    let plan = a.map.plan.as_ref().unwrap();
+    let fetches: Vec<_> = plan
+        .iter()
+        .filter(|e| e.decision == Decision::Fetch)
+        .collect();
+    assert!(!fetches.is_empty(), "the pair has new-side chunks to fetch");
+    for e in fetches {
+        let u = e.url.as_deref().expect("a FETCH has a url");
+        assert!(u.starts_with("https://cdn/new/"), "{u}");
+        assert!(u.ends_with(".zst"), "{u} does not carry the suffix");
     }
 }
 
