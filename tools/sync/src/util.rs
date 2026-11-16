@@ -62,15 +62,21 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The ASCII-only case comparison: ASCII case folded, every other byte exact.
+/// The ASCII-case comparison: ASCII case folded, every other byte exact.
 ///
-/// **Windows only.** The comparison belongs where the filesystem folds case and
-/// nowhere else: on POSIX the two spellings are distinct entries, so there is
-/// nothing to compare them with.
+/// **The crate's one ASCII-case comparison.** It states the **path key's** rule
+/// — the one [`path_key`] folds with, and the one every relative-path index
+/// uses — as a comparison, for the sites that compare two spellings rather
+/// than fold one of them into a key. The hash module's fold over an algorithm
+/// name is the same rule, and the case that checks it asks this comparison
+/// rather than one of its own.
 ///
-/// The **path key's** rule — the one [`path_key`] folds with, and the one every
-/// relative-path index uses — stated as a comparison for the sites that compare
-/// two spellings rather than fold one of them into a key.
+/// **Written out rather than borrowed from `std`.** `eq_ignore_ascii_case`
+/// would answer the same question, but a comparison borrowed from `std` is a
+/// comparison that *follows* `std`: a `std` that changed which bytes fold
+/// would change this rule along with it, and the case that checks the hash
+/// module's fold would follow `std` instead of catching it. Writing the rule
+/// out here keeps the crate's answer independent of `std`'s.
 ///
 /// It is deliberately **not** the identity rule's comparison. [`component_eq`]
 /// keeps a Unicode fallback because it asks whether two spellings open the same
@@ -80,14 +86,43 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// so the ASCII-only rule says it without borrowing a rule that answers
 /// something else.
 ///
-/// **Its two users are the cache reservation's two rules**: the prefix helper
-/// [`has_cache_prefix`] and its exact-name counterpart [`is_cache_name`]. One
-/// asks whether a component starts with the cache's prefix, the other whether
-/// it is the cache's own name, and both state this comparison — so a reader who
-/// follows one finds the other, and neither can drift from the other.
-#[cfg(windows)]
-fn ascii_case_eq(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+/// **Its users.** The cache reservation's two rules — the prefix helper
+/// [`has_cache_prefix`] and its exact-name counterpart [`is_cache_name`] — ask
+/// it on Windows only, where the filesystem folds case; on POSIX the two
+/// spellings are distinct entries, so the reservation matches exactly there.
+/// The borrowed key's equality ([`FoldedKey`]) asks it on every platform,
+/// because a key is a key everywhere. And the hash module's fold is checked
+/// against it, so the crate's answer to "do these two spellings fold alike" is
+/// written once and two sites cannot drift apart over it.
+pub(crate) const fn ascii_case_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if ascii_lower(a[i]) != ascii_lower(b[i]) {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// One byte, folded to lower case if it is an ASCII upper-case letter.
+///
+/// The fold is written out rather than borrowed, and so is the classification
+/// it rests on: an ASCII upper-case letter is 32 above its lower-case
+/// counterpart, and every other byte is itself.
+///
+/// `to_ascii_lowercase` would do the fold, and `is_ascii_uppercase` would do
+/// the classification. Neither is used, because the rule must not borrow
+/// `std`'s answer for either half: a `std` that changed which bytes count as
+/// upper-case would then be followed by the rule and by the case that checks
+/// it at once, and the case would agree with `std` instead of catching it.
+#[allow(clippy::manual_is_ascii_check)]
+const fn ascii_lower(b: u8) -> u8 {
+    if b >= b'A' && b <= b'Z' { b + 32 } else { b }
 }
 
 /// True when one path component names cache state: it starts with `girpr-cache`,
@@ -100,14 +135,15 @@ fn ascii_case_eq(a: &str, b: &str) -> bool {
 /// that must not be swept up by the reservation.
 ///
 /// **The fold is the path key's, not the identity rule's.** On Windows the
-/// comparison is `ascii_case_eq` — a helper only that platform compiles, since
-/// on POSIX the reservation is an exact prefix match — and it folds ASCII case
-/// and compares every other byte exactly: the rule [`path_key`] states. The
-/// identity rule ([`component_eq`]) keeps a Unicode fallback, because it
-/// answers a different question: do two spellings open the same place on
-/// disk. The reservation asks about the tool's own names, and the prefix it
-/// matches is ASCII, so the ASCII-only rule is the one that states it. The
-/// identity rule's fold would answer a question nobody is asking here.
+/// comparison is `ascii_case_eq` — the crate's one ASCII-case comparison, asked
+/// here because on POSIX the reservation is an exact prefix match — and it
+/// folds ASCII case and compares every other byte exactly: the rule
+/// [`path_key`] states. The identity rule ([`component_eq`]) keeps a Unicode
+/// fallback, because it answers a different question: do two spellings open
+/// the same place on disk. The reservation asks about the tool's own names,
+/// and the prefix it matches is ASCII, so the ASCII-only rule is the one that
+/// states it. The identity rule's fold would answer a question nobody is
+/// asking here.
 ///
 /// **Stated with its exact-name counterpart** [`is_cache_name`]. The two
 /// reserve one vocabulary under one spelling rule: this one reserves the whole
@@ -394,8 +430,10 @@ impl Hash for FoldedKey<'_> {
 }
 
 impl PartialEq for FoldedKey<'_> {
+    /// The crate's ASCII-case comparison, which is the rule the borrowed key
+    /// states: ASCII case folded, every other byte exact.
     fn eq(&self, other: &Self) -> bool {
-        self.0.eq_ignore_ascii_case(other.0)
+        ascii_case_eq(self.0, other.0)
     }
 }
 
@@ -629,6 +667,42 @@ mod tests {
         assert_eq!(path_key("Game/Readme.TXT"), "game/readme.txt");
         assert_eq!(path_key("Ärger"), "Ärger");
         assert_ne!(path_key("\u{212A}"), path_key("k"));
+    }
+
+    /// **The oracle's own rule, over the bytes it decides.**
+    ///
+    /// The comparison is the crate's answer to "which bytes fold", so the
+    /// answer is written out here as well as in the code that uses it: the 26
+    /// ASCII letters fold to their lower-case counterparts, and every other
+    /// byte is itself. The boundaries are the ones a reader would get wrong —
+    /// `@` and `[` are ASCII but not letters, and a byte outside ASCII is not
+    /// a letter either.
+    #[test]
+    fn the_ascii_case_comparison_folds_ascii_letters_and_nothing_else() {
+        assert_eq!(ascii_lower(b'A'), b'a', "the first letter");
+        assert_eq!(ascii_lower(b'Z'), b'z', "the last one");
+        assert_eq!(ascii_lower(b'a'), b'a', "a lower-case letter is itself");
+        assert_eq!(ascii_lower(b'@'), b'@', "ASCII, but not a letter");
+        assert_eq!(ascii_lower(b'['), b'[', "ASCII, and just above the letters");
+        assert_eq!(ascii_lower(b'0'), b'0', "a digit is not a letter");
+        assert_eq!(
+            ascii_lower(0xC4),
+            0xC4,
+            "and a byte outside ASCII is not a letter either"
+        );
+
+        // And the comparison that folds with it says the same thing about
+        // two spellings: the letters fold alike, and nothing else does.
+        assert!(ascii_case_eq("MD5", "md5"), "the letters fold alike");
+        assert!(!ascii_case_eq("md5", "md-5"), "a non-letter does not");
+        assert!(
+            !ascii_case_eq("md5", "md5 "),
+            "and a different length is not alike"
+        );
+        assert!(
+            !ascii_case_eq("bla\u{212A}e3", "blake3"),
+            "a byte outside ASCII is itself, so the Kelvin sign is not a `k`"
+        );
     }
 
     /// The borrowed folded key is the path key's rule, so two paths are one key
