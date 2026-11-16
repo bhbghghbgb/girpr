@@ -624,6 +624,36 @@ mod tests {
         );
     }
 
+    /// Build the grouping once and answer a single file's question from it. The
+    /// owned `(id, offset)` list is the same one the one-shot helper returned,
+    /// in offset order.
+    #[test]
+    fn one_build_answers_the_owned_chunk_list_for_one_file() {
+        let f = Fixture::build("one-build");
+        let id_at = |offset: i64| {
+            f.index
+                .blobs
+                .iter()
+                .find(|b| {
+                    b.referenced_by
+                        .iter()
+                        .any(|r| r.role == Set::MaterializeOld && r.offset == offset)
+                })
+                .expect("a blob referenced at that offset")
+                .props
+                .chunk_id
+                .clone()
+        };
+        let by_file = f.by_file();
+        let old = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld)
+            .expect("one build, one lookup");
+        assert_eq!(
+            old,
+            vec![(id_at(0), 0), (id_at(64), 64), (id_at(192), 192)],
+            "the same owned list, in offset order"
+        );
+    }
+
     /// The closure check: the blobs alone reproduce the file. Read from disk,
     /// through the same store a capture used, with no manifest consulted.
     #[test]
