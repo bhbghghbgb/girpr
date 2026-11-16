@@ -580,8 +580,9 @@ fn gate_from_spec(spec: &str) -> Option<Arc<CopyGate>> {
 /// refused, so there is never a second one for the split to be ambiguous
 /// about.
 ///
-/// A half that is empty, that is absolute, or that carries a colon of its own
-/// is not a path a run can copy, so the whole specification asks for no gate.
+/// A half that is not a path inside the mirror — empty, absolute, holding a
+/// parent component, a trailing separator or a colon of its own — names no
+/// copy a run can produce, so the whole specification asks for no gate.
 fn gate_paths(spec: &str) -> Option<(&str, &str)> {
     let (wait, on) = spec.split_once(':')?;
     if !is_relative_path(wait) || !is_relative_path(on) {
@@ -593,16 +594,47 @@ fn gate_paths(spec: &str) -> Option<(&str, &str)> {
 /// Whether `path` is a relative path inside the mirror, as each half of the
 /// gate's specification has to be.
 ///
-/// The gate names copies by the path the plan spells — relative to the root,
-/// `/`-separated — so a half that is not such a path names no copy at all.
-/// The colon is excluded for the reason the split relies on: it is the
-/// separator the specification is split on, so a half that carries a second
-/// colon is not a path but the tail of a longer specification.
+/// **The shape is the one a path inside the mirror is spelled in.** Such a
+/// path is:
+///
+/// - **relative to the mirror's root** — it starts at a name, not at the root
+///   itself and not at a drive;
+/// - **`/`-separated**, the separator the plan spells a path with, and the
+///   only separator a component may hold;
+/// - **made of ordinary names** — one or more components, each of them
+///   non-empty and neither `.` nor `..`.
+///
+/// The plan spells a copy's path as the components the walk reported, and
+/// nothing else, so **no copy's path holds a parent component, a trailing
+/// separator, or a separator of the host's own**: the walk reports
+/// `/`-separated names relative to the root. A value of another shape names
+/// no copy at all — and a specification that names no copy is not inert: the
+/// copy waiting on it would sit on the guard until it timed out, and then
+/// fail for a reason the specification never stated. So a value of another
+/// shape is refused rather than accepted.
 fn is_relative_path(path: &str) -> bool {
-    !path.is_empty()
-        && !path.contains(':')
-        && !path.starts_with('/')
-        && !Path::new(path).is_absolute()
+    // The colon is excluded for the reason the split relies on: it is the
+    // separator the specification is split on, so a half that carries a second
+    // colon is not a path but the tail of a longer specification. It is also
+    // the drive separator's character, so a half that carries one is not a
+    // path under the mirror's root either.
+    if path.is_empty() || path.contains(':') {
+        return false;
+    }
+    // The separator is `/`, the one the plan spells a path with, and a
+    // component holds no other: a Windows-rooted `\aaa` starts at a root
+    // rather than at a name, and a `dir\aaa` is not the spelling the plan
+    // gives a copy inside `dir`.
+    if path.contains('\\') {
+        return false;
+    }
+    // The components are ordinary names: one or more of them, each of them
+    // non-empty and neither `.` nor `..`. A path that starts at the root has
+    // an empty first component, a path with a parent component has one that
+    // is not a name, and a path with a trailing separator has an empty last
+    // one — so all three are refused here.
+    path.split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
 }
 
 /// Keep the failure with the **lowest plan index**.
@@ -852,9 +884,10 @@ mod tests {
     ///
     /// The value is split on the first colon, and the split is unambiguous
     /// because the rule is checked on the parsing: a half that is empty, that
-    /// is absolute, or that carries a colon of its own names no copy a run
-    /// can produce — and the copy waiting on it would sit on the guard until
-    /// it timed out, rather than learn at once that it waits for nothing.
+    /// is absolute, that holds a parent component or a trailing separator, or
+    /// that carries a colon of its own names no copy a run can produce — and
+    /// the copy waiting on it would sit on the guard until it timed out,
+    /// rather than learn at once that it waits for nothing.
     ///
     /// The rule is pinned on the parsing, so the case says what a
     /// specification means rather than how it is read.
@@ -891,6 +924,81 @@ mod tests {
             None,
             "an absolute path names no copy"
         );
+
+        // A parent component names no copy either: the plan spells a copy's
+        // path as the components the walk reported, and no copy's path has
+        // one.
+        assert_eq!(
+            gate_paths("../aaa.bin:mmm.bin"),
+            None,
+            "a parent component names no copy"
+        );
+        assert_eq!(
+            gate_paths("dir/../aaa.bin:mmm.bin"),
+            None,
+            "a parent component names no copy"
+        );
+
+        // A trailing separator names no copy: the plan spells a copy's path
+        // as the components it reported, and none of them ends in one.
+        assert_eq!(
+            gate_paths("aaa.bin/:mmm.bin"),
+            None,
+            "a trailing separator names no copy"
+        );
+
+        // A Windows-rooted path starts at a root rather than under the
+        // mirror's root, so it names no copy either.
+        assert_eq!(
+            gate_paths(r"\aaa.bin:mmm.bin"),
+            None,
+            "a rooted path names no copy"
+        );
+    }
+
+    /// **The shape a gate's path has, stated as what it is.**
+    ///
+    /// A path inside the mirror is relative to the mirror's root,
+    /// `/`-separated, and made of ordinary names — and the case says that
+    /// shape in the positive first, so the refusals that follow read as the
+    /// shapes that are *not* it rather than as a list of accidents.
+    ///
+    /// The two rules that are not about the components are the colon — which
+    /// is the separator the specification is split on, and the drive
+    /// separator's character — and the separator itself: the plan spells a
+    /// path with `/` and nothing else, so a component holding another
+    /// separator is not a component the plan spells.
+    #[test]
+    fn a_gate_path_is_relative_to_the_root_and_made_of_ordinary_names() {
+        for path in ["aaa.bin", "dir/aaa.bin", "dir/sub/aaa.bin"] {
+            assert!(
+                is_relative_path(path),
+                "`{path}` is a path inside the mirror"
+            );
+        }
+
+        for path in [
+            // Empty: no path at all.
+            "",
+            // The root itself, and a drive: neither is under the mirror's.
+            "/aaa.bin",
+            "C:aaa.bin",
+            // A parent component: the plan spells no copy's path with one.
+            "..",
+            "../aaa.bin",
+            "dir/../aaa.bin",
+            // The current directory: not a name either.
+            ".",
+            "dir/./aaa.bin",
+            // A trailing separator, and a doubled one: a component is empty.
+            "aaa.bin/",
+            "dir//aaa.bin",
+            // A separator other than `/`: the plan spells a path with `/`.
+            r"\aaa.bin",
+            r"dir\aaa.bin",
+        ] {
+            assert!(!is_relative_path(path), "`{path}` names no copy");
+        }
     }
 
     /// **A gate specification that names no gate is reported.**

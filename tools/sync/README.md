@@ -1649,12 +1649,15 @@ separately. Only the rename fails there, so its three switches share that name
 and carry the point in the suffix; the stage is in the **switch's name** and
 never in its value, so every failure hook's value stays a plain relative path.
 
-**The gate's value is split on the first colon**, and the two halves are
-relative paths inside the mirror — the `<rel>` shape above. A colon is the
-drive separator's character and is illegal in a name on Windows, so a relative
-path holds none there; and the rule is checked where the value is read on
-every host, so a half that carries one anyway is not a path. A value that is
-not two relative paths — an empty half, an absolute one, or a second colon —
+**The gate's value is split on the first colon**, and the two halves are paths
+inside the mirror — the `<rel>` shape above, spelled the way the plan spells a
+path: relative to the mirror's root, `/`-separated, and made of ordinary
+names, so no parent component, no trailing separator and no separator but `/`.
+A colon is the drive separator's character and is illegal in a name on
+Windows, so a path inside the mirror holds none there; and the rule is
+checked where the value is read on every host, so a half that carries one
+anyway is not a path. A value that is not two such paths — an empty half, an
+absolute one, a parent component, a trailing separator, or a second colon —
 asks for no gate at all, and **the log says so**: the value and the fact that
 it names no copy are in a warning, so a typo in a gated test is visible
 rather than silent.
