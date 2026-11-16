@@ -48,7 +48,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P4-01 | One acceptable-state table (D1) | pending_review | edbf8013 2ef89ac9 bd674692 | |
 | P4-02 | Remove remaining dead fields (D2) | pending_review | 6641a00a | |
 | P4-03 | Parse `getBuild` once (D3) | pending_review | 825d9581 074b2aa8 302188df | |
-| P4-04 | Allocation cleanups (C10, C11, C12) | in_progress | | |
+| P4-04 | Allocation cleanups (C10, C11, C12) | pending_review | 434b9532 0baf65ab 07e69de1 0a3fba49 | |
 
 ## Review batches
 
