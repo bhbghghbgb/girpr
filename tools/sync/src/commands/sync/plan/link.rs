@@ -223,8 +223,9 @@ pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 /// question — which directory entry the OS would open — and the OS's own table
 /// is a Unicode one, so the comparison folds Unicode case.
 ///
-/// The comparison is `crate::util::unicode_case_eq`, the comparison the
-/// identity rule's fallback uses as well: one implementation for two
+/// The comparison is [`crate::util::unicode_case_eq`], the comparison the
+/// identity rule's fallback uses as well, over the shared mapping
+/// [`crate::util::unicode_lowercase`]: one implementation for two
 /// questions, not one rule.
 ///
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
