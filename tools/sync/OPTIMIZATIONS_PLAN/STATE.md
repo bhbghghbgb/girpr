@@ -13,7 +13,7 @@ plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-evaluate
 active_batch: M54
-spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
+spawn: openchamber session.create (no agent or model specified, use defaults), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time, returnResult true
 last_updated: 2026-11-16T12:39:03Z
 tasks:
   - id: T01
