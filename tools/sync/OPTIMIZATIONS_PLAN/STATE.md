@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M52
+active_batch: M53
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T11:19:59Z
 tasks:
@@ -3209,7 +3209,7 @@ followups:
   - id: F298
     source: F208
     description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
-    status: pending
+    status: in_progress
     batch: M53
     commits: []
   - id: F299
@@ -3227,7 +3227,7 @@ followups:
   - id: F301
     source: F208
     description: The on-disk lookup's doc points at the shared mapping as plain code where the two neighbouring references use intra-doc links.
-    status: pending
+    status: in_progress
     batch: M53
     commits: []
   - id: F302
@@ -4375,6 +4375,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M53 started: F298 and F301 `pending` →
+  `in_progress`; `active_batch: M52` → `M53`.
 - 2026-11-16 — review M52 `done`: F295 kept (7d4e184b), F297 kept (0aedd172); no
   fix or revert commits; follow-ups F481 and F482 appended with batch `M135`, and
   F483 recorded as `skipped` as the same item as F478, whose description now
