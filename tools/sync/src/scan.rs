@@ -10,10 +10,10 @@ use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 ///
 /// The heartbeat is the walk's own progress report: it says how many entries
 /// the walk has pushed so far, every so often, so a long walk is visibly
-/// alive. The period is a number rather than a rule, and it is named here so
-/// that the walk and the case that pins it agree in one place: a tree of
-/// exactly this many entries produces exactly one heartbeat, and a tree of
-/// fewer produces none.
+/// alive. It is the `scan progress: walk` event. The period is a number
+/// rather than a rule, and it is named here so that the walk and the case
+/// that pins it agree in one place: a tree of exactly this many entries
+/// produces exactly one heartbeat, and a tree of fewer produces none.
 pub const HEARTBEAT_ENTRIES: usize = 2000;
 
 /// One entry as found on disk, before any cache consultation.
@@ -45,6 +45,12 @@ pub struct LiveEnt {
 ///
 /// `girpr-cache*` subtrees are pruned. Any walk error (dangling link, loop,
 /// IO failure) aborts the whole run rather than yielding a partial listing.
+///
+/// The walk reports itself in three events, and each of them names it: `scan
+/// start`, `scan progress: walk` (the heartbeat) and `scan done`. A reader
+/// therefore tells them from the phases' own events by the name alone, and
+/// does not have to know which fields an event carries to say where it came
+/// from.
 ///
 /// The "scan done" event carries what the walk saw — the entries it pushed and
 /// the files and directories among them — and those counts are the walk's own,
@@ -141,7 +147,11 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     bail!("unsupported file type {}", ent.path().display());
                 }
                 if out.len() % HEARTBEAT_ENTRIES == 0 {
-                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress");
+                    // The heartbeat names the walk, because the phases report
+                    // their progress under their own names — and two progress
+                    // events that share one name are told apart by the fields
+                    // they carry, which is a thing a reader has to know.
+                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress: walk");
                 }
             }
         }

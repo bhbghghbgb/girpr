@@ -214,7 +214,9 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   they report under `scan progress: phase a` and `scan progress: phase c`. The
   old names are prefixes of the new ones, so a grep for `effective done` still
   finds them both; the phase is what tells the two apart. The walk's own
-  heartbeat is the `scan progress` that counts the entries it has pushed.
+  heartbeat is the `scan progress: walk` that counts the entries it has
+  pushed: every progress event names what produced it, so two of them are
+  never told apart by the fields they carry.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).

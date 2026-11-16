@@ -893,15 +893,10 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         "and the depth cap it is walking to"
     );
 
-    // The walk's heartbeat. It carries the entries it has pushed, which is
-    // what tells it apart from the phases' own progress events — those count
-    // the work they have done, not the tree, and they name their phase.
-    let heartbeats: Vec<&Value> = logged
-        .iter()
-        .filter(|e| {
-            e["fields"]["message"] == "scan progress" && e["fields"].get("entries").is_some()
-        })
-        .collect();
+    // The walk's heartbeat. Its name says what produced it, so it needs no
+    // field of its own to be told apart from the phases' own progress events
+    // — those count the work they have done, not the tree.
+    let heartbeats = events_with(&logged, "scan progress: walk");
     assert_eq!(
         heartbeats.len(),
         1,
