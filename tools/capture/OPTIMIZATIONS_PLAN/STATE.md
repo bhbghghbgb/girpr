@@ -60,7 +60,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-4 | P1-13..P1-18 | done | | |
 | RC-5 | P2-01..P2-04 | done | | |
 | RC-6 | P3-01..P3-02 | done | | |
-| RC-7 | P3-04..P3-09 | pending | | |
+| RC-7 | P3-04..P3-09 | in_progress | | |
 | RC-8 | P4-01..P4-04 | pending | | |
 
 ## Rework
