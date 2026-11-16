@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M44
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T05:13:08Z
+last_updated: 2026-11-16T05:25:29Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -973,12 +973,12 @@ reviews:
     result: null
     followups: []
   - batch: M44
-    status: in_progress
+    status: done
     tasks: [F275]
     base: fb1fef37
     head: f6878407
-    result: null
-    followups: []
+    result: F275 kept (819da84b, f6878407); no fix or revert commits; 617 passed without the feature and 634 with it, 1 skipped; the reviewer put the per-transaction read back twice, once in every transaction and once only after the threshold trips, and the new case failed both times; the public surface is unchanged and the durability switch has exactly two readers, both inside the policy
+    followups: [F421, F422, F423, F424]
   - batch: M106
     status: pending
     tasks: [F421, F422]
@@ -2831,9 +2831,10 @@ followups:
   - id: F275
     source: F193
     description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
-    status: pending_review
+    status: completed
     batch: M44
     commits: [819da84b, f6878407]
+    note: review M44 kept; the reviewer mutated the read back twice and the new case failed both times, and confirmed the defaults and the public surface are unchanged
   - id: F276
     source: F194
     description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
@@ -3778,6 +3779,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M44 `done`: F275 kept (819da84b, f6878407); no fix or revert
+  commits; follow-ups F421–F424 appended with batches `M106` and `M107`.
+  F275 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M44 review checkpoint opened: F275 `in_progress` →
   `pending_review`, commits `819da84b`, `f6878407`; review M44 `pending` →
   `in_progress`, base `fb1fef37`, head `f6878407`.
