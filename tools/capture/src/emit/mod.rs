@@ -249,10 +249,13 @@ pub fn write_checksums(root: &Path) -> std::io::Result<(String, index::Checksums
 /// **This is the second half of A16's convergence, not a shortcut around it.**
 /// `run` writes `verify/selfcheck.json` a second time to record A16's own row,
 /// which changes that one file; the re-scan therefore re-digests one file rather
-/// than the whole bundle, and `Checksums::a16` still re-reads every file from
-/// disk to prove the result. `verify` passes nothing and scans everything, which
-/// is correct: a bundle may have been tampered with since it was written, and
-/// there is no honest way to carry a digest across that.
+/// than the whole bundle. The first pass is proved by `Checksums::a16`, which
+/// re-reads every file, and the document published here is proved by
+/// `Checksums::a16_scoped`, which checks membership and re-hashes exactly the
+/// files named in `rewritten`; no digest is trusted just because it was reused.
+/// `verify` passes nothing and scans everything, which is correct: a bundle may
+/// have been tampered with since it was written, and there is no honest way to
+/// carry a digest across that.
 pub fn write_checksums_reusing(
     root: &Path,
     known: &[index::FileEntry],
@@ -608,6 +611,43 @@ mod tests {
         // Absent, not created: one of these cases is about the writer creating
         // its own parents, so pre-creating the root would assert nothing.
         girpr_tempdir::TempDir::absent("gircap-emit", name)
+    }
+
+    /// Fixture shape: one file seeded, a first (no-reuse) checksum pass, then
+    /// that file rewritten without being named in the close-out's second-pass
+    /// `rewritten` list (only selfcheck.json and README.md are). The published
+    /// document is the reuse result, so it carries the stale digest.
+    #[test]
+    fn currently_the_published_checksums_reuses_a_stale_digest_for_an_unnamed_change() {
+        let root = tmp("published-reuse-stale");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("a.bin"), b"aaaa").expect("seed");
+
+        let (_, first) = super::write_checksums(&root).expect("first pass");
+        let seeded = first
+            .entries
+            .iter()
+            .find(|e| e.path == "a.bin")
+            .expect("seeded entry")
+            .clone();
+
+        std::fs::write(root.join("a.bin"), b"aaaaaa").expect("rewrite");
+        let (_, published) = super::write_checksums_reusing(
+            &root,
+            &first.entries,
+            &["verify/selfcheck.json", "README.md"],
+        )
+        .expect("second pass");
+
+        let reused = published
+            .entries
+            .iter()
+            .find(|e| e.path == "a.bin")
+            .expect("entry");
+        assert_eq!(reused, &seeded, "the stale digest is published verbatim");
+        assert_ne!(reused.md5, crate::hash::md5_hex(&b"aaaaaa"[..]));
+        assert_ne!(published, index::Checksums::scan(&root).unwrap());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

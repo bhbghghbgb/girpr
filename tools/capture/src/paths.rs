@@ -186,8 +186,20 @@ pub fn escape_component(component: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Borrowed(component)
 }
 
+/// Whether a component's on-disk spelling differs from its logical one.
+///
+/// The two conditions are exactly those under which [`escape_component`]
+/// returns `Cow::Owned`, so this predicate and the mapper cannot disagree about
+/// which components need escaping.
+fn component_needs_escaping(component: &str) -> bool {
+    is_windows_device_name(component) || component.contains('%')
+}
+
 /// Escape every component of a `/`-separated bundle path.
 pub fn escape_path(path: &str) -> String {
+    if !path.split('/').any(component_needs_escaping) {
+        return path.to_string();
+    }
     path.split('/')
         .map(|c| escape_component(c).into_owned())
         .collect::<Vec<_>>()
@@ -433,6 +445,42 @@ mod tests {
         }
         // A device and a literal percent do not collide.
         assert_ne!(escape_path("CON"), escape_path("%CON"));
+    }
+
+    /// The fast path and the per-component mapper must agree on every input:
+    /// a component the predicate calls plain but the mapper escapes (or the
+    /// reverse) would ship a different on-disk name from the one the path map
+    /// records. The table covers both branches and the `%`/device collisions.
+    #[test]
+    fn escape_path_table_covers_plain_and_escaped_components() {
+        for (logical, on_disk) in [
+            ("a", "a"),
+            ("a/b", "a/b"),
+            (
+                "GenshinImpact_Data/Persistent/audio_lang_14",
+                "GenshinImpact_Data/Persistent/audio_lang_14",
+            ),
+            ("a/b.c", "a/b.c"),
+            ("CON", "%CON"),
+            ("a/CON", "a/%CON"),
+            ("a/NUL.txt", "a/%NUL.txt"),
+            ("nested/a/CON/b.txt", "nested/a/%CON/b.txt"),
+            ("a/%CON", "a/%%CON"),
+            ("a/100%done.bin", "a/100%%done.bin"),
+            ("a/%%", "a/%%%%"),
+            ("%CON", "%%CON"),
+            ("a/CON/%NUL/b", "a/%CON/%%NUL/b"),
+        ] {
+            assert_eq!(escape_path(logical), on_disk, "{logical:?}");
+            assert_eq!(
+                logical.split('/').any(component_needs_escaping),
+                logical
+                    .split('/')
+                    .any(|c| matches!(escape_component(c), std::borrow::Cow::Owned(_))),
+                "{logical:?}: the fast-path predicate diverged from the mapper"
+            );
+            assert_eq!(unescape_path(&escape_path(logical)), logical, "{on_disk:?}");
+        }
     }
 
     #[test]

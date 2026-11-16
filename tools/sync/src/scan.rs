@@ -4,7 +4,26 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
+use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of, slash_rel};
+
+/// How many entries the walk pushes between two heartbeats.
+///
+/// The heartbeat is the walk's own progress report: it says how many entries
+/// the walk has pushed so far, every so often, so a long walk is visibly
+/// alive. It is the `scan progress: walk` event. The period is a number
+/// rather than a rule, and it is named here so that the walk and the case
+/// that pins it agree in one place: a tree of exactly this many entries
+/// produces exactly one heartbeat, and a tree of fewer produces none.
+///
+/// **Public because the suite needs the same number, and for nothing else.**
+/// The integration test that pins the heartbeat builds its tree from this
+/// constant, so the walk and the case cannot drift apart — it was a bare
+/// literal in both places before, and the two could only agree by hand. No
+/// other caller wants it: the period says nothing about the tool's
+/// behaviour, only about how often the walk narrates itself, so the public
+/// surface exists solely so that one test can read the number the walk
+/// divides by.
+pub const HEARTBEAT_ENTRIES: usize = 2000;
 
 /// One entry as found on disk, before any cache consultation.
 ///
@@ -16,6 +35,9 @@ use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 #[derive(Clone, Debug)]
 pub struct LiveEnt {
     /// `/`-separated path relative to the walk root, original casing preserved.
+    ///
+    /// On POSIX a backslash is a literal filename character, not a separator,
+    /// and stays in the name exactly as the disk spells it.
     pub rel: String,
     pub is_dir: bool,
     /// 0 for dirs: dirs are compared by presence only.
@@ -35,11 +57,26 @@ pub struct LiveEnt {
 ///
 /// `girpr-cache*` subtrees are pruned. Any walk error (dangling link, loop,
 /// IO failure) aborts the whole run rather than yielding a partial listing.
+///
+/// The walk reports itself in three events, and each of them names it: `scan
+/// start`, `scan progress: walk` (the heartbeat) and `scan done`. A reader
+/// therefore tells them from the phases' own events by the name alone, and
+/// does not have to know which fields an event carries to say where it came
+/// from.
+///
+/// The "scan done" event carries what the walk saw — the entries it pushed and
+/// the files and directories among them — and those counts are the walk's own,
+/// not the effective map's. They are read from the log file; see the counters'
+/// note at the subtraction below.
 #[tracing::instrument(skip_all, fields(root = %root.display(), max_depth))]
 pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
     debug!(root = %root.display(), max_depth, "scan start");
     let t0 = std::time::Instant::now();
     let mut out = Vec::new();
+    // Counted as the entries are pushed, so the walk does not walk its own
+    // output a second time to find out how many files it saw. A dir is the
+    // other half of the count, and the two add up to the entries.
+    let mut files = 0usize;
     let mut it = walkdir::WalkDir::new(root)
         .follow_links(true)
         .max_depth(max_depth)
@@ -62,8 +99,8 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     .strip_prefix(root)
                     .ok()
                     .and_then(|p| p.to_str())
-                    .with_context(|| format!("non-UTF8 path {}", ent.path().display()))?
-                    .replace('\\', "/");
+                    .with_context(|| format!("non-UTF8 path {}", ent.path().display()))?;
+                let rel = slash_rel(rel);
                 if rel.is_empty() {
                     continue;
                 }
@@ -96,7 +133,8 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     false
                 };
-                // Progress: trace every entry (file log), debug heartbeat every 2000.
+                // Progress: trace every entry (file log), debug heartbeat every
+                // HEARTBEAT_ENTRIES.
                 trace!(path = %ent.path().display(), rel = %rel, "scan entry");
                 if ft.is_dir() {
                     out.push(LiveEnt {
@@ -109,6 +147,7 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else if ft.is_file() {
                     let meta = std::fs::metadata(ent.path())
                         .with_context(|| format!("stat {}", ent.path().display()))?;
+                    files += 1;
                     out.push(LiveEnt {
                         rel,
                         is_dir: false,
@@ -119,13 +158,27 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                 } else {
                     bail!("unsupported file type {}", ent.path().display());
                 }
-                if out.len() % 2000 == 0 {
-                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress");
+                if out.len() % HEARTBEAT_ENTRIES == 0 {
+                    // The heartbeat names the walk, because the phases report
+                    // their progress under their own names — and two progress
+                    // events that share one name are told apart by the fields
+                    // they carry, which is a thing a reader has to know.
+                    debug!(root = %root.display(), entries = out.len(), elapsed_s = t0.elapsed().as_secs_f64(), "scan progress: walk");
                 }
             }
         }
     }
-    let files = out.iter().filter(|e| !e.is_dir).count();
+    // The counters the "scan done" event carries are the **walk's own**: every
+    // entry this walk saw, before anything else looked at them. The filter is
+    // applied to the walk's output afterwards, in phase A, so a path the run
+    // hides is counted here and is not in the effective map — the two numbers
+    // answer different questions, and a run with an `--exclude` is where they
+    // part company.
+    //
+    // `dirs` is the remainder rather than a second counter: a directory is
+    // pushed into `out` without being counted as a file, so the entries that
+    // are not files are the directories. One subtraction, and the two cannot
+    // drift apart.
     let dirs = out.len() - files;
     info!(
         root = %root.display(),
@@ -204,6 +257,29 @@ mod tests {
                 "nest/keep.txt"
             ]
         );
+    }
+
+    /// On POSIX a backslash is a filename character. A leading one must not turn
+    /// the relative path into an absolute one (which would replace the root when
+    /// joined onto it), and an interior one must not invent a directory that does
+    /// not exist on disk. The walk reports both names exactly as the disk spells
+    /// them.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_backslash_in_a_posix_name_stays_a_literal_character() {
+        let root = girpr_tempdir::TempDir::new("girsync_scan", "backslash");
+        for name in ["\\lead.txt", "a\\b.txt"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+
+        let mut rels: Vec<String> = walk_live(&root, 4)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.rel)
+            .collect();
+        rels.sort();
+
+        assert_eq!(rels, vec!["\\lead.txt", "a\\b.txt"]);
     }
 
     /// `max_depth` is the walk's own bound, and the cache prune must not consume

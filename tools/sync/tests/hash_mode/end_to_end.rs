@@ -59,11 +59,12 @@ fn any_of_answers_a_record_that_a_single_algorithm_run_would_reject() {
         "and it names what is missing: {msg}"
     );
     // The single algorithm that covers is offered, and `any-of` is **not** offered
-    // alongside it. Here `--hash-any-of md5 sha256` would also work — the record holds
-    // one of the two — but `--hash-all-of md5` asks for strictly less for the same
-    // coverage, so offering both would leave the user choosing between two flags with
-    // no stated preference. The `any-of` line is for the case where *nothing* single
-    // covers, which is the case where widening the mode is the only move left.
+    // alongside it. Here `--hash-any-of md5 --hash-any-of sha256` would also work —
+    // the record holds one of the two — but `--hash-all-of md5` asks for strictly
+    // less for the same coverage, so offering both would leave the user choosing
+    // between two flags with no stated preference. The `any-of` line is for the case
+    // where *nothing* single covers, which is the case where widening the mode is
+    // the only move left.
     assert!(
         msg.contains("--hash-all-of md5"),
         "offers the one algorithm the record already holds: {msg}"

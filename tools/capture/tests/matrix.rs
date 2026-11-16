@@ -256,7 +256,14 @@ fn admission_is_cheapest_first_and_the_totals_add_up() {
         .iter()
         .map(|c| c.as_str().unwrap())
         .collect();
-    for want in ["path", "matching_field", "total_cost", "classes", "rank"] {
+    for want in [
+        "path",
+        "matching_field",
+        "total_cost",
+        "classes",
+        "rank",
+        "admission_rank",
+    ] {
         assert!(
             cols.contains(&want),
             "the column {want} is missing: {cols:?}"

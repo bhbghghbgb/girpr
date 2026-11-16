@@ -28,17 +28,46 @@
 //!
 //! Not "it would be rude under `cargo nextest run`". These cases are
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
-//! each run fetches four manifests — ~20 MB of real bundle bytes — before it
-//! can plan a single file. The whole suite is a handful of cases and **minutes**
-//! of wall-clock, which is a price worth paying *when something has gone wrong*
-//! and not worth paying on every `cargo nextest run`.
+//! each run fetches four manifests — ~19 MiB of real bundle bytes — before it
+//! can plan a single file. The six cases take roughly a minute of wall-clock
+//! in a debug build (measured: 63 s wall for the whole six-test run — the
+//! cases run in parallel, so that is not the sum of their durations — and 67 s
+//! wall including the rebuild, on a 4-core Windows x86_64 host with
+//! `cargo nextest run -p girpr --test artifact_bridge --run-ignored only`
+//! against one 7.0.0 → 7.1.0 bundle); the figure depends on the profile and
+//! host, and a release build was not measured here. That is a price worth
+//! paying **before a release that changes the repair spec** and *after
+//! something has gone wrong*, and not worth paying on every `cargo nextest
+//! run`.
 //!
-//! So it is run **by hand, deliberately**, and only when the repair spec is
-//! suspected to have regressed:
+//! So it is run **by hand, deliberately** — before any release that changes
+//! the repair spec, and whenever that spec is suspected to have regressed. A
+//! pre-release run builds the verifier first, so the `gircap verify`
+//! precondition actually executes instead of skipping:
 //!
 //! ```text
-//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+//! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+//! cargo build -p gircap
+//! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 //! ```
+//!
+//! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
+//! own scratch tree (§6.3) and its own listeners (§6.2), so the cases are
+//! parallel-safe, and the `[[profile.default.overrides]]` in
+//! `.config/nextest.toml` whose `filter` names these six cases sets
+//! `success-output = "immediate"`, so the precondition and per-capture lines
+//! are printed even though the cases pass.
+//!
+//! To reproduce one failure, put the case in the filter of the same command:
+//!
+//! ```text
+//! cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+//! ```
+//!
+//! The `-E` expression narrows the set nextest has already selected; it does
+//! not add `#[ignore]`d cases to it. A command without `--run-ignored only`
+//! (or `all`) runs none of them, and `cargo nextest list` needs
+//! `--run-ignored only` (or `all`) to list them at all.
 //!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
@@ -60,8 +89,10 @@
 //! set GIRPR_ARTIFACT_BUNDLE=<dir>
 //! ```
 //!
-//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then
-//! `gircap list --root artifacts`, then a directory scan.
+//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then the search
+//! root (`GIRPR_ARTIFACT_ROOT` when set, else `artifacts/`), then
+//! `gircap list --root <root>`, and a directory scan only as the fallback when
+//! that listing is unavailable or fails.
 //!
 //! # What this file is allowed to touch
 //!
@@ -70,8 +101,15 @@
 //! is what turns a cleanup flag into a way to destroy the evidence, and the
 //! bundle has to still pass `gircap verify` afterwards.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
+#[path = "common/digest.rs"]
+mod digest;
+#[path = "common/run_lock.rs"]
+mod run_lock;
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
@@ -79,6 +117,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
+use digest::md5hex;
 use girpr_tempdir::TempDir;
 use server::{Bridge, Bundle, Origins};
 
@@ -229,7 +268,8 @@ fn patchmaps(bundle: &Bundle) -> Patchmaps {
 async fn assert_bundle_verifies(bundle: &Bundle) {
     let Some(exe) = gircap_exe() else {
         println!(
-            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`",
+            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`.\n\
+             \x20 A pre-release run builds it first: cargo build -p gircap",
             girpr_exe_dir().display()
         );
         return;
@@ -274,11 +314,115 @@ fn gircap_exe() -> Option<PathBuf> {
     None
 }
 
-/// Start the four listeners over the bundle under test.
-async fn bridge() -> Bridge {
-    let bundle = bundle();
-    assert_bundle_verifies(&bundle).await;
-    Bridge::start(bundle).await
+// ---------------------------------------------------------------------------
+// the suite fixture: one verified bundle, one listener set
+// ---------------------------------------------------------------------------
+
+/// The one fixture every capture test in this process shares.
+///
+/// The bundle is read-only and immutable for the whole suite, so opening it,
+/// verifying it once with `gircap verify`, and binding the four listeners are
+/// suite-level work, not per-test work. The capture *records* are read here too
+/// (`bundle()` already parses `MANIFEST.json`, and `patchmaps()` is a one-time
+/// parse of the patchmaps), so a test reads them from here rather than from the
+/// disk again.
+///
+/// Per-capture state is deliberately **not** shared: each test still makes its
+/// own [`Scratch`] tree and runs its own pre-pass and real run, and each run
+/// still cleans up its own run lock. Only the immutable inputs and the replay
+/// server are shared.
+struct Suite {
+    bridge: Bridge,
+    patchmaps: Patchmaps,
+    /// The bridge's accept loops are `tokio::spawn`ed, so they belong to a
+    /// runtime. Every `#[tokio::test]` gets a runtime of its own, dropped when
+    /// that test ends; a bridge started on one test's runtime would be dead —
+    /// its sockets closed — by the time the next test used it. The bridge is
+    /// therefore started on this dedicated multi-thread runtime, which stays
+    /// alive (with the fixture) for the life of the process.
+    _runtime: tokio::runtime::Runtime,
+}
+
+/// Serialize the capture tests against the shared bridge in a single-process
+/// run. A request-log checkpoint marks where one run begins; it can only mark
+/// that boundary between runs, not between requests arriving concurrently from
+/// two tests. Under nextest each test has its own process and this lock is
+/// uncontended.
+static RUN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// One test's checkpointed handle to the shared fixture.
+///
+/// The handle is per test even though the fixture is shared: each test gets its
+/// own scratch tree and runs its own pre-pass and real run through it, and
+/// `start` marks where this test's requests begin in the shared log.
+struct SuiteRun {
+    suite: &'static Suite,
+    start: usize,
+    /// Held for the whole test: see [`RUN_LOCK`].
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl SuiteRun {
+    fn bridge(&self) -> &Bridge {
+        &self.suite.bridge
+    }
+
+    /// The chunk ids this run asked for, not the ids earlier runs in this
+    /// process asked for.
+    fn chunk_ids(&self) -> Vec<String> {
+        self.bridge().chunk_ids_since(self.start)
+    }
+}
+
+/// The suite fixture, initialised once per process.
+///
+/// A process-wide `OnceCell` means "once per suite" under a single-process
+/// `cargo test` and "once per case" under nextest, where each test gets its own
+/// process. Both modes are correct: the fixture is immutable, so sharing it
+/// changes no per-capture assertion.
+async fn suite() -> &'static Suite {
+    static SUITE: tokio::sync::OnceCell<Suite> = tokio::sync::OnceCell::const_new();
+    SUITE
+        .get_or_init(|| async {
+            // The fixture needs a runtime that outlives the test runtimes, and
+            // `Runtime::block_on` cannot be called from inside an async
+            // context. Build it on a plain thread, off any test runtime.
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("build the bridge runtime");
+                let bundle = bundle();
+                runtime.block_on(assert_bundle_verifies(&bundle));
+                let patchmaps = patchmaps(&bundle);
+                let bridge = runtime.block_on(Bridge::start(bundle));
+                println!(
+                    "bridge fixture: verified {} and bound four listeners (once per process)",
+                    bridge.bundle().root.display()
+                );
+                tx.send(Suite {
+                    bridge,
+                    patchmaps,
+                    _runtime: runtime,
+                })
+                .expect("send the bridge fixture")
+            });
+            rx.recv().expect("initialise the bridge fixture")
+        })
+        .await
+}
+
+/// Take a per-test handle on the shared fixture, checkpointing the request log.
+async fn suite_run() -> SuiteRun {
+    let guard = RUN_LOCK.lock().await;
+    let suite = suite().await;
+    SuiteRun {
+        start: suite.bridge.log_len(),
+        suite,
+        _guard: guard,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +552,7 @@ async fn girpr(args: &[String]) -> Run {
         .output()
         .await
         .expect("spawn girpr");
+    run_lock::remove_run_lock_for_args(args);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let mut records = BTreeMap::new();
@@ -449,7 +594,7 @@ fn base_args(game: &Path, bundle: &Bundle, o: &Origins, log: &Path) -> Vec<Strin
         o.hyp_base.clone(),
         "--sophon-base".into(),
         o.sophon_base.clone(),
-        "--io-threads".into(),
+        "--jobs".into(),
         "1".into(),
         "--output".into(),
         "json".into(),
@@ -493,7 +638,8 @@ fn capture_args(capture: &Capture) -> Vec<String> {
 ///
 /// **One run per capture**, always: a `download_bytes` total is only
 /// attributable to a single capture.
-async fn drive_capture(bridge: &Bridge, capture: &Capture) {
+async fn drive_capture(handle: &SuiteRun, capture: &Capture) {
+    let bridge = handle.bridge();
     let bundle = bridge.bundle().clone();
     let scratch = Scratch::new(&bundle, capture);
 
@@ -598,7 +744,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         let bytes = std::fs::read(&target)
             .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));
         assert_eq!(
-            format!("{:x}", md5::compute(&bytes)),
+            md5hex(&bytes),
             capture.result_md5,
             "{}: the patched file must equal expectations.result_md5",
             capture.id
@@ -622,7 +768,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
     // empty reuse map every chunk is fetched, `local_manifest` says
     // `unavailable`, and the byte total is the whole file instead of the
     // patch.
-    let asked: BTreeSet<String> = bridge.chunk_ids().into_iter().collect();
+    let asked: BTreeSet<String> = handle.chunk_ids().into_iter().collect();
     let want_fetch: BTreeSet<String> = capture.fetch_set().iter().map(|s| s.to_string()).collect();
     let want_reuse: BTreeSet<String> = capture.reuse_set().iter().map(|s| s.to_string()).collect();
     assert_eq!(
@@ -683,8 +829,8 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
 /// does not mention at all is a **missing prerequisite** and fails: this suite
 /// only runs deliberately, so it must never report "checked nothing" as a
 /// pass.
-async fn drive_named(bridge: &Bridge, id: &str) {
-    let records = patchmaps(bridge.bundle());
+async fn drive_named(handle: &SuiteRun, id: &str) {
+    let records = &handle.suite.patchmaps;
     let Some(capture) = records.capture_for_class(id).cloned() else {
         match records.matrix_class(id) {
             Some(m) if m.absent_by_record() => {
@@ -708,17 +854,17 @@ async fn drive_named(bridge: &Bridge, id: &str) {
             ),
         }
     };
-    drive_capture(bridge, &capture).await;
+    drive_capture(handle, &capture).await;
 }
 
 macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
-            let bridge = bridge().await;
-            drive_named(&bridge, $id).await;
+            let run = suite_run().await;
+            drive_named(&run, $id).await;
         }
     };
 }

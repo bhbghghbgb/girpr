@@ -21,9 +21,10 @@
 //!   are read into RAM, so the write order cannot destroy them;
 //! - **patch** — the wrong chunks are written, ascending: from the staged
 //!   bytes when there are any, from a download otherwise;
-//! - **verify** — one more read. The whole-file MD5 is the gate; if it does
-//!   not match, the per-chunk verdicts name the culprit and only those are
-//!   redone.
+//! - **verify** — one read is the gate: the whole-file MD5 decides. Only a
+//!   mismatch takes a second read, which holds the per-chunk verdicts that
+//!   name what to redo. A file that matches pays for neither the second read
+//!   nor the chunk-range digests.
 //!
 //! Every byte written lands in a region that was **already wrong at the
 //! moment of the write**, and the whole-file MD5 decides whether the file is
@@ -74,17 +75,21 @@ use tracing::Instrument;
 use crate::config::RepairMode;
 use crate::repair::scope::ledger::StoppedBy;
 use crate::report::Summary;
+use crate::retry::{RetryState, retry_state};
 use crate::sleep::Sleep;
 #[cfg(test)]
 use crate::sophon::SophonChunk;
 use crate::util;
 
 use crate::repair::phases::manifest::LocalChunkMap;
-use crate::repair::phases::plan::{PlannedFile, RepairPlan, validate_chunk_ranges};
+use crate::repair::phases::plan::{FileId, PlannedFile, RepairPlan, validate_chunk_ranges};
+use crate::repair::scan::ScanReport;
 
 mod inplace;
 mod mode;
 mod temp;
+
+use self::inplace::FinalDigestMismatch;
 
 #[cfg(test)]
 use self::inplace::trim_is_free;
@@ -182,6 +187,23 @@ pub enum Mode {
     Temp,
 }
 
+/// Everything the repair loop needs, grouped so the signature names one phase
+/// rather than twelve inputs.
+pub(super) struct RepairInputs {
+    pub(super) http: reqwest::Client,
+    pub(super) game_dir: PathBuf,
+    pub(super) root: Option<util::PathRoot>,
+    pub(super) plan: Arc<RepairPlan>,
+    pub(super) local_map: Arc<LocalChunkMap>,
+    pub(super) scan: Option<Arc<ScanReport>>,
+    pub(super) summary: Summary,
+    pub(super) jobs: usize,
+    pub(super) dry_run: bool,
+    pub(super) output: crate::report::OutputFormat,
+    pub(super) repair_mode: RepairMode,
+    pub(super) sleep: Arc<dyn Sleep>,
+}
+
 /// Run the repair loop over the whole plan, bounded to `jobs` concurrent files.
 ///
 /// Per-file failures are counted, never fatal; the caller decides that a
@@ -190,22 +212,23 @@ pub enum Mode {
 /// `output` rides along rather than being read from a global: the progress
 /// ticker this spawns emits records, and a record's plane has to come from the
 /// same place the rest of the run's does.
-#[allow(clippy::too_many_arguments)] // one parameter per input the repair loop needs
-pub async fn repair_all(
-    http: reqwest::Client,
-    game_dir: PathBuf,
-    root: Option<util::PathRoot>,
-    plan: Arc<RepairPlan>,
-    local_map: LocalChunkMap,
-    summary: Summary,
-    jobs: usize,
-    dry_run: bool,
-    output: crate::report::OutputFormat,
-    repair_mode: RepairMode,
-    sleep: Arc<dyn Sleep>,
-) -> Summary {
+pub async fn repair_all(inputs: RepairInputs) -> Summary {
+    let RepairInputs {
+        http,
+        game_dir,
+        root,
+        plan,
+        local_map,
+        scan,
+        summary,
+        jobs,
+        dry_run,
+        output,
+        repair_mode,
+        sleep,
+    } = inputs;
     let summary = Arc::new(summary);
-    let total_files = plan.files.len();
+    let total_files = plan.len();
     // NOTE: these are shared by Arc on purpose. `local_map` holds every local
     // chunk (~10^4 entries) and the plan holds every planned file, so a
     // per-task deep clone once cost ~6GB across ~3k tasks.
@@ -215,12 +238,13 @@ pub async fn repair_all(
         http,
         plan: Arc::clone(&plan),
         local_map,
+        scan,
         summary: summary.clone(),
         dry_run,
         repair_mode,
         sleep,
     });
-    let progress = crate::report::spawn_progress_reporter(summary.clone(), output);
+    let progress = crate::report::ProgressGuard::start(Arc::clone(&summary), output);
 
     // Keep at most `jobs` file tasks alive at once: a task is spawned only when
     // the in-flight window has room, so a large plan does not allocate one task
@@ -232,7 +256,9 @@ pub async fn repair_all(
         file_task(ctx, idx, total_files)
     })
     .await;
-    progress.abort();
+    // The phase is over: stop the ticker before the final unwrap, so no tick
+    // can read the counters while they are being converted.
+    drop(progress);
     // `try_unwrap` often fails: the aborted reporter task may not have dropped
     // its clone yet. Either way `snapshot` reads the live counters.
     Arc::try_unwrap(summary)
@@ -255,11 +281,20 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
         seq = idx + 1,
         total = total_files,
         task = ?tokio::task::try_id(),
-        path = %ctx.plan.files[idx].rel,
+        path = %ctx.plan.files()[idx].rel,
     );
     async move {
         tracing::debug!(thread = ?std::thread::current().id(), "picked up by worker");
-        match repair_one_file(&ctx, idx).await {
+        let started = std::time::Instant::now();
+        let outcome = repair_one_file(&ctx, idx).await;
+        // One per-file total, at debug: a chunk line per chunk would drown the
+        // log, and the phase's own duration is already on its completion line.
+        tracing::debug!(
+            file = %ctx.plan.files()[idx].rel,
+            duration_ms = crate::phase::millis_between(started, std::time::Instant::now()),
+            "file repair finished"
+        );
+        match outcome {
             Ok(Repaired::Skipped) => {
                 ctx.summary.files_skipped.fetch_add(1, Ordering::Relaxed);
             }
@@ -306,7 +341,7 @@ async fn file_task(ctx: Arc<FileCtx>, idx: usize, total_files: usize) {
                 // abandoned attempt wrote is in the install, so it is
                 // not a byte the repair did not have to touch.
                 let kept =
-                    (ctx.plan.files[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
+                    (ctx.plan.files()[idx].size.max(0) as u64).saturating_sub(stats.settled_writes);
                 ctx.summary.kept_bytes.fetch_add(kept, Ordering::Relaxed);
             }
             Ok(Repaired::DryRun) | Ok(Repaired::Stopped) => {}
@@ -390,7 +425,9 @@ struct FileCtx {
     root: Option<util::PathRoot>,
     http: reqwest::Client,
     plan: Arc<RepairPlan>,
-    local_map: LocalChunkMap,
+    local_map: Arc<LocalChunkMap>,
+    /// The plan-phase scan, when `--scan` ran. Shared by every file task.
+    scan: Option<Arc<ScanReport>>,
     summary: Arc<Summary>,
     dry_run: bool,
     /// How each file is repaired.
@@ -417,7 +454,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     if ctx.summary.stopped_by() != StoppedBy::None || ctx.summary.aborted() {
         return Ok(Repaired::Stopped);
     }
-    let file = &ctx.plan.files[idx];
+    let file = &ctx.plan.files()[idx];
     // A test-only seam for the wiring, not the helper: the unit test on
     // `join_file_tasks` proves the join loop counts a `JoinError`, but only a
     // panic raised *inside* a real `repair_all` task proves that `repair_all`
@@ -445,12 +482,7 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
         std::fs::create_dir_all(parent)?;
     }
     tracing::debug!(expect_size = file.size, expect_md5 = %file.md5, chunks = file.chunks.len(), "check start");
-    let prefix = ctx
-        .plan
-        .url_prefix_by_file
-        .get(&file.rel)
-        .cloned()
-        .unwrap_or_default();
+    let prefix = file.url_prefix.as_ref();
     // NOTE(starward-parity): temp-then-atomic-promote. Starward writes
     // `FullPath + "_tmp"` (OpenOrCreate), verifies MD5, then `Move(tmp, final,
     // true)` and `Delete(tmp)` on mismatch — same contract here, including the
@@ -469,14 +501,13 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
 
     // The mode for this file. `--repair-mode temp` never uses the in-place
     // path; the rest decide from what the target is.
-    let mut mode = resolve_mode(ctx.repair_mode, &final_path);
-    let mut inplace = mode == Mode::Inplace;
-
+    let mode = resolve_mode(ctx.repair_mode, &final_path);
     // `--fail-fast` caps a file's attempts at one instead of [`MAX_ATTEMPTS`].
     // docs/04 E1 asks for "the run reaches its SUMMARY in seconds", and it cannot
-    // mean that while the *first* file alone spends 5 × (15 s of chunk-fetch
-    // backoff + 10 s of file-level backoff) ≈ 125 s of pure sleeping before anyone
-    // else is spared. The flag is an explicit "tell me fast"; a user who wants the
+    // mean that while the *first* file alone spends 5 × 10 s of chunk-fetch
+    // backoff plus 10 s of file-level backoff ≈ 60 s of pure sleeping before
+    // anyone else is spared (one failing chunk per attempt). The flag is an
+    // explicit "tell me fast"; a user who wants the
     // full budget does not pass it. Counter semantics are unchanged: a file that
     // fails on its first attempt is still just `files_failed`.
     let max_attempts = if ctx.summary.fail_fast() {
@@ -484,59 +515,101 @@ async fn repair_one_file(ctx: &FileCtx, idx: usize) -> Result<Repaired> {
     } else {
         MAX_ATTEMPTS
     };
-    let mut attempt = 1;
     // The file's settled writes, accumulated across its attempts. It outlives
     // an attempt on purpose: a chunk an abandoned attempt wrote is in the install,
     // and `kept_bytes` is the complement of this figure.
-    let mut writes = FileWrites::default();
-    while attempt <= max_attempts {
-        let outcome = if inplace {
-            inplace::attempt_inplace(ctx, file, &prefix, &final_path, &mut writes).await
-        } else {
-            temp::attempt_temp(ctx, file, &prefix, &tmp_path, &final_path, &mut writes).await
-        };
-        match outcome {
-            Ok(Inplace::Skipped) => return Ok(Repaired::Skipped),
-            Ok(Inplace::DryRun) => return Ok(Repaired::DryRun),
-            Ok(Inplace::Repaired(stats)) => {
-                let mut stats = stats;
-                stats.mode = mode;
-                stats.settled_writes = writes.settled;
-                return Ok(Repaired::Repaired(stats));
-            }
-            // The target cannot be opened for writing, so this file cannot
-            // be written where it lies. The temp path can: it does not need
-            // write access to the target. The switch is permanent for this
-            // file — an attempt is not spent on it.
-            Ok(Inplace::Unavailable(reason)) => {
-                tracing::warn!(file = %file.rel, reason, "cannot write the target in place -> writing it through a temp file");
-                mode = Mode::Temp;
-                inplace = false;
-                continue;
-            }
-            // The ceiling, not the file: this must not be counted as a
-            // failure and must not be retried.
-            Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
-                tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
-                return Ok(Repaired::Stopped);
-            }
-            Err(e) => {
-                tracing::warn!(attempt, "attempt failed: {e:#}");
-                // `--fail-fast` cuts the backoff short. Without it, one bad
-                // file spends 5 × linear sleep (and each of those attempts has
-                // its own 5× chunk retry inside `stream_chunk_to`) before the
-                // run even starts on the next file.
-                if attempt == max_attempts || ctx.summary.aborted() {
-                    return Err(e);
+    let state = AttemptState {
+        writes: FileWrites::default(),
+        mode,
+        inplace: mode == Mode::Inplace,
+    };
+    let final_path = final_path.as_path();
+    let tmp_path = tmp_path.as_path();
+    retry_state(
+        max_attempts,
+        ctx.sleep.as_ref(),
+        state,
+        |mut state, attempt| async move {
+            loop {
+                let outcome = if state.inplace {
+                    inplace::attempt_inplace(
+                        ctx,
+                        FileId::new(idx),
+                        file,
+                        prefix,
+                        final_path,
+                        &mut state.writes,
+                    )
+                    .await
+                } else {
+                    temp::attempt_temp(
+                        ctx,
+                        file,
+                        prefix,
+                        tmp_path,
+                        final_path,
+                        &mut state.writes,
+                    )
+                    .await
+                };
+                match outcome {
+                    Ok(Inplace::Skipped) => return RetryState::Done(Repaired::Skipped),
+                    Ok(Inplace::DryRun) => return RetryState::Done(Repaired::DryRun),
+                    Ok(Inplace::Repaired(mut stats)) => {
+                        stats.mode = state.mode;
+                        stats.settled_writes = state.writes.settled;
+                        return RetryState::Done(Repaired::Repaired(stats));
+                    }
+                    // The target cannot be opened for writing, so this file cannot
+                    // be written where it lies. The temp path can: it does not need
+                    // write access to the target. The switch is permanent for this
+                    // file — an attempt is not spent on it.
+                    Ok(Inplace::Unavailable(reason)) => {
+                        tracing::warn!(file = %file.rel, reason, "cannot write the target in place -> writing it through a temp file");
+                        state.mode = Mode::Temp;
+                        state.inplace = false;
+                        continue;
+                    }
+                    // The ceiling, not the file: this must not be counted as a
+                    // failure and must not be retried.
+                    Err(_e) if ctx.summary.stopped_by() != StoppedBy::None => {
+                        tracing::warn!(file = %file.rel, "byte ceiling reached -> stopped");
+                        return RetryState::Done(Repaired::Stopped);
+                    }
+                    Err(e) => {
+                        tracing::warn!(attempt, "attempt failed: {e:#}");
+                        // `--fail-fast` cuts the backoff short. Without it, one bad
+                        // file spends 5 × linear sleep (and each of those attempts has
+                        // its own 5× chunk retry inside `stream_chunk_to`) before the
+                        // run even starts on the next file.
+                        if ctx.summary.aborted() {
+                            return RetryState::Fatal(e);
+                        }
+                        // A whole-file digest mismatch after every chunk range
+                        // was verified is a function of the plan, not of the
+                        // network: the next attempt would assemble the same
+                        // bytes and fail the same gate. It is terminal by
+                        // construction, so it must not spend the file's whole
+                        // backoff budget. Transient download and write errors
+                        // are ordinary errors here and stay retryable.
+                        if e.downcast_ref::<FinalDigestMismatch>().is_some() {
+                            return RetryState::Fatal(e);
+                        }
+                        return RetryState::Retry(state, e);
+                    }
                 }
-                ctx.sleep
-                    .sleep(std::time::Duration::from_secs(attempt as u64))
-                    .await;
-                attempt += 1;
             }
-        }
-    }
-    unreachable!("attempt loop always returns")
+        },
+    )
+    .await
+}
+
+/// The state a file's next attempt starts from: its settled writes, the path
+/// chosen for it, and whether it is the in-place one.
+struct AttemptState {
+    writes: FileWrites,
+    mode: Mode,
+    inplace: bool,
 }
 
 /// What one attempt at a file decided.
@@ -628,7 +701,7 @@ fn note_write(ctx: &FileCtx, writes: &mut FileWrites, n: u64) -> Result<()> {
 ///
 /// Reserving **before** the write is what makes the ceiling meaningful: the
 /// bytes land in the install as soon as `write_all` returns, so a
-/// check-then-write under `--io-threads N` would overshoot by up to N-1
+/// check-then-write under `--jobs N` would overshoot by up to N-1
 /// buffers. On refusal the file is left where it is, and whatever was
 /// already correct in it stays correct: the next run re-verifies and
 /// continues.
@@ -741,6 +814,12 @@ fn zero_fill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use crate::test_support::FixtureRefusal;
+    #[cfg(unix)]
+    use crate::util::symlink_support::{
+        require_symlink, symlink_fixture_decision, try_symlink_dir,
+    };
 
     /// The resolution table, as a table.
     ///
@@ -767,19 +846,32 @@ mod tests {
         std::fs::create_dir_all(&sub).unwrap();
         assert_eq!(resolve_mode(RepairMode::Auto, &sub), Mode::Temp);
 
-        // A symlink: the temp path replaces it with a regular file, which is
-        // what a manifest entry means. (Windows needs the privilege, so the
-        // case is skipped where it cannot be made.)
-        #[cfg(unix)]
-        {
-            let link = dir.join("link.dat");
-            std::os::unix::fs::symlink(&file, &link).unwrap();
-            assert_eq!(resolve_mode(RepairMode::Auto, &link), Mode::Temp);
-        }
-
         // `--repair-mode temp` never uses the in-place path.
         assert_eq!(resolve_mode(RepairMode::Temp, &file), Mode::Temp);
         assert_eq!(resolve_mode(RepairMode::Temp, &missing), Mode::Temp);
+    }
+
+    /// A symlink is not a regular file: the temp path replaces it with one,
+    /// which is what a manifest entry means.
+    ///
+    /// The case needs a symlink, and a host that provably refuses one cannot
+    /// confirm the mode, so the case is skipped with the reason rather than
+    /// failed — unless `GIRPR_TEST_REQUIRE_SYMLINK` says it must run. Every
+    /// other failure is a broken test environment and fails loudly.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_resolves_to_the_temp_mode() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_resolve", "symlink");
+        let file = dir.join("f.dat");
+        std::fs::write(&file, b"x").unwrap();
+        let link = dir.join("link.dat");
+        if let Err(e) = try_symlink_dir(&file, &link) {
+            // The shared decision: a proven host refusal skips the case, and
+            // every other failure fails it loudly.
+            symlink_fixture_decision(e, require_symlink(), FixtureRefusal::Host);
+            return;
+        }
+        assert_eq!(resolve_mode(RepairMode::Auto, &link), Mode::Temp);
     }
 
     /// The mode a file was repaired with is carried on its stats, so the run
@@ -816,6 +908,7 @@ mod tests {
             rel: "f.bin".into(),
             size: 20,
             md5: "m".into(),
+            url_prefix: Arc::from(""),
             chunks: chunks.clone(),
         };
 
@@ -823,6 +916,13 @@ mod tests {
         assert!(trim_is_free(&file, &chunks, &[Some(0), Some(10)]));
         // The second one reaches past it: the tail is not dead weight.
         assert!(!trim_is_free(&file, &chunks, &[Some(0), Some(15)]));
+        // A source at the far end of the representable offsets is outside the
+        // target, so the trim is deferred rather than truncating it.
+        assert!(!trim_is_free(
+            &file,
+            &chunks,
+            &[Some(i64::MAX as u64), None]
+        ));
         // A chunk with no candidate at all: nothing to lose.
         assert!(trim_is_free(&file, &chunks, &[None, Some(10)]));
         // The test is against the **target's** end, so a bigger target frees it.
@@ -842,29 +942,30 @@ mod tests {
     #[tokio::test]
     async fn a_panic_inside_a_file_task_fails_the_run() {
         let dir = girpr_tempdir::TempDir::new("girpr_test_panic_wiring", "run");
-        let plan = Arc::new(RepairPlan {
-            latest: "1.0".into(),
-            files: vec![PlannedFile {
+        let plan = Arc::new(RepairPlan::from_files(
+            "1.0",
+            vec![PlannedFile {
                 rel: TEST_PANIC_REL.into(),
                 size: 4,
                 md5: String::new(),
+                url_prefix: Arc::from(""),
                 chunks: Vec::new(),
             }],
-            url_prefix_by_file: Default::default(),
-        });
-        let summary = repair_all(
-            reqwest::Client::new(),
-            dir.to_path_buf(),
-            None,
+        ));
+        let summary = repair_all(RepairInputs {
+            http: reqwest::Client::new(),
+            game_dir: dir.to_path_buf(),
+            root: None,
             plan,
-            LocalChunkMap::new(),
-            Summary::new(),
-            1,
-            false,
-            crate::report::OutputFormat::Text,
-            RepairMode::Inplace,
-            Arc::new(crate::sleep::NoSleep),
-        )
+            local_map: Arc::new(LocalChunkMap::new()),
+            scan: None,
+            summary: Summary::new(),
+            jobs: 1,
+            dry_run: false,
+            output: crate::report::OutputFormat::Text,
+            repair_mode: RepairMode::Inplace,
+            sleep: Arc::new(crate::sleep::NoSleep),
+        })
         .await;
         assert_eq!(
             summary.files_failed.load(Ordering::Relaxed),

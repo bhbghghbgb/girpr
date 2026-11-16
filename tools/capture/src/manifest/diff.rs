@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::manifest::CapturedManifest;
-use crate::manifest::proto::SophonChunkFile;
+use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
 /// One path's state in the diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -134,8 +134,18 @@ pub struct PathRow {
     /// numbers the row displays — a second lookup is a second chance to read a
     /// different size than the one printed.
     pub size: i64,
+    /// For an `added` path, `Σ compressed_size` over its chunks: the bytes a
+    /// fetch must download, and the charge against `--max-download-bytes`.
+    /// `None` for a common or removed path, whose budget charge comes from
+    /// their score's `total_cost` / their old `size`.
+    pub download_bytes: Option<u64>,
     /// The score, absent for a one-sided path.
     pub score: Option<PathScore>,
+    /// Whether the manifest entry is a folder rather than a file.
+    ///
+    /// Carried so selection can keep folders out of the candidate pool while the
+    /// diff still shows them in its rows and sidecars.
+    pub is_folder: bool,
 }
 
 /// Headline counts over one field's pair of manifests.
@@ -216,14 +226,6 @@ pub struct PathDiff {
     /// Carried here so a reader of `paths.diff.json` sees the reuse ceiling next
     /// to the reuse that same-file-only scoping actually reaches.
     pub new_chunks_reusable_at_all: u64,
-}
-
-impl PathDiff {
-    /// Whether the pair was interesting at all: something added, removed or
-    /// changed.
-    pub fn is_a_real_upgrade(&self) -> bool {
-        self.counts.added > 0 || self.counts.removed > 0 || self.counts.changed > 0
-    }
 }
 
 /// `diff/reuse_pool.json` — the cost of same-file-only reuse (spec §10).
@@ -316,18 +318,25 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                 if same_md5 {
                     counts.identical += 1;
                 }
-                let score = score(e, old_entry, file_index);
+                let state = if same_md5 {
+                    State::Identical
+                } else {
+                    State::Changed
+                };
+                // A folder has no patch cost: keep its row and state so the diff
+                // stays truthful, but never give it a score selection could use.
+                let score = (!e.is_folder).then(|| score(e, old_entry, file_index));
                 rows.push(PathRow {
                     path: e.file.clone(),
-                    state: if same_md5 {
-                        State::Identical
-                    } else {
-                        State::Changed
-                    },
+                    state,
                     size: e.size,
-                    score: Some(score.clone()),
+                    download_bytes: None,
+                    score: score.clone(),
+                    is_folder: e.is_folder,
                 });
-                scores.push(score);
+                if let Some(score) = score {
+                    scores.push(score);
+                }
             }
             None => {
                 counts.added += 1;
@@ -335,7 +344,9 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                     path: e.file.clone(),
                     state: State::Added,
                     size: e.size,
+                    download_bytes: Some(download_bytes(&e.chunks)),
                     score: None,
+                    is_folder: e.is_folder,
                 });
             }
         }
@@ -349,7 +360,9 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                 path: e.file.clone(),
                 state: State::Removed,
                 size: e.size,
+                download_bytes: None,
                 score: None,
+                is_folder: e.is_folder,
             });
         }
     }
@@ -416,6 +429,18 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
         sources,
         compressed_bytes,
     }
+}
+
+/// `Σ compressed_size` over a path's chunks: the bytes a fetch must download.
+///
+/// Saturating, with a negative declared size treated as zero — the same
+/// convention `index_file` and `score` use for their byte totals, so a hostile
+/// `compressed_size` cannot abort a diff that is only measuring it. An empty
+/// chunk list sums to zero: a file with no chunks downloads nothing.
+fn download_bytes(chunks: &[SophonChunk]) -> u64 {
+    chunks.iter().fold(0_u64, |total, c| {
+        total.saturating_add(c.compressed_size.max(0) as u64)
+    })
 }
 
 /// Old manifest-wide set of MD5s that appear anywhere.
@@ -572,6 +597,14 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
 
     for f in fields {
         for row in &f.rows {
+            // Folders are already tallied by state below (an added folder is an
+            // `added` row, a common one part of `common`), but the published
+            // `folders` count must say how many folder entries the diff carries.
+            // Count the row here rather than adding a field to `FieldCounts`,
+            // which would change the shape of `by_field` in the document.
+            if row.is_folder {
+                counts.folders += 1;
+            }
             match row.state {
                 State::Added => {
                     counts.added += 1;
@@ -763,6 +796,10 @@ mod tests {
     use super::*;
     use crate::manifest::proto::SophonChunk;
 
+    fn something_changed(c: &Counts) -> bool {
+        c.added > 0 || c.removed > 0 || c.changed > 0
+    }
+
     fn chunk(id: &str, md5: &str, offset: i64, usize_: i64, csize: i64) -> SophonChunk {
         SophonChunk {
             id: format!("{id}_{md5}"),
@@ -887,6 +924,242 @@ mod tests {
                 ("same", State::Identical)
             ]
         );
+    }
+
+    /// An added path carries the compressed bytes a fetch downloads, not the
+    /// declared uncompressed size. The candidate is charged the download bytes.
+    #[test]
+    fn an_added_row_carries_its_compressed_download_size() {
+        let old = manifest("7.0.0", vec![]);
+        let new = manifest(
+            "7.1.0",
+            vec![file(
+                "fresh",
+                "md5-fresh",
+                vec![chunk("a", "aa", 0, 700, 60), chunk("b", "bb", 700, 300, 40)],
+            )],
+        );
+        let d = diff_field(&old, &new).unwrap();
+        let row = d.rows.iter().find(|r| r.path == "fresh").unwrap();
+        assert_eq!(row.size, 1_000, "the declared, uncompressed size");
+        assert_eq!(row.download_bytes, Some(100), "60 + 40 compressed bytes");
+
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        let c = pool.iter().find(|c| c.candidate.path == "fresh").unwrap();
+        assert_eq!(c.budget_cost(), 100);
+    }
+
+    /// The download sum uses the saturating, `max(0)` convention of the other
+    /// byte totals: a negative `compressed_size` contributes nothing, and a
+    /// file with no chunks downloads nothing.
+    #[test]
+    fn an_added_download_size_saturates_negatives_and_empty_files_to_zero() {
+        let old = manifest("7.0.0", vec![]);
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file(
+                    "mixed",
+                    "md5-mixed",
+                    vec![chunk("a", "aa", 0, 10, -5), chunk("b", "bb", 10, 10, 30)],
+                ),
+                file("empty", "md5-empty", vec![]),
+            ],
+        );
+        let d = diff_field(&old, &new).unwrap();
+        let by_path: BTreeMap<&str, &PathRow> =
+            d.rows.iter().map(|r| (r.path.as_str(), r)).collect();
+        assert_eq!(by_path["mixed"].download_bytes, Some(30));
+        assert_eq!(by_path["empty"].download_bytes, Some(0));
+
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        let cost = |path: &str| {
+            pool.iter()
+                .find(|c| c.candidate.path == path)
+                .unwrap()
+                .budget_cost()
+        };
+        assert_eq!(cost("mixed"), 30);
+        assert_eq!(cost("empty"), 0, "a zero-chunk added file costs nothing");
+    }
+
+    /// Fixture shape: one common file whose whole-file md5 differs between the
+    /// two tags, plus one folder entry that exists only in the new tag.
+    /// The folder stays an `added` diff row so the counts remain truthful, but
+    /// it is flagged as a folder and `candidates` must not turn it into a file
+    /// capture.
+    #[test]
+    fn a_folder_entry_is_an_added_diff_row_but_not_a_candidate() {
+        let folder = SophonChunkFile {
+            file: "f/newdir".into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: "md5-dir".into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)])],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder,
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+
+        // The non-folder change is a normal `changed` row with a score.
+        let changed = d
+            .rows
+            .iter()
+            .find(|r| r.path == "data")
+            .expect("the changed row");
+        assert_eq!(changed.state, State::Changed);
+        assert!(changed.score.is_some());
+        assert!(!changed.is_folder);
+
+        // The folder stays an `added` row, counted as an added entry, but it is
+        // flagged as a folder rather than scored like a file.
+        let folder_row = d
+            .rows
+            .iter()
+            .find(|r| r.path == "f/newdir")
+            .expect("the folder row");
+        assert_eq!(folder_row.state, State::Added);
+        assert_eq!(folder_row.size, 0);
+        assert!(folder_row.score.is_none());
+        assert!(folder_row.is_folder);
+        assert_eq!(
+            d.counts.added, 1,
+            "the folder is counted as one added entry"
+        );
+
+        // Selection must not turn it into a file candidate.
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        assert!(
+            pool.iter().all(|c| c.candidate.path != "f/newdir"),
+            "a folder must never become a SizedCandidate"
+        );
+        assert!(
+            pool.iter().any(|c| c.candidate.path == "data"),
+            "the real file is still a candidate"
+        );
+    }
+
+    /// A folder keeps its row and its state in every position — common, added,
+    /// or removed — and is flagged as a folder, but never enters `scores`. The
+    /// sidecar still lists it, so the diff stays truthful about the manifest.
+    #[test]
+    fn folder_entries_stay_in_rows_and_never_enter_scores() {
+        let folder = |path: &str, md5: &str| SophonChunkFile {
+            file: path.into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: md5.into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![
+                file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/gone", "d2"),
+            ],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/fresh", "d3"),
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+        let by_path: BTreeMap<&str, &PathRow> =
+            d.rows.iter().map(|r| (r.path.as_str(), r)).collect();
+
+        assert_eq!(by_path["d/common"].state, State::Identical);
+        assert!(by_path["d/common"].is_folder);
+        assert!(by_path["d/common"].score.is_none());
+        assert_eq!(by_path["d/fresh"].state, State::Added);
+        assert!(by_path["d/fresh"].is_folder);
+        assert_eq!(by_path["d/gone"].state, State::Removed);
+        assert!(by_path["d/gone"].is_folder);
+
+        // Counts are unchanged: folders count as entries, like any other path.
+        assert_eq!(d.counts.common, 2, "data and the common folder");
+        assert_eq!(d.counts.identical, 1, "the common folder's md5 agrees");
+        assert_eq!(d.counts.added, 1, "the fresh folder");
+        assert_eq!(d.counts.removed, 1, "the gone folder");
+
+        // Only the real file is scored.
+        assert_eq!(
+            d.scores.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(),
+            vec!["data"]
+        );
+
+        // And the sidecar still shows every folder row.
+        let tsv = paths_tsv(std::slice::from_ref(&d));
+        for path in ["d/common", "d/fresh", "d/gone"] {
+            assert!(
+                tsv.lines().any(|l| l.split('\t').nth(1) == Some(path)),
+                "{path} must stay in paths.tsv"
+            );
+        }
+    }
+
+    /// The published `folders` count is folded from the folder rows, so
+    /// `paths.diff.json` reports it truthfully even though every folder is also
+    /// tallied as added/common/removed. Counting rows here — rather than adding
+    /// a field to `FieldCounts` — keeps the shape of `by_field` unchanged.
+    #[test]
+    fn aggregation_counts_folder_rows_separately_from_files() {
+        let folder = |path: &str, md5: &str| SophonChunkFile {
+            file: path.into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: md5.into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![
+                file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/gone", "d2"),
+            ],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/fresh", "d3"),
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert_eq!(
+            agg.counts.folders, 3,
+            "the common, added and removed folder rows are all counted"
+        );
+        // Folders remain tallied by state too, so the two counts are independent.
+        assert_eq!(agg.counts.common, 2, "data and the common folder");
+        assert_eq!(agg.counts.added, 1, "the fresh folder");
+        assert_eq!(agg.counts.removed, 1, "the gone folder");
+    }
+
+    /// A diff with no folder rows publishes a zero `folders` count.
+    #[test]
+    fn aggregation_reports_zero_folders_when_there_are_none() {
+        let d = three_state_pair();
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert_eq!(agg.counts.folders, 0);
     }
 
     /// spec §5's formulas, computed by hand on the fixture above.
@@ -1122,7 +1395,8 @@ mod tests {
         assert_eq!(d.counts.common, 0);
         assert!(d.scores.is_empty() && d.rows.is_empty());
         assert_eq!(d.pool.new_chunks_total, 0);
-        assert!(!aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d)).is_a_real_upgrade());
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert!(!something_changed(&agg.counts));
     }
 
     // ------------------------------------------------------------- ordering
@@ -1283,17 +1557,18 @@ mod tests {
         );
         assert!(diff.added.contains(&"game:fresh".to_string()));
         assert!(diff.added.contains(&"en-us:fresh".to_string()));
-        assert!(diff.is_a_real_upgrade());
+        assert!(something_changed(&diff.counts));
     }
 
     #[test]
-    fn a_pair_of_identical_manifests_is_not_an_upgrade() {
+    fn identical_content_with_different_tags_changes_nothing() {
         let same = manifest(
             "7.1.0",
             vec![file("a", "m", vec![chunk("x", "xx", 0, 1, 1)])],
         );
         let d = diff_field(&same, &same).unwrap();
-        assert!(!aggregate("7.0.0", "7.1.0", &[d]).is_a_real_upgrade());
+        let agg = aggregate("7.0.0", "7.1.0", &[d]);
+        assert!(!something_changed(&agg.counts));
     }
 
     /// **K1.** Sizes in a manifest are untrusted totals. Two `i64::MAX` costs

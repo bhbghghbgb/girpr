@@ -131,6 +131,18 @@ impl VersionPair {
                 return Err(format!("{source} {problem}"));
             }
         }
+        // The flag-level check in `capture_plan` cannot see a `BranchHead`/
+        // `FirstDiffTag` pair, which resolves to `main.tag` and `diff_tags[0]`
+        // only after the API answers. Compare the resolved strings with the
+        // same case-folding as that check so both entry points agree, and an
+        // equal pair never reaches a capture that would diff a tag against
+        // itself. Build ids are deliberately not compared: two tags sharing
+        // one are a different, possibly legitimate observation.
+        if new_tag.eq_ignore_ascii_case(&old_tag) {
+            return Err(format!(
+                "the resolved pair is `{new_source}` = {new_tag} and `{old_source}` = {old_tag}; the pair must differ"
+            ));
+        }
         Ok(VersionPair {
             old: VersionRef {
                 tag: old_tag,
@@ -627,7 +639,7 @@ fn tag_shape_rule_inner(tag: &str, allow_device: bool) -> Option<(&'static str, 
     if tag.len() > 32 {
         return Some((
             "tag.too-long",
-            format!("{tag:?} is longer than 32 characters; that is not a version tag"),
+            format!("{tag:?} is longer than 32 bytes; that is not a version tag"),
         ));
     }
     if tag.chars().any(char::is_control) {

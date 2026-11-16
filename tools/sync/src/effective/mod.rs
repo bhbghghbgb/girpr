@@ -11,7 +11,7 @@
 //!
 //! | module | phase | what it does |
 //! | --- | --- | --- |
-//! | `side` | — | what a *side* is, how its cache is opened, and which one-cache-per-run rule holds |
+//! | `side` | — | what a *side* is, how its cache is opened, where that cache lives, and which one-cache-per-run rule holds |
 //! | `phase_a` | A | [`scan_stat_only`] — walk the tree, consult the cache, **read no bytes** |
 //! | `phase_c` | C | [`resolve_folder`] / [`resolve_record`] — hash what the planner asked for, and finalize |
 //!
@@ -34,6 +34,6 @@ pub use phase_a::scan_stat_only;
 pub use phase_c::{resolve_folder, resolve_record, resolve_side};
 pub use record::load_record_side_from;
 pub use side::{
-    OpenSide, Side, classify, ensure_distinct_sides, open_folder_cache, open_side,
-    resolve_sides_concurrently,
+    OpenSide, Repopulate, Side, classify, ensure_distinct_sides, open_folder_cache, open_side,
+    resolve_sides_concurrently, side_folder,
 };

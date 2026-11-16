@@ -58,10 +58,6 @@ async fn main() {
         Cmd::List(a) => run::list(a.root.clone(), common.output).await,
     };
 
-    // Flush the JSON-lines log before the summary prints, so a reader tailing the
-    // file sees the run's own narration and not a prefix of it.
-    log_guard.finish();
-
     let (summary, code) = match outcome {
         Ok(outcome) => outcome,
         Err(mut f) => {
@@ -77,6 +73,12 @@ async fn main() {
         }
     };
     summary.emit(common.output);
+
+    // Emitting a record also logs it. Flush only now, after both a failure's own
+    // numbers (if any) and the terminal SUMMARY have been logged, so the file
+    // ends with the run's verdict. `exit_with` terminates the process, so this
+    // must stay ahead of it.
+    log_guard.finish();
 
     exit::exit_with(code);
 }

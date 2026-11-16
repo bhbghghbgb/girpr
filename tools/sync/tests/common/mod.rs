@@ -8,13 +8,17 @@
 use girsync::cache::{
     CACHE_PREFIX, CacheDb, CacheOpen, FileRec, TestCacheBackend, load_all_records, open_db,
 };
-use girsync::effective::{SideScan, classify, ensure_distinct_sides, open_side, resolve_side};
+use girsync::commands::side_label;
+use girsync::effective::{
+    SideScan, classify, ensure_distinct_sides, open_side, resolve_side, side_folder,
+};
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, HashMode, SideRequest, StatTrust, plan_pairs};
 use girsync::report::OutputFormat;
 use girsync::rw::{RwLimits, RwRuntime, RwSide};
 use girsync::{
-    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, Filter, LogCtx, ScanMode, SyncOpts,
+    TrustOpts, UpdateOpts,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -58,6 +62,7 @@ pub fn rw() -> CacheOpen {
     CacheOpen::ReadWrite {
         ignore_cache: false,
         backup_first: false,
+        retain: None,
     }
 }
 
@@ -272,8 +277,7 @@ pub fn opts() -> CommonOpts {
         stat: StatTrust::default(),
         why: false,
         show_identical: false,
-        includes: vec![],
-        excludes: vec![],
+        filter: Filter::new(vec![], vec![], true),
         case_sensitive: true,
         max_depth: 10,
         ignore_cache: false,
@@ -281,6 +285,8 @@ pub fn opts() -> CommonOpts {
         // The unflagged run, which is `Shared(1)` -- see `RwLimits::default`.
         rw: RwLimits::default(),
         test_cache: TestCacheBackend::default(),
+        // The unflagged run backs up and keeps everything.
+        backup: BackupPolicy::default(),
     }
 }
 
@@ -705,8 +711,11 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
     let mut d = open_side(&dst, &common, ScanMode::new(trust.no_trust_dst, false)).unwrap();
     // The labels exist only so a coverage error can name a side; a fixture that
     // reaches one is a test failure, not something to read.
-    let s_label = format!("src {}", src.cache_path().display());
-    let d_label = format!("dst {}", dst.cache_path().display());
+    //
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&src);
+    let d_label = side_label(&dst);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
@@ -714,6 +723,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
+            repopulate: side_folder(&src),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -721,6 +731,7 @@ pub fn resolve_both(src: &Path, dst: &Path, trust: TrustOpts) -> (SideScan, Side
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
+            repopulate: side_folder(&dst),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

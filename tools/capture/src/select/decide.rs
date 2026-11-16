@@ -27,9 +27,11 @@ pub struct Decided {
 ///
 /// `max_download_bytes` becomes the budget here as well as the ceiling
 /// `blobs::plan` checks later. That is deliberate and they are not redundant:
-/// M5 charges `total_cost` — what admitting a capture *commits* the run to —
-/// while `blobs::plan` measures `Σ compressed_size` — what the chunk store will
-/// actually put on the wire. Two numbers, two ceilings, both holding.
+/// the selection charges `total_cost` for a common path, compressed download
+/// bytes for an added one and old size for a removed one — what admitting a
+/// capture *commits* the run to — while `blobs::plan` measures `Σ compressed_size`
+/// — what the chunk store will actually put on the wire. Two numbers, two
+/// ceilings, both holding.
 ///
 /// `per_class` is floored at one: asking for zero captures of a class is not a
 /// request for an empty bundle, it is a request to capture nothing while still
@@ -137,7 +139,9 @@ mod tests {
                 path: "a/one.bin".to_string(),
                 state: crate::manifest::diff::State::Changed,
                 size: 2_000,
+                download_bytes: None,
                 score: Some(score("a/one.bin")),
+                is_folder: false,
             }],
             pool: Default::default(),
         }]

@@ -595,9 +595,19 @@ two spellings is a silent change of which file is admitted.
 
 ### Budget
 
-`--max-download-bytes N` is a hard ceiling on `Σ total_cost` over admitted
-files. Admission is **smallest-first**: files are sorted by `total_cost` asc and
-taken until the budget is exhausted; the rest are recorded as
+`--max-download-bytes N` is a hard ceiling on the sum of the **budget charge**
+over admitted files. The charge depends on the path's state:
+
+- a **common** path (identical / changed) charges `total_cost` — the compressed
+  bytes of both sides, because the old file has to be materialized in full for
+  the fixture to be real;
+- an **`added`** path charges the compressed bytes its chunks will download —
+  the whole new file has to be fetched, so the declared uncompressed size is not
+  the number that matters;
+- a **`removed`** path charges its old size — the bytes it occupies in `game/`.
+
+Admission is **smallest-first** by that charge: files are sorted by it ascending
+and taken until the budget is exhausted; the rest are recorded as
 `status="over_budget"`. A single file that cannot fit is reported, not silently
 swallowed — and because the run's own assertions decide the exit code, a
 deliberate exclusion is a recorded status, not a failure.
@@ -992,16 +1002,17 @@ the bundle's **own** patchmap — nothing here is a constant to hard-code.
    What it names is what makes it useful:
 
    ```
-   CHECK fail: md5 expect_md5=d992a789… actual_md5=1e210ff1…
+   CHECK fail: md5 file=GenshinImpact_Data/… expect_md5=d992a789… actual_md5=1e210ff1…
    ```
 
    this capture's `new.md5` and `old.md5`. Those two come from `tracing::warn!`
-   in `src/repair/check.rs`, so they reach **stderr and the log file only, never
-   stdout** — on the data plane the only signal is `exit 4`. A mismatch means
-   the fixture and the tool disagree about the file before a single byte moves.
+   in `src/repair/phases/check.rs`, so they reach **stderr and the log file
+   only, never stdout** — on the data plane the only signal is `exit 4`. A
+   mismatch means the fixture and the tool disagree about the file before a
+   single byte moves.
 
 3. **Repair, once per capture**, with `--include` naming exactly that capture's
-   path, plus `--max-files 1`, `--io-threads 1` and `--fail-fast`. `--max-files 1`
+   path, plus `--max-files 1`, `--jobs 1` and `--fail-fast`. `--max-files 1`
    is the cheap answer to `*` crossing `/` — and this fixture contains
    `GenshinImpact_Data/Resources/unity default resources`, a path with a space in
    it, so the glob is worth quoting and bounding. One run per capture is what
@@ -1127,8 +1138,8 @@ figures to the byte. Ten reused chunks across the three captures that declare
 them, none of them downloaded. Only the six captures' own paths changed on the
 scratch copy — the `added` file appeared, the `removed` file disappeared, the
 `identical` one was left alone, and the other three were modified in place — so
-the scope held across all six runs. The bundle itself was never a working tree
-and still verifies.
+the scope held across all twelve runs (a `--print-plan` pre-pass plus a real run
+per capture). The bundle itself was never a working tree and still verifies.
 
 **One capture, one class.** The class set is a partition on the content, so a
 file answers exactly one class and the bundle holds six captures for six

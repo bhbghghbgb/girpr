@@ -23,6 +23,12 @@
 //! which invalidates `checksums.json`. [`close`] owns that loop. Split across
 //! callers it would be four `emit::` calls in the right order, which is the same
 //! thing said more weakly.
+//!
+//! The published `checksums.json` is then checked by
+//! [`index::Checksums::a16_scoped`]: membership plus a re-hash of the two
+//! documents the loop rewrote. The first pass's full [`index::Checksums::a16`]
+//! proves the digests carried across, so the published document is checked
+//! without a second full re-hash.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -32,6 +38,11 @@ use crate::http::ApiError;
 
 use super::index;
 use super::selfcheck::{Assertion, Selfcheck};
+
+/// The two documents rewritten after A16 is recorded. Named once so the reuse
+/// pass and the scoped check of the published document cannot name different
+/// files — and so the A16 row can state the same scope it was checked under.
+const REWRITTEN_AFTER_A16: &[&str] = &["verify/selfcheck.json", "README.md"];
 
 /// Everything the close-out needs from the orchestrator.
 ///
@@ -54,11 +65,11 @@ pub struct CloseoutInput<'a> {
     pub diffs: &'a [crate::manifest::diff::FieldDiff],
     /// Per-capture `(old, new)` whole-file digests, for A19.
     pub side_digests: &'a BTreeMap<String, (String, String)>,
-    /// The run's A6-A12 and A19 rows.
+    /// Every artifact-relative path the run wrote, in write order.
     ///
-    /// Appended to as each document lands, because A14 asserts that every file
-    /// under `game/` was one the run planned — and a document the close-out
-    /// itself wrote would fail that check if it were not declared first.
+    /// Appended to as each document lands so the close-out can report what it
+    /// wrote. A14 reads the tree itself now, so this list no longer feeds that
+    /// assertion — only the count of documents written.
     pub written: Vec<String>,
     /// The patch shape of each capture, for A21-A23.
     pub shapes: &'a [crate::assemble::PatchShape],
@@ -71,7 +82,9 @@ pub struct CloseoutInput<'a> {
 pub struct Closed {
     /// `MANIFEST.json`, as written.
     pub manifest: index::Manifest,
-    /// `verify/checksums.json`, as written by the **second** pass.
+    /// `verify/checksums.json`, as finally published. Normally the second
+    /// pass's document; if the scoped check found a late discrepancy, the
+    /// republished one.
     pub checksums: index::Checksums,
     /// `verify/selfcheck.json`, final.
     pub selfcheck: Selfcheck,
@@ -117,7 +130,9 @@ pub struct Closed {
 /// Two passes converge exactly: the second `checksums.json` is scanned after the
 /// final `selfcheck.json` and `README.md`, so what it records is what is on
 /// disk. A third pass would find nothing new, which is the proof it converged —
-/// and `two_passes_converge` is that proof, as a test.
+/// and `two_passes_converge` is that proof, as a test. A third write happens only
+/// when the scoped check of the published document finds a late discrepancy and
+/// the failing A16 row has to replace the one written before the second pass.
 ///
 /// The second pass is **unconditional.** A guard such as
 /// `if !selfcheck.by_id().contains_key("A16")` could never be false:
@@ -135,7 +150,6 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         i.selection,
         i.diffs,
         i.side_digests,
-        &written,
         i.no_chunk_blobs,
     ));
     // A21-A23: the bundle's coverage. They are about the patchmaps, and the
@@ -203,12 +217,14 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     written.push(super::write_manifest(i.dir, &manifest).map_err(|e| write_err(i.dir, e))?);
     written
         .push(super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?);
-    let (_, checksums) =
+    let (_, first_checksums) =
         super::write_checksums_reusing(i.dir, &listed, &[]).map_err(|e| write_err(i.dir, e))?;
     // The independent half of A16: re-reads every listed file from disk and
     // compares. This is deliberately **not** folded into the scan above — a
-    // re-hash that reuses the digests it is checking would be a tautology.
-    let (a16_ok, a16_detail) = checksums.a16(i.dir);
+    // re-hash that reuses the digests it is checking would be a tautology. It
+    // also establishes the transitive coverage the scoped check below relies
+    // on: every non-rewritten digest is proved here, once, not carried unchecked.
+    let (first_ok, first_detail) = first_checksums.a16(i.dir);
     written.push("verify/checksums.json".to_string());
 
     // Second pass: record A16, then re-write the two documents it changed — and
@@ -219,22 +235,62 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // `selfcheck.json` said 116. Its final size does not depend on anything the
     // second scan measures — the counts are a row tally, not a byte total — so
     // the fixpoint below is still exact rather than converging in practice.
+    //
+    // The row's detail is the scope the *published* document will be checked
+    // under, not the first pass's "every digest re-hashed": the digests it did
+    // not rehash are carried from the first pass, which proved them above.
+    let written_ok = first_ok;
+    let written_detail = if first_ok {
+        index::scoped_pass_detail(first_checksums.file_count, REWRITTEN_AFTER_A16)
+    } else {
+        first_detail.clone()
+    };
     selfcheck.assertions.push(Assertion::row(
         "A16",
         "verify/checksums.json",
         "covers every file under the artifact root, and re-hashing matches",
-        a16_ok,
-        &a16_detail,
+        written_ok,
+        &written_detail,
     ));
     selfcheck = Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
     super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
     super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?;
-    let (_, checksums) = super::write_checksums_reusing(
-        i.dir,
-        &checksums.entries,
-        &["verify/selfcheck.json", "README.md"],
-    )
-    .map_err(|e| write_err(i.dir, e))?;
+    let (_, mut checksums) =
+        super::write_checksums_reusing(i.dir, &first_checksums.entries, REWRITTEN_AFTER_A16)
+            .map_err(|e| write_err(i.dir, e))?;
+
+    // Check the document actually published, not the one the A16 row was first
+    // drafted against. Membership and the two rewritten paths are checked here;
+    // everything else was re-hashed by the first pass and not written since.
+    let (scoped_ok, scoped_detail) = checksums.a16_scoped(i.dir, REWRITTEN_AFTER_A16);
+    let a16_ok = first_ok && scoped_ok;
+    let a16_detail = if first_ok {
+        scoped_detail
+    } else {
+        first_detail
+    };
+
+    // If what we wrote before the second pass differs from what the scoped
+    // check found, the selfcheck on disk cannot stand: it would claim a pass
+    // for a document that failed, or a stale finding. Rewrite the A16 row and
+    // republish the three documents once. On the ordinary path the detail is
+    // identical and nothing is written again — no third full pass.
+    if a16_ok != written_ok || a16_detail != written_detail {
+        selfcheck.assertions.pop();
+        selfcheck.assertions.push(Assertion::row(
+            "A16",
+            "verify/checksums.json",
+            "covers every file under the artifact root, and re-hashing matches",
+            a16_ok,
+            &a16_detail,
+        ));
+        selfcheck = Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
+        super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
+        super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?;
+        checksums = super::write_checksums_reusing(i.dir, &checksums.entries, REWRITTEN_AFTER_A16)
+            .map_err(|e| write_err(i.dir, e))?
+            .1;
+    }
 
     tracing::info!(
         selfcheck = ?selfcheck.result,
@@ -387,7 +443,19 @@ mod tests {
                 diff_tags: vec![],
             },
             selection: crate::select::Selection {
-                admitted: Vec::new(),
+                // `seed()` writes `game/data.bin` as the one captured file. A14
+                // now reads the tree, so that file has to be an admitted path
+                // or the seeded tree is genuinely dirty.
+                admitted: vec![crate::select::Admission {
+                    capture_id: "data".to_string(),
+                    primary_class: crate::select::Class::Identical,
+                    path: "data.bin".to_string(),
+                    matching_field: "game".to_string(),
+                    state: crate::manifest::diff::State::Identical,
+                    also_satisfies: Vec::new(),
+                    budget_cost: 0,
+                    patch_bytes: 0,
+                }],
                 rejected: Vec::new(),
                 forced_skipped: Vec::new(),
                 forced_unscored: Vec::new(),
@@ -493,6 +561,30 @@ mod tests {
     }
 
     #[test]
+    fn a_late_difference_in_a_rewritten_file_fails_the_scoped_check_naming_it() {
+        // The failure the scoped pass exists to catch. We cannot mutate a file
+        // between the close-out's two scans without a seam in `close`, so the
+        // late change is made to the document `close` published: the same
+        // `a16_scoped` call `close` makes must then fail and name the path.
+        let root = scratch("late-difference");
+        seed(&root);
+        let closed = run(&root);
+
+        let before = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(before.0, "clean tree: {}", before.1);
+
+        std::fs::write(root.join("README.md"), b"changed after publication").unwrap();
+        let after = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(!after.0, "a late rewrite must not pass silently");
+        assert!(
+            after.1.contains("README.md"),
+            "the finding must name the rewritten file: {}",
+            after.1
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn two_passes_converge_and_the_pass_the_comment_claims_would_change_nothing() {
         // **The claim this module exists to make checkable.** `close`'s doc says
         // two passes converge exactly and that a third would find nothing new —
@@ -578,6 +670,11 @@ mod tests {
             "A16 must still state the file count it checked: {:?}",
             a16[0].actual
         );
+        assert!(
+            a16[0].actual.contains("carried from the first pass"),
+            "A16 must name the digests it did not re-hash: {:?}",
+            a16[0].actual
+        );
 
         // And it must be in the document on disk too, not only in the returned
         // struct — the two can diverge if the final write is ever skipped.
@@ -594,6 +691,64 @@ mod tests {
             ids.iter().filter(|i| **i == "A16").count(),
             1,
             "A16 on disk: {ids:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The row is drafted before the published document exists, so the only
+    /// proof that it speaks for that document is that the scoped check of the
+    /// published document returns the row's own words. This pins that identity,
+    /// and that the success path publishes once rather than three times.
+    #[test]
+    fn the_a16_row_reports_the_check_of_the_published_document() {
+        let root = scratch("published-checked");
+        seed(&root);
+        let closed = run(&root);
+
+        let a16 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A16")
+            .expect("an A16 row");
+        assert!(a16.ok, "{}", a16.actual);
+        assert!(
+            a16.actual.contains("carried from the first pass"),
+            "the row must state the scope it was checked under: {}",
+            a16.actual
+        );
+        assert!(
+            !a16.actual.contains("every digest re-hashed"),
+            "the row must not claim a second full pass: {}",
+            a16.actual
+        );
+
+        // The document on disk is the one the row speaks for: it is exactly
+        // the document returned to the caller, and checking it scoped yields
+        // the detail recorded in the row.
+        let on_disk: index::Checksums = serde_json::from_slice(
+            &std::fs::read(root.join("verify/checksums.json")).expect("published checksums"),
+        )
+        .expect("parse published checksums");
+        assert_eq!(
+            on_disk, closed.checksums,
+            "the returned document is not the one published"
+        );
+        let (ok, detail) = closed.checksums.a16_scoped(&root, REWRITTEN_AFTER_A16);
+        assert!(ok, "{detail}");
+        assert_eq!(
+            detail, a16.actual,
+            "the row must report this check's result"
+        );
+        assert_eq!(
+            closed
+                .written
+                .iter()
+                .filter(|p| p.as_str() == "verify/checksums.json")
+                .count(),
+            1,
+            "the success path must not republish the document"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -689,6 +844,87 @@ mod tests {
             .collect();
         assert!(failing.is_empty(), "no row should fail: {failing:?}");
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fixture shape: `scratch()` + `seed()` give a `game/` with config.ini and
+    /// one admitted captured file plus a `scan/` file. Another file is left
+    /// under `game/` before the close-out runs, so the tree is dirty even
+    /// though nothing in the writer's plan mentions it. A14 reads the tree, so
+    /// it must fail and name the stray.
+    #[test]
+    fn a_stray_file_under_game_fails_a14_naming_it() {
+        let root = scratch("stray-game");
+        seed(&root);
+        std::fs::write(
+            root.join("game/stray.bin"),
+            b"left over from an earlier run",
+        )
+        .unwrap();
+
+        let closed = run(&root);
+
+        assert!(root.join("game/stray.bin").is_file());
+        assert!(
+            closed
+                .checksums
+                .entries
+                .iter()
+                .any(|e| e.path == "game/stray.bin"),
+            "the disk walk, not `written`, decides what is checksummed"
+        );
+        let a14 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A14")
+            .expect("an A14 row");
+        assert!(!a14.ok, "the stray is on disk: {}", a14.actual);
+        assert_eq!(
+            a14.actual, "1 stray path(s): stray.bin",
+            "the detail names the count and the stray path: {a14:?}"
+        );
+        assert!(
+            closed
+                .selfcheck
+                .assertions
+                .iter()
+                .find(|a| a.id == "A16")
+                .expect("an A16 row")
+                .ok,
+            "the stray is hashed, so A16 agrees too"
+        );
+        // A14 is fatal, so the dirty bundle ends the run.
+        let fatal = closed.fatal.as_ref().expect("a fatal A14 finding");
+        for want in ["A14", "stray.bin"] {
+            assert!(fatal.detail.contains(want), "{want} missing: {fatal:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The control for the stray case: the same tree with no stray passes A14.
+    /// The count is of files on disk under `game/`, so it includes the admitted
+    /// captured file as well as `config.ini`. The scan file sits outside
+    /// `game/` in this fixture, so it is not counted.
+    #[test]
+    fn a_clean_game_tree_passes_a14() {
+        let root = scratch("clean-game");
+        seed(&root);
+
+        let closed = run(&root);
+
+        let a14 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A14")
+            .expect("an A14 row");
+        assert!(a14.ok, "a clean tree must pass: {}", a14.actual);
+        assert_eq!(
+            a14.actual,
+            "2 files, all of them config.ini, the scan file, or a captured path"
+        );
+        assert!(closed.fatal.is_none(), "a clean tree must not end the run");
         let _ = std::fs::remove_dir_all(&root);
     }
 

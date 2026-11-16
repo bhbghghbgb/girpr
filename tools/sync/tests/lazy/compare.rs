@@ -176,7 +176,7 @@ fn stat_equal_pair_with_a_poisoned_digest_needs_no_read() {
     assert_eq!(r.hashed, 0, "the cached digests already disagree");
 }
 
-/// **`--hash none`.** No digest is required, so nothing is read, whatever the
+/// **`--hash-all-of none`.** No digest is required, so nothing is read, whatever the
 /// tree looks like.
 #[test]
 fn hash_none_reads_nothing_on_a_differing_tree() {
@@ -304,7 +304,7 @@ fn a_kind_conflict_needs_no_digest() {
 }
 
 /// **case-only difference, identical content.** In insensitive mode the pair is
-/// matched by lowercase, so it is compared rather than reported as
+/// matched by the folded key, so it is compared rather than reported as
 /// missing+extra — and since its stat agrees, the digest decides, which means
 /// both files are read. This is the case a planner that pairs by exact key gets
 /// wrong: it would plan nothing and the `CASE-MISMATCH` would be the only line.
@@ -317,10 +317,8 @@ fn a_case_only_difference_with_equal_content_is_still_compared() {
     wfile(&dst, "A.txt", b"alpha");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts_mem()
-    };
+    let mut insensitive = opts_mem();
+    insensitive.set_case_sensitive(false);
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
         r.records(),
@@ -354,10 +352,8 @@ fn a_case_only_difference_with_differing_content_is_changed_too() {
     wfile(&dst, "A.txt", b"ALPHA");
     sync_mtime(&src.join("a.txt"), &dst.join("A.txt"));
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts_mem()
-    };
+    let mut insensitive = opts_mem();
+    insensitive.set_case_sensitive(false);
     let r = run_pair(&src, &dst, &insensitive, TrustOpts::default());
     assert_eq!(
         r.records(),

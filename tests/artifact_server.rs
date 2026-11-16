@@ -19,8 +19,14 @@
 //! when the bundle carries none — and then the server *says so* rather than
 //! letting a not-found assertion pass on an invented status.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "artifact_bridge/server.rs"]
 mod server;
+
+#[path = "common/digest.rs"]
+mod digest;
 
 use std::path::{Path, PathBuf};
 
@@ -51,6 +57,9 @@ const OLD_AUDIO_MANIFEST: &str =
     "manifest_0000000000000003_0000000000000000cccccccccccccccccccccccccccccccc";
 const NEW_AUDIO_MANIFEST: &str =
     "manifest_0000000000000004_0000000000000000dddddddddddddddddddddddddddd";
+/// A `game` id both builds can declare, for the shared-id index case.
+const SHARED_GAME_MANIFEST: &str =
+    "manifest_0000000000000005_0000000000000000eeeeeeeeeeeeeeeeeeeeeeee";
 
 /// The chunk the bundle carries.
 const CHUNK_ID: &str = "616e6fbbf0a97dc9_a21a4420161bca81a78f73b27bfa359a";
@@ -69,26 +78,37 @@ struct MiniBundle {
 impl MiniBundle {
     /// A mini-bundle that carries the **recorded failure shapes**.
     fn with_shapes() -> Self {
-        Self::build(Some(all_shapes()))
+        Self::build(Some(all_shapes()), [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST])
     }
 
     /// A mini-bundle that carries **one** recorded failure shape.
     fn with_one_shape() -> Self {
-        Self::build(Some(vec![shape(
-            "getbuild_unknown_tag",
-            "json",
-            200,
-            "application/json",
-            r#"{"data":null,"message":"not found","retcode":-202}"#,
-        )]))
+        Self::build(
+            Some(vec![shape(
+                "getbuild_unknown_tag",
+                "json",
+                200,
+                "application/json",
+                r#"{"data":null,"message":"not found","retcode":-202}"#,
+            )]),
+            [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST],
+        )
     }
 
     /// A mini-bundle that carries **no** recorded failure shapes.
     fn without_shapes() -> Self {
-        Self::build(None)
+        Self::build(None, [OLD_GAME_MANIFEST, NEW_GAME_MANIFEST])
     }
 
-    fn build(shapes: Option<Vec<Shape>>) -> Self {
+    /// Both builds declare the same `game` id, for the shared-id index case.
+    fn with_shared_game_id() -> Self {
+        Self::build(
+            Some(all_shapes()),
+            [SHARED_GAME_MANIFEST, SHARED_GAME_MANIFEST],
+        )
+    }
+
+    fn build(shapes: Option<Vec<Shape>>, game_ids: [&str; 2]) -> Self {
         let guard = TempDir::new("girpr_artifact_server", "mini");
         let dir = guard.to_path_buf();
         std::fs::create_dir_all(dir.join("api")).expect("create api/");
@@ -157,11 +177,11 @@ impl MiniBundle {
         );
         write_json(
             &dir.join("api").join(format!("getBuild.{OLD_TAG}.json")),
-            &build_body(OLD_BUILD, OLD_TAG, OLD_GAME_MANIFEST, OLD_AUDIO_MANIFEST),
+            &build_body(OLD_BUILD, OLD_TAG, game_ids[0], OLD_AUDIO_MANIFEST),
         );
         write_json(
             &dir.join("api").join(format!("getBuild.{NEW_TAG}.json")),
-            &build_body(NEW_BUILD, NEW_TAG, NEW_GAME_MANIFEST, NEW_AUDIO_MANIFEST),
+            &build_body(NEW_BUILD, NEW_TAG, game_ids[1], NEW_AUDIO_MANIFEST),
         );
 
         // The carried archives: one per build, under the field the body's
@@ -556,16 +576,19 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
     for tag in [&bundle.old_tag, &bundle.new_tag] {
         let body: serde_json::Value =
             serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("body");
+        let build = body["data"]["build_id"]
+            .as_str()
+            .expect("build_id")
+            .to_string();
         for m in body["data"]["manifests"].as_array().expect("[]") {
             let id = m["manifest"]["id"].as_str().expect("id");
-            let (got_tag, field, build, carried) = bridge
-                .manifest_resolution(id)
-                .unwrap_or_else(|| panic!("id {id} is not indexed"));
+            let (got_tag, field, got_build, carried) = bridge
+                .manifest_resolution_for(&build, id)
+                .unwrap_or_else(|| panic!("{build}/{id} is not indexed"));
             assert_eq!(got_tag, *tag, "the tag decides which archive");
             assert_eq!(field, m["matching_field"].as_str().expect("field"));
             assert_eq!(
-                build,
-                body["data"]["build_id"].as_str().expect("build_id"),
+                got_build, build,
                 "the declaring build is the one whose body declared it"
             );
             assert_eq!(
@@ -612,6 +635,71 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
         ctype, "application/xml",
         "the measured blob 404 content-type"
     );
+}
+
+/// Both `getBuild` bodies declare the same `game` id. Because the index is
+/// keyed by `(build_id, id)`, neither declaration overwrites the other: each
+/// build resolves its own tag/field/archive and each route serves its own
+/// bytes. A build that never declared the id is refused rather than served the
+/// other build's archive.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_game_id_shared_by_both_builds_resolves_and_serves_per_build() {
+    let mini = MiniBundle::with_shared_game_id();
+    let bridge = Bridge::start(Bundle::open(mini.dir())).await;
+    let o = bridge.origins().clone();
+
+    assert_eq!(
+        bridge.manifest_resolution_for(OLD_BUILD, SHARED_GAME_MANIFEST),
+        Some((
+            OLD_TAG.to_string(),
+            "game".to_string(),
+            OLD_BUILD.to_string(),
+            true,
+        )),
+        "the old build keeps its own declaration"
+    );
+    assert_eq!(
+        bridge.manifest_resolution_for(NEW_BUILD, SHARED_GAME_MANIFEST),
+        Some((
+            NEW_TAG.to_string(),
+            "game".to_string(),
+            NEW_BUILD.to_string(),
+            true,
+        )),
+        "the new build keeps its own declaration too"
+    );
+    let mut ids = bridge.declared_manifest_ids();
+    ids.retain(|id| id == SHARED_GAME_MANIFEST);
+    assert_eq!(ids.len(), 1, "the shared id is listed once, not twice");
+
+    let url = |build: &str| {
+        format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{build}/{SHARED_GAME_MANIFEST}",
+            o.manifest_origin
+        )
+    };
+    let (old_status, _, old_body) = get(&url(OLD_BUILD)).await;
+    let (new_status, _, new_body) = get(&url(NEW_BUILD)).await;
+    assert_eq!(old_status, 200);
+    assert_eq!(new_status, 200);
+    assert_eq!(old_body, zstd_bytes(b"the old build's game manifest"));
+    assert_eq!(new_body, zstd_bytes(b"the new build's game manifest"));
+    assert_ne!(
+        old_body, new_body,
+        "each build serves the archive it declared"
+    );
+
+    // A build that declared no such id gets the recorded wrong-build 404, not
+    // either build's bytes.
+    let (status, ctype, body) = get(&url("OTHERbuild000001")).await;
+    assert_eq!(status, 404);
+    assert_eq!(ctype, "application/xml");
+    assert_ne!(body, old_body);
+    assert_ne!(body, new_body);
+    if let Some((rec_status, rec_ctype, _)) = bridge.recorded_shape("blob_wrong_build") {
+        assert_eq!(status, rec_status, "replayed status");
+        assert_eq!(ctype, rec_ctype, "replayed content-type");
+    }
 }
 
 /// The invariant `docs/06` §4.1 buys: **every blob request's `<build_id>` must

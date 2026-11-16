@@ -61,30 +61,138 @@ impl std::fmt::Display for RepairMode {
     }
 }
 
+/// Define the exit-code enum, its discriminants, and the exhaustive list from
+/// one source.
+///
+/// Every item — the variant, its documented number, and its `ALL` entry — comes
+/// from the same list, so a variant cannot be added to the enum without also
+/// appearing in `ALL`. The match in the compile-time check below is generated
+/// from that list too, and has no wildcard.
+macro_rules! define_run_exits {
+    (
+        $(#[$enum_doc:meta])*
+        pub enum $name:ident {
+            $(
+                $(#[$variant_doc:meta])*
+                $variant:ident = $code:literal,
+            )+
+        }
+    ) => {
+        $(#[$enum_doc])*
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum $name {
+            $(
+                $(#[$variant_doc])*
+                $variant = $code,
+            )+
+        }
+
+        impl $name {
+            /// Every documented exit status, in numeric order.
+            ///
+            /// Generated from the same list as the variants, so the list and
+            /// the enum cannot drift apart. Crate-internal: only the
+            /// compile-time check and the unit tests read it. The binary
+            /// target is a separate crate, so its test cannot see this and
+            /// names the statuses itself; that duplication is deliberate,
+            /// since removing it would mean publishing the list for one test.
+            /// A new variant still fails the binary's wildcard-free match.
+            pub(crate) const ALL: [$name; [$($name::$variant),+].len()] = [
+                $($name::$variant,)+
+            ];
+        }
+
+        /// The exit-code contract is compile-time checked: every variant is
+        /// named after its documented number (the `match` has no wildcard),
+        /// and [`RunExit::ALL`] is numbered contiguously from zero. A new or
+        /// renumbered variant stops the build here, before any test can drift.
+        const _: () = {
+            let mut i = 0;
+            while i < $name::ALL.len() {
+                let documented = match $name::ALL[i] {
+                    $($name::$variant => $code,)+
+                };
+                assert!($name::ALL[i] as u8 == documented);
+                assert!(documented as usize == i);
+                i += 1;
+            }
+        };
+    };
+}
+
+define_run_exits! {
+    /// The documented process exit codes.
+    ///
+    /// The numbers are the automation contract: a run's final `SUMMARY` carries
+    /// one, and a fatal failure carries one through [`RunFailure`]. Named
+    /// variants keep the choice at each return site explicit. Converting a
+    /// variant to the process status happens at the boundary in `main`; the
+    /// `SUMMARY` and the fatal log line call [`RunExit::code`] only to describe
+    /// the run.
+    pub enum RunExit {
+        /// The run did everything it was asked to do.
+        Success = 0,
+        /// The request or the configuration is wrong.
+        Usage = 1,
+        /// Metadata, manifest, or network failure.
+        Metadata = 2,
+        /// A write or verification failure.
+        Write = 3,
+        /// `--check-only` found damage.
+        CheckFailed = 4,
+        /// A requested ceiling bound the run.
+        Limit = 5,
+    }
+}
+
+impl RunExit {
+    /// The numeric status the process returns.
+    ///
+    /// `SUMMARY` and the fatal log line take this as an `i32`; the process
+    /// boundary takes [`RunExit::process_status`] instead.
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
+
+    /// The byte a process exit status carries.
+    ///
+    /// Infallible: `#[repr(u8)]` makes every discriminant fit, so no runtime
+    /// range check is needed at the boundary.
+    pub const fn process_status(self) -> u8 {
+        self as u8
+    }
+}
+
+impl From<RunFailure> for RunExit {
+    fn from(failure: RunFailure) -> Self {
+        failure.exit_code
+    }
+}
+
 /// Typed failure carrying the process exit code.
-/// `1` usage/config, `2` metadata/network, `3` write/verify.
 #[derive(Debug)]
 pub struct RunFailure {
-    pub exit_code: i32,
+    pub exit_code: RunExit,
     pub source: anyhow::Error,
 }
 
 impl RunFailure {
     pub fn usage(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 1,
+            exit_code: RunExit::Usage,
             source: e.into(),
         }
     }
     pub fn metadata(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 2,
+            exit_code: RunExit::Metadata,
             source: e.into(),
         }
     }
     pub fn write(e: impl Into<anyhow::Error>) -> Self {
         Self {
-            exit_code: 3,
+            exit_code: RunExit::Write,
             source: e.into(),
         }
     }
@@ -127,7 +235,10 @@ pub struct RunCtx {
     /// conditional key follows, so an unflagged run's line stays
     /// byte-identical.
     pub repair_mode_explicit: bool,
-    /// Concurrent **files**; guaranteed `>= 1`.
+    /// Concurrent **files**; guaranteed `>= 1`. Chunks inside a file stay
+    /// sequential. This is a file-task window, not the runtime's worker-thread
+    /// count; `--jobs` is the primary spelling and `--io-threads` is a
+    /// deprecated alias.
     pub jobs: usize,
     pub check_only: bool,
     /// `--scan`: read the whole install once, in the plan phase, so the
@@ -149,7 +260,7 @@ pub struct RunCtx {
     pub purge_after: bool,
     pub purge_before: bool,
     /// How the data plane is rendered: `key=value` lines (the default) or NDJSON.
-    /// One [`crate::report::Record`] per line either way — see [`crate::report`].
+    /// One [`crate::Record`] per line either way.
     pub output: OutputFormat,
     /// Offline/test endpoint overrides. When `Some`, the HoYoPlay / Sophon
     /// APIs are fetched from these bases instead of the production CDNs
@@ -203,5 +314,42 @@ impl RunCtx {
                 .clone()
                 .or_else(|| env("GIRPR_SOPHON_BASE")),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RunExit, RunFailure};
+
+    /// The numbers are the automation contract, so pin the integer each named
+    /// variant converts to. [`RunExit::ALL`] is the crate's exhaustive list;
+    /// the compile-time check ties its order to the discriminants.
+    #[test]
+    fn every_named_code_keeps_its_documented_number() {
+        for (number, status) in RunExit::ALL.into_iter().enumerate() {
+            assert_eq!(status.code(), number as i32, "{status:?}");
+        }
+    }
+
+    #[test]
+    fn every_failure_constructor_carries_its_documented_code() {
+        let cases = [
+            (
+                RunFailure::usage(anyhow::anyhow!("bad request")),
+                RunExit::Usage,
+            ),
+            (
+                RunFailure::metadata(anyhow::anyhow!("bad metadata")),
+                RunExit::Metadata,
+            ),
+            (
+                RunFailure::write(anyhow::anyhow!("bad write")),
+                RunExit::Write,
+            ),
+        ];
+        for (failure, expected) in cases {
+            assert_eq!(failure.exit_code, expected);
+            assert_eq!(RunExit::from(failure), expected);
+        }
     }
 }

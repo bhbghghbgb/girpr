@@ -262,8 +262,11 @@ One object per HTTP request, in `seq` order. In the reference capture: 43 rows �
   "attempts": 1 }
 ```
 
-Header keys are lowercased; values are strings exactly as received. `kind` lets a
-reader ask "what did the manifest fetch cost?" without string-matching URLs.
+Header keys are lowercased; values are strings exactly as received. If one name
+appears more than once in a response, its values are joined into a single string
+with `\n` (a header value cannot contain a raw newline, so the delimiter is
+unambiguous). `kind` lets a reader ask "what did the manifest fetch cost?"
+without string-matching URLs.
 
 `kind` is a closed set — `api`, `manifest`, `chunk`, `probe` — and two of the
 probes' paths share `probe` while differing in retry behaviour. A `getBuild?tag=`
@@ -475,7 +478,7 @@ text.
 { "schema_version": 3,
   "cap_bytes": 512,                        // per-value cap this run used
   "total": 1,
-  "omitted": 0,                            // rows after the 4096-row cap
+  "omitted": 0,                            // refusals not retained (cap or duplicate key)
   "rejections": [
     { "source": "manifest 7.1.0/game entry 42 file",
       "value": "GenshinImpact_Data/Resources/aux.dll",
@@ -487,9 +490,11 @@ text.
 `rule` is a stable identifier — `path.device`, `path.windows-fold`,
 `chunk-id.shape`, `chunk-id.empty`, … — and is the thing to assert on. `value` is
 JSON-escaped and capped at `cap_bytes` (512); `truncated` says whether it was
-cut. `value` is text, never joined to a filesystem path. `omitted` counts
-refusals that happened after the 4096-row cap, so a hostile manifest cannot make
-the document unbounded and the loss is still visible.
+cut. `value` is text, never joined to a filesystem path. The store keeps the
+4096 smallest rows by `(source, value, rule)`; `omitted` counts refusals that
+were not retained — rows past the cap and repeats of a key already kept — so a
+hostile manifest cannot make the document unbounded, the sample is independent
+of fetch order, and the loss is still visible.
 
 A manifest refusal that stops the run before a bundle directory exists writes
 this document into the would-be bundle directory: the refusal is evidence even
@@ -699,14 +704,15 @@ for the reference pool. Lets a later run ask "why did it pick that?"
 { "schema_version": 3,
   "columns": ["path","matching_field","old_size","new_size","nchunks","reused","moved",
               "moved_later","moved_earlier","old_max_end","same_md5","old_bytes","new_bytes",
-              "patch_bytes","total_cost","classes","rank"],
+              "patch_bytes","total_cost","classes","rank","admission_rank"],
   "rows": [
     { "path": "…/HoYoChannel.dll", "matching_field": "game",
       "old_size": 2340264, "new_size": 2340264,
       "nchunks": 3, "reused": 1, "moved": 0, "moved_later": 0, "moved_earlier": 0,
       "old_max_end": 2340264, "same_md5": false,
       "old_bytes": 913027, "new_bytes": 913040, "patch_bytes": 274426,
-      "total_cost": 1826067, "classes": ["reuse_in_place"], "rank": 1 }
+      "total_cost": 1826067, "classes": ["reuse_in_place"], "rank": 1,
+      "admission_rank": 1 }
   ] }
 ```
 
@@ -715,7 +721,26 @@ Column-oriented so a reader can sort without re-parsing objects.
 `matching_field` names the pool the path was scored from (`game`, or an audio
 code). It is a row column because the same relative path can appear in more than
 one pool, and without it a reader summing `total_cost` across rows would double
-count. `rank` is 1-based, in `total_cost` order.
+count. Two 1-based ranks are published, because they answer different questions
+and the picker's order is not the scorer's:
+
+- `rank` is the **scoring rank**: the row's position in `total_cost` order, with
+  the tie-break of field (`game` first), then `moved` descending, then `reused`
+  descending, then `path`. Rows are listed in this order.
+- `admission_rank` is the **selection rank**: where this path sits in the pool
+  the picker actually walks. That pool adds the one-sided `added`/`removed` rows,
+  charged their compressed download bytes and old size respectively, and breaks
+  a `total_cost` tie by field and then `path` — it does not consult `moved` or
+  `reused`. So for equal `total_cost` the
+  two ranks can disagree, and `admission_rank` is the one that answers "why was
+  this picked?". A path that `by_cost` scores but the pool excludes keeps its
+  scoring `rank` and carries a `null` `admission_rank`.
+
+One-sided paths (`added`/`removed`) are not rows in this table: they have no
+patch cost to score. A folder entry is likewise not a row — it is a directory,
+not a file — and so is never a capture even if it is scored. `admission_rank`
+still reflects a path's position among the full pool, including one-sided paths,
+so it remains meaningful even though those rows are absent here.
 
 `moved_later` and `moved_earlier` split `moved` by **where the bytes land**:
 `moved_later` counts the chunks whose source is *before* their destination, so

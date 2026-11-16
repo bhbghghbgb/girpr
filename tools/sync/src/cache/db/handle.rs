@@ -1,10 +1,10 @@
-//! The [`Handle`] enum: the redb handle a [`CacheDb`] wraps, read/write or
-//! read-only.
+//! The [`Handle`] enum: the redb handle a [`super::CacheDb`] wraps,
+//! read/write or read-only.
 
 use redb::{Database, ReadableDatabase};
 use std::sync::Arc;
 
-/// The redb handle a [`CacheDb`] wraps.
+/// The redb handle a [`super::CacheDb`] wraps.
 ///
 /// `ReadOnlyDatabase` is a distinct type rather than a flag on `Database`, so
 /// the two have to be matched on. Read-only handles *share* the file with each

@@ -18,7 +18,7 @@ use crate::failure::{Failure, assertion};
 use crate::http::ApiError;
 use crate::manifest::CapturedManifest;
 
-use super::chunks::{FilePair, Want, retention};
+use super::chunks::{FilePair, Retention, Want, retention};
 use super::{file_pairs, projected_download};
 
 /// Refuse a store larger than `--max-download-bytes`.
@@ -90,6 +90,11 @@ pub fn plan(
 ) -> Result<ChunkPlan, Failure> {
     let pairs = file_pairs(selection, fields, manifests, old_tag, new_tag);
 
+    // Retain each pair once and keep the result: the A12 check and the want
+    // builder both need it, and computing it in both places rebuilt a HashSet
+    // and cloned every old/new chunk id a second time. One pair per admitted
+    // capture, in order, so the vector stays index-aligned with `pairs`.
+    let mut retentions: Vec<Retention> = Vec::with_capacity(pairs.len());
     for (a, p) in selection.admitted.iter().zip(&pairs) {
         let r = retention(p);
         if !r.a12_holds() {
@@ -107,9 +112,10 @@ pub fn plan(
             reuse = r.reuse.len(),
             "retention planned"
         );
+        retentions.push(r);
     }
 
-    let wants = super::chunks::wants(&pairs);
+    let wants = super::chunks::wants_with(&pairs, &retentions);
     let projected = projected_download(&wants);
     tracing::info!(
         chunks = wants.len(),
@@ -297,5 +303,24 @@ mod tests {
         // zero bytes must not proceed with a store.
         check_byte_ceiling(1, Some(0)).expect_err("Some(0) is a ceiling of zero");
         check_byte_ceiling(0, Some(0)).expect("and zero fits in zero");
+    }
+
+    /// The planning path hands the retentions it computed for A12 straight to
+    /// the want builder. There is no counter seam here, so the guarantee is
+    /// pinned by equality: the plan's wants must be exactly what an uncached
+    /// rebuild produces, or a mis-indexed cache would drop or duplicate a chunk.
+    #[test]
+    fn a_plan_uses_the_same_wants_as_an_uncached_rebuild() {
+        let (selection, manifests, fields) = identical_capture(1_000);
+        let planned = plan(
+            &fields, &manifests, &selection, "7.0.0", "7.1.0", None, false,
+        )
+        .expect("a legal plan");
+        let pairs = file_pairs(&selection, &fields, &manifests, "7.0.0", "7.1.0");
+        assert_eq!(
+            planned.wants,
+            crate::blobs::chunks::wants(&pairs),
+            "cached and uncached planning paths must agree byte-for-byte"
+        );
     }
 }

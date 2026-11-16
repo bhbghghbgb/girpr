@@ -1449,7 +1449,6 @@ fn write_response(
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
-    let mut c = md5::Context::new();
-    c.consume(bytes);
-    format!("{:x}", c.compute())
+    use md5::{Digest as _, Md5};
+    format!("{:x}", Md5::digest(bytes))
 }

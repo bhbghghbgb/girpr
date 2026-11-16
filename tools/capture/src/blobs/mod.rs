@@ -39,6 +39,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::http::{ApiError, Fetcher, Kind};
+use crate::hyp::types::{Download, join};
 use crate::manifest::CapturedManifest;
 use chunks::{FilePair, Reference, Set, Want};
 use props::{BlobProps, FetchError};
@@ -58,20 +59,21 @@ pub struct ChunkIndex {
 ///
 /// **One constructor, three call sites.** A stored blob, a blob that was
 /// `--no-chunk-blobs`-planned, and a blob whose fetch came back empty all built
-/// the same struct with the same two clones, in three places. The rule that a
-/// row's `referenced_by` and `sets` are *the want's* is exactly the kind of
-/// thing that has to be said once: `chunks/index.json` is derived data, and a
-/// row whose `sets` disagreed with its `referenced_by` is the failure mode the
-/// `ChunkIndex::build` doc comment is about.
-fn indexed_from(props: BlobProps, want: &Want) -> (IndexedBlob, Vec<Set>) {
-    (
-        IndexedBlob {
-            props,
-            referenced_by: want.references.clone(),
-            sets: want.sets.clone(),
-        },
-        want.sets.clone(),
-    )
+/// the same struct from the same want, in three places. The rule that a row's
+/// `referenced_by` and `sets` are *the want's* is exactly the kind of thing that
+/// has to be said once: `chunks/index.json` is derived data, and a row whose
+/// `sets` disagreed with its `referenced_by` is the failure mode the
+/// [`ChunkIndex::build`] doc comment is about.
+///
+/// The want's roles are copied onto the blob exactly once. [`ChunkIndex::build`]
+/// derives the index's role lists from that field, so no second copy is carried
+/// beside the blob just to be consumed a few lines later.
+fn indexed_from(props: BlobProps, want: &Want) -> IndexedBlob {
+    IndexedBlob {
+        props,
+        referenced_by: want.references.clone(),
+        sets: want.sets.clone(),
+    }
 }
 
 /// One blob as `chunks/index.json` lists it: the measurement plus who wanted it.
@@ -91,20 +93,22 @@ impl ChunkIndex {
     ///
     /// Derived rather than tracked separately, because two lists that are
     /// *meant* to agree and are written by different code is how an index comes
-    /// to claim a blob is in `patch_fetch` while no reference says so.
-    pub fn build(entries: Vec<(IndexedBlob, Vec<Set>)>) -> ChunkIndex {
+    /// to claim a blob is in `patch_fetch` while no reference says so. The roles
+    /// are read from each blob's own [`IndexedBlob::sets`], so a blob's role list
+    /// and the index-wide list cannot come from two different copies.
+    pub fn build(entries: Vec<IndexedBlob>) -> ChunkIndex {
         // Keyed by `&str` and looked up by `&str`, so a blob's id is *borrowed*
         // while it is filed rather than cloned once per role it belongs to. The
         // three role lists are pre-seeded below, so the lookup never allocates a
         // key either; it only grows a `Vec`.
         //
-        // Two passes: the first borrows, the second consumes. That is strictly
-        // less work than the one pass it replaces, which cloned every blob in
-        // order to move it into `blobs` a few lines later.
+        // Two passes: the first borrows the ids from `entries`, the second turns
+        // those borrows into owned strings. The borrowed map is dropped before
+        // `entries` is moved into `blobs`, so no clone of a blob is needed.
         let mut sets: BTreeMap<&str, Vec<&str>> =
             Set::ALL.iter().map(|s| (s.id(), Vec::new())).collect();
-        for (blob, roles) in &entries {
-            for role in roles {
+        for blob in &entries {
+            for role in &blob.sets {
                 sets.entry(role.id())
                     .or_default()
                     .push(&blob.props.chunk_id);
@@ -117,7 +121,7 @@ impl ChunkIndex {
             .collect();
         ChunkIndex {
             schema_version: crate::SCHEMA_VERSION,
-            blobs: entries.into_iter().map(|(blob, _)| blob).collect(),
+            blobs: entries,
             sets,
         }
     }
@@ -203,9 +207,13 @@ impl ChunkIndex {
 }
 
 /// Where a tag's chunks are served from.
+///
+/// One declared [`Download`] per tag, kept whole so the `url_suffix` reaches
+/// the chunk URL just as it does the archive URL. Storing only the prefix here
+/// would drop a non-empty suffix and turn every chunk URL into a CDN 404.
 #[derive(Debug, Clone)]
 pub struct Sources {
-    bases: BTreeMap<String, String>,
+    bases: BTreeMap<String, Download>,
 }
 
 impl Sources {
@@ -218,27 +226,44 @@ impl Sources {
     ) -> Sources {
         let mut bases = BTreeMap::new();
         for m in manifests {
-            bases.insert(m.tag.clone(), m.chunk_url_prefix().to_string());
+            bases.insert(m.tag.clone(), m.chunk_download().clone());
         }
         Sources { bases }
     }
 
-    /// Build from explicit `tag -> base` pairs, for a test with no manifests.
+    /// Build from explicit `tag -> prefix` pairs, for a test with no manifests.
+    ///
+    /// Such a pair has no suffix to append; the stored download's `url_suffix`
+    /// is empty.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Sources {
         Sources {
-            bases: pairs.into_iter().collect(),
+            bases: pairs
+                .into_iter()
+                .map(|(tag, prefix)| {
+                    (
+                        tag,
+                        Download {
+                            url_prefix: prefix,
+                            ..Download::default()
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 
     /// The URL one chunk of one build is served from.
+    ///
+    /// Joined through the same helper as every other URL, so the stored
+    /// `url_suffix` is appended when it is non-empty.
     pub fn url(&self, tag: &str, chunk_id: &str) -> Result<String, ApiError> {
-        let base = self.bases.get(tag).ok_or_else(|| {
+        let download = self.bases.get(tag).ok_or_else(|| {
             ApiError::shape(
                 "chunk",
                 format!("no chunk source registered for tag {tag:?}"),
             )
         })?;
-        Ok(format!("{base}/{chunk_id}"))
+        Ok(join(download, chunk_id))
     }
 
     /// The tags that can serve chunks.
@@ -349,7 +374,7 @@ impl Store {
         fetcher: &Fetcher,
         wants: &Arc<[Want]>,
         jobs: usize,
-    ) -> (Vec<(IndexedBlob, Vec<Set>)>, Vec<String>) {
+    ) -> (Vec<IndexedBlob>, Vec<String>) {
         let outcomes = crate::tasks::join_ordered(wants, jobs, "chunk fetch", |i, wants| {
             let store = self.clone();
             let fetcher = fetcher.clone();
@@ -365,7 +390,7 @@ impl Store {
                     // A partial row succeeded at preserving bytes but failed to
                     // fetch the chunk. The run's failed-fetch count must see it
                     // once, through the structured reason it carries.
-                    if let Some(e) = &entry.0.props.fetch_error {
+                    if let Some(e) = &entry.props.fetch_error {
                         errors.push(e.detail.clone());
                     }
                     entry
@@ -400,7 +425,7 @@ impl Store {
     /// The role lists are still written, because knowing which chunks *would*
     /// have been needed is the part of the document that survives, and an index
     /// that simply vanished would take that with it.
-    pub fn plan_only(wants: &[Want]) -> Vec<(IndexedBlob, Vec<Set>)> {
+    pub fn plan_only(wants: &[Want]) -> Vec<IndexedBlob> {
         wants
             .iter()
             .map(|w| indexed_from(BlobProps::unmeasured(&w.chunk), w))
@@ -431,7 +456,7 @@ impl Store {
         slot: usize,
         fetcher: Fetcher,
         wants: Arc<[Want]>,
-    ) -> (usize, Result<(IndexedBlob, Vec<Set>), FetchError>) {
+    ) -> (usize, Result<IndexedBlob, FetchError>) {
         let want = &wants[slot];
         let self_ = &this;
         let mut last: Option<FetchError> = None;
@@ -560,7 +585,7 @@ impl Store {
     /// panicked. `decode_error` stays null because no bytes arrived to decode;
     /// `fetch_error` is the version-3 field that answers *why is this blob
     /// unusable* for a fetch that produced no body.
-    fn unfilled(&self, want: &Want, failure: &FetchError) -> (IndexedBlob, Vec<Set>) {
+    fn unfilled(&self, want: &Want, failure: &FetchError) -> IndexedBlob {
         let mut props = BlobProps::unmeasured(&want.chunk);
         props.fetch_error = Some(failure.clone());
         indexed_from(props, want)

@@ -15,7 +15,7 @@
 //! a reader who wants "is anything missing?" reads `checksums.json`; a reader who
 //! wants "what did this run produce?" reads `files[]`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::selfcheck;
@@ -215,16 +215,30 @@ pub struct FileEntry {
 /// between a capture that feels instant and one that does not. The writer is
 /// [`hash::DualDigest`] rather than a `Tee` defined here: one pass computes
 /// both digests, so a 90 MB artifact is not hashed twice.
+/// Read-buffer capacity for file digests.
+///
+/// Larger than the default `std::io::copy` buffer so a large blob needs fewer
+/// reads, while the bytes fed to [`hash::DualDigest`] — and so the digests —
+/// are unchanged. Applies to the reader only: `DualDigest` is the writer and
+/// needs no buffer of its own.
+const DIGEST_READ_CAPACITY: usize = 64 * 1024;
+
 pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Result<FileEntry> {
-    let mut file = std::fs::File::open(path)?;
+    let file = std::fs::File::open(path)?;
     let mut d = hash::DualDigest::new();
     match encoding {
-        crate::hash::Encoding::Identity => std::io::copy(&mut file, &mut d)?,
-        // Streamed rather than buffered, for the same reason as above: a
-        // full manifest decode is several megabytes.
+        crate::hash::Encoding::Identity => {
+            let mut reader = std::io::BufReader::with_capacity(DIGEST_READ_CAPACITY, file);
+            std::io::copy(&mut reader, &mut d)?;
+        }
+        // Streamed rather than materialised, for the same reason as above: a
+        // full manifest decode is several megabytes. The compressed bytes still
+        // arrive through a 64 KiB read buffer; only the digest target is the
+        // decoder's decompressed output.
         crate::hash::Encoding::Gzip => {
-            let mut gz = flate2::read::GzDecoder::new(file);
-            std::io::copy(&mut gz, &mut d)?
+            let reader = std::io::BufReader::with_capacity(DIGEST_READ_CAPACITY, file);
+            let mut gz = flate2::read::GzDecoder::new(reader);
+            std::io::copy(&mut gz, &mut d)?;
         }
     };
     let d = d.finish();
@@ -242,16 +256,51 @@ pub fn digest_file(path: &Path, encoding: crate::hash::Encoding) -> std::io::Res
 /// Sorted, because a list that depends on the filesystem's enumeration order
 /// makes two identical artifacts produce different documents — and this tool's
 /// whole claim is that the same world produces the same bundle.
+///
+/// **Every entry is resolved against the canonical root before it is used.**
+/// A directory is only descended into when its canonical path is inside the
+/// canonical root and has not been visited already, so a symlink or junction
+/// that points back up the tree cannot loop the walk and one that points
+/// outside cannot pull bytes from beyond the artifact into it. The same rule
+/// applies to files: a file whose canonical path is outside the root is not
+/// part of the artifact. Paths in the result stay relative to the `root`
+/// argument and keep its spelling, so a symlinked root (whose canonical form
+/// is its target) still yields an ordinary artifact-relative listing.
 pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    fn go(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    // Resolve the root once. A root that cannot be resolved fails here, just
+    // as it would fail at the first `read_dir` below. The canonical root is in
+    // the visited set from the start so a link back to the root is skipped.
+    let canonical_root = std::fs::canonicalize(root)?;
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    visited.insert(canonical_root.clone());
+
+    fn go(
+        dir: &Path,
+        root: &Path,
+        canonical_root: &Path,
+        visited: &mut HashSet<PathBuf>,
+        out: &mut Vec<PathBuf>,
+    ) -> std::io::Result<()> {
         let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)?
             .map(|e| e.map(|e| e.path()))
             .collect::<Result<_, _>>()?;
         entries.sort();
         for e in entries {
-            if e.is_dir() {
-                go(&e, root, out)?;
-            } else if e.is_file() {
+            // `is_dir`/`is_file` follow links, so resolve first: the canonical
+            // path is the only honest answer to "is this inside the artifact?".
+            // An entry that cannot be resolved is a broken link and, as before,
+            // contributes nothing to the walk.
+            let Some(canonical) = canonical_under_root(canonical_root, &e) else {
+                continue;
+            };
+            if canonical.is_dir() {
+                // A link to a directory already seen (the root included) is a
+                // cycle; descending again would revisit the same real tree.
+                if !visited.insert(canonical) {
+                    continue;
+                }
+                go(&e, root, canonical_root, visited, out)?;
+            } else if canonical.is_file() {
                 // Unreachable in practice — `read_dir` builds its entries by
                 // joining the rooted path it was given — and an `io::Error`
                 // anyway, matching every other function here. A `walk` that
@@ -270,8 +319,17 @@ pub fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
         Ok(())
     }
     let mut out = Vec::new();
-    go(root, root, &mut out)?;
+    go(root, root, &canonical_root, &mut visited, &mut out)?;
     Ok(out)
+}
+
+/// The canonical form of `path`, but only when it resolves inside
+/// `canonical_root`; `None` when it resolves outside the root or cannot be
+/// resolved at all (a broken link). Comparing canonical paths is what makes a
+/// symlinked root legitimate while a link that escapes it is rejected.
+fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    canonical.starts_with(canonical_root).then_some(canonical)
 }
 
 /// The `/`-separated form of an artifact-relative path.
@@ -286,6 +344,20 @@ pub fn rel(root: &Path, path: &Path) -> String {
         .map(|c| c.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// The passing detail for a scoped pass, stating which files were re-hashed and
+/// which digests were carried across. Kept as one function so the close-out can
+/// write the row before the published document exists and the scoped check can
+/// confirm the same words afterwards, without duplicating the claim in two
+/// literals.
+pub(crate) fn scoped_pass_detail(file_count: u64, rewritten: &[&str]) -> String {
+    let mut names: Vec<&str> = rewritten.to_vec();
+    names.sort_unstable();
+    format!(
+        "{file_count} files, every digest checked; re-hashed {} on disk, other digests carried from the first pass",
+        names.join(", ")
+    )
 }
 
 /// `verify/checksums.json`.
@@ -388,7 +460,7 @@ impl Checksums {
     /// between the two passes; a byte count is not. The total is one field read
     /// away in the document it describes.
     pub fn a16(&self, root: &Path) -> (bool, String) {
-        match self.findings(root).into_iter().next() {
+        match self.findings_up_to(root, 1).into_iter().next() {
             Some(f) => (false, f),
             None => (
                 true,
@@ -400,13 +472,107 @@ impl Checksums {
         }
     }
 
+    /// A16 for the document a close-out actually publishes: membership plus a
+    /// re-hash of the paths rewritten since the first pass.
+    ///
+    /// `close` writes `checksums.json` twice. The first document is checked by
+    /// [`Checksums::a16`], which re-hashes every file. Between the two writes
+    /// only `rewritten` is written again, and nothing else appears or vanishes —
+    /// the second pass is a `scan_reusing` of the same tree. So the exact check
+    /// of the published document has two halves:
+    ///
+    /// - membership: walk the tree and compare the path set with `entries`,
+    ///   excluding `checksums.json` itself, and check `file_count` and
+    ///   `total_bytes` against the entries — the same check, from the same
+    ///   helper, that [`Checksums::findings`] uses;
+    /// - digests: re-read and re-hash only `rewritten`, comparing with their
+    ///   entries. A rewritten path with no entry is a failure too.
+    ///
+    /// Every other entry was re-hashed by the first pass and not written since,
+    /// so it is covered transitively rather than hashed again here. That is the
+    /// cost saving this keeps. A caller that cannot assume a first pass —
+    /// `verify`, on a bundle someone else may have edited — uses
+    /// [`Checksums::a16`] instead.
+    pub fn a16_scoped(&self, root: &Path, rewritten: &[&str]) -> (bool, String) {
+        let (mut out, _) = self.membership_findings(root);
+        for path in rewritten {
+            match self.entries.iter().find(|e| e.path == *path) {
+                None => out.push(format!("{path} was rewritten but is not in checksums.json")),
+                Some(entry) => match digest_file(&root.join(path), entry.encoding) {
+                    Ok(got)
+                        if got.md5 == entry.md5
+                            && got.sha256 == entry.sha256
+                            && got.bytes == entry.bytes => {}
+                    Ok(got) => out.push(format!(
+                        "{path}: listed {} B md5 {}, on disk {} B md5 {}",
+                        entry.bytes, entry.md5, got.bytes, got.md5
+                    )),
+                    Err(io) => out.push(format!("{path}: {io}")),
+                },
+            }
+        }
+        match out.into_iter().next() {
+            Some(f) => (false, f),
+            None => (true, scoped_pass_detail(self.file_count, rewritten)),
+        }
+    }
+
     /// Every A16 failure, in a stable order.
     ///
-    /// Exhaustive on purpose. A capture reports the first because it stops at the
-    /// first anyway; a *verifier* that reported only the first would send an
-    /// operator round a 95-file bundle once per round trip, and the second
-    /// finding is usually in the same directory as the first.
+    /// Exhaustive on purpose. A capture reports only the first (through
+    /// [`Checksums::a16`], which stops as soon as it has one); a *verifier* that
+    /// reported only the first would send an operator round a 95-file bundle
+    /// once per round trip, and the second finding is usually in the same
+    /// directory as the first.
     pub fn findings(&self, root: &Path) -> Vec<String> {
+        self.findings_up_to(root, usize::MAX)
+    }
+
+    /// The first `limit` A16 failures, in the same stable order as
+    /// [`Checksums::findings`].
+    ///
+    /// Membership findings (extras, ghosts, count/total) are collected first and
+    /// the per-entry re-hash loop stops as soon as `limit` is reached, so a
+    /// caller wanting one finding — the capture path — does not re-hash the rest
+    /// of the tree. Passing `usize::MAX` keeps the exhaustive behavior, and the
+    /// order is unchanged: the first item here is the first item the full list
+    /// would produce.
+    fn findings_up_to(&self, root: &Path, limit: usize) -> Vec<String> {
+        let (mut out, on_disk) = self.membership_findings(root);
+        if out.len() >= limit {
+            out.truncate(limit);
+            return out;
+        }
+        // Only re-hash a file that still exists: a ghost above already named it,
+        // and digesting it would report the same problem a second way.
+        for e in &self.entries {
+            if out.len() >= limit {
+                break;
+            }
+            if !on_disk.contains(&e.path) {
+                continue;
+            }
+            match digest_file(&root.join(&e.path), e.encoding) {
+                Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
+                Ok(got) => out.push(format!(
+                    "{}: listed {} B md5 {}, on disk {} B md5 {}",
+                    e.path, e.bytes, e.md5, got.bytes, got.md5
+                )),
+                Err(io) => out.push(format!("{}: {io}", e.path)),
+            }
+        }
+        out
+    }
+
+    /// The membership and total half of [`Checksums::findings`], shared with
+    /// [`Checksums::a16_scoped`] so the two cannot disagree about what "listed"
+    /// means: the same exclusion, the same sorted walk, the same saturating
+    /// total fold. Returns the paths found on disk so `findings` can re-hash
+    /// them without a second walk.
+    fn membership_findings(
+        &self,
+        root: &Path,
+    ) -> (Vec<String>, std::collections::BTreeSet<String>) {
         let mut out = Vec::new();
         let on_disk: std::collections::BTreeSet<String> = match walk(root) {
             Ok(v) => v
@@ -416,7 +582,7 @@ impl Checksums {
                 .collect(),
             Err(e) => {
                 out.push(format!("walk {}: {e}", root.display()));
-                return out;
+                return (out, std::collections::BTreeSet::new());
             }
         };
         let listed: std::collections::BTreeSet<String> =
@@ -462,36 +628,41 @@ impl Checksums {
         } else if self.total_bytes != total {
             out.push("total_bytes disagrees with the entries".into());
         }
-        // Only re-hash a file that still exists: a ghost above already named it,
-        // and digesting it would report the same problem a second way.
-        for e in &self.entries {
-            if !on_disk.contains(&e.path) {
-                continue;
-            }
-            match digest_file(&root.join(&e.path), e.encoding) {
-                Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
-                Ok(got) => out.push(format!(
-                    "{}: listed {} B md5 {}, on disk {} B md5 {}",
-                    e.path, e.bytes, e.md5, got.bytes, got.md5
-                )),
-                Err(io) => out.push(format!("{}: {io}", e.path)),
-            }
-        }
-        out
+        (out, on_disk)
     }
 }
 
-/// The encoding a stored document is in, decided by its extension.
+/// The encoding a stored document is in, decided by what it is rather than by
+/// its filename.
+///
+/// Only [`crate::manifest::dump::write`] compresses documents, and it writes
+/// exactly one shape: `manifests/<tag>/<field>.manifest.json.gz`. So that is the
+/// only name [`is_gzipped_manifest_document`] recognizes. A captured game asset
+/// that happens to be named `*.gz` is `Identity` — the bytes on disk are the
+/// bytes the bundle promises, whatever the name suggests. A future writer that
+/// compresses another document family must extend that rule deliberately; a
+/// `.gz` suffix alone is never a reason to gunzip a file.
 ///
 /// `hash::should_gzip` decides what gets gzipped; this decides how to *read*
 /// what was written, and the two must agree or a reader would digest the wrong
 /// bytes.
 fn encoding_of(rel_path: &str) -> crate::hash::Encoding {
-    if rel_path.ends_with(".gz") {
+    if is_gzipped_manifest_document(rel_path) {
         crate::hash::Encoding::Gzip
     } else {
         crate::hash::Encoding::Identity
     }
+}
+
+/// Whether `rel_path` is the gzipped full-decode document the manifest writer
+/// produces: `manifests/<tag>/<field>.manifest.json.gz`.
+///
+/// Prefix plus suffix, without pinning the tag and field components: the writer
+/// escapes its tag and validates its field, but both remain single components,
+/// so `manifests/` … `.manifest.json.gz` is the whole shape. Kept private to
+/// `emit::index` so no other module can widen the gzip family by accident.
+fn is_gzipped_manifest_document(rel_path: &str) -> bool {
+    rel_path.starts_with("manifests/") && rel_path.ends_with(".manifest.json.gz")
 }
 
 /// The artifact schema's per-file entry, reused for `MANIFEST.json → files[]`.
@@ -503,6 +674,27 @@ mod tests {
 
     fn scratch(name: &str) -> girpr_tempdir::TempDir {
         girpr_tempdir::TempDir::new("gircap-m8", name)
+    }
+
+    /// Create a directory link. A host that denies it (Windows without the
+    /// privilege) makes the link tests skip with a clear message rather than
+    /// fail the suite; the containment helper is covered without links too.
+    #[cfg(unix)]
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+
+    #[cfg(unix)]
+    fn link_file(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    fn link_file(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_file(target, link).is_ok()
     }
 
     #[test]
@@ -519,16 +711,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// The digest is streamed in 64 KiB blocks, so a file that is an exact
-    /// multiple of the block size has to come out the same as one that is not.
+    /// The digest reads through a 64 KiB buffer, so a file that is an exact
+    /// multiple of the buffer size has to come out the same as one that is not.
     #[test]
     fn a_file_exactly_one_block_long_digests_correctly() {
         let root = scratch("block");
-        let body = vec![7_u8; 64 * 1024];
+        let body = vec![7_u8; DIGEST_READ_CAPACITY];
         std::fs::write(root.join("a.bin"), &body).unwrap();
         let e = digest_file(&root.join("a.bin"), crate::hash::Encoding::Identity).unwrap();
         assert_eq!(e.md5, hash::md5_hex(&body));
         assert_eq!(e.bytes, 65_536);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The 64 KiB read buffer must not change the bytes hashed: identity and
+    /// gzip digests agree with a direct hash of the intended bytes, both below
+    /// and above the buffer boundary, and gzip still digests the decompressed
+    /// body rather than the stored stream.
+    #[test]
+    fn digest_buffer_size_does_not_change_identity_or_gzip_digests() {
+        let root = scratch("digestbuf");
+        for (name, body) in [
+            ("small.bin", b"tiny".repeat(3)),
+            ("large.bin", vec![0x5A; DIGEST_READ_CAPACITY + 123]),
+        ] {
+            let path = root.join(name);
+            std::fs::write(&path, &body).unwrap();
+            let e = digest_file(&path, crate::hash::Encoding::Identity).unwrap();
+            assert_eq!(e.bytes, body.len() as u64, "{name}");
+            assert_eq!(e.md5, hash::md5_hex(&body), "{name}");
+            assert_eq!(e.sha256, hash::sha256_hex(&body), "{name}");
+            assert_eq!(e.encoding, crate::hash::Encoding::Identity, "{name}");
+        }
+        for (name, body) in [
+            ("small.gz", b"tiny".repeat(3)),
+            ("large.gz", vec![0x5A; DIGEST_READ_CAPACITY + 123]),
+        ] {
+            let path = root.join(name);
+            let stored = hash::gzip(&body).unwrap();
+            std::fs::write(&path, &stored).unwrap();
+            let e = digest_file(&path, crate::hash::Encoding::Gzip).unwrap();
+            assert_eq!(e.bytes, body.len() as u64, "{name}");
+            assert_eq!(e.md5, hash::md5_hex(&body), "{name}");
+            assert_eq!(e.sha256, hash::sha256_hex(&body), "{name}");
+            assert_eq!(e.encoding, crate::hash::Encoding::Gzip, "{name}");
+            assert_ne!(
+                e.md5,
+                hash::md5_hex(&stored),
+                "{name}: a gzip digest covers the body, not the stored bytes"
+            );
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -546,6 +778,94 @@ mod tests {
             "sorted, and a directory comes before its contents' siblings deterministically"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Containment is decided on canonical paths, so it can be checked without
+    /// any symlink privilege: a real child is inside, a separate tree is not,
+    /// and a path that does not resolve is not either.
+    #[test]
+    fn canonical_under_root_accepts_inside_and_rejects_outside() {
+        let root = scratch("contain-root");
+        let outside = scratch("contain-outside");
+        let inside = root.join("a");
+        std::fs::create_dir_all(&inside).unwrap();
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(
+            canonical_under_root(&canonical_root, &inside),
+            Some(std::fs::canonicalize(&inside).unwrap())
+        );
+        assert_eq!(canonical_under_root(&canonical_root, &outside), None);
+        assert_eq!(
+            canonical_under_root(&canonical_root, &root.join("gone")),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A link from a real directory back to the root closes a cycle. Without a
+    /// visited set the walk would descend `real/back` → root → `real` forever;
+    /// with one it returns each real file exactly once.
+    #[test]
+    fn a_directory_cycle_terminates_and_lists_each_real_file_once() {
+        let root = scratch("cycle");
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::write(root.join("real/here.txt"), b"h").unwrap();
+        std::fs::write(root.join("real/sub/data.txt"), b"d").unwrap();
+        if !link_dir(&root, &root.join("real/back")) {
+            eprintln!("skipping cycle test: directory symlinks unavailable on this host");
+            return;
+        }
+        let paths: Vec<String> = walk(&root).unwrap().iter().map(|p| rel(&root, p)).collect();
+        assert_eq!(paths, vec!["real/here.txt", "real/sub/data.txt"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A link under the root that points outside it contributes no bytes: neither
+    /// the linked directory's files nor a linked single file are part of the
+    /// artifact. Only the real file under the root is walked.
+    #[test]
+    fn links_outside_the_root_are_not_walked() {
+        let root = scratch("outside-link");
+        let outside = scratch("outside-target");
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::write(outside.join("sub/secret.txt"), b"s").unwrap();
+        std::fs::write(outside.join("loose.txt"), b"l").unwrap();
+        std::fs::write(root.join("keep.txt"), b"k").unwrap();
+        if !link_dir(&outside, &root.join("escape_dir")) {
+            eprintln!("skipping outside-link test: directory symlinks unavailable on this host");
+            return;
+        }
+        // A file link is gated by the same privilege; if it is unavailable the
+        // directory-link case above still exercises containment.
+        let _file_link = link_file(&outside.join("loose.txt"), &root.join("escape_file"));
+        let paths: Vec<String> = walk(&root).unwrap().iter().map(|p| rel(&root, p)).collect();
+        assert_eq!(
+            paths,
+            vec!["keep.txt"],
+            "no file reached through a link outside the root is included"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A symlinked root is legitimate: its canonical form is the target, and the
+    /// result stays relative to the link that was passed in.
+    #[test]
+    fn a_symlinked_root_is_walked_as_its_target() {
+        let real = scratch("linked-root-target");
+        std::fs::create_dir_all(real.join("sub")).unwrap();
+        std::fs::write(real.join("sub/file.txt"), b"f").unwrap();
+        let alias = scratch("linked-root-alias");
+        let link = alias.join("root_link");
+        if !link_dir(&real, &link) {
+            eprintln!("skipping symlinked-root test: directory symlinks unavailable on this host");
+            return;
+        }
+        let paths: Vec<String> = walk(&link).unwrap().iter().map(|p| rel(&link, p)).collect();
+        assert_eq!(paths, vec!["sub/file.txt"]);
+        let _ = std::fs::remove_dir_all(&alias);
+        let _ = std::fs::remove_dir_all(&real);
     }
 
     #[test]
@@ -585,6 +905,102 @@ mod tests {
         let (ok, detail) = c.a16(&root);
         assert!(ok, "{detail}");
         assert!(detail.contains("re-hashed"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The scoped pass proves membership and the rewritten paths, and says so.
+    /// Its detail is the same string the close-out writes into the A16 row
+    /// before the published document exists, so a green check confirms the row
+    /// rather than contradicting it.
+    #[test]
+    fn a16_scoped_passes_a_clean_document_and_states_its_scope() {
+        let root = scratch("scoped-ok");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        let rewritten = ["verify/selfcheck.json", "README.md"];
+        let (ok, detail) = c.a16_scoped(&root, &rewritten);
+        assert!(ok, "{detail}");
+        assert_eq!(detail, scoped_pass_detail(c.file_count, &rewritten));
+        assert!(detail.contains("README.md"), "{detail}");
+        assert!(detail.contains("carried from the first pass"), "{detail}");
+        assert!(
+            !detail.contains("every digest re-hashed"),
+            "a scoped pass must not claim a second full re-hash: {detail}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// One rewritten file drifting from its recorded entry is a scoped failure
+    /// that names the path. The check re-hashes that file rather than trusting
+    /// the digest the second `scan_reusing` wrote for it.
+    #[test]
+    fn a16_scoped_fails_naming_the_rewritten_file_that_changed() {
+        let root = scratch("scoped-rewrite");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        // The late change is to one of the two rewritten paths, so the scoped
+        // half must re-hash it and report the disagreement.
+        std::fs::write(root.join("README.md"), b"CHANGED").unwrap();
+        let (ok, detail) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(!ok);
+        assert!(detail.contains("README.md"), "{detail}");
+        assert!(detail.contains("on disk"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file that appeared after the document was written is caught by the
+    /// membership half, even though it is not in `rewritten` and every recorded
+    /// digest still matches.
+    #[test]
+    fn a16_scoped_fails_naming_a_file_that_appeared_after_the_scan() {
+        let root = scratch("scoped-member");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        std::fs::write(root.join("surprise.bin"), b"s").unwrap();
+        let (ok, detail) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(!ok);
+        assert!(
+            detail.contains("surprise.bin") && detail.contains("not in"),
+            "{detail}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The scope is exact, not merely conservative: a path outside `rewritten`
+    /// is carried rather than re-hashed. Its digest was proved by the first
+    /// full pass and nothing wrote it between the passes, which is the saving
+    /// this check exists to keep.
+    #[test]
+    fn a16_scoped_carries_digests_outside_the_rewritten_list() {
+        let root = scratch("scoped-carry");
+        std::fs::create_dir_all(root.join("verify")).unwrap();
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("verify/selfcheck.json"), b"self").unwrap();
+        std::fs::write(root.join("README.md"), b"read").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("verify/checksums.json"), b"{}").unwrap();
+
+        std::fs::write(root.join("a.bin"), b"CHANGED").unwrap();
+        let (ok, _) = c.a16_scoped(&root, &["verify/selfcheck.json", "README.md"]);
+        assert!(
+            ok,
+            "a.bin was not rewritten, so its digest comes from the first pass"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -676,6 +1092,49 @@ mod tests {
             "{detail}"
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A16's detail is exactly the first item of the exhaustive `findings`
+    /// list, even when several files have drifted. The early exit must not
+    /// reorder or skip findings: entries are re-hashed in path order and the
+    /// first mismatch still wins.
+    #[test]
+    fn a16_reports_the_first_of_several_digest_mismatches() {
+        let root = scratch("a16first");
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        std::fs::write(root.join("b.bin"), b"b").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"CHANGED-A").unwrap();
+        std::fs::write(root.join("b.bin"), b"CHANGED-B").unwrap();
+
+        let all = c.findings(&root);
+        assert_eq!(all.len(), 2, "{all:?}");
+        let (ok, detail) = c.a16(&root);
+        assert!(!ok);
+        assert_eq!(detail, all[0], "A16 reports the head of the full list");
+        assert!(detail.contains("a.bin"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Findings come in a stable order: membership problems before any
+    /// per-entry re-hash. An extra file is therefore reported ahead of a
+    /// drifted digest even when the drifted file sorts first, and A16 takes
+    /// that head rather than the re-hash finding.
+    #[test]
+    fn findings_order_membership_before_rehash() {
+        let root = scratch("a16order");
+        std::fs::write(root.join("a.bin"), b"a").unwrap();
+        let c = Checksums::scan(&root).unwrap();
+        std::fs::write(root.join("a.bin"), b"CHANGED").unwrap();
+        std::fs::write(root.join("zz-extra.bin"), b"z").unwrap();
+
+        let all = c.findings(&root);
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert!(all[0].contains("zz-extra.bin"), "membership first: {all:?}");
+        assert!(all[1].contains("a.bin"), "re-hash second: {all:?}");
+        let (_, detail) = c.a16(&root);
+        assert_eq!(detail, all[0]);
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -789,13 +1248,90 @@ mod tests {
     }
 
     #[test]
-    fn a_gzipped_file_is_recorded_as_gzip_so_a_reader_knows_which_digest() {
-        assert_eq!(encoding_of("a.bin"), crate::hash::Encoding::Identity);
-        assert_eq!(encoding_of("a.json.gz"), crate::hash::Encoding::Gzip);
-        assert_eq!(encoding_of("a.json"), crate::hash::Encoding::Identity);
-        let e = &c_of("x.json.gz");
+    fn only_manifest_documents_are_recorded_as_gzip() {
+        // The writer's exact output shape is gzip; every other name — including
+        // a captured asset that merely ends in `.gz` — is plain bytes on disk.
+        assert_eq!(
+            encoding_of("manifests/7.1.0/game.manifest.json.gz"),
+            crate::hash::Encoding::Gzip
+        );
+        assert_eq!(
+            encoding_of("game/assets/pack.gz"),
+            crate::hash::Encoding::Identity
+        );
+        assert_eq!(
+            encoding_of("manifests/7.1.0/game.manifest.json"),
+            crate::hash::Encoding::Identity
+        );
+        // A `.json.gz` name outside the manifest family is still not a document
+        // this tool compressed.
+        assert_eq!(
+            encoding_of("assets/report.json.gz"),
+            crate::hash::Encoding::Identity
+        );
+
+        let e = &c_of("manifests/7.1.0/game.manifest.json.gz");
         assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
         assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "gzip");
+    }
+
+    /// Fixture shape: a scratch root holding one plain-text file named `*.gz`.
+    /// It is a captured asset, not a document this tool compressed, so the scan
+    /// digests the bytes on disk and close-out's A16 sees a healthy tree.
+    #[test]
+    fn a_plain_file_named_gz_is_digested_as_identity_bytes() {
+        let root = scratch("notgzip");
+        let body: &[u8] = b"plain bytes, not a gzip stream";
+        std::fs::write(root.join("notgzip.gz"), body).unwrap();
+
+        let c = Checksums::scan(&root).unwrap();
+        assert_eq!(c.file_count, 1);
+        assert_eq!(c.total_bytes, body.len() as u64);
+        let e = &c.entries[0];
+        assert_eq!(e.path, "notgzip.gz");
+        assert_eq!(e.encoding, crate::hash::Encoding::Identity);
+        assert_eq!(e.bytes, body.len() as u64);
+        assert_eq!(e.md5, hash::md5_hex(body));
+        assert_eq!(e.sha256, hash::sha256_hex(body));
+        assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "identity");
+
+        // Close-out re-hashes with the stored encoding, so the digest that was
+        // written is exactly the digest A16 checks. A green A16 is the whole
+        // point: the capture no longer aborts on a `.gz` name.
+        assert!(c.findings(&root).is_empty(), "{:?}", c.findings(&root));
+        let (ok, detail) = c.a16(&root);
+        assert!(ok, "{detail}");
+        assert!(detail.contains("re-hashed"), "{detail}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fixture shape: a real gzip stream at a captured-looking `assets/pack.gz`
+    /// path. `digest_file` still honours an explicit `Gzip` (the manifest writer's
+    /// case), but the scan classifies this captured asset as `Identity` and
+    /// digests the bytes on disk, not the decompressed body.
+    #[test]
+    fn a_gzip_asset_is_digested_as_on_disk_bytes_unless_gzip_is_explicit() {
+        let root = scratch("realgzip");
+        let body: &[u8] = b"the decompressed document";
+        let stored = hash::gzip(body).unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/pack.gz"), &stored).unwrap();
+
+        // The explicit-encoding path is unchanged: told `Gzip`, `digest_file`
+        // streams through the decoder and digests the body.
+        let e = digest_file(&root.join("assets/pack.gz"), crate::hash::Encoding::Gzip).unwrap();
+        assert_eq!(e.bytes, body.len() as u64);
+        assert_eq!(e.md5, hash::md5_hex(body));
+        assert_eq!(e.sha256, hash::sha256_hex(body));
+        assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
+
+        // The scan decides for itself, and a captured `.gz` asset is plain bytes.
+        let c = Checksums::scan(&root).unwrap();
+        assert_eq!(c.entries[0].path, "assets/pack.gz");
+        assert_eq!(c.entries[0].encoding, crate::hash::Encoding::Identity);
+        assert_eq!(c.entries[0].bytes, stored.len() as u64);
+        assert_eq!(c.entries[0].md5, hash::md5_hex(&stored));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A synthetic entry, for the assertions that need a file that was never written.

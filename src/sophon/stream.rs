@@ -1,9 +1,11 @@
 use anyhow::Result;
-use futures::StreamExt;
+use futures_util::{StreamExt, stream::Stream};
+use md5::Digest;
 use prost::Message;
 use std::io::Write;
 
 use crate::hyp::ChunkManifestMeta;
+use crate::retry::{Retry, RetryState, retry_state};
 use crate::sleep::Sleep;
 use crate::sophon::proto::{SophonChunkFile, SophonChunkManifest};
 use crate::util::Md5;
@@ -31,27 +33,31 @@ pub async fn fetch_manifest(
     // it is not trusted enough to allocate on. A blob bigger than the clamp
     // grows the buffer; a bogus number cannot ask for an impossible allocation.
     let hint = manifest_size_hint(meta.manifest.uncompressed_size);
-    let mut decoded: Vec<u8> = Vec::with_capacity(hint);
-    let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=ATTEMPTS {
-        match try_fetch_manifest(client, &url, meta, attempt, &mut decoded).await {
-            Attempt::Ok(v) => return Ok(v),
-            Attempt::Fatal(e) => {
-                tracing::debug!(
-                    manifest = %meta.manifest.id,
-                    attempt,
-                    "manifest fetch failed, not retryable: {e:#}"
-                );
-                return Err(e);
+    let decoded: Vec<u8> = Vec::with_capacity(hint);
+    let url = url.as_str();
+    retry_state(
+        ATTEMPTS,
+        sleep,
+        decoded,
+        |mut decoded, attempt| async move {
+            match try_fetch_manifest(client, url, meta, attempt, &mut decoded).await {
+                Retry::Done(v) => RetryState::Done(v),
+                Retry::Fatal(e) => {
+                    tracing::debug!(
+                        manifest = %meta.manifest.id,
+                        attempt,
+                        "manifest fetch failed, not retryable: {e:#}"
+                    );
+                    RetryState::Fatal(e)
+                }
+                Retry::Retry(e) => {
+                    tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
+                    RetryState::Retry(decoded, e)
+                }
             }
-            Attempt::Retry(e) => {
-                tracing::debug!(manifest = %meta.manifest.id, attempt, "manifest fetch failed: {e:#}");
-                last_err = e;
-            }
-        }
-        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
-    }
-    Err(last_err)
+        },
+    )
+    .await
 }
 
 /// The largest allocation the manifest's reported size is allowed to ask for.
@@ -79,14 +85,14 @@ async fn try_fetch_manifest(
     client: &reqwest::Client,
     url: &str,
     meta: &ChunkManifestMeta,
-    attempt: u64,
+    attempt: u32,
     decoded: &mut Vec<u8>,
-) -> Attempt<Vec<SophonChunkFile>> {
+) -> Retry<Vec<SophonChunkFile>> {
     tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, url = %url, "GET manifest");
     let resp = match client.get(url).send().await {
         Ok(r) => r,
         Err(e) => {
-            return Attempt::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
+            return Retry::Retry(anyhow::anyhow!("GET manifest {}: {}", meta.manifest.id, e));
         }
     };
     let status = resp.status();
@@ -96,7 +102,7 @@ async fn try_fetch_manifest(
     // A retry starts the manifest over: the decoded bytes of the failed
     // attempt are in the buffer, and they are about to be replaced.
     if let Err(e) = decoded.restart() {
-        return Attempt::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
+        return Retry::Fatal(anyhow::anyhow!("reset the manifest buffer: {e}"));
     }
     // The whole blob is zstd-compressed; the checksum is the MD5 of the
     // DECOMPRESSED bytes. There is no ceiling on the decode and none on the
@@ -106,7 +112,7 @@ async fn try_fetch_manifest(
         Ok(v) => v,
         Err(f) => {
             return match f.error {
-                StreamError::Transport(e) | StreamError::Content(e) => Attempt::Retry(e),
+                StreamError::Transport(e) | StreamError::Content(e) => Retry::Retry(e),
             };
         }
     };
@@ -115,7 +121,7 @@ async fn try_fetch_manifest(
     // A checksum mismatch is worth another try: the origin may have served a
     // torn body, and the next attempt is a fresh one.
     if !digest.md5.matches_hex(&meta.manifest.checksum) {
-        return Attempt::Retry(anyhow::anyhow!(
+        return Retry::Retry(anyhow::anyhow!(
             "manifest checksum mismatch id={} expect={} got={}",
             meta.manifest.id,
             meta.manifest.checksum,
@@ -129,9 +135,9 @@ async fn try_fetch_manifest(
                 m.chuncks.iter().map(|f| f.chunks.len()).sum(),
             );
             tracing::debug!(manifest = %meta.manifest.id, field = %meta.matching_field, files, chunks, attempt, "manifest parsed");
-            Attempt::Ok(m.chuncks)
+            Retry::Done(m.chuncks)
         }
-        Err(e) => Attempt::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
+        Err(e) => Retry::Retry(anyhow::Error::new(e).context("protobuf decode manifest")),
     }
 }
 
@@ -176,7 +182,7 @@ pub struct ChunkDigest {
 /// crosses the line rather than after the whole thing has been written.
 pub struct HashingWriter<W: Write> {
     inner: W,
-    hasher: md5::Context,
+    hasher: md5::Md5,
     written: u64,
     limit: Option<u64>,
 }
@@ -190,7 +196,7 @@ impl<W: Write> HashingWriter<W> {
     pub fn new(inner: W, limit: Option<u64>) -> Self {
         Self {
             inner,
-            hasher: md5::Context::new(),
+            hasher: md5::Md5::new(),
             written: 0,
             limit,
         }
@@ -203,7 +209,7 @@ impl<W: Write> HashingWriter<W> {
 
     /// The MD5 of the bytes that passed through.
     pub fn md5(&self) -> Md5 {
-        Md5::from(self.hasher.clone().compute())
+        Md5::from(self.hasher.clone().finalize())
     }
 }
 
@@ -222,7 +228,7 @@ impl<W: Write> Write for HashingWriter<W> {
         let n = self.inner.write(buf)?;
         // Only the bytes that were really taken are hashed: a short write is
         // the inner writer's business, and the caller retries with the rest.
-        self.hasher.consume(&buf[..n]);
+        self.hasher.update(&buf[..n]);
         self.written += n as u64;
         Ok(n)
     }
@@ -261,12 +267,12 @@ impl<T: ChunkSink + ?Sized> ChunkSink for &mut T {
 /// not what it should be — but the two callers read them differently, and the
 /// difference is deliberate:
 ///
-/// - **a chunk** treats it as [`Attempt::Fatal`]: the origin answered
+/// - **a chunk** treats it as [`Retry::Fatal`]: the origin answered
 ///   definitively with a body that does not decode, and the file-level retry
 ///   is what asks for it again. That is what the buffered path did — a bad
 ///   frame failed the *file* attempt, not the chunk fetch — so the request
 ///   counts do not change;
-/// - **a manifest** treats it as [`Attempt::Retry`]: a torn body is worth
+/// - **a manifest** treats it as [`Retry::Retry`]: a torn body is worth
 ///   another try of the whole fetch, which is what the manifest path has
 ///   always done with a decode failure.
 #[derive(Debug)]
@@ -277,8 +283,34 @@ enum StreamError {
     Content(anyhow::Error),
 }
 
+/// The inputs of one streamed chunk fetch.
+///
+/// The URL prefix and chunk id name the object; `expected` and
+/// `max_compressed` are the manifest's two sizes and the reservation made for
+/// the body. `consumed` and `sink` are the fetch's mutable state, carried
+/// across attempts so a retry starts the sink over without forgetting the
+/// bytes the failed attempt spent.
+pub struct ChunkFetch<'a, S: ChunkSink> {
+    /// The HTTP client.
+    pub client: &'a reqwest::Client,
+    /// The wait between attempts.
+    pub sleep: &'a dyn Sleep,
+    /// The chunk's URL prefix.
+    pub url_prefix: &'a str,
+    /// The chunk id appended to the prefix.
+    pub id: &'a str,
+    /// The expected decompressed size, enforced as the bytes go.
+    pub expected: u64,
+    /// The compressed bytes reserved for the body.
+    pub max_compressed: u64,
+    /// Compressed bytes spent by this call, across attempts.
+    pub consumed: &'a mut u64,
+    /// Where the decoded bytes land.
+    pub sink: &'a mut S,
+}
+
 /// Stream one chunk's compressed body, decode it, and write the decoded bytes
-/// into `sink` — digested on the way past.
+/// into the fetch's sink — digested on the way past.
 ///
 /// The chunk is never resident as a whole: the compressed body is decoded as
 /// it arrives and the decoded bytes are written into the sink as they are
@@ -302,45 +334,49 @@ enum StreamError {
 /// The digest is known when the stream ends, which is one byte too late to
 /// gate the write — the one thing the streaming path gives up. The file-level
 /// gate (the whole-file MD5) is what decides whether the file is good.
-#[allow(clippy::too_many_arguments)] // one parameter per input the fetch path needs
-pub async fn stream_chunk_to(
-    client: &reqwest::Client,
-    sleep: &dyn Sleep,
-    url_prefix: &str,
-    id: &str,
-    expected: u64,
-    max_compressed: u64,
-    consumed: &mut u64,
-    sink: &mut impl ChunkSink,
-) -> Result<ChunkDigest> {
-    let url = join_url(url_prefix, id);
-    let mut last_err = anyhow::anyhow!("no attempts");
-    for attempt in 1..=ATTEMPTS {
-        match try_stream_chunk(
-            client,
-            &url,
-            id,
-            attempt,
-            expected,
-            max_compressed,
-            consumed,
-            sink,
-        )
-        .await
-        {
-            Attempt::Ok(d) => return Ok(d),
-            Attempt::Fatal(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
-                return Err(e);
+pub async fn stream_chunk_to<S: ChunkSink>(fetch: ChunkFetch<'_, S>) -> Result<ChunkDigest> {
+    let ChunkFetch {
+        client,
+        sleep,
+        url_prefix,
+        id,
+        expected,
+        max_compressed,
+        consumed,
+        sink,
+    } = fetch;
+    retry_state(
+        ATTEMPTS,
+        sleep,
+        (consumed, sink),
+        |(consumed, sink), attempt| async move {
+            let result = {
+                let mut fetch = ChunkFetch {
+                    client,
+                    sleep,
+                    url_prefix,
+                    id,
+                    expected,
+                    max_compressed,
+                    consumed: &mut *consumed,
+                    sink: &mut *sink,
+                };
+                try_stream_chunk(&mut fetch, attempt).await
+            };
+            match result {
+                Retry::Done(d) => RetryState::Done(d),
+                Retry::Fatal(e) => {
+                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed, not retryable: {e:#}");
+                    RetryState::Fatal(e)
+                }
+                Retry::Retry(e) => {
+                    tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
+                    RetryState::Retry((consumed, sink), e)
+                }
             }
-            Attempt::Retry(e) => {
-                tracing::debug!(chunk = %id, attempt, "chunk fetch failed: {e:#}");
-                last_err = e;
-            }
-        }
-        sleep.sleep(std::time::Duration::from_secs(attempt)).await;
-    }
-    Err(last_err)
+        },
+    )
+    .await
 }
 
 /// One attempt at a streamed chunk fetch.
@@ -353,20 +389,16 @@ pub async fn stream_chunk_to(
 /// Whatever the attempt delivered is added to `consumed` before it returns,
 /// on every path: this is the only place that sees the compressed byte count
 /// of an attempt that did not finish.
-#[allow(clippy::too_many_arguments)]
-async fn try_stream_chunk(
-    client: &reqwest::Client,
-    url: &str,
-    id: &str,
-    attempt: u64,
-    expected: u64,
-    max_compressed: u64,
-    consumed: &mut u64,
-    sink: &mut impl ChunkSink,
-) -> Attempt<ChunkDigest> {
-    let resp = match client.get(url).send().await {
+async fn try_stream_chunk<S: ChunkSink>(
+    fetch: &mut ChunkFetch<'_, S>,
+    attempt: u32,
+) -> Retry<ChunkDigest> {
+    let id = fetch.id;
+    let url = join_url(fetch.url_prefix, fetch.id);
+    let url = url.as_str();
+    let resp = match fetch.client.get(url).send().await {
         Ok(r) => r,
-        Err(e) => return Attempt::Retry(anyhow::anyhow!("GET chunk: {}", e)),
+        Err(e) => return Retry::Retry(anyhow::anyhow!("GET chunk: {}", e)),
     };
     let status = resp.status();
     if let Some(e) = status_failure(status, url) {
@@ -383,30 +415,32 @@ async fn try_stream_chunk(
     tracing::trace!(chunk = %id, attempt, "chunk downloaded");
     // A retry starts the chunk over: the decoded bytes are written as they are
     // produced, so a failed attempt may have left half a chunk behind.
-    if let Err(e) = sink.restart() {
-        return Attempt::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
+    if let Err(e) = fetch.sink.restart() {
+        return Retry::Fatal(anyhow::anyhow!("reset the chunk sink: {e}"));
     }
     let digest = match stream_body(
         resp.bytes_stream(),
-        Some(expected),
-        Some(max_compressed),
-        sink,
+        Some(fetch.expected),
+        Some(fetch.max_compressed),
+        &mut *fetch.sink,
     )
     .await
     {
         Ok(v) => {
-            *consumed = consumed.saturating_add(v.compressed_bytes);
+            let total = fetch.consumed.saturating_add(v.compressed_bytes);
+            *fetch.consumed = total;
             v
         }
         Err(f) => {
-            *consumed = consumed.saturating_add(f.compressed_bytes);
+            let total = fetch.consumed.saturating_add(f.compressed_bytes);
+            *fetch.consumed = total;
             return match f.error {
-                StreamError::Transport(e) => Attempt::Retry(e),
-                StreamError::Content(e) => Attempt::Fatal(e),
+                StreamError::Transport(e) => Retry::Retry(e),
+                StreamError::Content(e) => Retry::Fatal(e),
             };
         }
     };
-    Attempt::Ok(digest)
+    Retry::Done(digest)
 }
 
 /// Why a streamed body failed, and how much of it had already arrived.
@@ -443,7 +477,7 @@ async fn stream_body<S, B, E>(
     sink: &mut impl ChunkSink,
 ) -> Result<ChunkDigest, StreamFailure>
 where
-    S: futures::Stream<Item = Result<B, E>> + Unpin,
+    S: Stream<Item = Result<B, E>> + Unpin,
     B: AsRef<[u8]>,
     E: std::fmt::Display,
 {
@@ -508,28 +542,17 @@ where
 }
 
 /// Attempts per blob fetch, and the backoff is `attempt` seconds: 1+2+3+4 s.
-const ATTEMPTS: u64 = 5;
+const ATTEMPTS: u32 = 5;
 
-/// One attempt at a blob fetch, classified by whether an identical retry could
-/// come back different.
+/// Split an error by whether the status says it can change.
 ///
 /// The three-way split is the retry policy. Collapsing `Fatal` into `Retry` is
 /// what makes a run spend ~15 s of sleep to learn something it already knew.
-enum Attempt<T> {
-    Ok(T),
-    /// Transient, or a failure we cannot classify. Worth another try.
-    Retry(anyhow::Error),
-    /// The origin has answered definitively. A second identical request will
-    /// answer identically.
-    Fatal(anyhow::Error),
-}
-
-/// Split an error by whether the status says it can change.
-fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Attempt<T> {
+fn verdict<T>(e: anyhow::Error, retryable_status: bool) -> Retry<T> {
     if retryable_status {
-        Attempt::Retry(e)
+        Retry::Retry(e)
     } else {
-        Attempt::Fatal(e)
+        Retry::Fatal(e)
     }
 }
 
@@ -573,6 +596,9 @@ pub fn join_url(prefix: &str, id: &str) -> String {
 mod tests {
     use super::super::proto::{SophonChunk, SophonChunkFile, SophonChunkManifest};
     use super::*;
+    use crate::sleep::NoSleep;
+    use crate::test_http::serve_status;
+    use std::sync::atomic::Ordering;
 
     /// A frame the differential runs over.
     fn frame(payload: &[u8]) -> Vec<u8> {
@@ -591,7 +617,7 @@ mod tests {
         max_compressed: Option<u64>,
     ) -> Result<(Vec<u8>, ChunkDigest), StreamError> {
         let mut sink: Vec<u8> = Vec::new();
-        let body = futures::stream::iter(pieces(compressed, 4096));
+        let body = futures_util::stream::iter(pieces(compressed, 4096));
         let digest = stream_body(body, expected, max_compressed, &mut sink)
             .await
             .map_err(|f| f.error)?;
@@ -622,7 +648,7 @@ mod tests {
         assert_eq!(digest.bytes, buffered.len() as u64);
         assert_eq!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&buffered)),
+            crate::util::md5::md5_digest(&buffered).to_hex(),
             "the same digest as the buffered path"
         );
         assert_eq!(
@@ -657,7 +683,7 @@ mod tests {
         );
         assert_ne!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&payload)),
+            crate::util::md5::md5_digest(&payload).to_hex(),
             "a corrupt payload must not carry the wanted digest"
         );
     }
@@ -690,7 +716,7 @@ mod tests {
         body.push(Err(std::io::Error::other("the connection dropped")));
         let mut sink: Vec<u8> = Vec::new();
         let f = stream_body(
-            futures::stream::iter(body),
+            futures_util::stream::iter(body),
             Some(payload.len() as u64),
             Some(compressed.len() as u64),
             &mut sink,
@@ -713,7 +739,7 @@ mod tests {
         let payload: Vec<u8> = (0..8 * 1024).map(|i| (i % 251) as u8).collect();
         let compressed = frame(&payload);
         let mut sink: Vec<u8> = Vec::new();
-        let body = futures::stream::iter(pieces(&compressed, compressed.len()));
+        let body = futures_util::stream::iter(pieces(&compressed, compressed.len()));
         let f = stream_body(
             body,
             Some(payload.len() as u64),
@@ -784,7 +810,7 @@ mod tests {
         let compressed = frame(&raw);
         // The buffer the API's `uncompressed_size` sizes.
         let mut sink: Vec<u8> = Vec::with_capacity(raw.len());
-        let body = futures::stream::iter(pieces(&compressed, 4096));
+        let body = futures_util::stream::iter(pieces(&compressed, 4096));
         let digest = stream_body(body, None, None, &mut sink)
             .await
             .expect("the frame decodes");
@@ -796,7 +822,7 @@ mod tests {
         );
         assert_eq!(
             digest.md5.to_hex(),
-            format!("{:x}", md5::compute(&raw)),
+            crate::util::md5::md5_digest(&raw).to_hex(),
             "the checksum is of the decompressed bytes"
         );
         assert_eq!(digest.bytes, raw.len() as u64);
@@ -861,5 +887,83 @@ mod tests {
     fn a_success_is_not_confused_with_a_retryable_failure() {
         assert!(!retryable(200));
         assert!(!retryable(204));
+    }
+
+    /// The status classifier answers the verdict the loop acts on: a transient
+    /// status is worth another attempt, a decided one is not.
+    #[test]
+    fn verdict_splits_retryable_statuses_from_decided_ones() {
+        for status in [408, 429, 500, 503] {
+            assert!(
+                matches!(
+                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                    Retry::Retry(_)
+                ),
+                "{status} must be retried"
+            );
+        }
+        for status in [400, 403, 404] {
+            assert!(
+                matches!(
+                    verdict::<()>(anyhow::anyhow!("{status}"), retryable(status)),
+                    Retry::Fatal(_)
+                ),
+                "{status} must stop the fetch"
+            );
+        }
+    }
+
+    fn manifest_meta(base: &str) -> ChunkManifestMeta {
+        ChunkManifestMeta {
+            category_id: String::new(),
+            category_name: String::new(),
+            matching_field: "game".into(),
+            manifest: crate::hyp::ManifestFile {
+                id: "manifest".into(),
+                ..Default::default()
+            },
+            chunk_download: crate::hyp::ManifestUrl::default(),
+            manifest_download: crate::hyp::ManifestUrl {
+                url_prefix: base.into(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_retryable_manifest_status_is_retried_to_the_cap() {
+        let (base, hits) = serve_status("500 Internal Server Error").await;
+        let meta = manifest_meta(&base);
+        let client = reqwest::Client::new();
+        let err = fetch_manifest(&client, &NoSleep, &meta)
+            .await
+            .expect_err("the origin never recovers");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            ATTEMPTS as usize,
+            "a 500 is retried on every allowed attempt"
+        );
+        let chain = format!("{err:#}");
+        assert!(chain.contains("after 5 attempts"), "{chain}");
+    }
+
+    #[tokio::test]
+    async fn a_terminal_manifest_status_is_not_retried() {
+        let (base, hits) = serve_status("404 Not Found").await;
+        let meta = manifest_meta(&base);
+        let client = reqwest::Client::new();
+        let err = fetch_manifest(&client, &NoSleep, &meta)
+            .await
+            .expect_err("the build has no such manifest");
+        assert_eq!(
+            hits.load(Ordering::Relaxed),
+            1,
+            "the origin answered definitively"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            !chain.contains("after "),
+            "a fatal answer must not be dressed up as exhaustion: {chain}"
+        );
     }
 }

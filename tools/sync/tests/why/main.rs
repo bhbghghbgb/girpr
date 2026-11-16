@@ -22,12 +22,12 @@
 //! ## The rows that earn their place
 //!
 //! - `digest-differs:md5+sha256` is the one that pins **which** algorithms a tag
-//!   names. `--hash-all-of md5 sha256` asks for both, so a reason built from the
-//!   *request* would look identical to one built from the *disagreement* — and the
-//!   difference is the whole usefulness of the field.
+//!   names. `--hash-all-of md5 --hash-all-of sha256` asks for both, so a reason
+//!   built from the *request* would look identical to one built from the
+//!   *disagreement* — and the difference is the whole usefulness of the field.
 //! - The tag's **order** is pinned separately, and is the disagreement's rather
-//!   than the flag order's: `--hash-all-of sha256 md5` produces the same
-//!   `digest-differs:md5+sha256`, so a parser can compare tags without first
+//!   than the flag order's: `--hash-all-of sha256 --hash-all-of md5` produces the
+//!   same `digest-differs:md5+sha256`, so a parser can compare tags without first
 //!   normalising them.
 //! - The `any-of` row is the same claim against a different mechanism. There the run
 //!   asked for two algorithms and the planner picked one; naming the request would
@@ -65,8 +65,10 @@ use std::path::{Path, PathBuf};
 
 use common::{TempDir, age, serial_rw, sync_mtime, temp_root, wfile};
 use girsync::cache::TestCacheBackend;
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, StatField, Verdict, diff_maps, hashes_differ, pair_verdict};
+use girsync::effective::side_folder;
 use girsync::effective::{classify, ensure_distinct_sides, open_side, resolve_side};
 use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{
@@ -164,20 +166,26 @@ fn resolved(
         open_side(&s_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: src side: {e:#}"));
     let mut d =
         open_side(&d_side, &common, mode).unwrap_or_else(|e| panic!("{temp_tag}: dst side: {e:#}"));
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&s_side);
+    let d_label = side_label(&d_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
             algos: &common.algos,
             no_trust: false,
             cap: s.cap,
-            label: &format!("src {}", s_side.cache_path().display()),
+            label: &s_label,
+            repopulate: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
             algos: &common.algos,
             no_trust: false,
             cap: d.cap,
-            label: &format!("dst {}", d_side.cache_path().display()),
+            label: &d_label,
+            repopulate: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

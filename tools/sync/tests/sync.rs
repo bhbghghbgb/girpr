@@ -8,16 +8,51 @@ use girsync::rw::RwLimits;
 
 use common::{
     compare, compare_mem, compare_self_opts, entry_names, has_backup_sibling, is_case_sensitive,
-    log, parse_ndjson, recs_of, rfile, sync, sync_dry, sync_mem, sync_mtime, temp_root, update,
-    update_mem, wfile,
+    log, parse_ndjson, recs_of, rfile, strip_ansi, sync, sync_dry, sync_mem, sync_mtime, temp_root,
+    update, update_mem, wfile,
 };
-use girsync::cache::{CACHE_PREFIX, TestCacheBackend};
-use girsync::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::cache::{CACHE_PREFIX, CacheOpen, TestCacheBackend, load_all_records, open_db};
+use girsync::{BackupPolicy, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 use serde_json::Value;
 use std::path::Path;
 
 fn recs(dir: &Path) -> std::collections::HashMap<String, girsync::cache::FileRec> {
     recs_of(dir)
+}
+
+/// The names of the entries in `dir` that start with `prefix`, sorted.
+///
+/// The tool's own namespace, so the answer is "what the tool left behind"
+/// rather than "what is in the directory".
+fn siblings(dir: &Path, prefix: &str) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(prefix))
+        .collect();
+    names.sort();
+    names
+}
+
+/// The md5 digest a folder's cache holds for `rel`.
+fn md5_in(dir: &Path, rel: &str) -> Vec<u8> {
+    recs(dir)[rel]
+        .hashes
+        .get_named("md5")
+        .expect("the row holds an md5")
+        .to_vec()
+}
+
+/// The md5 digest a cache *file* holds for `rel` — a copy of one, read
+/// without touching it.
+fn md5_in_file(path: &Path, rel: &str) -> Vec<u8> {
+    let db = open_db(path, true, CacheOpen::ReadOnly).expect("the copy is a readable cache");
+    load_all_records(&db).unwrap()[rel]
+        .hashes
+        .get_named("md5")
+        .expect("the row holds an md5")
+        .to_vec()
 }
 
 /// Run the real binary and return the records it reported on stdout.
@@ -276,6 +311,45 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     let real = run_binary(&src, &dst, &[], &[]);
     assert_eq!(common::summary_of(&real)["rmdir"], 0, "real run: {real:?}");
     assert!(dst.join("clash").is_file(), "and the copy happened");
+}
+
+/// A backslash is a literal filename character on POSIX, not a separator. A
+/// walk that rewrote it would plan `\lead.txt` at an absolute path — which
+/// replaces the destination root when joined onto it — and `a\b.txt` under a
+/// directory that does not exist on disk. The plan must keep both names as the
+/// disk spells them, and the copies must land under dst with those names.
+#[cfg(not(windows))]
+#[test]
+fn a_backslash_in_a_posix_filename_stays_literal_and_the_copy_stays_under_dst() {
+    let t = temp_root("posix_backslash");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a\\b.txt", b"inside");
+    wfile(&src, "\\lead.txt", b"leading");
+
+    // Read the plan before the real run: an absolute `/lead.txt` would copy
+    // outside dst, so the dry run is where that must be caught, before a byte is
+    // written anywhere.
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let copies = paths(&dry, "copy");
+    assert!(copies.contains(&"\\lead.txt"), "{dry:?}");
+    assert!(copies.contains(&"a\\b.txt"), "{dry:?}");
+    assert!(!copies.contains(&"/lead.txt"), "{dry:?}");
+    assert!(!copies.contains(&"a/b.txt"), "{dry:?}");
+    assert!(entry_names(&dst).is_empty(), "the dry run writes nothing");
+
+    assert_eq!(cmd_sync(sync_mem(src, dst.clone()), &log()).unwrap(), 0);
+
+    assert_eq!(rfile(&dst, "\\lead.txt"), b"leading");
+    assert_eq!(rfile(&dst, "a\\b.txt"), b"inside");
+    assert_eq!(
+        entry_names(&dst),
+        vec!["\\lead.txt".to_string(), "a\\b.txt".to_string()]
+    );
+    assert!(
+        !dst.join("a").exists(),
+        "the backslash did not invent a directory"
+    );
 }
 
 #[test]
@@ -590,7 +664,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Dry run: prints the rename, changes nothing.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.test_cache = TestCacheBackend::Memory;
-    dry.common.case_sensitive = false;
+    dry.common.set_case_sensitive(false);
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
@@ -602,7 +676,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
     // Real run: dst adopts src's casing.
     let mut real = sync(src.clone(), dst.clone());
     real.common.test_cache = TestCacheBackend::Memory;
-    real.common.case_sensitive = false;
+    real.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
     assert_eq!(
         entry_names(&dst),
@@ -612,7 +686,7 @@ fn run_sync_case_only_difference_renames_instead_of_copying() {
 
     // Converged: no further differences in either mode.
     let mut same = compare_mem(src.clone(), dst.clone());
-    same.common.case_sensitive = false;
+    same.common.set_case_sensitive(false);
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
     assert_eq!(cmd_compare(compare_mem(src, dst), &log()).unwrap(), 0);
 }
@@ -630,9 +704,15 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
     let t = temp_root("case_tmp_collision");
     let src = t.subdir("src");
     let dst = t.subdir("dst");
-    wfile(&src, "Data.txt", b"payload");
-    wfile(&dst, "data.txt", b"payload");
-    sync_mtime(&src.join("Data.txt"), &dst.join("data.txt"));
+    // **The two src names mix case on purpose.** The rename pass orders its
+    // steps by the *folded* src key, and the folded keys are `data.txt` and
+    // `dir` — so the file moves first. Sorted by the exact key the order would
+    // be the other way round, because `Dir` sorts before `data.txt` byte-wise.
+    // A fixture whose names all started with the same case would have one
+    // order under both rules, and the case could not tell them apart.
+    wfile(&src, "data.txt", b"payload");
+    wfile(&dst, "Data.txt", b"payload");
+    sync_mtime(&src.join("data.txt"), &dst.join("Data.txt"));
     // The directory form takes the other claim branch (create_dir, not
     // create_new), so the same candidates are exercised twice, in sequence.
     wfile(&src, "Dir/nested.txt", b"nested");
@@ -657,8 +737,21 @@ fn run_sync_case_rename_steps_over_occupied_temporaries() {
         .filter(|r| r["event"] == "rename")
         .map(|r| r["from"].as_str().expect("a rename names its source"))
         .collect();
-    assert_eq!(renames, ["data.txt", "dir"], "{recs:?}");
-    assert_eq!(rfile(&dst, "Data.txt"), b"payload", "the rename happened");
+    assert_eq!(renames, ["Data.txt", "dir"], "{recs:?}");
+    // The order the pass did **not** use, computed from the fixture's own
+    // names: the pairs sorted by their exact src spelling put the directory
+    // first, because `Dir` sorts before `data.txt` byte-wise. The order above
+    // is the folded one, so a pass that changed its rule would land on this
+    // one and fail the assertion — rather than the case passing whichever of
+    // the two the pass happened to use.
+    let mut exact = [("Data.txt", "data.txt"), ("dir", "Dir")];
+    exact.sort_by(|a, b| a.1.cmp(b.1));
+    let exact_order: Vec<&str> = exact.iter().map(|(dst, _)| *dst).collect();
+    assert_ne!(
+        renames, exact_order,
+        "the pass ordered by the exact src key, not the folded one"
+    );
+    assert_eq!(rfile(&dst, "data.txt"), b"payload", "the rename happened");
     assert_eq!(rfile(&dst, "Dir/nested.txt"), b"nested");
     // The filesystem is case-insensitive here, so `dst.join("dir").exists()`
     // cannot tell the two spellings apart; the directory entries can.
@@ -1035,7 +1128,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
     // committed to disk.
     let mut dry = sync(src.clone(), dst.clone());
     dry.common.test_cache = TestCacheBackend::Memory;
-    dry.common.case_sensitive = false;
+    dry.common.set_case_sensitive(false);
     dry.common.dry_run = true;
     assert_eq!(cmd_sync(dry, &log()).unwrap(), 0);
     assert_eq!(
@@ -1046,7 +1139,7 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
 
     let mut real = sync(src.clone(), dst.clone());
     real.common.test_cache = TestCacheBackend::Memory;
-    real.common.case_sensitive = false;
+    real.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(real, &log()).unwrap(), 0);
 
     assert_eq!(
@@ -1064,6 +1157,80 @@ fn a_case_only_difference_in_content_is_copied_not_merely_renamed() {
         0,
         "converged"
     );
+}
+
+/// **A copy carries src's timestamp to dst.**
+///
+/// The stamp is what makes a copied file *identical* to its source rather than
+/// merely equal in content: `compare` treats size+mtime+hash as identity, so
+/// a dst whose mtime drifted would read as changed on the next run and be
+/// copied again, forever.
+///
+/// Asserted on the file on disk, not through a `compare` afterwards. A compare
+/// answers "do the two sides agree", which several things can make true; the
+/// property here is narrower — dst's mtime is src's mtime — and it is the one
+/// a copy can lose on its own, since the bytes are written at a different
+/// moment than the source's timestamp.
+///
+/// The source's timestamp is pinned to a fixed past instant first, so "dst
+/// kept src's stamp" cannot be confused with "dst got stamped with the time
+/// of the copy", which would be a different (and wrong) value.
+///
+/// **Both flush shapes**, because the stamp is ordered against the flush: the
+/// flush puts the bytes on the disk, and the stamp has to land after it and
+/// before the handle closes. A shape that stamped before the flush would let
+/// the flush's own write-back move it again. `GIRSYNC_TEST_NO_FSYNC` picks
+/// which shape runs, so both are asked for explicitly rather than inheriting
+/// the workspace's choice.
+#[test]
+fn a_copied_file_carries_the_sources_timestamp() {
+    let t = temp_root("copy_mtime");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"payload");
+
+    // A fixed instant well in the past, so the copy's own write time cannot
+    // be mistaken for it.
+    let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(src.join("a.txt"))
+        .unwrap()
+        .set_modified(stamp)
+        .unwrap();
+
+    for no_fsync in ["0", "1"] {
+        let out = run_binary_raw(
+            &src,
+            &dst,
+            &[],
+            &[
+                ("GIRSYNC_TEST_CACHE", "memory"),
+                ("GIRSYNC_TEST_NO_FSYNC", no_fsync),
+            ],
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "the copy must succeed with GIRSYNC_TEST_NO_FSYNC={no_fsync}; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        assert_eq!(
+            rfile(&dst, "a.txt"),
+            b"payload",
+            "the bytes were copied (GIRSYNC_TEST_NO_FSYNC={no_fsync})"
+        );
+        assert_eq!(
+            std::fs::metadata(dst.join("a.txt"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            stamp,
+            "the copy carries src's timestamp, not the time of the copy \
+             (GIRSYNC_TEST_NO_FSYNC={no_fsync})"
+        );
+    }
 }
 
 /// **A copy into a directory this same run created must leave a cache row.**
@@ -1256,7 +1423,7 @@ fn rows_for_a_directory_created_and_removed_in_one_run_are_dropped() {
     }
 
     let mut o = sync(src.clone(), dst.clone());
-    o.common.case_sensitive = true;
+    o.common.set_case_sensitive(true);
     let _ = cmd_sync(o, &log());
 
     let rows = recs(&dst);
@@ -1604,6 +1771,124 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
     assert!(recs(&dst).contains_key("a.bin"));
 }
 
+/// The failure a run reports is the **first copy in the plan**, not the first
+/// copy to fail.
+///
+/// Two copies fail here, and they are arranged so that the two orders are not
+/// the same order: `mmm.bin` fails before it opens anything, while `aaa.bin`
+/// is copied in full and fails at the flush. The first failure to *finish* is
+/// therefore `mmm.bin`, and the first copy *in the plan* is `aaa.bin`. A
+/// phase that reported the first failure to finish would name `mmm.bin`; the
+/// plan's order says `aaa.bin`, and that is what has to be reported.
+///
+/// **The plan lists its copies in path order**, so the copy that comes first
+/// in the plan is the one whose path sorts first: `aaa.bin`. That order is
+/// the plan builder's rule — pinned by the builder's own case,
+/// `the_copy_list_is_in_path_order` — and this case leans on it, so it is
+/// said here rather than left for a reader to infer from the fixture.
+///
+/// **The order the two failures are recorded in is put in place by a barrier,
+/// not by a race.** `aaa.bin` waits at a gate until `mmm.bin` has failed, so
+/// the recording order is the opposite of the plan's whatever the workers
+/// happen to do and however fast the host is. A fixture that merely made
+/// `aaa.bin` slow would say the same thing only while the host stayed slow
+/// enough: the case would pass for the wrong reason on a fast machine, and
+/// fail for the wrong reason on a loaded one.
+///
+/// The third file is the control: it succeeds, and it was still copied, so
+/// the failure did not cut the phase short.
+#[test]
+fn the_reported_copy_failure_is_the_first_copy_in_the_plan() {
+    let t = temp_root("copy_fail_order");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "aaa.bin", b"first in the plan");
+    wfile(&src, "mmm.bin", b"fails first");
+    wfile(&src, "zzz.bin", b"the control");
+
+    let out = run_binary_raw(
+        &src,
+        &dst,
+        &["--rw-threads", "2"],
+        &[
+            ("GIRSYNC_TEST_FAIL_COPY", "mmm.bin"),
+            ("GIRSYNC_TEST_FAIL_FLUSH", "aaa.bin"),
+            // The workspace's nextest setup turns the flush off for speed; this
+            // case is about the flush.
+            ("GIRSYNC_TEST_NO_FSYNC", "0"),
+            // The barrier: `aaa.bin` does not begin until `mmm.bin` has failed,
+            // so the failure recorded first is the one that comes *later* in
+            // the plan.
+            ("GIRSYNC_TEST_GATE_COPY", "aaa.bin:mmm.bin"),
+        ],
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "two copies failed, so the run failed; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The colour is taken out first: the console writes the level and the
+    // target in their own colours, and the escape sequences land between the
+    // text a check is looking at.
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    // The reported copy is named as the path inside the mirror, and the name
+    // is the whole of it: a check for a bare `aaa.bin` would accept a longer
+    // path that starts with it, and the plan's first copy is the one the
+    // report has to name.
+    assert!(
+        stderr.contains(r#"error="copy aaa.bin: "#),
+        "the failure reported is the first copy in the plan: {stderr}"
+    );
+    assert!(
+        !stderr.contains("mmm.bin"),
+        "the copy that failed first is not the one reported: {stderr}"
+    );
+
+    // Every copy was attempted: the one that could succeed was copied and
+    // announced, and neither failure announced anything.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(
+        paths(&recs, "copy"),
+        vec!["zzz.bin"],
+        "the successful copy was announced and the failed ones were not: {recs:?}"
+    );
+    assert!(dst.join("zzz.bin").is_file(), "the successful copy landed");
+}
+
+/// **The failure a user reads is `copy <rel>: <cause>`, and it is exactly that.**
+///
+/// The reported failure reaches the user as one line: the copy that failed,
+/// and why it failed. That line is the tool's contract with whoever reads it,
+/// and a check for a substring does not pin it: a cause that grew a prefix, or
+/// a copy named by its full path rather than by its path inside the mirror,
+/// would pass a check for `copy mmm.bin` and change what the user reads.
+///
+/// The cause here is the injected one, which names no path of its own, so the
+/// whole line is fixed — the phase, the copy, the separator, and the cause,
+/// with nothing else in it.
+#[test]
+fn a_reported_copy_failure_is_the_copy_and_the_cause() {
+    let t = temp_root("copy_fail_text");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "mmm.bin", b"payload");
+
+    let out = run_binary_raw(&src, &dst, &[], &[("GIRSYNC_TEST_FAIL_COPY", "mmm.bin")]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a failed copy is a failed run; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let stderr = strip_ansi(&String::from_utf8_lossy(&out.stderr));
+    assert!(
+        stderr.contains(r#"error="copy mmm.bin: test: injected copy failure for mmm.bin""#),
+        "the failure names the copy and the cause, and nothing else: {stderr}"
+    );
+}
+
 /// A case-only rename of a directory must move the subtree once, not try to
 /// rename its children at the old path: on a case-sensitive host that path no
 /// longer exists after the parent move. Here the child's leaf casing is already
@@ -1619,7 +1904,10 @@ fn run_sync_renames_a_case_only_directory_before_its_children() {
 
     let mut o = sync(src.clone(), dst.clone());
     o.common.test_cache = TestCacheBackend::Memory;
-    o.common.case_sensitive = false;
+    // The setter, not the field: the filter caches the options it matches with,
+    // and the case mode is one of them, so assigning the field alone would leave
+    // the filter matching under the old mode.
+    o.common.set_case_sensitive(false);
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     assert_eq!(entry_names(&dst), vec!["Dir".to_string()]);
@@ -1628,7 +1916,7 @@ fn run_sync_renames_a_case_only_directory_before_its_children() {
     assert!(!dst.join("Dir/Dir").exists());
 
     let mut same = compare_mem(src, dst);
-    same.common.case_sensitive = false;
+    same.common.set_case_sensitive(false);
     assert_eq!(cmd_compare(same, &log()).unwrap(), 0);
 }
 
@@ -1741,4 +2029,459 @@ fn run_sync_excludes_a_case_renamed_cache_directory() {
     // Both caches still open; a dst cache readable before the run stays readable.
     assert_eq!(cmd_update(update(src.clone()), &log()).unwrap(), 0);
     assert_eq!(cmd_update(update(dst.clone()), &log()).unwrap(), 0);
+}
+
+/// A sync backs up src's cache and snapshots dst's pre-sync state.
+///
+/// dst gets the snapshot only. The two would be copies of the same bytes
+/// taken at the same moment, so the second name is a second copy of one file
+/// and nothing else.
+#[test]
+fn run_sync_backs_up_src_and_snapshots_dst() {
+    let t = temp_root("bakpolicy");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    // Both sides have a cache, so both have something to copy aside.
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        1,
+        "src keeps one copy of its cache"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-").len(),
+        1,
+        "dst keeps one snapshot of its pre-sync state"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-backup-").is_empty(),
+        "dst does not get a second copy of the same bytes"
+    );
+}
+
+/// The bound leaves a copy that is still being written alone.
+///
+/// A copy is written under a working name and published under its real name
+/// once it is complete, so a run that merely opens a folder cannot take away
+/// the copy another run is making there — however often the bound is applied.
+#[test]
+fn a_run_that_bounds_a_folder_leaves_a_copy_that_is_being_written_alone() {
+    let t = temp_root("retain_working");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // The copy another run is making: the working name carries neither of the
+    // two published prefixes.
+    wfile(
+        &src,
+        "girpr-cache-partial-20240101T000000.000000Z",
+        b"half a copy",
+    );
+    // Copies from earlier runs, which the bound *is* about.
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(
+        src.join("girpr-cache-partial-20240101T000000.000000Z")
+            .exists(),
+        "the copy that is being written is left alone"
+    );
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        1,
+        "the published copies are still bounded"
+    );
+}
+
+/// `--no-backup` leaves no copy and no snapshot behind.
+///
+/// It is a policy about what a run leaves behind, so it cannot change what
+/// the run answers: the mirror is the same either way.
+#[test]
+fn run_sync_with_no_backup_leaves_no_copy() {
+    let t = temp_root("nobak");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    for dir in [&src, &dst] {
+        assert!(
+            siblings(dir, "girpr-cache-backup-").is_empty(),
+            "{} keeps no copy",
+            dir.display()
+        );
+        assert!(
+            siblings(dir, "girpr-cache-old-").is_empty(),
+            "{} keeps no snapshot",
+            dir.display()
+        );
+    }
+    // The run still did its work.
+    assert_eq!(rfile(&dst, "a.txt"), b"one");
+}
+
+/// `--backup-retain N` holds each prefix to N siblings.
+///
+/// The prefixes are counted separately: src's copies and dst's snapshots are
+/// two lists, each with its own bound.
+///
+/// What the bound takes is the oldest copies it may remove — a copy a live
+/// run is still using is left alone and does not spend the removal budget,
+/// so the bound walks on to the next copy in age order and can take one that
+/// is among the newest N. None is spoken for here, so the oldest of each
+/// list goes and what is left is the two newest of the three. That is what
+/// this case shows, not what the bound promises: the copies a folder keeps
+/// are not necessarily its newest.
+#[test]
+fn run_sync_backup_retain_bounds_each_prefix() {
+    let t = temp_root("retain");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    for _ in 0..3 {
+        let mut o = sync(src.clone(), dst.clone());
+        o.common.backup = BackupPolicy {
+            disabled: false,
+            retain: NonZeroUsize::new(2),
+        };
+        assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+    }
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        2,
+        "two copies kept, the oldest one gone"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-").len(),
+        2,
+        "two snapshots kept, the oldest one gone"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-backup-").is_empty(),
+        "dst keeps no copy of its own"
+    );
+}
+
+/// A conversion that was killed before it could clean up after itself leaves a
+/// file in the folder — and it is the tool's own residue, not the user's
+/// content.
+///
+/// The conversion's temporary is named inside the tool's namespace, so the
+/// scan does not see it: it is neither copied out of a source folder nor
+/// deleted as an extra in a destination one.
+#[test]
+fn run_sync_leaves_a_leftover_conversion_temporary_alone() {
+    let t = temp_root("convtmp");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // A leftover in each folder, as a killed conversion in either would leave.
+    wfile(
+        &src,
+        "girpr-cache-convert-1234-20240101T000000.000000Z.redb",
+        b"half a database",
+    );
+    wfile(
+        &dst,
+        "girpr-cache-convert-5678-20240101T000000.000000Z.redb",
+        b"half a database",
+    );
+
+    assert_eq!(cmd_sync(sync(src.clone(), dst.clone()), &log()).unwrap(), 0);
+
+    assert!(
+        !dst.join("girpr-cache-convert-1234-20240101T000000.000000Z.redb")
+            .exists(),
+        "the tool's own residue is not mirrored as content"
+    );
+    assert!(
+        dst.join("girpr-cache-convert-5678-20240101T000000.000000Z.redb")
+            .exists(),
+        "and an extra in the destination is left alone: it is tool state"
+    );
+}
+
+/// `--backup-retain N` bounds the copies beside a folder, whether or not this
+/// run copied one.
+///
+/// The copies are what accumulates in a folder over time, so the bound is
+/// about the folder rather than about the run that happens to be looking at
+/// it. A folder whose cache is absent is bounded just the same — otherwise
+/// the copies would only ever be pruned by a run that happened to make
+/// another one.
+#[test]
+fn run_sync_backup_retain_bounds_a_folder_with_no_cache() {
+    let t = temp_root("retain_nocache");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // Copies from earlier runs, sitting beside caches these folders do not
+    // have. Both lists are bounded on their own.
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+    wfile(&dst, "girpr-cache-old-20240101T000000.000000Z", b"old");
+    wfile(&dst, "girpr-cache-old-20240102T000000.000000Z", b"newer");
+    assert!(!src.join(CACHE_PREFIX).exists(), "src has no cache");
+    assert!(!dst.join(CACHE_PREFIX).exists(), "dst has no cache");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-"),
+        vec!["girpr-cache-backup-20240102T000000.000000Z".to_string()],
+        "the oldest copy beside src's cache is gone"
+    );
+    assert_eq!(
+        siblings(&dst, "girpr-cache-old-"),
+        vec!["girpr-cache-old-20240102T000000.000000Z".to_string()],
+        "and the oldest snapshot beside dst's cache is gone"
+    );
+}
+
+/// `--no-backup` skips the copies; it does not skip the bound.
+///
+/// The two are separate questions: the copies are what this run leaves
+/// behind, and the bound is what the folder keeps. A run that copies nothing
+/// aside still has to leave the folder within the bound the user asked for.
+#[test]
+fn run_sync_with_no_backup_still_bounds_the_copies() {
+    let t = temp_root("retain_nobak");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    // A cache, so a run that copied aside would have copied this one.
+    let mut up = update(src.clone());
+    up.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    cmd_update(up, &log()).unwrap();
+    assert!(src.join(CACHE_PREFIX).exists(), "src has a cache");
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-"),
+        vec!["girpr-cache-backup-20240102T000000.000000Z".to_string()],
+        "the bound holds even though this run copied nothing aside"
+    );
+}
+
+/// A dry run writes nothing, and a bound is a removal.
+#[test]
+fn run_sync_dry_run_bounds_nothing() {
+    let t = temp_root("retain_dry");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&src, "girpr-cache-backup-20240101T000000.000000Z", b"old");
+    wfile(&src, "girpr-cache-backup-20240102T000000.000000Z", b"newer");
+
+    let mut o = sync_dry(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: false,
+        retain: NonZeroUsize::new(1),
+    };
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert_eq!(
+        siblings(&src, "girpr-cache-backup-").len(),
+        2,
+        "a dry run removes nothing"
+    );
+}
+
+/// A dry run writes nothing, and a copy is a write.
+#[test]
+fn run_sync_dry_run_leaves_no_copy() {
+    let t = temp_root("drycopy");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+
+    assert_eq!(
+        cmd_sync(sync_dry(src.clone(), dst.clone()), &log()).unwrap(),
+        0
+    );
+
+    for dir in [&src, &dst] {
+        assert!(
+            siblings(dir, "girpr-cache-backup-").is_empty(),
+            "{} keeps no copy",
+            dir.display()
+        );
+        assert!(
+            siblings(dir, "girpr-cache-old-").is_empty(),
+            "{} keeps no snapshot",
+            dir.display()
+        );
+    }
+}
+
+/// The copy is taken **before** the cache is removed, so the copy holds the
+/// cache as it was and the live cache is a new one.
+///
+/// The order is what makes the copy worth having: a copy taken after the
+/// removal would be a copy of the rebuilt cache, which is the thing the run
+/// could always make again.
+#[test]
+fn run_sync_copies_the_cache_before_ignore_cache_removes_it() {
+    let t = temp_root("copyorder");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"one");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    // A digest that is wrong but the right length, so it is stored as it is:
+    // the row's stat still matches the file, so a run that keeps the cache
+    // trusts it and leaves it alone.
+    common::poison_digest(&src, "a.txt", "md5");
+    let planted = md5_in(&src, "a.txt");
+    assert!(
+        planted.iter().all(|b| *b == 0xAB),
+        "the planted digest is in the cache"
+    );
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.ignore_cache = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    let copies = siblings(&src, "girpr-cache-backup-");
+    assert_eq!(
+        copies.len(),
+        1,
+        "the cache was copied before it was removed"
+    );
+    assert_eq!(
+        md5_in_file(&src.join(&copies[0]), "a.txt"),
+        planted,
+        "the copy holds the cache as it was before the run"
+    );
+    assert_ne!(
+        md5_in(&src, "a.txt"),
+        planted,
+        "the live cache was removed and rebuilt from the disk"
+    );
+}
+
+/// `--ignore-cache` still removes the cache when the copy is skipped: the
+/// flag is about the copy, not about the removal.
+///
+/// The removal is what the planted digest shows — a cache that was removed
+/// and rebuilt does not hold what the old one held.
+#[test]
+fn run_sync_with_no_backup_still_removes_the_cache() {
+    let t = temp_root("nobakignore");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"one");
+    sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
+    cmd_update(update(src.clone()), &log()).unwrap();
+    cmd_update(update(dst.clone()), &log()).unwrap();
+    common::poison_digest(&src, "a.txt", "md5");
+    let planted = md5_in(&src, "a.txt");
+
+    let mut o = sync(src.clone(), dst.clone());
+    o.common.backup = BackupPolicy {
+        disabled: true,
+        retain: None,
+    };
+    o.common.ignore_cache = true;
+    assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
+
+    assert!(
+        siblings(&src, "girpr-cache-backup-").is_empty(),
+        "no copy was made"
+    );
+    assert!(
+        siblings(&dst, "girpr-cache-old-").is_empty(),
+        "no snapshot was made"
+    );
+    assert_ne!(
+        md5_in(&src, "a.txt"),
+        planted,
+        "the cache was removed and rebuilt from the disk anyway"
+    );
+}
+
+/// `--backup-retain 0` is refused, and the refusal names the flag.
+///
+/// Keeping none of the copies is what `--no-backup` is for, so a bound of
+/// zero is a contradiction rather than a request — and it is a runtime usage
+/// mistake, which is exit `3` rather than the `2` a parse error gets.
+#[test]
+fn run_backup_retain_zero_is_refused() {
+    let t = temp_root("retain0");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"one");
+    wfile(&dst, "a.txt", b"two");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .arg("sync")
+        .arg("--src")
+        .arg(&src)
+        .arg("--dst")
+        .arg(&dst)
+        .arg("--backup-retain")
+        .arg("0")
+        .output()
+        .expect("spawn girsync");
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "a runtime usage mistake exits 3: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--backup-retain"),
+        "the message names the flag: {stderr}"
+    );
 }

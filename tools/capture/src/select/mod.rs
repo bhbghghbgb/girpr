@@ -47,8 +47,9 @@ pub struct Candidate {
     pub path: String,
     /// Common / one-sided.
     pub state: State,
-    /// `old_bytes + new_bytes`. Zero for a one-sided path, which is charged by
-    /// its own size — see [`SizedCandidate::budget_cost`].
+    /// `old_bytes + new_bytes`. Zero for a one-sided path, whose budget charge
+    /// comes from [`SizedCandidate`]'s `size` / `download_bytes` — see
+    /// [`SizedCandidate::budget_cost`].
     pub total_cost: u64,
     /// `Σ compressed_size` a patch would fetch. Zero for a one-sided path.
     pub patch_bytes: u64,
@@ -74,31 +75,47 @@ impl Candidate {
     }
 }
 
-/// A candidate plus the size a one-sided row needs to be charged for.
+/// A candidate plus the numbers its one-sided rows are charged for.
 ///
-/// A pair rather than a field, because the size is only consulted when the row
-/// is one-sided — and a `Candidate` carrying a `size` it ignores nine times out
-/// of ten is a field someone will eventually read on a common path and trust.
+/// A pair rather than fields on [`Candidate`], because these numbers are only
+/// consulted when the row is one-sided — and a `Candidate` carrying a `size` it
+/// ignores nine times out of ten is a field someone will eventually read on a
+/// common path and trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizedCandidate {
     /// The candidate.
     pub candidate: Candidate,
     /// The file's declared size on whichever side exists.
+    ///
+    /// The budget charge for a `removed` path: the bytes it occupies in `game/`.
     pub size: u64,
+    /// `Σ compressed_size` over an `added` path's chunks: the bytes a fetch must
+    /// download, and its budget charge. Zero for a common or removed path,
+    /// which are charged by `total_cost` / `size`.
+    pub download_bytes: u64,
 }
 
 impl SizedCandidate {
     /// What this capture costs against `--max-download-bytes`.
     ///
-    /// `total_cost` for a common path, and **the file's own size** for a
-    /// one-sided one. A `removed` path has no new side to materialize, so its
-    /// cost is the bytes it occupies in `game/`; an `added` path has to be
-    /// fetched whole, so its cost is its compressed size. Charging `total_cost`
-    /// to both would make `removed` free and `added` cost nothing, which is
-    /// backwards.
+    /// The exact rule, by state:
+    ///
+    /// - a **common** path (identical / changed) charges `total_cost` — the
+    ///   compressed bytes of both sides, because the old file must be
+    ///   materialized in full for the fixture to be real;
+    /// - an **`added`** path charges `download_bytes` — the compressed bytes a
+    ///   fetch must download, since the whole new file has to be fetched;
+    /// - a **`removed`** path charges `size` — the bytes it occupies in `game/`,
+    ///   which is what admitting its removal frees.
+    ///
+    /// Charging `total_cost` to a one-sided path would make `removed` free and
+    /// `added` cost nothing, which is backwards; charging `added` its declared
+    /// `size` overstates the bytes on the wire, which is not what the flag
+    /// measures.
     pub fn budget_cost(&self) -> u64 {
         match self.candidate.state {
-            State::Added | State::Removed => self.size,
+            State::Added => self.download_bytes,
+            State::Removed => self.size,
             _ => self.candidate.total_cost,
         }
     }
@@ -137,6 +154,26 @@ impl MatrixStatus {
         }
     }
 
+    /// Parse a wire spelling back into a status — the inverse of
+    /// [`MatrixStatus::id`].
+    ///
+    /// This is the one place the matrix's text vocabulary is written down.
+    /// `id()` spells each variant out and `parse` reads those same four strings
+    /// back, so a reader of `MANIFEST.json` and A17's checker cannot drift
+    /// apart: `coveredby` and `overbudget` are rejected, not silently accepted.
+    /// If a fifth state is added later, only `select` changes — add its variant,
+    /// its `id()` spelling and its `parse` arm here, and both the writer and
+    /// every consumer (including `ok_status`) follow.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "captured" => Some(MatrixStatus::Captured),
+            "covered_by" => Some(MatrixStatus::CoveredBy),
+            "over_budget" => Some(MatrixStatus::OverBudget),
+            "unavailable" => Some(MatrixStatus::Unavailable),
+            _ => None,
+        }
+    }
+
     /// Whether A17 accepts this state.
     ///
     /// **All four.** A17 is about the matrix being *complete*: every class has
@@ -169,7 +206,7 @@ impl std::fmt::Display for MatrixStatus {
 
 #[cfg(test)]
 mod status_tests {
-    use super::MatrixStatus::*;
+    use super::MatrixStatus::{self, *};
 
     /// The spellings are what `MANIFEST.json`, A17 and the schema doc all agree
     /// on, and they are **not** the lowercased Rust variant names.
@@ -193,6 +230,38 @@ mod status_tests {
     fn display_is_the_id() {
         for s in [Captured, CoveredBy, OverBudget, Unavailable] {
             assert_eq!(s.to_string(), s.id());
+        }
+    }
+
+    /// `parse` is the exact inverse of `id()`: every variant's wire spelling
+    /// reads back to the same variant.
+    #[test]
+    fn parse_round_trips_every_id() {
+        for s in [Captured, CoveredBy, OverBudget, Unavailable] {
+            assert_eq!(MatrixStatus::parse(s.id()), Some(s), "{s:?}");
+        }
+    }
+
+    /// The wire vocabulary is exact: the old lowercased-variant spellings, an
+    /// empty string and a differently-cased one are all rejected.
+    #[test]
+    fn parse_rejects_spellings_outside_the_vocabulary() {
+        assert_eq!(MatrixStatus::parse("coveredby"), None);
+        assert_eq!(MatrixStatus::parse("overbudget"), None);
+        assert_eq!(MatrixStatus::parse(""), None);
+        assert_eq!(MatrixStatus::parse("CAPTURED"), None);
+    }
+
+    /// An unrecognized status is rejected by both halves of the shared rule:
+    /// the model cannot parse it and A17's checker will not call it okay.
+    #[test]
+    fn an_unknown_status_is_rejected_by_both_definitions() {
+        for s in ["coveredby", "", "CAPTURED", "something else"] {
+            assert_eq!(MatrixStatus::parse(s), None, "parse: {s:?}");
+            assert!(
+                !crate::emit::selfcheck::MatrixRow::ok_status(s),
+                "ok_status: {s:?}"
+            );
         }
     }
 
@@ -394,6 +463,12 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     let mut out: Vec<SizedCandidate> = Vec::new();
     for f in diffs {
         for row in &f.rows {
+            // A folder is a directory, not a file: the diff keeps its row so the
+            // counts and sidecars stay truthful, but it has no patch cost and
+            // must never become a file capture.
+            if row.is_folder {
+                continue;
+            }
             let shape = match &row.score {
                 Some(s) => Shape::from_row(row.state, s),
                 None => match row.state {
@@ -414,6 +489,7 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
                     classes: Class::all_satisfied_by(shape),
                 },
                 size: row.size.max(0) as u64,
+                download_bytes: row.download_bytes.unwrap_or(0),
             });
         }
     }
@@ -421,29 +497,29 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
     out
 }
 
-/// The pool indices that satisfy each class, indexed by [`Class::ALL`].
+/// The pool indices that satisfy each class, **keyed by the class itself**.
 ///
 /// One walk of the pool instead of one per class. The per-class lists are in
 /// pool order — cheapest first — so a class's picks are read straight off its
 /// list, and `considered` is the list's length.
-fn candidates_by_class(pool: &[SizedCandidate]) -> [Vec<usize>; Class::ALL.len()] {
-    let mut out: [Vec<usize>; Class::ALL.len()] = std::array::from_fn(|_| Vec::new());
+///
+/// Keyed rather than positionally indexed so a lookup cannot depend on the
+/// class order used to build the table matching the order a caller walks. The
+/// two orders are the same list today; keying keeps them from being load
+/// bearing if one is ever reordered.
+fn candidates_by_class(pool: &[SizedCandidate]) -> BTreeMap<Class, Vec<usize>> {
+    let mut out: BTreeMap<Class, Vec<usize>> = Class::ALL
+        .into_iter()
+        .map(|class| (class, Vec::new()))
+        .collect();
     for (i, c) in pool.iter().enumerate() {
-        for (list, class) in out.iter_mut().zip(Class::ALL) {
-            if c.candidate.satisfies(class) {
+        for (class, list) in &mut out {
+            if c.candidate.satisfies(*class) {
                 list.push(i);
             }
         }
     }
     out
-}
-
-/// Where a class sits in [`Class::ALL`], for indexing [`candidates_by_class`].
-fn class_idx(class: Class) -> usize {
-    Class::ALL
-        .iter()
-        .position(|c| *c == class)
-        .expect("every class is in ALL")
 }
 
 /// Cheapest first, then the field with `game` ranked first, then by path.
@@ -541,15 +617,20 @@ pub fn select(
     let mut forced_skipped: Vec<String> = Vec::new();
     let mut forced_unscored: Vec<String> = Vec::new();
     let mut forced_rejected: Vec<Rejection> = Vec::new();
-    // **How many forced paths of each class have already taken an id.**
+    // **One ordinal sequence per class, shared by every path that can produce
+    // a capture id.** Phase 0 takes the first ordinals for forced paths, in the
+    // caller's order; phase 1 continues the same sequence when it picks wants,
+    // so a want can never claim an id a forced path already took. A forced path
+    // refused by the budget keeps its ordinal anyway — its rejection record
+    // still names the id that path would have written — and that is exactly the
+    // id a cheaper pick of the same class must not reuse. Assigning here, rather
+    // than at admission, is what lets the rejection record carry that id.
     //
-    // A forced path is admitted with ordinal zero only when it is the *first*
-    // forced path of its primary class. Two distinct paths that both answer
-    // `added` would share the id `added`, so the second `patchmaps/added.json`
-    // would replace the first while the run still reported two captures. The
-    // ordinal is assigned here rather than at admission so the rejection record
-    // carries the same id the path would have written.
-    let mut forced_ordinals: BTreeMap<Class, usize> = BTreeMap::new();
+    // Two distinct paths that both answer `added` cannot both be `added`: the
+    // second `patchmaps/added.json` would replace the first while the run still
+    // reported two captures. Numbering per class is what keeps their identities
+    // apart, in both the admitted and the rejected lists.
+    let mut ordinals: BTreeMap<Class, usize> = BTreeMap::new();
     for want in forced {
         let Some(c) = pool.iter().find(|c| c.candidate.path == *want) else {
             // A path the manifests do not carry is not an error here: the caller
@@ -568,8 +649,8 @@ pub fn select(
             forced_unscored.push(want.clone());
             continue;
         };
-        let nth = forced_ordinals.get(&primary).copied().unwrap_or(0);
-        forced_ordinals.insert(primary, nth + 1);
+        let nth = ordinals.get(&primary).copied().unwrap_or(0);
+        ordinals.insert(primary, nth + 1);
         let cost = c.budget_cost();
         if !budget.admits(cost) {
             // **Record and continue.** A `break` here would silently drop every
@@ -604,10 +685,12 @@ pub fn select(
     // already captured.
     //
     // The ordinal rides along because `capture_id` is `<class>` or `<class>+<n>`
-    // where `n` counts *within the class*. Phase 2 re-sorts these by cost, so
-    // the position a want is admitted at says nothing about which pick it was —
-    // `reuse_moved+7` would be a true statement about a global cost
-    // order and a useless one about `--per-class`.
+    // where `n` counts *within the class*. It continues phase 0's sequence for
+    // that class, so a want cannot claim an id a forced path already took —
+    // including one that was refused and lives on only as a rejection record.
+    // Phase 2 re-sorts these by cost, so the position a want is admitted at says
+    // nothing about which pick it was — `reuse_moved+7` would be a true
+    // statement about a global cost order and a useless one about `--per-class`.
     let mut wants: Vec<(Class, usize, SizedCandidate)> = Vec::new();
     // One entry per class, in `Class::REQUIRED_ORDER`: the row phase 3 will
     // resolve, and the answer the class had before the budget's verdict. The
@@ -622,7 +705,13 @@ pub fn select(
     let mut taken: std::collections::HashSet<&str> =
         admitted.iter().map(|a| a.path.as_str()).collect();
     for class in Class::REQUIRED_ORDER {
-        let candidates = &by_class[class_idx(class)];
+        // Every class is seeded by `candidates_by_class`, so a miss means the
+        // two class lists disagree; fail loudly rather than admit an empty
+        // list and report the class as unavailable.
+        let candidates: &[usize] = by_class
+            .get(&class)
+            .map(Vec::as_slice)
+            .expect("candidates_by_class seeds every class from Class::ALL");
         let considered = candidates.len() as u64;
 
         // Already answered by something captured for another reason?
@@ -663,6 +752,9 @@ pub fn select(
             continue;
         }
 
+        // `picked` counts this class's wants for the `--per-class` limit. The id
+        // ordinal instead continues phase 0's sequence for the class, so a want
+        // cannot take an id a forced path already claimed, funded or refused.
         let mut picked = 0_usize;
         for &i in candidates {
             if picked == per_class {
@@ -674,7 +766,9 @@ pub fn select(
             if !taken.insert(c.candidate.path.as_str()) {
                 continue;
             }
-            wants.push((class, picked, c.clone()));
+            let nth = ordinals.get(&class).copied().unwrap_or(0);
+            ordinals.insert(class, nth + 1);
+            wants.push((class, nth, c.clone()));
             picked += 1;
         }
 
@@ -824,7 +918,7 @@ pub fn select(
         "the admitted sum and the charged budget must be the same number"
     );
 
-    Selection {
+    let selection = Selection {
         bytes_admitted,
         admitted,
         rejected,
@@ -832,7 +926,73 @@ pub fn select(
         forced_unscored,
         matrix,
         budget: final_budget,
+    };
+
+    // A debug assertion, not a refusal: a degenerate manifest may still yield
+    // a usable bundle, so release builds keep the old behaviour. The guard is
+    // a runtime `cfg!` rather than a `debug_assert!` so the check (and the two
+    // sets it builds) is not merely compiled out but never runs in release.
+    if cfg!(debug_assertions)
+        && let Err(message) = debug_validate_unique_ids(&selection)
+    {
+        panic!("capture-id invariant violated: {message}");
     }
+
+    selection
+}
+
+/// Debug-only invariant for the ids that become `patchmaps/<id>.json` stems.
+///
+/// [`write_patchmap`](crate::emit::write_patchmap) names its file after a
+/// capture's id, so an id that repeats — or that carries a path separator or a
+/// parent traversal — makes two records claim one file and the later write
+/// silently replaces the earlier one. The per-class ordinals assigned in phase
+/// 0 and phase 1 are meant to prevent that; this checks the *result* rather
+/// than trusting the assignment, so a future budget or ordering change that
+/// breaks it is caught in a test or a debug run instead of in a bundle.
+///
+/// Returns the first problem it finds as a message; `Ok` means every admitted
+/// and rejected id is a valid single file stem and no id is claimed twice,
+/// either within one list or across the two.
+fn debug_validate_unique_ids(selection: &Selection) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    // A single, nonempty path component: no separator, no parent traversal.
+    // Anything else would escape `patchmaps/` or name a different file than
+    // the reader of the matrix expects.
+    fn check_stem(id: &str) -> Result<(), String> {
+        if id.is_empty() || id.contains('/') || id.contains('\\') || id.contains("..") {
+            return Err(format!("`{id}` is not a valid file stem"));
+        }
+        Ok(())
+    }
+
+    let mut admitted_ids: HashSet<&str> = HashSet::new();
+    for a in &selection.admitted {
+        check_stem(&a.capture_id)?;
+        if !admitted_ids.insert(a.capture_id.as_str()) {
+            return Err(format!("duplicate admitted capture id `{}`", a.capture_id));
+        }
+    }
+
+    let mut rejected_ids: HashSet<&str> = HashSet::new();
+    for r in &selection.rejected {
+        check_stem(&r.capture_id)?;
+        if !rejected_ids.insert(r.capture_id.as_str()) {
+            return Err(format!("duplicate rejected capture id `{}`", r.capture_id));
+        }
+    }
+
+    // A rejected id is the one a path *would* have written. If it matches an
+    // admitted id, two records still describe the same patchmap even though
+    // only one of them was funded.
+    for id in &admitted_ids {
+        if rejected_ids.contains(id) {
+            return Err(format!("capture id `{id}` is both admitted and rejected"));
+        }
+    }
+
+    Ok(())
 }
 
 /// Why a class was not captured.
@@ -869,13 +1029,40 @@ const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
 ///
-/// Column-oriented so a reader can sort without re-parsing objects, and carrying
-/// `rank` so "why did it pick that?" has an answer without re-running anything.
+/// Column-oriented so a reader can sort without re-parsing objects. Two ranks
+/// are published because two different orders are at work and neither can
+/// answer the other's question:
+///
+/// - `rank` is the **scoring rank**, the one-based position in [`by_cost`]'s
+///   `total_cost` order (with its field / `moved` / `reused` / path tie-break).
+/// - `admission_rank` is the **selection rank**, the one-based position of this
+///   path in the [`candidates`] pool the picker actually walks. Scoring and
+///   admission tie-break differently, so on a `total_cost` tie the two ranks can
+///   disagree, and "why was this picked?" is answered by the latter.
+///
+/// Only common *scored* paths appear here: one-sided paths have no patch cost to
+/// rank, and folder entries are directories rather than files, so neither is a
+/// row in this table. A path that a [`candidates`] filter excludes (a folder) is
+/// absent from the pool; such a row keeps its scoring `rank` and carries a `null`
+/// `admission_rank` rather than being given a position it does not have.
 pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
+    // One walk of the pool, keyed by path. First occurrence wins if a malformed
+    // diff repeats a path; either way this is 0-based and becomes 1-based below.
+    let mut admission_by_path: BTreeMap<String, usize> = BTreeMap::new();
+    for (position, sized) in candidates(diffs).into_iter().enumerate() {
+        admission_by_path
+            .entry(sized.candidate.path)
+            .or_insert(position);
+    }
+
     let rows: Vec<serde_json::Value> = by_cost(diffs)
         .into_iter()
         .enumerate()
         .map(|(rank, (field, s))| {
+            let admission_rank = admission_by_path
+                .get(&s.path)
+                .map(|position| serde_json::Value::from(*position + 1))
+                .unwrap_or(serde_json::Value::Null);
             let all = Class::all_satisfied_by(Shape::from_row(
                 if s.same_md5 {
                     State::Identical
@@ -902,6 +1089,7 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
                 "total_cost": s.total_cost,
                 "classes": all.iter().map(|c| c.id()).collect::<Vec<_>>(),
                 "rank": rank + 1,
+                "admission_rank": admission_rank,
             })
         })
         .collect();
@@ -911,6 +1099,7 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
             "path", "matching_field", "old_size", "new_size", "nchunks", "reused",
             "moved", "moved_later", "moved_earlier", "old_max_end", "same_md5",
             "old_bytes", "new_bytes", "patch_bytes", "total_cost", "classes", "rank",
+            "admission_rank",
         ],
         "rows": rows,
     })

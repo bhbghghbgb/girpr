@@ -38,7 +38,7 @@ src/repair/phases/check.rs   # --check-only size+MD5 verification loop (step 6.5
 src/repair/file/mod.rs       # per-file repair: the in-place tiers, the temp mode, reuse vs download (step 6)
 src/repair/reuse.rs   # the salvage order: which reuse source survives, in which direction
 src/repair/scan.rs    # the --scan pass: the plan's exact download estimate and damaged-chunk count
-src/repair/lock.rs    # the single-writer lock (girpr.lock)
+src/repair/lock.rs    # the single-writer lock (outside the install)
 src/repair/phases/post.rs    # deprecated delete, audio cache->res move, purge-after, config.ini bump (step 7)
 src/repair/audio.rs   # audio scan-file read/write + effective selection
 tests/repair_offline.rs   # offline integration/e2e against a local mock server
@@ -54,7 +54,7 @@ No build.rs (prost `derive` only, no protoc). No SQLite, no GUI, no speed limite
 ```text
 girpr --game-path <DIR> --biz <hk4e_cn|hk4e_global|hk4e_bilibili>
       [--audio <zh-cn,en-us,ja-jp,ko-kr|none>]...   (repeatable; default: keep current else en-us; `none` = explicit game-only, overwrites scan file, cannot mix)
-      [--io-threads <N, default 4>]            (concurrent FILES; chunks sequential/file)
+      [--jobs <N, default 4>]                  (concurrent FILES; chunks sequential/file; `--io-threads` is a deprecated alias)
       [--purge-after] [--purge-before]          (same files-cleanup after / before; timing only)
       [--check-only] [--dry-run]               (verify / print actions, write nothing)
       [--repair-mode <auto|inplace|temp|discard>]  (how each file is written; default auto)
@@ -88,18 +88,18 @@ the final `SUMMARY key=value` (NDJSON with `--output json`) go to stdout and are
 | Begin `REPORT` | `report::format_report_line` (2.5) | Starward |
 | Manifest fetch/verify/parse | `repair::phases::manifest::fetch_latest` → `sophon::fetch_manifest` → zstd decode (streamed into a buffer the API's `uncompressed_size` sizes) → md5 check → `prost::Message::decode` (3) | Starward |
 | Work list + reuse map | `repair::phases::plan::build_plan` + `sophon::build_local_chunk_map` keyed by path, chunk md5+size (4) | Starward |
-| Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `io_threads`, giving the download estimate and the damaged-chunk count (4) | — |
-| Deprecated-file list (lazy, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
+| Exact plan figures (`--scan`) | `repair::scan::scan_plan` — one read per planned file, parallel over `jobs`, giving the download estimate and the damaged-chunk count (4) | — |
+| Deprecated-file list (fetched in the plan phase, per-launcher `channel`/`sub_channel`) | `hyp::HypClient::deprecated_files` → `hyp_url(api, with_channel)` (2.6) | Starward |
 | Files-cleanup before | `repair::purge::plan_purge` → `apply_purge` when `--purge-before` (5) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` parity) |
-| Single-writer lock | `repair::lock::Lock::acquire` — `{game_dir}/girpr.lock`, created with `create_new`; a live lock refuses the run with exit 1 (6) | — |
+| Single-writer lock | `repair::lock::Lock::acquire` — an OS advisory lock on `{temp}/girpr-{key:016x}.lock`, keyed by an FNV-1a hash of the canonical game dir; a live lock refuses the run with exit 1 (6) | — |
 | Per-file repair | `repair::file::repair_all` — one scan (whole-file MD5 + per-chunk verdicts) → stage the bytes that must move → write only the wrong chunks: staged copy, else `GET chunk_prefix/id` → zstd decode **streamed straight into the file**, digested on the way past → trim → final md5 (6) | Starward's chunk repair; the in-place write is what the launcher does too |
 | Check-only | `repair::phases::check::verify_plan` (6.5) | Starward |
 | Post deletes/config | `repair::phases::post::run` — deprecated delete + audio cache→res + `util::write_config_ini` (7) | Collapse-handling (section-preserving `config.ini` bump; `game_biz` force is a Starward carryover) |
-| Files-cleanup after | `repair::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` + the single-writer lock + the cleaned blacklist) |
+| Files-cleanup after | `repair::purge::plan_purge` → `apply_purge` when `--purge-after` (7) → `deleted_extra_bytes` | Collapse-handling (`GetUnusedFileInfoList` v1 scope: expected = Sophon paths + `config.ini` + the legacy in-install `girpr.lock` + the cleaned blacklist) |
 | Summary | `report::format_summary_line`, emitted by `main` (8) | — |
 
-Concurrency: `tokio::Semaphore(io_threads)` over files; one `reqwest::Client` with fixed
-`pool_max_idle_per_host(16)` (see `src/hyp.rs`; not scaled by `io_threads`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
+Concurrency: `tokio::Semaphore(jobs)` over files; one `reqwest::Client` with fixed
+`pool_max_idle_per_host(16)` (see `src/hyp.rs`; not scaled by `jobs`); per-chunk `GET` sequential inside a file (HDD-safe). MD5 streaming
 (512 KiB bufs). Retries: 5× linear backoff on manifest/chunk/file ops.
 
 ## 4. Testing
@@ -172,7 +172,7 @@ persistent revisions, inside-`game_dir` manifest cache never written, `chunk/` r
 | an interrupted run | leaves a file that fails the same check; the next run re-verifies and continues | leaves the target exactly as it was, plus a partial `*_tmp` the next run resumes by length |
 | a final-MD5 mismatch | redoes only the chunks the per-chunk verdicts name | deletes the temp and restarts the file |
 | the resume artefact | none: the scan finds the chunks that are already right, so a corrupt prefix cannot be inherited | the `*_tmp` prefix, kept and continued |
-| peak extra disk | `io_threads × largest *growth*` — 0 for a same-size repair | `io_threads × largest file` |
+| peak extra disk | `jobs × largest *growth*` — 0 for a same-size repair | `jobs × largest file` |
 | `stopped=--max-download-bytes`/`stopped=--max-write-bytes` | the next run re-verifies and continues | the next run resumes the `*_tmp` prefix |
 
 The rows are two ways to spend disk, not two rungs of a safety ladder. Both gate the file on

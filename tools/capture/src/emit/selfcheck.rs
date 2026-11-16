@@ -450,7 +450,6 @@ pub fn api_and_manifest(
 /// `Vec<Assertion>` for the caller to append -- so it belonged next to the
 /// `Assertion` it builds, with `check_config_ini` beside it.
 ///
-#[allow(clippy::too_many_arguments)]
 pub fn closing(
     dir: &std::path::Path,
     old_tag: &str,
@@ -458,7 +457,6 @@ pub fn closing(
     selection: &crate::select::Selection,
     diffs: &[crate::manifest::diff::FieldDiff],
     side_digests: &BTreeMap<String, (String, String)>,
-    written: &[String],
     no_chunk_blobs: bool,
 ) -> Vec<Assertion> {
     let mut rows = Vec::new();
@@ -473,6 +471,12 @@ pub fn closing(
     // A14: `game/` holds nothing but the tool-read config and the variant
     // files. Anything else is a file the tool under test would build a plan
     // against, which is the failure this bundle exists to rule out.
+    //
+    // The set comes from the tree on disk, not from the writer's list: a stray
+    // left behind by a reused or pre-created bundle directory is exactly what
+    // this assertion exists to find, and it would be invisible in `written`.
+    // A missing `game/` is a failure row rather than a panic, with the walk's
+    // error in the detail so a reader sees what went wrong.
     // A captured path is compared under the name the tree actually holds: a
     // device component is escaped on disk (`CON` -> `%CON`) and recorded in
     // `diagnostics/path_map.json`, so the *logical* spelling would look like a
@@ -482,33 +486,48 @@ pub fn closing(
         .iter()
         .map(|a| crate::paths::escape_path(&a.path))
         .collect();
-    let game_files: std::collections::BTreeSet<&str> = written
-        .iter()
-        .filter_map(|p| p.strip_prefix("game/"))
-        .collect();
-    let strays: Vec<&str> = game_files
-        .iter()
-        .copied()
-        .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(*p))
-        .collect();
-    rows.push(if strays.is_empty() {
-        Assertion::pass(
-            "A14",
-            wording("A14"),
-            "game/",
-            &format!(
-                "{} files, all of them config.ini, the scan file, or a captured path",
-                game_files.len()
-            ),
-        )
-    } else {
-        Assertion::fail(
+    let game_dir = dir.join("game");
+    rows.push(match crate::emit::index::walk(&game_dir) {
+        Ok(paths) => {
+            // `walk` is sorted and a `BTreeSet` keeps it so: both the count and
+            // the stray list are independent of the filesystem's enumeration
+            // order. `rel` strips the `game` component and uses `/` separators.
+            let game_files: std::collections::BTreeSet<String> = paths
+                .iter()
+                .map(|p| crate::emit::index::rel(&game_dir, p))
+                .collect();
+            let strays: Vec<&str> = game_files
+                .iter()
+                .map(String::as_str)
+                .filter(|p| *p != "config.ini" && *p != scan_dir && !captured.contains(*p))
+                .collect();
+            if strays.is_empty() {
+                Assertion::pass(
+                    "A14",
+                    wording("A14"),
+                    "game/",
+                    &format!(
+                        "{} files, all of them config.ini, the scan file, or a captured path",
+                        game_files.len()
+                    ),
+                )
+            } else {
+                Assertion::fail(
+                    "A14",
+                    wording("A14"),
+                    "game/",
+                    "config.ini, the audio scan file, and captured paths only",
+                    &format!("{} stray path(s): {}", strays.len(), strays.join(", ")),
+                )
+            }
+        }
+        Err(e) => Assertion::fail(
             "A14",
             wording("A14"),
             "game/",
             "config.ini, the audio scan file, and captured paths only",
-            &format!("{} stray path(s): {}", strays.len(), strays.join(", ")),
-        )
+            &format!("cannot walk {}: {e}", game_dir.display()),
+        ),
     });
 
     // A19: the *converse* of A14 - every captured file differs between the two
@@ -784,15 +803,15 @@ impl MatrixRow {
     ///
     /// Takes the string rather than a `&MatrixRow` because M9's `verify` has a
     /// status it read out of `MANIFEST.json` and no row to hang the answer on.
+    /// Delegates to the matrix model rather than spelling out the acceptable
+    /// states again: `parse` owns the wire vocabulary and `is_acceptable` owns
+    /// the all-four policy, so this answer cannot disagree with A17's row.
     /// Every state is acceptable: A17 is about the matrix being **complete**,
     /// and `over_budget` is a complete answer — "a candidate existed and this
     /// run's budget would not pay for it". The *requirement* is
     /// `--require-class`'s business, and it excludes `over_budget` on its own.
     pub fn ok_status(status: &str) -> bool {
-        matches!(
-            status,
-            "captured" | "covered_by" | "over_budget" | "unavailable"
-        )
+        crate::select::MatrixStatus::parse(status).is_some_and(|s| s.is_acceptable())
     }
 }
 
@@ -1252,6 +1271,36 @@ mod tests {
         for k in ["id", "assertion", "subject", "expected", "actual", "ok"] {
             assert!(j.get(k).is_some(), "{k} is missing");
         }
+    }
+
+    /// A missing `game/` is a failure row, not a panic: the walk's error is the
+    /// detail, so a reader sees why the assertion could not enumerate the tree.
+    #[test]
+    fn a_missing_game_directory_is_an_a14_failure_not_a_panic() {
+        let root = girpr_tempdir::TempDir::new("gircap-a14", "missing-game");
+        let selection = crate::select::Selection {
+            admitted: Vec::new(),
+            rejected: Vec::new(),
+            forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
+            matrix: Vec::new(),
+            bytes_admitted: 0,
+            budget: crate::select::Budget::unlimited(),
+        };
+        let rows = closing(
+            &root,
+            "7.0.0",
+            "scan",
+            &selection,
+            &[],
+            &BTreeMap::new(),
+            false,
+        );
+        let a14 = rows.iter().find(|r| r.id == "A14").expect("an A14 row");
+        assert!(!a14.ok, "a missing game/ must fail: {a14:?}");
+        assert!(a14.actual.contains("cannot walk"), "{a14:?}");
+        assert!(a14.actual.contains("game"), "{a14:?}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use super::*;
 use crate::blobs::Sources;
 use crate::blobs::chunks::{NewFile, OldFile};
 use crate::hash;
+use crate::manifest::CapturedManifest;
 use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
 /// `stored_path` comes out of `chunks/index.json`, which is a document in a
@@ -233,7 +234,7 @@ fn sources() -> Sources {
     ])
 }
 
-fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
+fn assemble_pair_with_sources(pair: &FilePair, sources: &Sources) -> Result<Assembled, String> {
     let entries: Vec<&SophonChunkFile> = [
         pair.old.as_ref().map(|o| &o.entry),
         pair.new.as_ref().map(|n| &n.entry),
@@ -247,9 +248,13 @@ fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
         pair,
         matching_field: "game",
         classes: &classes,
-        sources: &sources(),
+        sources,
         chunks: &src,
     })
+}
+
+fn assemble_pair(pair: &FilePair) -> Result<Assembled, String> {
+    assemble_pair_with_sources(pair, &sources())
 }
 
 /// The measured shape: the file on disk is **longer** than the target and
@@ -485,6 +490,32 @@ fn every_fetch_entry_names_the_url_it_would_download() {
     }
 }
 
+/// The suffix a source declares reaches `patchmap.plan[].url`, the recorded
+/// address a consumer downloads the chunk from — not just `Sources::url` in
+/// isolation.
+#[test]
+fn a_suffix_on_the_source_reaches_the_plan_url() {
+    let mut old = CapturedManifest::empty("7.0.0", "game", vec![]);
+    old.meta.declared.chunk_download.url_prefix = "https://cdn/old".into();
+    let mut new = CapturedManifest::empty("7.1.0", "game", vec![]);
+    new.meta.declared.chunk_download.url_prefix = "https://cdn/new".into();
+    new.meta.declared.chunk_download.url_suffix = ".zst".into();
+    let sources = Sources::from_manifests([&old, &new]);
+
+    let a = assemble_pair_with_sources(&same_offset_pair(), &sources).expect("assembles");
+    let plan = a.map.plan.as_ref().unwrap();
+    let fetches: Vec<_> = plan
+        .iter()
+        .filter(|e| e.decision == Decision::Fetch)
+        .collect();
+    assert!(!fetches.is_empty(), "the pair has new-side chunks to fetch");
+    for e in fetches {
+        let u = e.url.as_deref().expect("a FETCH has a url");
+        assert!(u.starts_with("https://cdn/new/"), "{u}");
+        assert!(u.ends_with(".zst"), "{u} does not carry the suffix");
+    }
+}
+
 /// The moved case: the same bytes at a different offset in the new file. The
 /// patch flow has to read them from where they *are*, not where they land.
 #[test]
@@ -715,6 +746,47 @@ fn an_added_file_has_no_old_side_and_nothing_to_reuse() {
     assert!(!a.map.expectations.absent_after);
     assert!(a.map.expectations.must_not_fetch.is_empty());
     assert!(a.a12_holds(), "vacuously");
+}
+
+#[test]
+fn a12_is_false_exactly_when_a_chunk_is_both_fetched_and_reused() {
+    let a = assemble_pair(&same_offset_pair()).expect("assembles");
+    let plan = a.map.plan.as_ref().expect("a plan");
+    assert!(plan.iter().any(|e| e.decision == Decision::Reuse));
+    assert!(a.a12_holds(), "a real, disjoint plan");
+
+    // Force an overlap: a FETCH entry whose id is also REUSEd. The boolean must
+    // flip and nothing else about the plan matters.
+    let mut overlapping = a.clone();
+    let plan = overlapping.map.plan.as_mut().expect("a plan");
+    let reused_id = plan
+        .iter()
+        .find(|e| e.decision == Decision::Reuse)
+        .expect("a reused chunk")
+        .chunk_id
+        .clone();
+    let mut collide = plan[0].clone();
+    collide.decision = Decision::Fetch;
+    collide.chunk_id = reused_id;
+    plan.push(collide);
+    assert!(!overlapping.a12_holds());
+}
+
+#[test]
+fn a12_holds_with_no_plan() {
+    let a = assemble_pair(&FilePair {
+        capture_id: "removed".into(),
+        path: "gone.blk".into(),
+        old: Some(OldFile {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            entry: file("gone.blk", vec![chunk(5, 0, 32)]),
+        }),
+        new: None,
+    })
+    .expect("assembles");
+    assert!(a.map.plan.is_none());
+    assert!(a.a12_holds(), "no plan: nothing to reuse or fetch");
 }
 
 #[test]
@@ -1196,6 +1268,74 @@ fn a_plan_cost_that_overflows_is_a_typed_error() {
     assert!(
         e.contains("overflows") && e.contains(&i64::MAX.to_string()),
         "names the arithmetic and the value: {e}"
+    );
+}
+
+/// Direct writes size `out` from the declared target before the loop, so a
+/// hostile size must be a typed error rather than a huge allocation or a panic
+/// in `copy_from_slice`. Called on the flow directly to reach the sizing guard.
+#[test]
+fn a_patch_target_size_that_cannot_fit_a_buffer_is_an_error_not_a_panic() {
+    let pair = same_offset_pair();
+    let a = assemble_pair(&pair).expect("assembles");
+    let old = a.old.as_ref().expect("an old side");
+    let entries: Vec<&SophonChunkFile> = [&pair.old.as_ref().unwrap().entry].into();
+    let src = ChunkSource::from_memory(memory_of(&entries));
+    let classes = [Class::ReuseInPlace];
+    let input = AssemblyInput {
+        pair: &pair,
+        matching_field: "game",
+        classes: &classes,
+        sources: &sources(),
+        chunks: &src,
+    };
+
+    for size in [i64::MIN, -1, 1_i64 << 40, i64::MAX] {
+        let mut new_entry = pair.new.as_ref().unwrap().entry.clone();
+        new_entry.size = size;
+        let e = patch_flow(&input, &new_entry, old, "7.0.0", "7.1.0").unwrap_err();
+        assert!(
+            e.contains("past the") || e.contains("does not fit"),
+            "size {size}: {e}"
+        );
+    }
+}
+
+/// The identity map keeps the *first* old chunk with a given content, even when
+/// several old chunks share it — the choice stays the first offset, not the
+/// last one inserted and not whichever a hash table happens to yield.
+#[test]
+fn duplicate_old_identities_choose_the_first_offset() {
+    let pair = FilePair {
+        capture_id: "reuse_in_place".into(),
+        path: "blk".into(),
+        old: Some(OldFile {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            // The same content twice, at offsets 0 and 64.
+            entry: file("blk", vec![chunk(1, 0, 64), chunk(1, 64, 64)]),
+        }),
+        new: Some(NewFile {
+            tag: "7.1.0".into(),
+            build_id: "sMXGW2ll3Fuu".into(),
+            entry: file("blk", vec![chunk(2, 0, 64), chunk(1, 64, 64)]),
+        }),
+    };
+    let a = assemble_pair(&pair).expect("assembles");
+    let plan = a.map.plan.as_ref().unwrap();
+    let reused = plan
+        .iter()
+        .find(|e| e.decision == Decision::Reuse)
+        .expect("the shared identity is reused");
+    assert_eq!(
+        reused.source_range.as_ref().unwrap().start,
+        0,
+        "the first old occurrence wins, not the one already at offset 64"
+    );
+    assert_eq!(reused.target_range.start, 64);
+    assert!(
+        reused.is_moved(),
+        "it moves from the first slot to the second"
     );
 }
 

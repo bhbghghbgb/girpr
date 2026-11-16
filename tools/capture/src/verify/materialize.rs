@@ -14,7 +14,7 @@
 //! the blobs alone are enough. A bundle whose manifests survived but whose index
 //! was incomplete fails here, and should.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::assemble::ChunkSource;
 use crate::assemble::ranges::Layout;
@@ -39,23 +39,23 @@ pub struct Rebuilt {
     pub layout: Layout,
 }
 
-/// The chunks the index says make up one file on one side.
+/// The chunks the index says make up one file on one side, as owned ids.
 ///
 /// `(chunk_id, offset)`, ordered by offset so the caller's layout check and the
 /// assembly both see the file the way a reader would.
 ///
-/// **One file's worth of [`ChunksByFile`].** This is a convenience over the
-/// index that every caller inside [`rebuild_all`] shares — asking it separately
-/// means rebuilding the grouping, which is the work the grouping exists to do
-/// once. Nothing outside this module needs it.
+/// A thin convenience over [`ChunksByFile::get`] for callers that need owned
+/// `(id, offset)` pairs. The grouping is supplied by the caller, so this never
+/// rebuilds the index: build [`ChunksByFile`] once and ask it about as many files
+/// as needed. Nothing outside this module needs it.
 pub fn chunks_for(
-    index: &ChunkIndex,
+    by_file: &ChunksByFile<'_>,
     tag: &str,
     capture_id: &str,
     path: &str,
     role: Set,
 ) -> Result<Vec<(String, i64)>, String> {
-    Ok(ChunksByFile::build(index)
+    Ok(by_file
         .get(tag, capture_id, path, role)?
         .into_iter()
         .map(|(id, offset)| (id.to_string(), offset))
@@ -81,11 +81,11 @@ impl Ref<'_> {
 
 /// Every reference in the index, grouped by the file it places bytes into.
 ///
-/// [`chunks_for`] answered one question by walking **every** blob's entire
-/// `referenced_by` vector, and then [`rebuild`] built a fresh map of **every**
-/// blob's size — per side, and `rebuild_all` calls it twice per capture. On the
-/// reference bundle that is 38 blobs and 66 references scanned sixteen times to
-/// answer sixteen questions, and sixteen maps of 38 entries thrown away.
+/// Answering one file's question by walking **every** blob's entire
+/// `referenced_by` vector, and rebuilding a fresh map of **every** blob's size
+/// per side, used to cost a full index scan per file. On the reference bundle
+/// that is 38 blobs and 66 references scanned sixteen times to answer sixteen
+/// questions, and sixteen maps of 38 entries thrown away.
 ///
 /// Built once instead, and sorted, so a lookup is a binary search and a walk of
 /// the (short) run of rows that share the key. Nothing is cloned: the rows
@@ -102,14 +102,14 @@ impl Ref<'_> {
 pub struct ChunksByFile<'i> {
     rows: Vec<Ref<'i>>,
     /// `chunk_id` -> decompressed size, for the layout check.
-    sizes: BTreeMap<&'i str, i64>,
+    sizes: HashMap<&'i str, i64>,
 }
 
 impl<'i> ChunksByFile<'i> {
     /// Read every reference in the index, once.
     pub fn build(index: &'i ChunkIndex) -> Self {
         let mut rows: Vec<Ref<'i>> = Vec::new();
-        let mut sizes = BTreeMap::new();
+        let mut sizes = HashMap::new();
         for b in &index.blobs {
             sizes.insert(b.props.chunk_id.as_str(), b.props.uncompressed_size as i64);
             rows.extend(b.referenced_by.iter().map(|r| Ref {
@@ -182,6 +182,12 @@ impl<'i> ChunksByFile<'i> {
 /// The layout is checked before any byte is placed (A11), so a closure set with
 /// a hole produces an error naming the hole rather than a short file.
 ///
+/// `declared_size` is the patchmap side's declared byte count. It is supplied
+/// by the caller rather than derived from the index, so A11's size check is
+/// independent: a side whose declared size disagrees with the chunk lengths is
+/// refused here instead of producing a file that merely happens to weigh what
+/// the chunks do.
+///
 /// `root` is not a parameter: where the blobs live is already inside `src`,
 /// and taking it would only discard it.
 pub fn rebuild(
@@ -191,7 +197,14 @@ pub fn rebuild(
     capture_id: &str,
     path: &str,
     role: Set,
+    declared_size: i64,
 ) -> Result<Rebuilt, String> {
+    let label = format!("{tag} {path} ({role})");
+    if declared_size < 0 {
+        return Err(format!(
+            "{label}: declares a negative size {declared_size} B"
+        ));
+    }
     let chunks = by_file.get(tag, capture_id, path, role)?;
     if chunks.is_empty() {
         return Err(format!(
@@ -203,9 +216,8 @@ pub fn rebuild(
     // through `Bundle::open`'s validation, so the arithmetic is checked here as
     // well: a crafted `offset: i64::MAX` must be a typed error naming the values,
     // never an abort in the layout check.
-    let label = format!("{tag} {path} ({role})");
     let mut parts: Vec<(i64, i64)> = Vec::with_capacity(chunks.len());
-    let mut declared_size: i64 = 0;
+    let mut chunk_sum: i64 = 0;
     for (id, offset) in &chunks {
         let len = by_file.size(id);
         if *offset < 0 {
@@ -223,10 +235,10 @@ pub fn rebuild(
                 "{label}: chunk {id} at offset {offset} + length {len} overflows i64"
             ));
         }
-        declared_size = declared_size.checked_add(len).ok_or_else(|| {
+        chunk_sum = chunk_sum.checked_add(len).ok_or_else(|| {
             format!(
                 "{label}: the chunk lengths overflow i64 at chunk {id} \
-                 (length {len}, running total {declared_size} B)"
+                 (length {len}, running total {chunk_sum} B)"
             )
         })?;
         parts.push((*offset, len));
@@ -267,14 +279,37 @@ pub struct Pair {
 ///
 /// The two things this walk would otherwise redo per side are done once here:
 /// the index's references are grouped by file ([`ChunksByFile::build`]) and the
-/// decoded chunks are remembered ([`ChunkSource::memoizing`]).
+/// decoded chunks are remembered ([`ChunkSource::memoizing`]). Callers that also
+/// need the grouping for their own checks use [`rebuild_all_with`] so it is built
+/// once for the whole report.
 pub fn rebuild_all(
     root: &std::path::Path,
     index: &ChunkIndex,
     patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
     max_decompressed_bytes: u64,
 ) -> Result<Vec<Pair>, String> {
-    let by_file = ChunksByFile::build(index);
+    rebuild_all_with(
+        &ChunksByFile::build(index),
+        root,
+        index,
+        patchmaps,
+        max_decompressed_bytes,
+    )
+}
+
+/// [`rebuild_all`] with the index grouping supplied by its caller.
+///
+/// `verify` cross-checks each patchmap's plan against the same index references
+/// this rebuild uses. Building a second [`ChunksByFile`] for that would walk the
+/// whole index twice to answer what one grouping answers, so the caller builds
+/// it once and hands it to both.
+pub fn rebuild_all_with(
+    by_file: &ChunksByFile<'_>,
+    root: &std::path::Path,
+    index: &ChunkIndex,
+    patchmaps: &BTreeMap<String, crate::assemble::PatchMap>,
+    max_decompressed_bytes: u64,
+) -> Result<Vec<Pair>, String> {
     let src = ChunkSource::from_index(root, index, max_decompressed_bytes).memoizing();
     let mut names: Vec<&String> = patchmaps.keys().collect();
     names.sort();
@@ -323,7 +358,7 @@ fn rebuild_side(
     let Some(side) = side else {
         return Ok(None);
     };
-    let r = rebuild(by_file, src, &side.tag, capture_id, path, role)?;
+    let r = rebuild(by_file, src, &side.tag, capture_id, path, role, side.size)?;
     if r.nchunks != side.nchunks {
         return Err(format!(
             "{capture_id}: the index names {} {role} chunks, the patchmap says {}",
@@ -365,6 +400,9 @@ mod tests {
     use crate::manifest::proto::SophonChunk;
 
     const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
+    /// Each side's chunks are 64 + 128 + 32 B, which is what the patchmap
+    /// declares for them.
+    const SIDE_SIZE: i64 = 224;
 
     /// A chunk and the compressed bytes a real bundle would hold for it.
     ///
@@ -480,14 +518,11 @@ mod tests {
                 std::fs::write(&path, raw).expect("blob");
                 let mut props = BlobProps::measure(raw, chunk).expect("measure");
                 props.set_stored(rel);
-                entries.push((
-                    IndexedBlob {
-                        props,
-                        referenced_by: refs.clone(),
-                        sets: sets.clone(),
-                    },
-                    sets.clone(),
-                ));
+                entries.push(IndexedBlob {
+                    props,
+                    referenced_by: refs.clone(),
+                    sets: sets.clone(),
+                });
             }
             Fixture {
                 index: ChunkIndex::build(entries),
@@ -520,6 +555,7 @@ mod tests {
                 } else {
                     Set::MaterializeNew
                 },
+                SIDE_SIZE,
             )
             .expect("rebuilds");
             r.bytes
@@ -529,14 +565,15 @@ mod tests {
     #[test]
     fn the_index_names_every_chunk_of_a_side_with_its_offset() {
         let f = Fixture::build("index");
-        let old = chunks_for(&f.index, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap();
+        let by_file = f.by_file();
+        let old = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap();
         assert_eq!(old.len(), 3);
         assert_eq!(
             old.iter().map(|(_, o)| *o).collect::<Vec<_>>(),
             vec![0, 64, 192],
             "ordered by offset, the way a reader walks a file"
         );
-        let new = chunks_for(&f.index, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap();
+        let new = chunks_for(&by_file, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap();
         assert_eq!(new.len(), 3);
         assert_eq!(
             new.iter().map(|(_, o)| *o).collect::<Vec<_>>(),
@@ -544,7 +581,7 @@ mod tests {
             "same layout, different content at offset 0"
         );
         assert_eq!(
-            chunks_for(&f.index, "7.1.0", "c", DLL, Set::PatchFetch)
+            chunks_for(&by_file, "7.1.0", "c", DLL, Set::PatchFetch)
                 .unwrap()
                 .len(),
             1
@@ -566,7 +603,7 @@ mod tests {
             ("7.1.0", Set::PatchFetch, 1),
         ] {
             let one = by_file.get(tag, "c", DLL, role).unwrap();
-            let many = chunks_for(&f.index, tag, "c", DLL, role).unwrap();
+            let many = chunks_for(&by_file, tag, "c", DLL, role).unwrap();
             assert_eq!(one.len(), want, "{tag} {role}");
             assert_eq!(
                 one.iter()
@@ -584,21 +621,67 @@ mod tests {
         );
     }
 
+    /// Build the grouping once and answer a single file's question from it. The
+    /// owned `(id, offset)` list is the same one the one-shot helper returned,
+    /// in offset order.
+    #[test]
+    fn one_build_answers_the_owned_chunk_list_for_one_file() {
+        let f = Fixture::build("one-build");
+        let id_at = |offset: i64| {
+            f.index
+                .blobs
+                .iter()
+                .find(|b| {
+                    b.referenced_by
+                        .iter()
+                        .any(|r| r.role == Set::MaterializeOld && r.offset == offset)
+                })
+                .expect("a blob referenced at that offset")
+                .props
+                .chunk_id
+                .clone()
+        };
+        let by_file = f.by_file();
+        let old = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld)
+            .expect("one build, one lookup");
+        assert_eq!(
+            old,
+            vec![(id_at(0), 0), (id_at(64), 64), (id_at(192), 192)],
+            "the same owned list, in offset order"
+        );
+    }
+
     /// The closure check: the blobs alone reproduce the file. Read from disk,
     /// through the same store a capture used, with no manifest consulted.
     #[test]
     fn both_sides_rebuild_from_the_blobs_alone() {
         let f = Fixture::build("rebuild");
         let src = f.source();
-        let old =
-            rebuild(&f.by_file(), &src, "7.0.0", "c", DLL, Set::MaterializeOld).expect("old side");
+        let old = rebuild(
+            &f.by_file(),
+            &src,
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE,
+        )
+        .expect("old side");
         assert_eq!(old.bytes.len(), 224, "64 + 128 + 32");
         assert_eq!(old.md5, hash::md5_hex(&old.bytes));
         assert_eq!(old.nchunks, 3);
         assert!(old.layout.is_clean());
         assert_eq!(old.layout.ranges[1], Range::at(64, 128));
-        let new =
-            rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).expect("new side");
+        let new = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .expect("new side");
         assert_eq!(new.bytes.len(), 224, "the same three ranges");
         // Offset 0 now holds different content, which is the whole point: a
         // rebuild that ignored the new chunk would still be 224 B and would
@@ -630,6 +713,7 @@ mod tests {
                 } else {
                     Set::MaterializeNew
                 },
+                SIDE_SIZE,
             )
             .unwrap();
             let disk = std::fs::read(&shipped).unwrap();
@@ -674,6 +758,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("decodes to md5"), "{e}");
@@ -689,6 +774,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("not a decodable zstd blob"), "{e}");
@@ -705,6 +791,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("references no chunks"), "{e}");
@@ -723,7 +810,8 @@ mod tests {
         index.blobs[1]
             .referenced_by
             .push(reference("7.0.0", "c", DLL, Set::MaterializeOld, 999));
-        let hits = chunks_for(&index, "7.0.0", "c", DLL, Set::MaterializeOld).expect("both");
+        let by_file = ChunksByFile::build(&index);
+        let hits = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld).expect("both");
         let offsets: Vec<i64> = hits.iter().map(|(_, o)| *o).collect();
         assert_eq!(offsets, vec![0, 64, 192, 999], "every offset is kept");
         assert_eq!(
@@ -747,6 +835,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains(&victim), "{e}");
@@ -883,6 +972,117 @@ mod tests {
         );
     }
 
+    /// Fixture shape: `Fixture::build` is a four-blob bundle whose old side's
+    /// chunks sum to 224 B. The patchmap declares 999 B with the right chunk
+    /// count, so the rebuild must refuse the side rather than produce bytes
+    /// that only the A7 size row later disagrees with.
+    #[test]
+    fn a_wrong_patchmap_side_size_is_refused_by_the_rebuild() {
+        let f = Fixture::build("wrong-size");
+        let maps = BTreeMap::from([(
+            "c".to_string(),
+            side_map(Some(("7.0.0", 999, 3)), Some(("7.1.0", 224, 3))),
+        )]);
+        let e = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("999"),
+            "names both the chunk sum and the declared size: {e}"
+        );
+    }
+
+    /// A declared size above the chunk sum fails A11, and the message names
+    /// both numbers so a reader can see which figure disagreed.
+    #[test]
+    fn a_declared_size_above_the_chunk_sum_fails_a11_naming_both() {
+        let f = Fixture::build("size-above");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE + 1,
+        )
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("225"),
+            "names the chunk sum and the declared size: {e}"
+        );
+    }
+
+    /// A declared size below the chunk sum fails A11 too: the check is
+    /// symmetric, not a one-sided "at least this many bytes" guard.
+    #[test]
+    fn a_declared_size_below_the_chunk_sum_fails_a11() {
+        let f = Fixture::build("size-below");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE - 1,
+        )
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("223"),
+            "names the chunk sum and the declared size: {e}"
+        );
+    }
+
+    /// A side whose declared size matches its chunks still rebuilds cleanly,
+    /// with the declared size recorded on the layout rather than the sum we
+    /// could have derived ourselves.
+    #[test]
+    fn a_matching_declared_size_still_rebuilds_and_passes() {
+        let f = Fixture::build("size-match");
+        let r = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE,
+        )
+        .expect("rebuilds");
+        assert!(r.layout.is_clean());
+        assert_eq!(r.layout.declared_size, SIDE_SIZE);
+        assert_eq!(r.layout.total, SIDE_SIZE);
+        assert_eq!(r.bytes.len() as i64, SIDE_SIZE);
+    }
+
+    /// A hostile declared size is a typed error naming the side, never a
+    /// negative allocation or a panic in the layout check.
+    #[test]
+    fn a_negative_declared_size_is_a_typed_error_naming_the_side() {
+        let f = Fixture::build("size-negative");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            -1,
+        )
+        .unwrap_err();
+        assert!(e.contains("negative"), "{e}");
+        assert!(e.contains("-1"), "names the value: {e}");
+        assert!(e.contains("materialize_old"), "names the side: {e}");
+    }
+
     /// `added` and `removed` are one-sided and must rebuild the side they have,
     /// with the other reported as absent rather than as an error.
     #[test]
@@ -953,7 +1153,16 @@ mod tests {
             }
         }
         let src = f.source();
-        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        let e = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .unwrap_err();
         assert!(
             e.contains("overflows i64") && e.contains(&i64::MAX.to_string()),
             "names the arithmetic and the value: {e}"
@@ -973,7 +1182,16 @@ mod tests {
             }
         }
         let src = f.source();
-        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        let e = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .unwrap_err();
         assert!(
             e.contains("length -1") && e.contains("does not fit i64"),
             "names the cast and the value: {e}"

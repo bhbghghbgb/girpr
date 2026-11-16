@@ -448,6 +448,31 @@ fn a_log_file_is_written_and_flushed_before_the_process_ends() {
     );
 }
 
+/// The terminal SUMMARY is logged while the file sink is still open, so the
+/// JSON-lines log ends with the run's verdict rather than its narration — and
+/// the record appears exactly once.
+#[test]
+fn the_log_file_ends_with_the_summary_record() {
+    let dir = TempDir::absent("gircap-contract", "log_summary");
+    let log = dir.join("summary.ndjson");
+
+    let r = run_owned(&offline_capture(&["--log-file", log.to_str().unwrap()]));
+    assert_eq!(r.code, 2);
+
+    let text = std::fs::read_to_string(&log).expect("the log file was written");
+    let lines: Vec<&str> = text.lines().collect();
+    let count = lines
+        .iter()
+        .filter(|l| l.contains("\"message\":\"summary\""))
+        .count();
+    assert_eq!(count, 1, "SUMMARY logged zero or more than once:\n{text}");
+    let last = lines.last().expect("at least one log record");
+    assert!(
+        last.contains("\"message\":\"summary\""),
+        "the last log record is not the SUMMARY: {last}"
+    );
+}
+
 /// `RUST_LOG` does not reach the log file.
 ///
 /// The two sinks have two levels; the environment variable is a console lever

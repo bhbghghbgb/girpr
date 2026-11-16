@@ -848,7 +848,7 @@ fn sync_refuses_to_rename_through_a_shared_dst_link() {
     skip_if_no_link!("directory", dir_link(&outside, &dst.join("link")));
 
     let mut opts = sync_mem(src.clone(), dst.clone());
-    opts.common.case_sensitive = false;
+    opts.common.set_case_sensitive(false);
     let err = cmd_sync(opts, &log()).expect_err("renaming through a shared dst link must fail");
     let msg = format!("{err:#}");
     assert!(

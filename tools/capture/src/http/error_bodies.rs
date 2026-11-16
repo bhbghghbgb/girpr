@@ -121,9 +121,38 @@ pub struct ErrorBodies {
 
 #[derive(Debug, Default)]
 struct State {
-    /// Bytes already promised to rows in `rows`.
+    /// Bytes already promised to rows in `rows` or to live [`Reservation`]s.
     used: u64,
     rows: Vec<ErrorBody>,
+}
+
+/// A charge against the retention budget, held while a body is being read.
+///
+/// The charge is made when the reservation is created, so a burst of concurrent
+/// readers cannot all observe the same [`ErrorBodies::remaining`] and each buffer
+/// that much. A reservation is consumed by [`ErrorBodies::push_reserved`];
+/// dropping it unconsumed — on an early return or a panic — refunds the charge.
+#[derive(Debug)]
+pub(crate) struct Reservation<'a> {
+    store: &'a ErrorBodies,
+    granted: u64,
+    consumed: bool,
+}
+
+impl Reservation<'_> {
+    /// How many bytes this reservation promises. The holder must buffer no more.
+    pub(crate) fn granted(&self) -> u64 {
+        self.granted
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        if !self.consumed {
+            let mut state = self.store.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.used = state.used.saturating_sub(self.granted);
+        }
+    }
 }
 
 impl ErrorBodies {
@@ -142,10 +171,11 @@ impl ErrorBodies {
 
     /// How many bytes the run can still keep.
     ///
-    /// Read *before* a body is buffered, so the buffer does not grow past what
-    /// could possibly be retained. It is not a reservation: two concurrent reads
-    /// may both see the same remainder, and [`Self::push`] is what makes the
-    /// total exact by truncating whichever row arrives later.
+    /// Advisory only: two concurrent readers can both observe the same remainder
+    /// and each buffer that much. A caller about to read a body should use
+    /// [`Self::reserve`] instead, which charges the budget atomically. [`Self::push`]
+    /// and [`Self::push_reserved`] keep the final total exact by truncating
+    /// whichever row arrives later.
     pub fn remaining(&self) -> u64 {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         self.budget.saturating_sub(state.used)
@@ -156,21 +186,57 @@ impl ErrorBodies {
         self.budget
     }
 
+    /// Charge the budget for up to `max` bytes before a body is read.
+    ///
+    /// Returns a [`Reservation`] holding `min(max, remaining)`. The grant is
+    /// charged to `used` immediately, so concurrent reservations divide the
+    /// budget rather than each seeing all of it. Drop the reservation without
+    /// pushing to refund the charge.
+    pub(crate) fn reserve(&self, max: u64) -> Reservation<'_> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let room = self.budget.saturating_sub(state.used);
+        let granted = room.min(max);
+        state.used = state.used.saturating_add(granted);
+        Reservation {
+            store: self,
+            granted,
+            consumed: false,
+        }
+    }
+
+    /// Record one response against a reservation made before its body was read.
+    ///
+    /// The body is cut to what the reservation granted (when it is larger), the
+    /// unused part of the grant is refunded, and the row is pushed. A body that
+    /// did not fit is marked `truncated`. Consuming the reservation here means a
+    /// later drop of it does not refund twice.
+    pub(crate) fn push_reserved(&self, mut row: ErrorBody, mut reservation: Reservation<'_>) {
+        let granted = reservation.granted;
+        if row.body.len() as u64 > granted {
+            row.body
+                .truncate(usize::try_from(granted).unwrap_or(usize::MAX));
+            row.truncated = true;
+        }
+        let retained = row.body.len() as u64;
+        // Consume before touching `used`, so the reservation's Drop is a no-op
+        // and the accounting below is the only refund.
+        reservation.consumed = true;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.used = state.used.saturating_sub(granted).saturating_add(retained);
+        state.rows.push(row);
+    }
+
     /// Record one response, truncating its body to what the budget still allows.
     ///
     /// A truncated body still produces a row, with `truncated: true`: losing the
     /// observation because the evidence did not fit would be the same mistake as
-    /// throwing the body away in the first place.
-    pub fn push(&self, mut row: ErrorBody) {
-        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let room = self.budget.saturating_sub(state.used);
-        if row.body.len() as u64 > room {
-            row.body
-                .truncate(usize::try_from(room).unwrap_or(usize::MAX));
-            row.truncated = true;
-        }
-        state.used = state.used.saturating_add(row.body.len() as u64);
-        state.rows.push(row);
+    /// throwing the body away in the first place. This is a convenience for
+    /// callers that already hold the whole body; readers that stream one should
+    /// [`Self::reserve`] first and use [`Self::push_reserved`].
+    pub fn push(&self, row: ErrorBody) {
+        let granted = row.body.len() as u64;
+        let reservation = self.reserve(granted);
+        self.push_reserved(row, reservation);
     }
 
     /// Every row, in `seq` order.
@@ -272,13 +338,80 @@ mod tests {
 
     #[test]
     fn a_body_larger_than_the_ceiling_is_cut_at_the_ceiling() {
-        // The fetcher passes `remaining().min(max_response_bytes)` as the
-        // retention cap, so this is the store's share of that promise.
+        // The fetcher passes `reservation.granted().min(max_response_bytes)` as
+        // the retention cap, so this is the store's share of that promise.
         let store = ErrorBodies::new(2);
         let mut r = row(1, b"abcdef");
         r.body.truncate(2);
         r.truncated = true;
         store.push(r);
         assert_eq!(store.snapshot()[0].body, b"ab");
+    }
+
+    #[test]
+    fn concurrent_reservations_divide_the_budget() {
+        // Two readers that each ask for 6 of a 10-byte budget must be granted 6
+        // and 4, not both 10. Pushing 5 and 5 then keeps 5 and a truncated 4 —
+        // a total of 9, bounded by the budget rather than doubling it.
+        let store = ErrorBodies::new(10);
+        let a = store.reserve(6);
+        let b = store.reserve(6);
+        assert_eq!(a.granted(), 6);
+        assert_eq!(b.granted(), 4);
+        assert_eq!(store.remaining(), 0, "both grants are charged up front");
+
+        store.push_reserved(row(1, b"12345"), a);
+        store.push_reserved(row(2, b"12345"), b);
+
+        let rows = store.snapshot();
+        assert_eq!(rows[0].body, b"12345");
+        assert!(!rows[0].truncated);
+        assert_eq!(rows[1].body, b"1234");
+        assert!(rows[1].truncated, "the second body exceeded its grant");
+        assert_eq!(store.remaining(), 1, "only 9 of 10 bytes are retained");
+    }
+
+    #[test]
+    fn an_unused_reservation_refunds_its_grant_on_drop() {
+        let store = ErrorBodies::new(10);
+        {
+            let r = store.reserve(6);
+            assert_eq!(r.granted(), 6);
+            assert_eq!(store.remaining(), 4);
+        }
+        assert_eq!(
+            store.remaining(),
+            10,
+            "dropping without pushing returns the whole grant"
+        );
+    }
+
+    #[test]
+    fn a_body_smaller_than_its_grant_refunds_the_difference() {
+        let store = ErrorBodies::new(10);
+        let r = store.reserve(8);
+        store.push_reserved(row(1, b"abc"), r);
+        assert_eq!(store.snapshot()[0].body, b"abc");
+        assert_eq!(
+            store.remaining(),
+            7,
+            "only the 3 retained bytes stay charged; consuming the grant here \
+             also prevents its Drop from refunding a second time"
+        );
+    }
+
+    #[test]
+    fn push_still_truncates_to_what_the_budget_allows() {
+        // `push` is a convenience that reserves and then pushes; its behaviour
+        // must be identical to the old direct implementation.
+        let store = ErrorBodies::new(4);
+        store.push(row(1, b"123456"));
+        store.push(row(2, b"789"));
+        let rows = store.snapshot();
+        assert_eq!(rows[0].body, b"1234");
+        assert!(rows[0].truncated);
+        assert_eq!(rows[1].body, b"");
+        assert!(rows[1].truncated);
+        assert_eq!(store.remaining(), 0);
     }
 }

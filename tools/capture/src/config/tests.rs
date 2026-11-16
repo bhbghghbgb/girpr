@@ -301,6 +301,61 @@ fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
     assert!(e.message().contains("must differ"), "{}", e.message());
 }
 
+/// The flag-level guard covers only two explicit flags. When both halves
+/// resolve from the branch and `main.tag` happens to equal `diff_tags[0]`,
+/// `select` must refuse the pair by name before a build id is asked for or a
+/// directory is named after the duplicated tag.
+#[test]
+fn an_equal_resolved_tag_pair_is_refused_naming_both_sources() {
+    let mut b = branch();
+    b.tag = b.diff_tags[0].clone();
+    let p = pair_plan(None, None);
+    let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+    assert!(
+        e.contains("main.tag") && e.contains("diff_tags[0]"),
+        "the message names both sources: {e}"
+    );
+    assert!(
+        e.contains("7.0.0") && e.contains("must differ"),
+        "the message names the resolved tag and the rule: {e}"
+    );
+}
+
+/// The flags fold case with `eq_ignore_ascii_case`, so the resolved halves do
+/// too: a case-only difference is one tag for the pair's purposes on both
+/// entry points.
+#[test]
+fn a_case_only_difference_is_refused_for_both_flags_and_resolved_pair() {
+    assert!(
+        plan(|a| {
+            a.new_tag = Some("7.0.0-RC".into());
+            a.old_tag = Some("7.0.0-rc".into());
+        })
+        .is_err()
+    );
+
+    let mut b = branch();
+    b.tag = "7.0.0-RC".into();
+    b.diff_tags[0] = "7.0.0-rc".into();
+    let p = pair_plan(None, None);
+    let e = VersionPair::select(&b, p.new_selector(), p.old_selector()).unwrap_err();
+    assert!(
+        e.contains("main.tag") && e.contains("diff_tags[0]"),
+        "the message names both sources: {e}"
+    );
+}
+
+/// The guard is about equality, not similarity: a real version step resolved
+/// from the branch still yields both halves, with their sources intact.
+#[test]
+fn a_different_resolved_pair_is_still_accepted() {
+    let p = pair_plan(None, None);
+    let v = VersionPair::select(&branch(), p.new_selector(), p.old_selector()).unwrap();
+    assert_eq!(v.tags(), ["7.1.0", "7.0.0"]);
+    assert_eq!(v.new.source, "main.tag");
+    assert_eq!(v.old.source, "diff_tags[0]");
+}
+
 #[test]
 fn latest_is_accepted_for_new_tag_and_refused_for_a_probe() {
     assert!(
@@ -319,6 +374,37 @@ fn a_tag_that_is_not_a_bare_version_string_is_refused() {
     for good in ["7.1.0", "6.7.0", "5.5.0-nightly", "v7.1"] {
         assert!(validate_tag(good, "--old-tag").is_ok(), "{good:?}");
     }
+}
+
+/// The limit is 32 *bytes*, and the message says so. A 33-byte ASCII tag is
+/// refused; a 32-byte one passes.
+#[test]
+fn a_tag_longer_than_32_bytes_is_refused_with_byte_wording() {
+    let too_long = "7".repeat(33);
+    let problem = tag_shape_problem(&too_long).expect("33 bytes is too long");
+    assert!(problem.contains("32 bytes"), "{problem}");
+
+    let at_limit = "7".repeat(32);
+    assert_eq!(tag_shape_problem(&at_limit), None, "{at_limit:?}");
+}
+
+/// `len()` counts bytes, so 17 two-byte characters are 34 bytes and refused
+/// even though that is only 17 characters. The message must not claim the
+/// rule counts characters.
+#[test]
+fn a_multibyte_tag_is_counted_in_bytes_not_characters() {
+    let tag = "é".repeat(17);
+    assert_eq!(tag.len(), 34);
+    assert_eq!(tag.chars().count(), 17);
+
+    let problem = tag_shape_problem(&tag).expect("34 bytes is too long");
+    assert!(problem.contains("32 bytes"), "{problem}");
+    assert!(!problem.contains("characters"), "{problem}");
+
+    // 16 two-byte characters land exactly on the 32-byte limit and pass.
+    let at_limit = "é".repeat(16);
+    assert_eq!(at_limit.len(), 32);
+    assert_eq!(tag_shape_problem(&at_limit), None, "{at_limit:?}");
 }
 
 #[test]

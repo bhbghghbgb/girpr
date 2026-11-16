@@ -8,15 +8,17 @@
 //! `crate::repair::phases::plan::{PlannedFile, RepairPlan}`.
 
 use std::io::Write;
+use std::time::{Duration, SystemTime};
 
 use super::mode::{open_inplace, open_rw};
-use super::temp::write_downloaded_chunk;
+use super::temp::{DownloadedChunk, write_downloaded_chunk};
 use super::{
     ChunkStats, FileCtx, FileWrites, Inplace, PlannedFile, copy_within, write_at, zero_fill,
 };
 use crate::config::RepairMode;
+use crate::repair::phases::plan::FileId;
 use crate::repair::reuse;
-use crate::repair::scan::scan_ranges;
+use crate::repair::scan::{Verdict, scan_ranges, source_ok_by_chunk, source_ok_by_range};
 use crate::sophon::SophonChunk;
 use crate::util::{self, Md5};
 use anyhow::{Context, Result};
@@ -34,20 +36,23 @@ use anyhow::{Context, Result};
 ///    clearing the read-only attribute if that is what stopped the open;
 /// 2. **scan** — one read that answers everything: the whole-file MD5 (the
 ///    skip check), which chunks are already correct where they belong, and
-///    which reuse sources are intact;
+///    which reuse sources are intact. Under `--scan` the plan phase already
+///    read the file; when a length and modification-time check proves it has
+///    not changed, that verdict is reused instead of reading it again;
 /// 3. **stage** — the bytes of the chunks that have to *move* inside the
 ///    file are read into RAM, so the write order cannot destroy them;
 /// 4. **patch** — the wrong chunks are written, ascending: from the staged
 ///    bytes when there are any, from a download otherwise;
-/// 5. **verify** — one more read. The whole-file MD5 is the gate; if it does
-///    not match, the per-chunk verdicts name the culprit and only those are
-///    redone.
+/// 5. **verify** — one read is the gate: the whole-file MD5 decides. Only a
+///    mismatch takes a second read, which holds the per-chunk verdicts that
+///    name what to redo.
 ///
 /// A target that cannot be opened for writing answers [`Inplace::Unavailable`]
 /// and the caller writes that file the other way — through a `_tmp`, which
 /// does not need write access to the target.
 pub(super) async fn attempt_inplace(
     ctx: &FileCtx,
+    id: FileId,
     file: &PlannedFile,
     prefix: &str,
     final_path: &std::path::Path,
@@ -62,12 +67,13 @@ pub(super) async fn attempt_inplace(
     // reported `download_bytes` — "the bytes of the files that were actually
     // repaired" — does not count them. The settle happens where the file is
     // promoted, in `repair_all`.
-    attempt_inplace_inner(ctx, file, prefix, final_path, &mut stats, writes).await
+    attempt_inplace_inner(ctx, id, file, prefix, final_path, &mut stats, writes).await
 }
 
 /// The body of the in-place repair — see [`attempt_inplace`].
 async fn attempt_inplace_inner(
     ctx: &FileCtx,
+    id: FileId,
     file: &PlannedFile,
     prefix: &str,
     final_path: &std::path::Path,
@@ -83,6 +89,98 @@ async fn attempt_inplace_inner(
     // maps those verdicts back to the chunk they belong to.
     let (dest_ranges, source_ranges, source_owner) = scan_ranges(&file.chunks, &sources);
 
+    // 1 + 2. open, scan (or reuse the plan scan), the skip check, dry-run.
+    let (mut handle, mut scan) = match open_and_scan(
+        ctx,
+        id,
+        file,
+        final_path,
+        &dest_ranges,
+        &source_ranges,
+        &source_owner,
+    )? {
+        OpenScan::Finished(outcome) => return Ok(outcome),
+        OpenScan::Ready { handle, scan } => (handle, scan),
+    };
+
+    // `--repair-mode discard`: the target is deleted and written from scratch.
+    (handle, scan) = discard_if_requested(
+        ctx,
+        final_path,
+        handle,
+        scan,
+        dest_ranges.len(),
+        source_ranges.len(),
+    )?;
+
+    // The chunks that are not correct where they belong, and the stats that
+    // describe them.
+    let bad = plan_bad_chunks(file, &mut scan, &source_owner, stats);
+
+    // The eager/deferred trim decision.
+    trim_dead_tail(file, &sources, &handle, final_path)?;
+
+    // 3. the tier, and the staging that goes with it.
+    let (tier, payload, _reservation) = choose_tier(ctx, file, &sources, &scan.source_ok, &bad);
+    let captured = stage_sources(
+        file,
+        &sources,
+        &scan.source_ok,
+        &bad,
+        tier,
+        payload,
+        &mut handle,
+    )?;
+
+    // 4. patch, including the hole fill and the final length.
+    patch_chunks(
+        ctx,
+        writes,
+        &mut handle,
+        Patch {
+            file,
+            prefix,
+            final_path,
+            sources: &sources,
+            source_ok: &scan.source_ok,
+            bad: &bad,
+            captured: &captured,
+            tier,
+        },
+        stats,
+    )
+    .await?;
+
+    // 5. verify, redo what is still wrong, verify again.
+    verify_and_retry(ctx, writes, &mut handle, &dest_ranges, file, prefix, stats).await
+}
+
+/// What [`open_and_scan`] ended with.
+enum OpenScan {
+    /// The attempt is over before any patch: skipped, dry-run, or unavailable.
+    Finished(Inplace),
+    /// The target is open and scanned; the patch can proceed.
+    Ready {
+        handle: std::fs::File,
+        scan: util::Scan,
+    },
+}
+
+/// Steps 1 and 2 of the in-place repair: open the target and scan it.
+///
+/// The scan is one read that answers everything: the whole-file MD5 (the skip
+/// check), which chunks are already correct where they belong, and which reuse
+/// sources are intact. Under `--scan` the plan phase already took that read;
+/// [`reusable_verdict`] decides whether it can be reused.
+fn open_and_scan(
+    ctx: &FileCtx,
+    id: FileId,
+    file: &PlannedFile,
+    final_path: &std::path::Path,
+    dest_ranges: &[util::ScanRange<'_>],
+    source_ranges: &[util::ScanRange<'_>],
+    source_owner: &[usize],
+) -> Result<OpenScan> {
     // 1. open. A dry run changes nothing: no file is created and no
     // attribute is cleared, so the target is only read.
     let mut handle = match open_inplace(ctx, final_path) {
@@ -91,57 +189,112 @@ async fn attempt_inplace_inner(
             // A dry run on a file that is not there: nothing is correct, so
             // the file would be repaired.
             tracing::info!("would repair");
-            return Ok(Inplace::DryRun);
+            return Ok(OpenScan::Finished(Inplace::DryRun));
         }
         Err(e) => {
             // The target cannot be opened for writing. That is not a failed
             // file: the temp path does not need write access to the target,
             // so the repair still happens — through the other path.
             tracing::debug!(error = %format!("{e:#}"), "in-place open failed");
-            return Ok(Inplace::Unavailable(
+            return Ok(OpenScan::Finished(Inplace::Unavailable(
                 "the target cannot be opened for writing",
-            ));
+            )));
         }
     };
 
     // 2. scan. One read: the whole-file MD5, which chunks are already
-    // correct, and which sources are intact.
-    let mut scan = util::scan_reader(&mut handle, &dest_ranges, &source_ranges)
-        .with_context(|| format!("scan {}", file.rel))?;
+    // correct, and which sources are intact. Under `--scan` the plan phase
+    // already took that read; reuse it only when the guard proves the file is
+    // still the one that was scanned.
+    let scan = match reusable_verdict(ctx, id, file, &handle) {
+        Some(v) => {
+            // How long ago the plan scan ran, not how old the file's mtime is:
+            // the verdict records the latter for the guard, and the two are
+            // unrelated.
+            let scan_age_secs = ctx
+                .scan
+                .as_deref()
+                .and_then(|report| report.scanned_at)
+                .and_then(|started| started.elapsed().ok())
+                .map(|age| age.as_secs());
+            tracing::debug!(
+                file = %file.rel,
+                scan_age_secs = ?scan_age_secs,
+                "reusing the plan scan in the in-place writer"
+            );
+            util::Scan {
+                file_md5: v.file_md5,
+                file_len: v.file_len,
+                dest_ok: v.dest_ok.clone(),
+                source_ok: source_ok_by_range(&v.source_ok, source_owner),
+            }
+        }
+        None => util::scan_reader(&mut handle, dest_ranges, source_ranges)
+            .with_context(|| format!("scan {}", file.rel))?,
+    };
     tracing::debug!(
         actual_md5 = %scan.file_md5,
         expect_md5 = %file.md5,
         on_disk = scan.file_len,
         "scanned"
     );
-    if Md5::parse_hex(&scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
+    if scan.file_md5.matches_hex(&file.md5) {
         tracing::debug!(actual_md5 = %scan.file_md5, "check: md5 match -> skip");
-        return Ok(Inplace::Skipped);
+        return Ok(OpenScan::Finished(Inplace::Skipped));
     }
     if ctx.dry_run {
         tracing::info!("would repair");
-        return Ok(Inplace::DryRun);
+        return Ok(OpenScan::Finished(Inplace::DryRun));
     }
+    Ok(OpenScan::Ready { handle, scan })
+}
 
-    // `--repair-mode discard`: the target is deleted and written from
-    // scratch. Zero peak extra disk, and a full download for the file — the
-    // trade the mode exists to offer. The delete happens *after* the skip
-    // check, so an intact file is never deleted.
-    if ctx.repair_mode == RepairMode::Discard {
-        drop(handle);
-        discard_target(final_path)?;
-        handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
-        // The file is gone: every chunk has to be written, and there is
-        // nothing left to reuse from. `absent` is per range, not per chunk, so
-        // it is remapped below like every other scan.
-        scan = util::Scan::absent(dest_ranges.len(), source_ranges.len());
+/// `--repair-mode discard`: delete the target and write it from scratch.
+///
+/// Zero peak extra disk, and a full download for the file — the trade the mode
+/// exists to offer. The delete happens *after* the skip check, so an intact
+/// file is never deleted. Every other mode returns the open handle and its scan
+/// unchanged.
+fn discard_if_requested(
+    ctx: &FileCtx,
+    final_path: &std::path::Path,
+    handle: std::fs::File,
+    scan: util::Scan,
+    dest_len: usize,
+    source_len: usize,
+) -> Result<(std::fs::File, util::Scan)> {
+    if ctx.repair_mode != RepairMode::Discard {
+        return Ok((handle, scan));
     }
+    drop(handle);
+    discard_target(final_path)?;
+    let handle = open_rw(final_path).with_context(|| format!("create {}", final_path.display()))?;
+    // The file is gone: every chunk has to be written, and there is nothing
+    // left to reuse from. `absent` is per range, not per chunk, so it is
+    // remapped below like every other scan.
+    let scan = util::Scan::absent(dest_len, source_len);
+    Ok((handle, scan))
+}
 
+/// The chunks that are not correct where they belong, plus the kept-chunk
+/// accounting the repaired log reports.
+fn plan_bad_chunks(
+    file: &PlannedFile,
+    scan: &mut util::Scan,
+    source_owner: &[usize],
+    stats: &mut ChunkStats,
+) -> Vec<usize> {
     // Back to one source verdict per chunk, in the plan's order: a chunk with
     // no source has no intact source, by definition. Everything below indexes
     // `source_ok` by chunk, and the discard scan is per range like the rest.
-    let source_ok = source_ok_by_chunk(file.chunks.len(), &source_owner, &scan.source_ok);
-    scan.source_ok = source_ok;
+    // The scan answers one verdict per source range, so the two lists are the
+    // same length here.
+    debug_assert_eq!(
+        source_owner.len(),
+        scan.source_ok.len(),
+        "the scan answers one source verdict per source range"
+    );
+    scan.source_ok = source_ok_by_chunk(file.chunks.len(), source_owner, &scan.source_ok);
 
     // The chunks that are not correct where they belong. `file.chunks` is
     // sorted by offset (the plan guarantees it), so this list is ascending
@@ -151,20 +304,26 @@ async fn attempt_inplace_inner(
         .collect();
     stats.chunks_kept = (file.chunks.len() - bad.len()) as u64;
     tracing::debug!(bad = bad.len(), kept = stats.chunks_kept, "in-place plan");
+    bad
+}
 
-    // The eager trim: when no reuse candidate reaches past the target's
-    // end, the tail is dead weight and can be released before a single byte
-    // is written.
-    //
-    // **The other half is logged too.** The trim's outcome is not in the
-    // output contract — the file ends at the target size either way, and the
-    // difference is the *peak* disk usage, which nothing reports. The log is
-    // the only place the outcome is visible, so both branches say which one
-    // they took.
-    let have = handle_len(&handle)
+/// The eager trim: when no reuse candidate reaches past the target's end, the
+/// tail is dead weight and can be released before a single byte is written.
+///
+/// **The other half is logged too.** The trim's outcome is not in the output
+/// contract — the file ends at the target size either way, and the difference
+/// is the *peak* disk usage, which nothing reports. The log is the only place
+/// the outcome is visible, so both branches say which one they took.
+fn trim_dead_tail(
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    handle: &std::fs::File,
+    final_path: &std::path::Path,
+) -> Result<()> {
+    let have = handle_len(handle)
         .with_context(|| format!("stat {} before the trim", final_path.display()))?;
     if have > file.size.max(0) as u64 {
-        if trim_is_free(file, &file.chunks, &sources) {
+        if trim_is_free(file, &file.chunks, sources) {
             tracing::debug!(before = have, after = file.size, "trimming the dead tail");
             handle.set_len(file.size.max(0) as u64)?;
         } else {
@@ -179,19 +338,28 @@ async fn attempt_inplace_inner(
             );
         }
     }
+    Ok(())
+}
 
-    // 3. the tier, and the staging that goes with it.
-    //
-    // `Staged` reads the bytes that have to move into RAM, so **every**
-    // source survives and the writes run forward. `Ordered` reads each
-    // source from the file at the moment it is written, and the write
-    // order is the one that keeps the most of them alive.
-    //
-    // The budget picks the tier; it never refuses the file. A file that
-    // cannot get its reservation is written in the ordered direction, which
-    // produces the same file with less reuse.
-    let payload = staged_payload(&file.chunks, &sources, &scan.source_ok, &bad);
-    let (tier, _reservation) = match ctx.summary.max_ram_bytes() {
+/// Step 3: pick the write tier and reserve the staged payload.
+///
+/// `Staged` reads the bytes that have to move into RAM, so **every** source
+/// survives and the writes run forward. `Ordered` reads each source from the
+/// file at the moment it is written, and the write order is the one that keeps
+/// the most of them alive.
+///
+/// The budget picks the tier; it never refuses the file. A file that cannot get
+/// its reservation is written in the ordered direction, which produces the same
+/// file with less reuse.
+fn choose_tier<'a>(
+    ctx: &'a FileCtx,
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+) -> (Tier, u64, Option<RamReservation<'a>>) {
+    let payload = staged_payload(&file.chunks, sources, source_ok, bad);
+    let (tier, reservation) = match ctx.summary.max_ram_bytes() {
         // "stage nothing at all" is a mode, not a shortage.
         Some(0) => (Tier::Ordered, None),
         _ if payload == 0 => (Tier::Staged, None),
@@ -214,28 +382,75 @@ async fn attempt_inplace_inner(
             }
         }
     };
+    (tier, payload, reservation)
+}
 
+/// Step 3 continued: read every staged source into RAM, hash-gated.
+///
+/// Every byte written is hash-gated before it lands, and a staged source is a
+/// write's source: gate it here too.
+fn stage_sources(
+    file: &PlannedFile,
+    sources: &[Option<u64>],
+    source_ok: &[bool],
+    bad: &[usize],
+    tier: Tier,
+    payload: u64,
+    handle: &mut std::fs::File,
+) -> Result<Vec<Option<Vec<u8>>>> {
     let mut captured: Vec<Option<Vec<u8>>> = vec![None; file.chunks.len()];
-    if matches!(tier, Tier::Staged) && payload > 0 {
-        for &i in &bad {
-            if !scan.source_ok[i] {
-                continue;
-            }
-            let Some(off) = sources[i] else { continue };
-            let c = &file.chunks[i];
-            let bytes = util::read_range(&mut handle, off, c.uncompressed_size.max(0) as u64)
-                .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
-            // Every byte written is hash-gated before it lands, and a staged
-            // source is a write's source: gate it here too.
-            let h = Md5::from(md5::compute(&bytes));
-            if !h.matches_hex(&c.uncompressed_md5) {
-                tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
-                continue;
-            }
-            captured[i] = Some(bytes);
-        }
+    if !matches!(tier, Tier::Staged) || payload == 0 {
+        return Ok(captured);
     }
+    for &i in bad {
+        if !source_ok[i] {
+            continue;
+        }
+        let Some(off) = sources[i] else { continue };
+        let c = &file.chunks[i];
+        let bytes = util::read_range(handle, off, c.uncompressed_size.max(0) as u64)
+            .with_context(|| format!("capture chunk {} of {}", c.id, file.rel))?;
+        let h = util::md5::md5_digest(&bytes);
+        if !h.matches_hex(&c.uncompressed_md5) {
+            tracing::debug!(chunk = %c.id, "staged bytes do not match -> download");
+            continue;
+        }
+        captured[i] = Some(bytes);
+    }
+    Ok(captured)
+}
 
+/// The plan-side inputs to [`patch_chunks`]: what is wrong, where its bytes
+/// come from, and the write tier the patch runs in.
+struct Patch<'a> {
+    file: &'a PlannedFile,
+    prefix: &'a str,
+    final_path: &'a std::path::Path,
+    sources: &'a [Option<u64>],
+    source_ok: &'a [bool],
+    bad: &'a [usize],
+    captured: &'a [Option<Vec<u8>>],
+    tier: Tier,
+}
+
+/// Step 4: write the wrong chunks, fill the holes, and end at the target size.
+async fn patch_chunks(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    handle: &mut std::fs::File,
+    patch: Patch<'_>,
+    stats: &mut ChunkStats,
+) -> Result<()> {
+    let Patch {
+        file,
+        prefix,
+        final_path,
+        sources,
+        source_ok,
+        bad,
+        captured,
+        tier,
+    } = patch;
     // The order (ordered tier only): the direction that keeps the most
     // sources alive, and which sources those are. Only the sources the scan
     // found intact can be salvaged — the rest have to be downloaded.
@@ -245,9 +460,9 @@ async fn attempt_inplace_inner(
             let chunks: Vec<&SophonChunk> = bad.iter().map(|&i| &file.chunks[i]).collect();
             let srcs: Vec<Option<u64>> = bad
                 .iter()
-                .map(|&i| if scan.source_ok[i] { sources[i] } else { None })
+                .map(|&i| if source_ok[i] { sources[i] } else { None })
                 .collect();
-            let usable = handle_len(&handle)
+            let usable = handle_len(handle)
                 .with_context(|| format!("stat {} for the salvage order", final_path.display()))?;
             let o = reuse::salvage_order_refs(&chunks, &srcs, usable);
             tracing::info!(
@@ -261,9 +476,9 @@ async fn attempt_inplace_inner(
         }
     };
 
-    // 4. patch. Ascending in the staged tier (forward writes), in the
-    // salvage order in the ordered tier. One scratch buffer serves the whole
-    // patch: the chunks are written one at a time, so the copy pieces reuse it.
+    // Ascending in the staged tier (forward writes), in the salvage order in
+    // the ordered tier. One scratch buffer serves the whole patch: the chunks
+    // are written one at a time, so the copy pieces reuse it.
     let mut scratch = Vec::new();
     let mut write_order: Vec<usize> = (0..bad.len()).collect();
     if let Some(o) = &order
@@ -277,7 +492,7 @@ async fn attempt_inplace_inner(
         let dst = c.offset.max(0) as u64;
         if let Some(bytes) = &captured[i] {
             // A staged source: the bytes are already verified.
-            write_at(ctx, writes, &mut handle, dst, bytes)?;
+            write_at(ctx, writes, handle, dst, bytes)?;
             stats.chunks_reused += 1;
         } else if let Some(o) = &order
             && o.live[k]
@@ -287,7 +502,7 @@ async fn attempt_inplace_inner(
             copy_within(
                 ctx,
                 writes,
-                &mut handle,
+                handle,
                 &mut scratch,
                 src,
                 dst,
@@ -295,7 +510,15 @@ async fn attempt_inplace_inner(
             )?;
             stats.chunks_reused += 1;
         } else {
-            write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
+            write_downloaded_chunk(DownloadedChunk {
+                ctx,
+                prefix,
+                c,
+                out: &mut *handle,
+                stats: &mut *stats,
+                writes: &mut *writes,
+            })
+            .await?;
         }
     }
 
@@ -304,35 +527,51 @@ async fn attempt_inplace_inner(
     // ordered tier a hole can still hold a source that a later chunk needs.
     let layout = file.layout();
     for (offset, len) in &layout.gaps {
-        zero_fill(ctx, writes, &mut handle, *offset, *len)?;
+        zero_fill(ctx, writes, handle, *offset, *len)?;
     }
 
     // The file must end at its manifest size: shorter means the tail is
     // missing, longer means it is dead weight.
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
+    Ok(())
+}
 
-    // 5. verify. One more read: the whole-file MD5 is the gate, and the
-    // per-chunk verdicts name the culprit when it does not match.
-    let after = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if Md5::parse_hex(&after.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
-        return Ok(repaired_in_place(stats, &after.file_md5));
-    }
+/// Step 5: verify, redo only the still-wrong chunks, then verify again.
+async fn verify_and_retry(
+    ctx: &FileCtx,
+    writes: &mut FileWrites,
+    handle: &mut std::fs::File,
+    dest_ranges: &[util::ScanRange<'_>],
+    file: &PlannedFile,
+    prefix: &str,
+    stats: &mut ChunkStats,
+) -> Result<Inplace> {
+    // One pass is the gate: the whole-file digest. The per-chunk verdicts are
+    // only needed when it fails, so a repaired file does not hash every chunk
+    // range as well as the file.
+    let still_bad = match verify_in_place(
+        dest_ranges,
+        |ranges| util::scan_reader(handle, ranges, &[]),
+        file.chunks.len(),
+        &file.md5,
+    )? {
+        Verified::Matches(md5) => return Ok(repaired_in_place(stats, md5)),
+        Verified::Mismatch { md5, still_bad } => {
+            if still_bad.is_empty() {
+                return Err(FinalDigestMismatch(format!(
+                    "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
+                    file.rel, file.md5, md5
+                ))
+                .into());
+            }
+            still_bad
+        }
+    };
 
-    // Redo only the chunks that are still wrong. A chunk that fails here
-    // passed its own MD5, so the damage is elsewhere: a second pass names
-    // it instead of re-fetching the whole file.
-    let still_bad: Vec<usize> = (0..file.chunks.len())
-        .filter(|&i| !after.dest_ok[i])
-        .collect();
-    if still_bad.is_empty() {
-        anyhow::bail!(
-            "final md5 mismatch for {}: expect {} got {} (the bytes outside the chunks are wrong)",
-            file.rel,
-            file.md5,
-            after.file_md5
-        );
-    }
+    // Redo only the chunks the verify pass found still wrong. A chunk that
+    // fails here passed its own MD5, so the damage is elsewhere: the range
+    // verdicts name it instead of re-fetching the whole file.
     tracing::warn!(
         file = %file.rel,
         chunks = still_bad.len(),
@@ -340,40 +579,336 @@ async fn attempt_inplace_inner(
     );
     for &i in &still_bad {
         let c = &file.chunks[i];
-        write_downloaded_chunk(ctx, prefix, c, &mut handle, stats, writes).await?;
+        write_downloaded_chunk(DownloadedChunk {
+            ctx,
+            prefix,
+            c,
+            out: &mut *handle,
+            stats: &mut *stats,
+            writes: &mut *writes,
+        })
+        .await?;
     }
     handle.set_len(file.size.max(0) as u64)?;
     handle.flush()?;
-    let final_scan = util::scan_reader(&mut handle, &dest_ranges, &[])?;
-    if !Md5::parse_hex(&final_scan.file_md5).is_ok_and(|actual| actual.matches_hex(&file.md5)) {
-        anyhow::bail!(
+    // The digest and, when the layout has an overlap, the verdicts the
+    // terminal decision needs are the same read: the scan hashes the whole
+    // file as it sweeps the ranges.
+    let (scan, checked) = read_after_redo(file, dest_ranges, |ranges| {
+        util::scan_reader(handle, ranges, &[])
+    })?;
+    let final_md5 = scan.file_md5;
+    if !Md5::parse_hex(&file.md5).is_ok_and(|expected| expected == final_md5) {
+        let message = format!(
             "final md5 mismatch for {}: expect {} got {}",
-            file.rel,
-            file.md5,
-            final_scan.file_md5
+            file.rel, file.md5, final_md5
         );
+        if redo_mismatch_is_terminal(file, &scan, checked) {
+            return Err(FinalDigestMismatch(message).into());
+        }
+        return Err(anyhow::anyhow!(message));
     }
-    Ok(repaired_in_place(stats, &final_scan.file_md5))
+    Ok(repaired_in_place(stats, final_md5))
 }
 
-/// Map the scan's per-source-range verdicts back onto one verdict per chunk.
+/// The one read the post-redo tail takes: the whole-file digest and, when the
+/// layout has an overlap, the per-chunk verdicts the terminal decision needs.
 ///
-/// `scan.source_ok` is indexed by the range list [`scan_ranges`] built, which
-/// has one entry per chunk **with a source**; `source_owner[k]` is the chunk
-/// that range `k` belongs to. A chunk with no source has no intact source, by
-/// definition, so it stays `false`. The discard path replaces a real scan with
-/// [`util::Scan::absent`], whose tuple is `(dest ranges, source ranges)`; this
-/// remap is what keeps that per-range shape from being read as per-chunk.
-fn source_ok_by_chunk(
-    chunks_len: usize,
-    source_owner: &[usize],
-    scan_source_ok: &[bool],
-) -> Vec<bool> {
-    let mut source_ok = vec![false; chunks_len];
-    for (k, &i) in source_owner.iter().enumerate() {
-        source_ok[i] = scan_source_ok.get(k).copied().unwrap_or(false);
+/// [`util::scan_reader`] hashes the whole file as it sweeps, so its digest is
+/// the digest a bare whole-file pass would return. An overlap needs the range
+/// verdicts anyway, so asking the scan for them costs no extra read; asking
+/// for a digest first and scanning after the comparison failed would read the
+/// file twice. The trade is the range digests on an overlap whose redo did
+/// settle the digest. A plan with no overlap is proved by the layout alone, so
+/// it is given no ranges: the same single pass still answers the digest, just
+/// without building per-range digests.
+///
+/// The second value is how many verdicts the terminal decision reads: the
+/// number of ranges the pass was given. A scan that answers a different
+/// number is missing or surplus answers, not correct ones — see
+/// [`redo_mismatch_is_terminal`].
+fn read_after_redo(
+    file: &PlannedFile,
+    dest_ranges: &[util::ScanRange<'_>],
+    read: impl FnOnce(&[util::ScanRange<'_>]) -> Result<util::Scan>,
+) -> Result<(util::Scan, usize)> {
+    let ranges = overlapping_ranges(file, dest_ranges);
+    let checked = ranges.len();
+    Ok((read(&ranges)?, checked))
+}
+
+/// The chunk ranges the layout says overlap, in the order the scan was given
+/// them.
+///
+/// The layout names the two offsets of every overlap — the chunk that claims
+/// the bytes and the chunk that claims them again — so the ranges whose offset
+/// it names are the contested ones. Every chunk that claims bytes another
+/// chunk claims is named: the layout records an overlap whenever a chunk
+/// starts before the coverage ends, and it names both sides of that overlap.
+///
+/// The chunks it leaves out are the ones **no other chunk claims**. Nothing
+/// but their own write moves their bytes, so the redo cannot change their
+/// verdict: they are still the chunks the verify pass found, and the redo
+/// wrote them correctly when they were wrong. Their verdict is therefore
+/// already known, and asking the scan for it again only hashes their bytes a
+/// second time.
+fn overlapping_ranges<'a>(
+    file: &PlannedFile,
+    dest_ranges: &'a [util::ScanRange<'a>],
+) -> Vec<util::ScanRange<'a>> {
+    let layout = file.layout();
+    if layout.overlaps.is_empty() {
+        // No overlap: the layout is the whole proof, and there is no verdict
+        // to ask for.
+        return Vec::new();
     }
-    source_ok
+    let mut contested: Vec<u64> = layout.overlaps.iter().flat_map(|&(a, b)| [a, b]).collect();
+    contested.sort_unstable();
+    contested.dedup();
+    dest_ranges
+        .iter()
+        .copied()
+        .filter(|(offset, _, _)| contested.binary_search(offset).is_ok())
+        .collect()
+}
+
+/// Can another attempt change the bytes a post-redo mismatch was computed
+/// over?
+///
+/// The redo wrote every chunk the second scan named. A layout with no overlap
+/// is the whole proof: the only remaining difference is the zero-filled gaps
+/// and the declared length, so a second attempt would write no chunk and
+/// repeat the digest. That answer is the layout's, not the caller's: a scan
+/// built from an empty range list for an overlapping layout is missing
+/// answers, not evidence that nothing can change.
+///
+/// An overlap can undo a neighbour when the redo rewrites a chunk, so a
+/// non-empty overlap list is not proof by itself. Two chunks that claim the
+/// same bytes can be genuinely different — at most one of them can match — or
+/// identical duplicates, where both match and no write can change either.
+/// The layout cannot tell the two apart, because it only knows offsets and
+/// lengths; only the bytes can. The scan therefore carries one verdict per
+/// overlapping range, and the mismatch is final exactly when every one of
+/// them now matches.
+///
+/// `expected` is how many verdicts the decision reads: the ranges
+/// [`read_after_redo`] asked the scan for. A verdict list of another length is
+/// not the answer that was asked for: a shorter one is missing verdicts, and a
+/// longer one means the scan answered ranges the caller did not ask about, so
+/// which verdict belongs to which range is unknown. Both decide nothing and
+/// the mismatch keeps its retries — the same defensive shape
+/// [`verify_in_place`] uses for the chunks it has to redo.
+fn redo_mismatch_is_terminal(file: &PlannedFile, scan: &util::Scan, expected: usize) -> bool {
+    if file.layout().overlaps.is_empty() {
+        return true;
+    }
+    expected > 0 && scan.dest_ok.len() == expected && scan.dest_ok.iter().all(|&ok| ok)
+}
+
+/// A whole-file digest mismatch that no retry can change.
+///
+/// The in-place writer assembles the target from bytes it has already checked
+/// one chunk at a time: a staged source's MD5, an in-file source range the
+/// scan found intact, or a downloaded chunk that passed its own gate. The
+/// bytes outside those ranges are the plan's zero-filled gaps and declared
+/// length. A whole-file mismatch therefore means the **plan** is inconsistent
+/// with itself — bytes no chunk describes, or a declared digest no assembly
+/// of them can produce — not that a download or a write went wrong.
+///
+/// The marker is only used when another attempt cannot change the assembled
+/// bytes: either every chunk range already matched, or [`verify_and_retry`]'s
+/// redo was followed by a scan that found every range it checked correct (a
+/// layout with no overlap asks for no ranges and is proved by that layout).
+/// An overlap whose ranges cannot all match keeps the ordinary error, because
+/// rewriting one chunk can make its neighbour wrong again and the next attempt
+/// may assemble different bytes.
+///
+/// A **transient** download or write error is still an ordinary `Err` and is
+/// retried; this marker is only for the verify gate's deterministic verdict.
+/// The temp path's digest gate keeps its retries: it resumes by length, so a
+/// corrupt `_tmp` prefix is a cause a retry can remove.
+#[derive(Debug)]
+pub(super) struct FinalDigestMismatch(String);
+
+impl std::fmt::Display for FinalDigestMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FinalDigestMismatch {}
+
+/// What one verification run over the in-place target answered.
+enum Verified {
+    /// The whole-file digest is the manifest's; the chunk verdicts were not
+    /// needed.
+    Matches(Md5),
+    /// The digest did not match. `still_bad` names the chunks whose verdicts
+    /// the follow-up scan found wrong, in plan order.
+    Mismatch { md5: Md5, still_bad: Vec<usize> },
+}
+
+/// Verify the target: one pass for the digest, a second only on a mismatch.
+///
+/// The digest alone answers success, and success is the normal outcome, so the
+/// gate is a whole-file read that hashes nothing else. When the digest does
+/// not match, the per-chunk verdicts are needed to name what to redo; that
+/// second read is the rare path, and it is the only one that pays for the
+/// range digests. Asking the first pass for the ranges as well would hash
+/// every chunk range on every repaired file to save the second read only when
+/// something is wrong.
+///
+/// `read` takes the ranges to hash and returns the scan. It is called once
+/// with no ranges and, only on a mismatch, once with `dest_ranges`.
+fn verify_in_place(
+    dest_ranges: &[util::ScanRange<'_>],
+    mut read: impl FnMut(&[util::ScanRange<'_>]) -> Result<util::Scan>,
+    chunks_len: usize,
+    expect: &str,
+) -> Result<Verified> {
+    let scan = read(&[])?;
+    if Md5::parse_hex(expect).is_ok_and(|expected| expected == scan.file_md5) {
+        return Ok(Verified::Matches(scan.file_md5));
+    }
+    let scan = read(dest_ranges)?;
+    let still_bad = (0..chunks_len)
+        .filter(|&i| !scan.dest_ok.get(i).copied().unwrap_or(false))
+        .collect();
+    Ok(Verified::Mismatch {
+        md5: scan.file_md5,
+        still_bad,
+    })
+}
+
+/// The widest filesystem timestamp tick the reuse guard accounts for.
+///
+/// FAT/exFAT record modification times at 2 s; HFS+ and some SMB/NFS servers
+/// at 1-2 s. A store that truncates further is outside this margin and is
+/// covered by the residual limit documented on [`reusable_verdict`].
+const COARSE_MTIME_TICK: Duration = Duration::from_secs(2);
+
+/// Did the recorded mtime predate the scan by more than one coarse tick?
+///
+/// A rewrite that happens at or after the scan can only present the recorded
+/// mtime on a tick-truncating store when its own time falls in the recorded
+/// tick. Requiring the scan start to be more than a tick after the recorded
+/// mtime rules that out. Missing or backwards timestamps answer `false`, so
+/// the caller reads the file again.
+///
+/// This inference assumes a forward-moving wall clock: a write at or after
+/// `scanned_at` stamps a time no earlier than `scanned_at`. A backwards jump
+/// can break it; the consequences are described on [`reusable_verdict`].
+fn mtime_predates_scan(recorded: SystemTime, scanned_at: Option<SystemTime>) -> bool {
+    let Some(scanned_at) = scanned_at else {
+        return false;
+    };
+    scanned_at
+        .duration_since(recorded)
+        .is_ok_and(|age| age > COARSE_MTIME_TICK)
+}
+
+/// The plan-phase verdict for this file, when a cheap stat proves the open
+/// handle has not changed since it was scanned.
+///
+/// Reuse is deliberately conservative: a missing report or scan start, a
+/// failed stat, a length mismatch, any modification-time difference, or a
+/// recorded mtime too close to the scan all mean "read it again". A stale
+/// verdict describes a layout that is no longer on disk, so every uncertainty
+/// costs the read rather than risking a wrong write.
+///
+/// The verdict is about the **open handle**, not the path: the length and
+/// mtime come from `handle.metadata()`, so a path replacement between the open
+/// and this check cannot make the guard read another file's metadata. The
+/// writer still writes the handle it opened; a path replacement after that is
+/// outside this guard and is caught by the final digest only for the handle.
+///
+/// # The coarse-timestamp limit
+///
+/// A **coarse** filesystem - FAT/exFAT (2 s), HFS+, and some SMB/NFS servers
+/// (1-2 s) - can let a rewrite keep the length and land inside the same
+/// timestamp tick as the scan. The recorded and current mtimes are then equal,
+/// and without more information the guard would accept a verdict that
+/// describes the previous bytes. The natural evasion window is exactly that:
+/// the recorded mtime must share the coarse tick with the post-scan rewrite.
+///
+/// [`mtime_predates_scan`] closes the **intact**-verdict gap. A rewrite at or
+/// after the scan has a timestamp at least as new as the scan start, so when
+/// the recorded mtime predates the scan start by more than one coarse tick,
+/// no such rewrite can present the recorded timestamp. Only a file whose mtime
+/// is within the tick of the scan start pays the extra read on a normal
+/// filesystem; files installed or last changed earlier keep the reuse.
+///
+/// What a stale verdict costs depends on what the plan scan found:
+///
+/// - A verdict that found the file **damaged** cannot make the writer skip,
+///   because its digest is not the manifest's. The patch runs with the stale
+///   per-chunk answers, and [`verify_in_place`] always digests the finished
+///   file; when the answers were wrong that digest fails, its range scan names
+///   the chunks that are still wrong, and [`verify_and_retry`] downloads them.
+///   The cost is one extra verify pass and a redo, never a wrong byte left in
+///   the file.
+/// - A verdict that found the file **intact** is also the skip check: its
+///   digest matches the manifest's, so the writer reports the file skipped
+///   without reading or writing it. The age check above rejects the same-tick
+///   rewrite, but it cannot cover every store or writer. The residual is a
+///   post-scan rewrite that can still present the recorded mtime even though
+///   it is older than the scan:
+///
+///   - a store that does not advance the mtime on a write at all, where the
+///     recorded value is preserved no matter how old it is;
+///   - a store whose timestamp granularity is coarser than
+///     [`COARSE_MTIME_TICK`], where a scan more than a tick after the recorded
+///     mtime can still share the truncated tick with a later rewrite;
+///   - a writer that backdates the mtime, for example by restoring the
+///     original timestamp after changing the bytes.
+///
+///   Such a store or writer can still make this run report the file skipped
+///   until a later scan sees it. Nothing is ever written from a stale verdict,
+///   so this run cannot corrupt the file; it can only fail to repair it.
+///
+/// # The clock direction
+///
+/// The age rule assumes the wall clock moves forward between the file's last
+/// write, the plan scan, and the writer's check. A backwards jump is not
+/// detected. A jump before the scan starts leaves every recorded mtime at or
+/// after the earlier scan start; [`mtime_predates_scan`] then answers `false`
+/// and each file is read again, the safe direction at the cost of the read. A
+/// jump during the scan is per file, because the scan start is one timestamp
+/// taken before the files are read: one scanned before the jump recorded a
+/// time at or after the scan start and is read again, while one scanned after
+/// the jump recorded a lower time and the after-scan caveat below applies.
+/// If the jump happens after the scan, a post-scan rewrite can stamp a time
+/// earlier than the scan start, so "a later write is at least as new as the
+/// scan" no longer holds. Should that rewrite then
+/// present the recorded mtime exactly - naturally or because a coarse store
+/// truncates it there - the guard can accept a stale intact verdict, with the
+/// residual consequence above: skipped until a later scan, never written from
+/// the stale verdict.
+///
+/// Not paying for a second read here is the trade that makes scanning worth it.
+fn reusable_verdict<'a>(
+    ctx: &'a FileCtx,
+    id: FileId,
+    file: &PlannedFile,
+    handle: &std::fs::File,
+) -> Option<&'a Verdict> {
+    let report = ctx.scan.as_deref()?;
+    let verdict = report.get(&ctx.plan, id)?;
+    if verdict.dest_ok.len() != file.chunks.len() || verdict.source_ok.len() != file.chunks.len() {
+        return None;
+    }
+    let recorded = verdict.modified?;
+    let metadata = handle.metadata().ok()?;
+    if metadata.len() != verdict.file_len {
+        return None;
+    }
+    if metadata.modified().ok()? != recorded {
+        return None;
+    }
+    if !mtime_predates_scan(recorded, report.scanned_at) {
+        return None;
+    }
+    Some(verdict)
 }
 
 /// The success settle shared by the first verify and the redo.
@@ -381,7 +916,7 @@ fn source_ok_by_chunk(
 /// Both paths end the same way: one `repaired in place` line carrying the
 /// file's chunk accounting, then the stats the caller promotes. Keeping it in
 /// one place stops the two paths' log blocks from drifting apart.
-fn repaired_in_place(stats: &ChunkStats, md5: &str) -> Inplace {
+fn repaired_in_place(stats: &ChunkStats, md5: Md5) -> Inplace {
     tracing::info!(
         chunks_total = stats.chunks_total,
         chunks_kept = stats.chunks_kept,
@@ -466,7 +1001,9 @@ pub(super) fn trim_is_free(
     chunks.iter().zip(sources).all(|(c, src)| {
         let Some(r) = *src else { return true };
         let s = c.uncompressed_size.max(0) as u64;
-        r.checked_add(s).is_none_or(|end| end <= size)
+        // An overflowing end is unrepresentable and therefore certainly past
+        // any real target: treat it as outside, never as inside.
+        r.checked_add(s).is_some_and(|end| end <= size)
     })
 }
 
@@ -536,7 +1073,16 @@ enum Tier {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Seek, SeekFrom};
+    use std::sync::Arc;
+
     use super::*;
+    use crate::repair::phases::manifest::LocalChunkMap;
+    use crate::repair::phases::plan::RepairPlan;
+    use crate::repair::scan::ScanReport;
+    use crate::report::Summary;
+    use crate::sleep::NoSleep;
+    use crate::test_support::stamp_ago;
 
     /// R-4: a failed delete in discard mode must be reported as the delete,
     /// not ignored and then blamed on the re-open. A directory at the target
@@ -663,6 +1209,83 @@ mod tests {
         assert_eq!(staged_payload(&chunks, &sources, &ok, &bad), 10);
     }
 
+    /// The tier decision, as a table: the RAM limit and the payload together
+    /// pick the tier, and "stage nothing" is a mode (`Some(0)`), not a
+    /// shortage.
+    ///
+    /// The payload here is 10 for `bad = [0, 1]` (only chunk 0 has an intact
+    /// source) and 0 for `bad = [1]` (chunk 1 has no source at all).
+    #[test]
+    fn the_tier_decision_table_is_pinned() {
+        fn tier_for(limit: Option<u64>, bad: &[usize]) -> (Tier, u64, bool) {
+            let mut ctx = test_ctx(None);
+            Arc::get_mut(&mut ctx.summary)
+                .expect("the test context owns its summary")
+                .set_ram_limit(limit);
+            let chunks = vec![chunk("a", 10), chunk("b", 20)];
+            let sources = vec![Some(0), None];
+            let source_ok = vec![true, true];
+            let file = PlannedFile {
+                rel: "f.dat".into(),
+                size: 30,
+                md5: "m".into(),
+                url_prefix: Arc::from(""),
+                chunks,
+            };
+            let (tier, payload, reservation) = choose_tier(&ctx, &file, &sources, &source_ok, bad);
+            let reserved = reservation.is_some();
+            drop(reservation);
+            (tier, payload, reserved)
+        }
+
+        // Nothing to stage: the tier is staged, but there is nothing to reserve.
+        assert_eq!(tier_for(None, &[1]), (Tier::Staged, 0, false));
+        // `--max-ram-bytes 0` is a mode: ordered even when there is nothing to
+        // stage, and regardless of the payload.
+        assert_eq!(tier_for(Some(0), &[1]), (Tier::Ordered, 0, false));
+        assert_eq!(tier_for(Some(0), &[0, 1]), (Tier::Ordered, 10, false));
+        // Exactly at the limit reserves; one byte short falls back.
+        assert_eq!(tier_for(Some(10), &[0, 1]), (Tier::Staged, 10, true));
+        assert_eq!(tier_for(Some(9), &[0, 1]), (Tier::Ordered, 10, false));
+        // Without a limit the reservation always succeeds.
+        assert_eq!(tier_for(None, &[0, 1]), (Tier::Staged, 10, true));
+    }
+
+    /// The bad-chunk plan, as a table: the list is the chunks that are not
+    /// correct where they belong, the kept count is the complement, and the
+    /// per-range source verdicts are folded back onto chunks (chunk 1 has no
+    /// source range, so it can never be reused).
+    #[test]
+    fn the_bad_chunk_plan_is_the_wrong_chunks_with_the_kept_count() {
+        let chunks = vec![chunk("a", 10), chunk("b", 20), chunk("c", 30)];
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 60,
+            md5: "m".into(),
+            url_prefix: Arc::from(""),
+            chunks,
+        };
+        let mut stats = ChunkStats {
+            chunks_total: 3,
+            ..Default::default()
+        };
+        let mut scan = util::Scan {
+            file_md5: Md5::EMPTY,
+            file_len: 60,
+            dest_ok: vec![true, false, true],
+            source_ok: vec![true, false],
+        };
+        let bad = plan_bad_chunks(&file, &mut scan, &[0, 2], &mut stats);
+        assert_eq!(bad, vec![1], "only the wrong chunk is patched");
+        assert_eq!(stats.chunks_kept, 2, "the correct chunks are kept");
+        assert_eq!(
+            scan.source_ok,
+            vec![true, false, false],
+            "range 0 belongs to chunk 0; chunk 2's range was not intact and \
+             chunk 1 has no range"
+        );
+    }
+
     /// B3: the in-place scan must not invent a source at offset 0 for a chunk
     /// that has none. The same content sits at the head of the file under a
     /// different layout, so a coerced source range would verify there and the
@@ -671,7 +1294,7 @@ mod tests {
     fn an_inplace_scan_never_checks_a_source_less_chunk_at_offset_zero() {
         let x = vec![0x58u8; 10];
         let y = vec![0x59u8; 10];
-        let md5_x = format!("{:x}", md5::compute(&x));
+        let md5_x = util::md5::md5_digest(&x).to_hex();
         let mut bytes = x.clone();
         bytes.extend_from_slice(&y);
         let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "no_source_offset");
@@ -726,6 +1349,991 @@ mod tests {
         assert_eq!(
             source_ok_by_chunk(chunks.len(), &owner, &[true]),
             vec![false, true]
+        );
+    }
+
+    /// A whole-file digest mismatch with every chunk range already correct is
+    /// unretryable: the writer marks it so the file loop answers `Fatal`
+    /// instead of running the same scan, the same zero-fill, and the same
+    /// digest again.
+    #[tokio::test]
+    async fn a_digest_mismatch_outside_the_chunks_is_unretryable() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "unretryable_digest");
+        let path = dir.join("f.dat");
+        std::fs::write(&path, b"").unwrap();
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 0,
+            // Not the digest of the empty file: no byte string has this one.
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: Vec::new(),
+        };
+        let ctx = test_ctx(None);
+        let mut handle = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let mut writes = FileWrites::default();
+        let mut stats = ChunkStats::default();
+
+        let err = verify_and_retry(&ctx, &mut writes, &mut handle, &[], &file, "", &mut stats)
+            .await
+            .err()
+            .expect("the empty file cannot carry a non-empty digest");
+        assert!(
+            err.downcast_ref::<FinalDigestMismatch>().is_some(),
+            "the file loop must see the deterministic mismatch as terminal: {err:#}"
+        );
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("the bytes outside the chunks are wrong"),
+            "{chain}"
+        );
+    }
+
+    /// A post-redo mismatch is only final when the redo's writes cannot be
+    /// undone by the next attempt. A gap between chunks does not matter — it
+    /// is zero-filled and no chunk write touches it — so the layout alone
+    /// settles a plan with no overlap, without asking for range verdicts.
+    ///
+    /// An overlap does need the bytes: two identical chunks at one offset both
+    /// match after the redo, so no write a retry could make would change a
+    /// byte, while two genuinely different chunks cannot both match and must
+    /// keep their retries. The same pass that produces the digest carries
+    /// those verdicts, so the overlap path reads the file once instead of
+    /// digesting and then rescanning.
+    #[test]
+    fn a_redo_mismatch_settles_in_one_read_and_rescans_only_an_overlap() {
+        let overlapping = PlannedFile {
+            rel: "f.dat".into(),
+            size: 2,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 2),
+                chunk_at("b", "md5-b", 0, 2),
+                chunk_at("c", "md5-c", 1, 1),
+            ],
+        };
+
+        // No overlap: the layout is the proof, so the single pass is given no
+        // ranges and its digest settles the file.
+        let gapped = PlannedFile {
+            rel: "f.dat".into(),
+            size: 3,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("a", "md5-a", 0, 1), chunk_at("b", "md5-b", 2, 1)],
+        };
+        let gapped_dest = [(0u64, 1u64, "md5-a"), (2, 1, "md5-b")];
+        let mut reads = 0;
+        let (scan, checked) = read_after_redo(&gapped, &gapped_dest, |ranges| {
+            reads += 1;
+            assert!(
+                ranges.is_empty(),
+                "a plan with no overlap needs no per-range verdicts"
+            );
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 3,
+                dest_ok: Vec::new(),
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(reads, 1, "the post-redo tail reads the file exactly once");
+        assert_eq!(checked, 0, "no range was asked for, so no verdict is read");
+        assert!(
+            redo_mismatch_is_terminal(&gapped, &scan, checked),
+            "a gap is zero-filled and does not make the digest changeable"
+        );
+
+        // Duplicate identical chunks: every range matches after the redo, so
+        // the next attempt would write nothing and repeat the same bytes.
+        let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
+        let mut reads = 0;
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |ranges| {
+            reads += 1;
+            assert_eq!(
+                ranges.len(),
+                3,
+                "an overlap needs a verdict for every overlapping range"
+            );
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: vec![true, true, true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(
+            reads, 1,
+            "the whole-file digest and the range verdicts are one pass, not a \
+             digest followed by a rescan"
+        );
+        assert_eq!(checked, 3, "every overlapping range was asked for");
+        assert!(
+            redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            "identical duplicates cannot make a retry assemble different bytes"
+        );
+        // This is the branch that builds `FinalDigestMismatch`, so the file
+        // loop settles the file here instead of spending another attempt on
+        // the same bytes.
+
+        // A genuine overlap: at least one range cannot match, so the next
+        // attempt may assemble different bytes.
+        let mut reads = 0;
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+            reads += 1;
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: vec![true, false, true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(reads, 1, "one pass decides either way");
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            "an overlapping plan whose ranges cannot all match keeps its retries"
+        );
+    }
+
+    /// The post-redo pass reads the whole file for the digest, but the
+    /// verdicts it needs are only the ones the layout says overlap.
+    ///
+    /// A chunk no other chunk claims cannot change when the redo writes: the
+    /// redo only moves the bytes of the chunk it rewrites, and a chunk that
+    /// claims the same bytes as none of them keeps its verdict — it is still
+    /// the chunk the verify pass found, and the redo wrote it correctly when
+    /// it was wrong. Its verdict is known, so the pass does not hash it again.
+    ///
+    /// The chunks that *do* overlap are the ones a rewrite can undo, and they
+    /// are the ones the terminal decision reads.
+    #[test]
+    fn the_post_redo_pass_asks_only_for_the_overlapping_ranges() {
+        // `a` and `b` claim the same bytes; `c` claims its own, past a gap.
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 12,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 4),
+                chunk_at("b", "md5-b", 2, 4),
+                chunk_at("c", "md5-c", 8, 4),
+            ],
+        };
+        let dest = [(0u64, 4u64, "md5-a"), (2, 4, "md5-b"), (8, 4, "md5-c")];
+
+        let mut reads = 0;
+        let (scan, checked) = read_after_redo(&file, &dest, |ranges| {
+            reads += 1;
+            assert_eq!(
+                ranges.len(),
+                2,
+                "only the chunks that overlap need a verdict"
+            );
+            assert!(
+                ranges.iter().all(|(offset, _, _)| *offset != 8),
+                "the chunk no other chunk claims is not asked for"
+            );
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 12,
+                dest_ok: vec![true, true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(reads, 1, "the narrowing costs no extra pass");
+        assert_eq!(checked, 2, "the decision reads two verdicts");
+        assert!(
+            redo_mismatch_is_terminal(&file, &scan, checked),
+            "the overlapping chunks match, so the mismatch is final"
+        );
+
+        // The chunk that claims its own bytes cannot be wrong after the redo,
+        // so the decision is the same one the whole chunk list gave: the two
+        // overlapping chunks match and the third one cannot have changed.
+        assert_eq!(
+            file.layout().overlaps,
+            vec![(0, 2)],
+            "the layout names the two offsets of the overlap"
+        );
+    }
+
+    /// The narrowing is only sound while a chunk the layout does not name is
+    /// one **no other chunk claims**: the redo moves the bytes of the chunk
+    /// it rewrites and nothing else, so a chunk nobody else claims keeps the
+    /// verdict the verify pass gave it.
+    ///
+    /// The layout names both sides of every overlap, so the ranges it leaves
+    /// out are exactly the ones whose verdict cannot change — and therefore
+    /// the ones the terminal decision does not have to read again.
+    #[test]
+    fn the_ranges_the_layout_leaves_out_are_claimed_by_no_other_chunk() {
+        // `a` and `b` claim the same bytes; `c` follows `b` and `d` follows a
+        // gap. The layout names the first two and leaves the last two out.
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 14,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 4),
+                chunk_at("b", "md5-b", 2, 4),
+                chunk_at("c", "md5-c", 6, 2),
+                chunk_at("d", "md5-d", 10, 4),
+            ],
+        };
+        let dest = [
+            (0u64, 4u64, "md5-a"),
+            (2, 4, "md5-b"),
+            (6, 2, "md5-c"),
+            (10, 4, "md5-d"),
+        ];
+
+        let named = overlapping_ranges(&file, &dest);
+        assert_eq!(
+            named.len(),
+            2,
+            "the layout names the two chunks that claim the same bytes"
+        );
+
+        // The ranges the layout leaves out claim bytes no other range claims.
+        for (i, a) in dest.iter().enumerate() {
+            if named.contains(a) {
+                continue;
+            }
+            for (j, b) in dest.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert!(
+                    disjoint(a, b),
+                    "the range {a:?} is claimed by {b:?}, so the layout has to \
+                     name it and the decision has to read it"
+                );
+            }
+        }
+    }
+
+    /// Do two byte ranges share a byte?
+    fn disjoint(a: &util::ScanRange<'_>, b: &util::ScanRange<'_>) -> bool {
+        let (a_off, a_len, _) = *a;
+        let (b_off, b_len, _) = *b;
+        a_off.saturating_add(a_len) <= b_off || b_off.saturating_add(b_len) <= a_off
+    }
+
+    /// A verdict list that is shorter than the ranges the decision needs is
+    /// missing answers, not correct ones.
+    ///
+    /// The scan answers one verdict per range it was given, so a shorter list
+    /// means the scan did not say what the decision asked. Treating the
+    /// missing verdicts as passes would mark a mismatch final — a file the
+    /// next attempt could still repair — so the decision reads them the way
+    /// [`verify_in_place`] reads the chunks it has to redo: a missing verdict
+    /// is a wrong one.
+    #[test]
+    fn a_short_verdict_list_is_never_a_pass() {
+        let overlapping = PlannedFile {
+            rel: "f.dat".into(),
+            size: 2,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![
+                chunk_at("a", "md5-a", 0, 2),
+                chunk_at("b", "md5-b", 0, 2),
+                chunk_at("c", "md5-c", 1, 1),
+            ],
+        };
+        let overlap_dest = [(0u64, 2u64, "md5-a"), (0, 2, "md5-b"), (1, 1, "md5-c")];
+
+        // The scan answers one verdict for one of the three overlapping
+        // ranges. The two it did not answer are not passes.
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: vec![true],
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert_eq!(checked, 3, "the overlap needs a verdict for every range");
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            "a missing verdict is a missing answer, never a pass"
+        );
+
+        // And the same for the empty list: no verdict at all decides nothing.
+        let (scan, checked) = read_after_redo(&overlapping, &overlap_dest, |_ranges| {
+            Ok(util::Scan {
+                file_md5: Md5::EMPTY,
+                file_len: 2,
+                dest_ok: Vec::new(),
+                source_ok: Vec::new(),
+            })
+        })
+        .unwrap();
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping, &scan, checked),
+            "no verdict at all decides nothing"
+        );
+
+        // The complete list is the only one that decides.
+        let complete = util::Scan {
+            file_md5: Md5::EMPTY,
+            file_len: 2,
+            dest_ok: vec![true, true, true],
+            source_ok: Vec::new(),
+        };
+        assert!(
+            redo_mismatch_is_terminal(&overlapping, &complete, checked),
+            "every overlapping range matches, so the mismatch is final"
+        );
+    }
+
+    /// The no-overlap proof is the layout's, not the caller's: an overlapping
+    /// layout handed a scan built from an empty range list is missing answers,
+    /// never evidence that a retry cannot change the bytes. A scan that
+    /// answers more ranges than were asked is not trusted either, because the
+    /// caller cannot tell which verdict belongs to which range.
+    #[test]
+    fn an_overlapping_layout_needs_exactly_the_verdicts_it_asked_for() {
+        // `a` and `b` claim the same bytes, so the layout has an overlap.
+        let overlapping = PlannedFile {
+            rel: "f.dat".into(),
+            size: 2,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("a", "md5-a", 0, 2), chunk_at("b", "md5-b", 0, 2)],
+        };
+        let empty = util::Scan {
+            file_md5: Md5::EMPTY,
+            file_len: 2,
+            dest_ok: Vec::new(),
+            source_ok: Vec::new(),
+        };
+
+        // The wrong caller asks for no ranges for an overlapping layout. The
+        // empty verdict list must not be read as "nothing can have changed".
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping, &empty, 0),
+            "no overlap is the layout's answer, not the empty range list's"
+        );
+
+        // One verdict was asked for, but the scan answered two.
+        let surplus = util::Scan {
+            dest_ok: vec![true, true],
+            ..empty.clone()
+        };
+        assert!(
+            !redo_mismatch_is_terminal(&overlapping, &surplus, 1),
+            "a surplus verdict means the answers cannot be mapped to the ranges"
+        );
+
+        // Exactly the verdicts the caller asked for, all correct.
+        let exact = util::Scan {
+            dest_ok: vec![true],
+            ..empty.clone()
+        };
+        assert!(
+            redo_mismatch_is_terminal(&overlapping, &exact, 1),
+            "the asked-for verdicts all match, so the mismatch is final"
+        );
+
+        // A layout with no overlap needs no verdicts at all: the layout alone
+        // settles it, whatever the scan answered.
+        let gapped = PlannedFile {
+            rel: "f.dat".into(),
+            size: 3,
+            md5: "00000000000000000000000000000001".into(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("a", "md5-a", 0, 1), chunk_at("b", "md5-b", 2, 1)],
+        };
+        assert!(
+            redo_mismatch_is_terminal(&gapped, &empty, 0),
+            "no overlap is proof by itself"
+        );
+    }
+
+    /// The verify pass pins the whole-file digest on success and names the
+    /// chunks to redo on a mismatch. The corrupt byte is in the chunk the
+    /// patch did not write, so the digest has to fail and the follow-up pass
+    /// has to report that chunk — not the one the patch rewrote.
+    ///
+    /// Success is one read: the digest, with no per-range hashing. A mismatch
+    /// is two — the digest again, plus the range verdicts — because that is
+    /// the rare path and it is the only one that needs the verdicts.
+    #[test]
+    fn the_in_place_verify_pins_the_digest_and_names_the_still_bad_chunks() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "verify_digest");
+        let path = dir.join("f.dat");
+        let mut good = vec![0x41u8; 64];
+        good.extend_from_slice(&[0x42u8; 64]);
+        std::fs::write(&path, &good).unwrap();
+
+        let md5_0 = util::md5::md5_digest(&good[..64]).to_hex();
+        let md5_1 = util::md5::md5_digest(&good[64..]).to_hex();
+        let dest: Vec<util::ScanRange<'_>> = vec![(0, 64, &md5_0), (64, 64, &md5_1)];
+        let expect = util::md5::md5_digest(&good).to_hex();
+
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        // The verify starts at the beginning of the file even when the last
+        // write left the handle at EOF.
+        f.seek(SeekFrom::End(0)).unwrap();
+        let mut reads = 0;
+        match verify_in_place(
+            &dest,
+            |ranges| {
+                reads += 1;
+                util::scan_reader(&mut f, ranges, &[])
+            },
+            2,
+            &expect,
+        )
+        .unwrap()
+        {
+            Verified::Matches(md5) => assert_eq!(md5.to_hex(), expect),
+            Verified::Mismatch { md5, .. } => {
+                panic!("an intact file must match, got {md5}")
+            }
+        }
+        assert_eq!(reads, 1, "an intact file needs only the digest pass");
+
+        // Only the second chunk is damaged: chunk 0 is the one a patch would
+        // have written, chunk 1 is outside it.
+        let mut bad = good.clone();
+        bad[70] ^= 0xff;
+        std::fs::write(&path, &bad).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        f.seek(SeekFrom::End(0)).unwrap();
+        let mut reads = 0;
+        match verify_in_place(
+            &dest,
+            |ranges| {
+                reads += 1;
+                util::scan_reader(&mut f, ranges, &[])
+            },
+            2,
+            &expect,
+        )
+        .unwrap()
+        {
+            Verified::Mismatch { md5, still_bad } => {
+                assert_eq!(
+                    still_bad,
+                    vec![1],
+                    "the follow-up pass names the chunk that is still wrong"
+                );
+                assert_eq!(md5, util::md5::md5_digest(&bad));
+            }
+            Verified::Matches(md5) => panic!("a damaged file must not match, got {md5}"),
+        }
+        assert_eq!(
+            reads, 2,
+            "a mismatch reads once more to name the chunks, not on the success path"
+        );
+    }
+
+    /// The coarse tick containing `t`, used to model a store that truncates
+    /// modification times to 2 s.
+    ///
+    /// The tick stays on the Unix epoch's 2 s grid, where a real coarse store
+    /// truncates, but it is found by subtracting the offset into the tick
+    /// rather than by rebuilding a time from epoch seconds. A clock on either
+    /// side of the epoch therefore gets the tick at or before it, and a
+    /// subtraction the platform cannot represent leaves `t` unchanged instead
+    /// of panicking.
+    fn coarse_tick_of(t: SystemTime) -> SystemTime {
+        let tick = COARSE_MTIME_TICK.as_nanos();
+        let since_epoch = match t.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(since) => since.as_nanos() as i128,
+            Err(before) => -(before.duration().as_nanos() as i128),
+        };
+        // The non-negative remainder is the distance back to the tick, whether
+        // the stamp is before or after the epoch.
+        let into_tick = since_epoch.rem_euclid(tick as i128) as u64;
+        t.checked_sub(Duration::from_nanos(into_tick)).unwrap_or(t)
+    }
+
+    /// The coarse tick is the epoch-aligned 2 s boundary at or before the
+    /// stamp, on either side of the epoch, and truncating it again is a no-op.
+    #[test]
+    fn coarse_tick_is_at_or_before_the_stamp_on_either_side_of_the_epoch() {
+        let cases = [
+            SystemTime::UNIX_EPOCH + Duration::from_millis(1500),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(10),
+            SystemTime::UNIX_EPOCH - Duration::from_millis(1500),
+            SystemTime::UNIX_EPOCH - Duration::from_secs(10),
+        ];
+        for t in cases {
+            let tick = coarse_tick_of(t);
+            let into_tick = t
+                .duration_since(tick)
+                .expect("the tick is at or before the stamp");
+            assert!(
+                into_tick < COARSE_MTIME_TICK,
+                "the tick starts less than one tick before {t:?}"
+            );
+            assert_eq!(
+                coarse_tick_of(tick),
+                tick,
+                "a tick is stable under truncation"
+            );
+        }
+        assert_eq!(
+            coarse_tick_of(SystemTime::UNIX_EPOCH + Duration::from_millis(1500)),
+            SystemTime::UNIX_EPOCH
+        );
+        assert_eq!(
+            coarse_tick_of(SystemTime::UNIX_EPOCH - Duration::from_millis(1500)),
+            SystemTime::UNIX_EPOCH - COARSE_MTIME_TICK
+        );
+        for boundary in [
+            SystemTime::UNIX_EPOCH + COARSE_MTIME_TICK * 4,
+            SystemTime::UNIX_EPOCH - COARSE_MTIME_TICK * 4,
+        ] {
+            assert_eq!(
+                coarse_tick_of(boundary),
+                boundary,
+                "a boundary is its own tick"
+            );
+        }
+    }
+
+    fn set_modified(path: &std::path::Path, stamp: SystemTime) {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+    }
+
+    /// A stamp a given age before the current clock, or `None` after
+    /// reporting the skip when this host cannot represent that age.
+    ///
+    /// The fixture asserts the age the test needs instead of silently running
+    /// with a younger stamp: on a host that cannot represent it, the caller
+    /// returns without having exercised the age rule, using the clock-skip
+    /// reason the shared helper prints.
+    fn ago(age: Duration) -> Option<SystemTime> {
+        let stamp = stamp_ago(age);
+        if stamp.is_none() {
+            crate::clock_support::skip_pre_epoch("the fixture's age, a day before the clock");
+        }
+        stamp
+    }
+
+    /// The natural coarse-timestamp window: the recorded mtime must share a
+    /// tick with the scan, and a same-length rewrite right after the scan can
+    /// then present the same recorded mtime. When the plan scan found the file
+    /// **intact**, the digest is the skip check, so accepting that verdict
+    /// would report the rewritten file skipped and leave it unrepaired. The
+    /// age guard refuses a verdict recorded that recently and re-reads instead.
+    #[test]
+    fn a_same_tick_rewrite_of_an_intact_file_is_rescanned() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "same_tick_intact");
+        let path = dir.join("f.dat");
+        let good: Vec<u8> = (0..8u8).map(|b| b'a' + b).collect();
+        let md5_0 = util::md5::md5_digest(&good[..4]).to_hex();
+        let md5_1 = util::md5::md5_digest(&good[4..]).to_hex();
+
+        // The scan starts inside the tick that holds the file's mtime.
+        let scanned_at = SystemTime::now();
+        let recorded = coarse_tick_of(scanned_at);
+        std::fs::write(&path, &good).unwrap();
+        set_modified(&path, recorded);
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert!(
+            scanned_at.duration_since(recorded).unwrap() <= COARSE_MTIME_TICK,
+            "the setup must put the scan in the recorded tick"
+        );
+
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: good.len() as i64,
+            md5: util::md5::md5_digest(&good).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("c0", &md5_0, 0, 4), chunk_at("c1", &md5_1, 4, 4)],
+        };
+        let verdict = Verdict {
+            file_md5: util::md5::md5_digest(&good),
+            dest_ok: vec![true, true],
+            source_ok: vec![true, true],
+            file_len: good.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test_at(&plan, vec![Some(verdict)], scanned_at);
+        let mut ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
+        ctx.dry_run = false;
+
+        // Same length, and the coarse store truncates the rewrite back onto
+        // the recorded tick.
+        let mut changed = good.clone();
+        changed[1] ^= 0xff;
+        std::fs::write(&path, &changed).unwrap();
+        set_modified(&path, recorded);
+
+        let sources = [None, None];
+        let (dest, src, owner) = scan_ranges(&file.chunks, &sources);
+        let OpenScan::Ready { scan, .. } =
+            open_and_scan(&ctx, FileId::new(0), &file, &path, &dest, &src, &owner).unwrap()
+        else {
+            panic!("a same-tick rewrite of an intact file must not be reported skipped");
+        };
+        assert!(
+            !scan.file_md5.matches_hex(&file.md5),
+            "the writer must have taken a fresh scan and seen the rewrite"
+        );
+        assert_ne!(std::fs::read(&path).unwrap(), good);
+    }
+
+    /// Even when a store preserves the recorded mtime across a write (the
+    /// residual limit on [`reusable_verdict`]), a stale verdict that found the
+    /// file **damaged** cannot make the writer skip: its digest is not the
+    /// manifest's, so the patch runs and the whole-file digest stays the gate.
+    /// It fails, and the extra range scan names the chunks to redo.
+    #[test]
+    fn a_stale_damaged_verdict_never_makes_the_writer_skip() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "stale_damaged");
+        let path = dir.join("f.dat");
+        let good: Vec<u8> = (0..8u8).map(|b| b'a' + b).collect();
+        let md5_0 = util::md5::md5_digest(&good[..4]).to_hex();
+        let md5_1 = util::md5::md5_digest(&good[4..]).to_hex();
+
+        // What the plan scan saw: chunk 1 already wrong, and the file's mtime.
+        let mut damaged = good.clone();
+        damaged[5] ^= 0xff;
+        std::fs::write(&path, &damaged).unwrap();
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        set_modified(&path, stamp);
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+        let scanned_at = SystemTime::now();
+        assert!(
+            mtime_predates_scan(recorded, Some(scanned_at)),
+            "this store is the one that keeps an old mtime across a write"
+        );
+
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: good.len() as i64,
+            md5: util::md5::md5_digest(&good).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("c0", &md5_0, 0, 4), chunk_at("c1", &md5_1, 4, 4)],
+        };
+        let verdict = Verdict {
+            file_md5: util::md5::md5_digest(&damaged),
+            dest_ok: vec![true, false],
+            source_ok: vec![true, true],
+            file_len: good.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test_at(&plan, vec![Some(verdict)], scanned_at);
+        let mut ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
+        ctx.dry_run = false;
+
+        // Both chunks change, the length stays the same, and the mtime is
+        // restored the way this store preserves it.
+        let mut changed = good.clone();
+        changed[1] ^= 0xff;
+        changed[5] ^= 0xff;
+        std::fs::write(&path, &changed).unwrap();
+        set_modified(&path, recorded);
+
+        let sources = [None, None];
+        let (dest, src, owner) = scan_ranges(&file.chunks, &sources);
+        let OpenScan::Ready { mut handle, scan } =
+            open_and_scan(&ctx, FileId::new(0), &file, &path, &dest, &src, &owner).unwrap()
+        else {
+            panic!("a stale damaged verdict must not make the writer skip");
+        };
+        assert!(
+            !scan.file_md5.matches_hex(&file.md5),
+            "the guard reused a verdict whose digest is not the manifest's"
+        );
+        assert_ne!(std::fs::read(&path).unwrap(), good);
+
+        let dest: Vec<util::ScanRange<'_>> = vec![(0, 4, &md5_0), (4, 4, &md5_1)];
+        match verify_in_place(
+            &dest,
+            |ranges| util::scan_reader(&mut handle, ranges, &[]),
+            2,
+            &file.md5,
+        )
+        .unwrap()
+        {
+            Verified::Mismatch { still_bad, .. } => assert_eq!(
+                still_bad,
+                vec![0, 1],
+                "the digest gate names both rewritten chunks for the redo"
+            ),
+            Verified::Matches(md5) => panic!("a rewritten file must not match, got {md5}"),
+        }
+    }
+
+    /// A verdict that does not describe this file's chunk layout is not
+    /// reusable, even when length and mtime still match: the per-chunk lists
+    /// are positional, so a differently shaped verdict would be indexed with
+    /// the wrong meaning. A verdict with no recorded mtime is not reusable
+    /// either.
+    #[test]
+    fn the_guard_rejects_a_verdict_that_does_not_describe_the_file() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "guard_shape");
+        let path = dir.join("a.dat");
+        let bytes = b"abcdef";
+        std::fs::write(&path, bytes).unwrap();
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "a.dat".into(),
+            size: bytes.len() as i64,
+            md5: util::md5::md5_digest(bytes).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: vec![chunk_at("c0", "m0", 0, bytes.len() as i64)],
+        };
+        let id = FileId::new(0);
+        let handle = std::fs::File::open(&path).unwrap();
+
+        let wrong_shape = Verdict {
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
+            dest_ok: vec![true, true],
+            source_ok: vec![true, true],
+            file_len: bytes.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(wrong_shape)]);
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
+        assert!(
+            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            "a verdict for another chunk layout is not this file's verdict"
+        );
+
+        let no_time = Verdict {
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
+            dest_ok: vec![true],
+            source_ok: vec![true],
+            file_len: bytes.len() as u64,
+            modified: None,
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test(&plan, vec![Some(no_time)]);
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
+        assert!(
+            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            "without a recorded mtime the guard cannot prove the file unchanged"
+        );
+    }
+
+    fn test_ctx(scan: Option<Arc<ScanReport>>) -> FileCtx {
+        test_ctx_with_plan(RepairPlan::from_files("", Vec::new()), scan)
+    }
+
+    fn test_ctx_with_plan(plan: RepairPlan, scan: Option<Arc<ScanReport>>) -> FileCtx {
+        FileCtx {
+            game_dir: std::path::PathBuf::new(),
+            root: None,
+            http: reqwest::Client::new(),
+            plan: Arc::new(plan),
+            local_map: Arc::new(LocalChunkMap::new()),
+            scan,
+            summary: Arc::new(Summary::new()),
+            dry_run: true,
+            repair_mode: RepairMode::Inplace,
+            sleep: Arc::new(NoSleep),
+        }
+    }
+
+    /// The plan scan is reusable only when the open file is still the one the
+    /// scan saw: the same length and an exactly equal modification time. Any
+    /// uncertainty falls back to a fresh read.
+    #[test]
+    fn the_guard_reuses_only_an_unchanged_plan_scan() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_inplace", "reuse_guard");
+        let path = dir.join("a.dat");
+        let bytes = b"abcdef";
+        std::fs::write(&path, bytes).unwrap();
+        let Some(stamp) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(stamp)
+            .unwrap();
+        let recorded = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let file = PlannedFile {
+            rel: "a.dat".into(),
+            size: bytes.len() as i64,
+            md5: util::md5::md5_digest(bytes).to_hex(),
+            url_prefix: Arc::from(""),
+            chunks: Vec::new(),
+        };
+        let verdict = Verdict {
+            file_md5: Md5::parse_hex(&file.md5).unwrap(),
+            dest_ok: Vec::new(),
+            source_ok: Vec::new(),
+            file_len: bytes.len() as u64,
+            modified: Some(recorded),
+        };
+        let plan = RepairPlan::from_files("", vec![file.clone()]);
+        let report = ScanReport::for_test_at(&plan, vec![Some(verdict)], SystemTime::now());
+        let ctx = test_ctx_with_plan(plan, Some(Arc::new(report)));
+        let id = FileId::new(0);
+
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, id, &file, &handle).is_some(),
+            "an old mtime with the same length is the one reusable shape"
+        );
+
+        // A changed modification time, with the length held fixed.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded + Duration::from_secs(1))
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            "a different mtime means a different snapshot"
+        );
+
+        // A changed length, with the recorded mtime restored.
+        std::fs::write(&path, b"abcdefg").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded)
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        assert!(
+            reusable_verdict(&ctx, id, &file, &handle).is_none(),
+            "a different length is never reused"
+        );
+
+        // The same file again, but the report has no verdict for it.
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(recorded)
+            .unwrap();
+        let handle = std::fs::File::open(&path).unwrap();
+        let no_verdict = test_ctx(Some(Arc::new(ScanReport::default())));
+        assert!(
+            reusable_verdict(&no_verdict, id, &file, &handle).is_none(),
+            "a missing verdict is not reusable"
+        );
+
+        // And without a scan there is nothing to reuse.
+        let no_scan = test_ctx(None);
+        assert!(reusable_verdict(&no_scan, id, &file, &handle).is_none());
+    }
+
+    /// The age rule, as a table: only a recorded mtime more than one coarse
+    /// tick before the scan is trusted. A missing scan time, a future mtime,
+    /// and the exact boundary all mean "read it again".
+    #[test]
+    fn the_reuse_age_rule_requires_more_than_one_coarse_tick() {
+        let Some(recorded) = ago(Duration::from_secs(24 * 60 * 60)) else {
+            return;
+        };
+        assert!(
+            !mtime_predates_scan(recorded, None),
+            "a report with no scan time cannot prove the window is closed"
+        );
+        assert!(!mtime_predates_scan(recorded, Some(recorded)));
+        assert!(
+            !mtime_predates_scan(recorded, Some(recorded + COARSE_MTIME_TICK)),
+            "the boundary itself is still within the coarse tick"
+        );
+        assert!(mtime_predates_scan(
+            recorded,
+            Some(recorded + COARSE_MTIME_TICK + Duration::from_millis(1))
+        ));
+        assert!(mtime_predates_scan(
+            recorded,
+            Some(recorded + COARSE_MTIME_TICK * 2)
+        ));
+        assert!(
+            !mtime_predates_scan(recorded + COARSE_MTIME_TICK, Some(recorded)),
+            "a recorded mtime after the scan is uncertain, not reusable"
+        );
+    }
+
+    /// An overflowing candidate end is unrepresentable, so it cannot be
+    /// inside the target: the eager trim is deferred and the source survives.
+    /// The non-overflow boundaries keep their old answers.
+    #[test]
+    fn an_overflowing_trim_candidate_is_not_free() {
+        let small = chunk("c0", 10);
+        let chunks = vec![small.clone()];
+        let file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 10,
+            md5: "m".into(),
+            url_prefix: Arc::from(""),
+            chunks: chunks.clone(),
+        };
+        assert!(
+            trim_is_free(&file, &chunks, &[Some(0)]),
+            "the end is exactly the target's"
+        );
+        assert!(
+            !trim_is_free(&file, &chunks, &[Some(1)]),
+            "one past the target is not free"
+        );
+        assert!(
+            trim_is_free(&file, &chunks, &[None]),
+            "no candidate loses nothing"
+        );
+
+        let huge = vec![chunk("c0", i64::MAX)];
+        let huge_file = PlannedFile {
+            rel: "f.dat".into(),
+            size: 10,
+            ..file
+        };
+        assert!(
+            !trim_is_free(&huge_file, &huge, &[Some(u64::MAX)]),
+            "a source that overflows r + s is outside the target, never inside"
         );
     }
 }

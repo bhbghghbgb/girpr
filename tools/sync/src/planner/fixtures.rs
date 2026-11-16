@@ -14,7 +14,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-use crate::effective::{SideCapability, SideEntry};
+use crate::effective::{Repopulate, SideCapability, SideEntry};
 use crate::hash::{DigestSet, HashAlg};
 
 use super::HashMode;
@@ -143,6 +143,7 @@ impl Shape {
                 no_trust: self.no_trust.0,
                 cap: cap(self.hashable.0),
                 label: "src",
+                repopulate: Repopulate::NotAFolderCache,
             },
             SideRequest {
                 entries: d,
@@ -150,6 +151,7 @@ impl Shape {
                 no_trust: self.no_trust.1,
                 cap: cap(self.hashable.1),
                 label: "dst",
+                repopulate: Repopulate::NotAFolderCache,
             },
             CasePairing::from(sensitive),
             self.mode,

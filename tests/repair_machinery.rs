@@ -41,15 +41,18 @@
 //! the scope contains the run, and the trace log's download records agree
 //! with the server's request log.
 
-#[path = "common/mod.rs"]
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use common::{
     ChunkSpec, FileSpec, FixtureSpec, Lies, MockOpts, MockServer, build_fixture_spec, lay_out,
-    temp_dir,
+    md5hex, stamp_ago, stamp_ahead, temp_dir,
 };
 use girpr_tempdir::TempDir;
 
@@ -139,12 +142,15 @@ impl Rig {
     fn at_local_version(&self) {
         std::fs::write(
             self.dir.join("config.ini"),
-            "[General]\ngame_version=9.9.8-test\n",
+            format!("[General]\ngame_version={}\n", common::LOCAL_TAG),
         )
         .expect("write config.ini");
     }
 
     /// Run the real binary against the rig's install.
+    ///
+    /// `--io-threads` is the deprecated alias for `--jobs`; this rig keeps one
+    /// run on it so the integration suite still exercises the alias.
     async fn run(&self, args: &[&str]) -> Run {
         let n = self.runs.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let log = self.logs.join(format!("girpr-{n}.log"));
@@ -176,6 +182,7 @@ impl Rig {
             .output()
             .await
             .expect("spawn girpr");
+        common::remove_run_lock_for_args(&all);
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
         let mut records = BTreeMap::new();
@@ -246,10 +253,7 @@ fn snapshot(game: &Path) -> BTreeMap<String, (u64, String)> {
                 .to_string_lossy()
                 .replace('\\', "/");
             let bytes = std::fs::read(&path).expect("read file");
-            out.insert(
-                rel,
-                (bytes.len() as u64, format!("{:x}", md5::compute(&bytes))),
-            );
+            out.insert(rel, (bytes.len() as u64, md5hex(&bytes)));
         }
     }
     let mut out = BTreeMap::new();
@@ -438,6 +442,303 @@ async fn the_chunk_outcomes_are_kept_copied_and_fetched() {
     );
     // The file is the target's bytes.
     assert_eq!(rig.read("game/three.dat"), lay_out(&spec.new[0].chunks));
+}
+
+/// Set a fixture file's mtime explicitly, so a test never depends on how a
+/// write advances a coarse filesystem's clock.
+fn set_mtime(path: &Path, stamp: SystemTime) {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open to set mtime")
+        .set_modified(stamp)
+        .expect("set mtime");
+}
+
+/// Whether a fixture's mtime carries the age the reuse guard needs.
+///
+/// A named type rather than a `bool`: a call site has to handle the
+/// [`Unrepresentable`](MtimeAge::Unrepresentable) arm instead of discarding
+/// it, because running with a younger stamp would stop exercising the guarded
+/// reuse without saying so.
+#[must_use]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MtimeAge {
+    /// The file carries the requested age.
+    Aged,
+    /// The host clock cannot represent a stamp that old; skip the case.
+    Unrepresentable,
+}
+
+/// Age a fixture file's mtime well past the reuse guard's coarse-tick window,
+/// so a `--scan` run can still exercise the guarded plan-scan reuse.
+///
+/// Returns [`MtimeAge::Unrepresentable`] when the host clock cannot represent
+/// a stamp that old. The caller must then skip the case.
+fn age_mtime(path: &Path) -> MtimeAge {
+    let Some(stamp) = stamp_ago(Duration::from_secs(24 * 60 * 60)) else {
+        return MtimeAge::Unrepresentable;
+    };
+    set_mtime(path, stamp);
+    MtimeAge::Aged
+}
+
+/// A `--scan` repair and an unscanned repair of the same damage are the same
+/// repair: same bytes, same exit code, and the same chunk accounting.
+///
+/// The scan only changes where the in-place writer gets its verdicts. When the
+/// file has not changed since the plan phase, the guarded reuse must be
+/// invisible: the file, the counters, and the per-file stats all have to match
+/// the run that read the file itself.
+#[tokio::test]
+async fn a_scanned_repair_and_an_unscanned_repair_agree() {
+    let size = 64usize;
+    let old = vec![
+        chunk("old_x", 0x71, size, 0),
+        chunk("old_k", 0x72, size, size as i64),
+        chunk("old_m", 0x73, size, 3 * size as i64),
+    ];
+    let new = vec![
+        chunk("new_k", 0x72, size, 0),
+        chunk("new_m", 0x73, size, size as i64),
+        chunk("new_f", 0x74, size, 2 * size as i64),
+    ];
+    let spec = FixtureSpec::new(vec![FileSpec::new("game/parity.dat", new)])
+        .with_old(vec![FileSpec::new("game/parity.dat", old.clone())])
+        .with_disk("game/parity.dat", lay_out(&old));
+
+    let args = ["--repair-mode", "inplace", "--max-write-bytes", "1048576"];
+
+    let scanned_rig = Rig::start(&spec).await;
+    scanned_rig.at_local_version();
+    let MtimeAge::Aged = age_mtime(&scanned_rig.game().join("game/parity.dat")) else {
+        eprintln!(
+            "skipping a_scanned_repair_and_an_unscanned_repair_agree: the host clock \
+             cannot represent a stamp a day old"
+        );
+        return;
+    };
+    let mut scanned_args = vec!["--scan"];
+    scanned_args.extend_from_slice(&args);
+    let scanned = scanned_rig.run(&scanned_args).await;
+
+    let plain_rig = Rig::start(&spec).await;
+    plain_rig.at_local_version();
+    let plain = plain_rig.run(&args).await;
+
+    assert_eq!(scanned.code, 0, "{}\n{}", scanned.stdout, scanned.stderr);
+    assert_eq!(
+        scanned.code, plain.code,
+        "the scan must not change the exit code"
+    );
+    assert_eq!(
+        snapshot(&scanned_rig.game()),
+        snapshot(&plain_rig.game()),
+        "the two runs must leave the same bytes on disk"
+    );
+    for key in [
+        "total",
+        "skipped",
+        "repaired",
+        "failed",
+        "download_bytes",
+        "write_bytes",
+        "kept_bytes",
+    ] {
+        assert_eq!(
+            scanned.num("summary", key),
+            plain.num("summary", key),
+            "SUMMARY {key} must not depend on where the scan came from"
+        );
+    }
+    assert_eq!(
+        in_place_chunk_stats(&scanned.log),
+        in_place_chunk_stats(&plain.log),
+        "the per-file chunk accounting must be identical"
+    );
+    assert!(
+        scanned
+            .log
+            .contains("reusing the plan scan in the in-place writer"),
+        "the scanned run must take the guarded reuse on an unchanged file"
+    );
+}
+
+/// A file changed **after** the plan scan is read again instead of being
+/// skipped from the stale verdict.
+///
+/// The plan scans both files. `a_first.dat` is missing, so repairing it fetches
+/// a chunk; the mock changes `z_target.dat` just before serving that first
+/// chunk body, which is after the scan and before the loop reaches the target.
+/// The plan's verdict for the target said "intact", so a writer that trusted it
+/// would skip the file and leave the damage in place. The fresh read must
+/// notice the change and repair the bytes.
+///
+/// The target is aged before the run so its plan verdict is otherwise eligible
+/// for the guarded reuse. The hook then moves its mtime well away from the
+/// recorded one after the rewrite: a same-size write alone can land in the same
+/// coarse timestamp tick, which would leave the guard with only the age check
+/// to reject the verdict rather than the change itself.
+#[tokio::test]
+async fn a_file_changed_after_the_plan_scan_is_read_again() {
+    let size = 64usize;
+    let want = lay_out(&[chunk("target", 0x42, size, 0)]);
+    let spec = FixtureSpec::new(vec![
+        FileSpec::new("game/a_first.dat", vec![chunk("first", 0x41, size, 0)]),
+        FileSpec::new("game/z_target.dat", vec![chunk("target", 0x42, size, 0)]),
+    ])
+    .with_disk("game/z_target.dat", want.clone());
+
+    // The path is filled in after the rig exists; the hook cannot run before
+    // the first chunk request, which is after `run` starts.
+    let target_path = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let hook_path = std::sync::Arc::clone(&target_path);
+    let Some(changed_stamp) = stamp_ago(Duration::from_secs(2 * 24 * 60 * 60)) else {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again: the host clock \
+             cannot represent a stamp two days old"
+        );
+        return;
+    };
+    let opts = MockOpts {
+        on_first_chunk: Some(std::sync::Arc::new(move || {
+            let path = hook_path
+                .lock()
+                .expect("hook path lock")
+                .clone()
+                .expect("the test sets the path before the run");
+            std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
+            // A stamp far from the aged one the plan scanned, so the guard sees
+            // a different file on every filesystem, including one that only
+            // advances mtimes once per coarse tick. Both stamps are relative to
+            // the current clock.
+            set_mtime(&path, changed_stamp);
+        })),
+        ..Default::default()
+    };
+
+    let rig = Rig::start_with(&spec, opts).await;
+    *target_path.lock().expect("hook path lock") = Some(rig.game().join("game/z_target.dat"));
+    let MtimeAge::Aged = age_mtime(&rig.game().join("game/z_target.dat")) else {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again: the host clock \
+             cannot represent a stamp a day old"
+        );
+        return;
+    };
+
+    let run = rig.run(&["--scan"]).await;
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.num("summary", "repaired"),
+        2,
+        "the changed file must not be skipped"
+    );
+    assert_eq!(
+        rig.read("game/z_target.dat"),
+        want,
+        "the changed bytes must be repaired from a fresh read"
+    );
+}
+
+/// The age half of the reuse guard, as the complement of the test above: the
+/// file changes after the plan scan while its mtime stays exactly the recorded
+/// one.
+///
+/// The target is stamped after any scan start in the run, so the age rule
+/// cannot be satisfied. The hook rewrites the bytes and restores that same
+/// stamp, leaving length and mtime equal: only the age rule can reject the
+/// plan verdict. A writer that omitted it would reuse the intact verdict and
+/// skip the damaged file.
+#[tokio::test]
+async fn a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_change() {
+    let size = 64usize;
+    let want = lay_out(&[chunk("target", 0x42, size, 0)]);
+    let spec = FixtureSpec::new(vec![
+        FileSpec::new("game/a_first.dat", vec![chunk("first", 0x41, size, 0)]),
+        FileSpec::new("game/z_target.dat", vec![chunk("target", 0x42, size, 0)]),
+    ])
+    .with_disk("game/z_target.dat", want.clone());
+
+    let target_path = std::sync::Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+    let hook_path = std::sync::Arc::clone(&target_path);
+    let opts = MockOpts {
+        on_first_chunk: Some(std::sync::Arc::new(move || {
+            let path = hook_path
+                .lock()
+                .expect("hook path lock")
+                .clone()
+                .expect("the test sets the path before the run");
+            // The plan scan recorded this stamp; preserve it across the
+            // rewrite so only the age rule can reject the verdict.
+            let stamp = std::fs::metadata(&path)
+                .expect("stat the target before damaging it")
+                .modified()
+                .expect("the target has a modification time");
+            std::fs::write(&path, vec![0x5Au8; size]).expect("damage the target");
+            set_mtime(&path, stamp);
+        })),
+        ..Default::default()
+    };
+
+    let rig = Rig::start_with(&spec, opts).await;
+    let target = rig.game().join("game/z_target.dat");
+    *target_path.lock().expect("hook path lock") = Some(target.clone());
+    // Later than the scan start, so the age rule refuses the plan verdict
+    // rather than the mtime comparison. Relative to the clock, like
+    // `stamp_ago` and `stamp_ahead`: a fixed future epoch stops being future
+    // once a host's clock passes it, and the age rule would then accept the
+    // verdict.
+    let Some(ahead) = stamp_ahead(Duration::from_secs(3600)) else {
+        eprintln!(
+            "skipping a_file_changed_after_the_plan_scan_is_read_again_without_an_mtime_change: \
+             the host clock cannot represent a stamp an hour ahead"
+        );
+        return;
+    };
+    set_mtime(&target, ahead);
+
+    let run = rig.run(&["--scan"]).await;
+    assert_eq!(run.code, 0, "{}\n{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.num("summary", "repaired"),
+        2,
+        "an unchanged mtime must not make the writer skip a changed file"
+    );
+    assert_eq!(
+        rig.read("game/z_target.dat"),
+        want,
+        "the changed bytes must be repaired from a fresh read"
+    );
+}
+
+/// The `chunks_*` figures from the one `repaired in place` line in a trace log.
+fn in_place_chunk_stats(log: &str) -> BTreeMap<&'static str, u64> {
+    let line = log
+        .lines()
+        .find(|l| l.contains("repaired in place"))
+        .unwrap_or_else(|| panic!("no `repaired in place` line in:\n{log}"));
+    [
+        "chunks_total",
+        "chunks_kept",
+        "chunks_reused",
+        "chunks_downloaded",
+    ]
+    .into_iter()
+    .map(|key| {
+        let marker = format!("{key}=");
+        let at = line
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no {key} in: {line}"));
+        let value = line[at + marker.len()..]
+            .split_whitespace()
+            .next()
+            .unwrap_or_else(|| panic!("no value for {key} in: {line}"))
+            .parse()
+            .unwrap_or_else(|e| panic!("{key} is not a number in: {line} ({e})"));
+        (key, value)
+    })
+    .collect()
 }
 
 /// With no local manifest the reuse map is empty, so **every** chunk is

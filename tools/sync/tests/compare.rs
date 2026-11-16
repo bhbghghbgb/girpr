@@ -9,9 +9,11 @@ use common::{
     recs_of, rfile, serial_rw, strip_algo, sync, sync_mtime, temp_root, update, update_dry, wfile,
 };
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, TestCacheBackend};
+use girsync::commands::side_label;
 use girsync::config::{CommonOpts, ScanMode};
 use girsync::effective::{
     EffRec, ScanStats, SideScan, classify, ensure_distinct_sides, open_side, resolve_side,
+    side_folder,
 };
 use girsync::hash::{DigestSet, HashAlg};
 use girsync::planner::{CasePairing, SideRequest, plan_pairs};
@@ -108,8 +110,11 @@ fn effective_maps(
     let mut do_ = open_side(&d, &common, mode).unwrap();
     // Labels only so a coverage error can name a side; these fixtures are both
     // folders and fully covered, so it never fires.
-    let s_label = format!("{}", s.cache_path().display());
-    let d_label = format!("{}", d.cache_path().display());
+    //
+    // Built by the same helper the commands use, so this harness cannot keep a
+    // second spelling of how a side is named.
+    let s_label = side_label(&s);
+    let d_label = side_label(&d);
     let plans = plan_pairs(
         SideRequest {
             entries: &so.phase_a.map,
@@ -117,6 +122,7 @@ fn effective_maps(
             no_trust: false,
             cap: so.cap,
             label: &s_label,
+            repopulate: side_folder(&s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -124,6 +130,7 @@ fn effective_maps(
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
+            repopulate: side_folder(&d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -594,6 +601,65 @@ fn an_uncovered_record_fails_before_the_folder_side_is_resolved() {
         recs_of(&folder)["a.txt"].hashes.len(),
         0,
         "the folder side was never resolved: nothing hashed, nothing written"
+    );
+}
+
+/// **A record that is not a folder's cache is offered no repopulation, and is
+/// told why.**
+///
+/// A `girpr-cache-backup-*` copy is a record as far as the tool is concerned —
+/// a comparison may be pointed at one — but no folder's `girpr-cache` is it, so
+/// nothing the tool can run would rebuild it. The remedy must not name the
+/// folder it happens to sit in: `girsync update --dir` there rebuilds that
+/// folder's *own* cache, which is a different file, and the user would be sent
+/// to fix the wrong thing.
+///
+/// And the message says so: a remedy list one line shorter is a question the
+/// user cannot answer from the list alone.
+#[test]
+fn a_backup_record_is_offered_no_repopulation() {
+    let t = temp_root("cmp_backup_rec");
+    let rec_home = t.subdir("rec");
+    let folder = t.subdir("live");
+    for dir in [&rec_home, &folder] {
+        wfile(dir, "a.txt", b"hello");
+    }
+    sync_mtime(&rec_home.join("a.txt"), &folder.join("a.txt"));
+    cmd_update(update(rec_home.clone()), &log()).unwrap();
+    cmd_update(update(folder.clone()), &log()).unwrap();
+    strip_algo(&rec_home, "a.txt", "md5");
+    // The backup: the same bytes, under a name that is not a folder's cache.
+    let backup = rec_home.join("girpr-cache-backup-1");
+    std::fs::copy(rec_home.join(CACHE_PREFIX), &backup).unwrap();
+
+    let err = cmd_compare(compare(backup.clone(), folder.clone()), &log())
+        .expect_err("a record without the digest cannot answer the question");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("girpr-cache-backup-1"),
+        "names the record it was pointed at:\n{msg}"
+    );
+    assert!(
+        !msg.contains("girsync update"),
+        "and offers no repopulation, because none would rebuild this file:\n{msg}"
+    );
+    assert!(
+        msg.contains("not a folder's own cache"),
+        "and says why there is none, so the shorter list is an answer:\n{msg}"
+    );
+    assert!(
+        msg.contains("--hash-all-of none"),
+        "the stat-only way out is still named:\n{msg}"
+    );
+
+    // The same tree, pointed at the folder's own cache, does get the command —
+    // so the difference is the record's name and nothing else.
+    let err = cmd_compare(compare(rec_home.join(CACHE_PREFIX), folder.clone()), &log())
+        .expect_err("the folder's own cache is short of the digest too");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains(&format!("girsync update --dir {}", rec_home.display())),
+        "a record that is a folder's cache names the folder to repopulate:\n{msg}"
     );
 }
 

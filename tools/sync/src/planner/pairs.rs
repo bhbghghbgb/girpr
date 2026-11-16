@@ -10,8 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 
-use crate::effective::{SideCapability, SideEntry};
+use crate::effective::{Repopulate, SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
+use crate::util::FoldedKey;
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -19,7 +20,7 @@ use super::plan::{HashPlan, plan_one};
 use super::stat_trust::StatTrust;
 
 /// One side's inputs to a pair plan.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct SideRequest<'a> {
     /// Phase A's output for this side.
     pub entries: &'a HashMap<String, SideEntry>,
@@ -40,6 +41,19 @@ pub struct SideRequest<'a> {
     /// side *can do*, not what it *is*, so this is the one chance a caller has to
     /// put its own vocabulary into the message.
     pub label: &'a str,
+    /// Where a repopulation of this side would run.
+    ///
+    /// A record that **is** a folder's own `girpr-cache` lives in that folder,
+    /// and that folder is what the remedy repopulates. A record that is not a
+    /// folder's own cache has none — a repopulation there would rebuild a
+    /// different file. The planner knows what a side *can do*, not where its
+    /// cache lives, so this is the caller's one chance to say that too.
+    ///
+    /// **Required**: a side with no folder to repopulate says so, in
+    /// [`Repopulate::NotAFolderCache`], rather than leaving the field out. A
+    /// caller that forgot would otherwise lose the remedy bullet without saying
+    /// so.
+    pub repopulate: Repopulate,
 }
 
 /// Both sides' plans, from one decision.
@@ -71,6 +85,14 @@ pub struct PairPlan {
 /// | [`Exact`](Self::Exact) | `a.txt` and `A.txt` are two different paths | a diff over paths that already line up |
 /// | [`Lowercase`](Self::Lowercase) | `a.txt` and `A.txt` are one path, spelled two ways | pairing what is on disk, before any rename |
 ///
+/// [`Lowercase`](Self::Lowercase) folds **ASCII case only**, the same key
+/// [`crate::util::path_key`] builds: `Ärger.txt` and `ärger.txt`, or the Kelvin sign `\u{212A}`
+/// and `k`, stay two paths. A non-ASCII name therefore pairs only with its
+/// byte-identical spelling. The fold deliberately does not reproduce a platform's
+/// Unicode case table; restricting it to ASCII means no two distinct non-ASCII
+/// spellings are ever merged, and the disk walk and capture both preserve names as
+/// written.
+///
 /// `sync` plans with [`Lowercase`](Self::Lowercase) in insensitive mode and then
 /// diffs with [`Exact`](Self::Exact), because the rename pass has re-keyed dst
 /// onto src's spelling by then. Read as two bare booleans that is a pair of calls
@@ -79,7 +101,8 @@ pub struct PairPlan {
 pub enum CasePairing {
     /// Pair by exact key — the paths must match character for character.
     Exact,
-    /// Pair by lowercase key — spelling is not part of a path's identity.
+    /// Pair by the ASCII-case-folded key — spelling is not part of a path's
+    /// identity.
     Lowercase,
 }
 
@@ -118,12 +141,15 @@ fn shared_pairs<'a>(
             }
         }
         CasePairing::Lowercase => {
-            let mut slow: HashMap<String, &String> = HashMap::new();
-            for k in src.keys() {
-                slow.insert(k.to_lowercase(), k);
-            }
-            for (lkey, drel) in dst.keys().map(|k| (k.to_lowercase(), k)) {
-                if let Some(srel) = slow.get(&lkey) {
+            // The src side is the index and dst is what is looked up. The
+            // index's keys are the src paths themselves, borrowed and folded
+            // in place, so neither side's path is copied into a `String` to
+            // be found: a lookup folds the dst path it asks about rather
+            // than materialising the fold.
+            let src_folded_keys: HashMap<FoldedKey<'_>, (&String, &SideEntry)> =
+                src.iter().map(|(k, v)| (FoldedKey(k), (k, v))).collect();
+            for drel in dst.keys() {
+                if let Some(&(srel, _)) = src_folded_keys.get(&FoldedKey(drel)) {
                     out.push((srel, drel));
                 }
             }
@@ -148,7 +174,7 @@ fn shared_pairs<'a>(
 ///
 /// Two consequences worth stating, because both are deliberate:
 ///
-/// - `--hash none` is trivially lazy: an empty `algos` means there is nothing to
+/// - `--hash-all-of none` is trivially lazy: an empty `algos` means there is nothing to
 ///   ask for, so no file is opened. It is a distinct mode, not all-of over an
 ///   empty set that happens to pass — and it is also why an empty request is never
 ///   a coverage failure, since the early return happens before any pair is even
@@ -236,7 +262,7 @@ pub fn plan_pairs(
         ..PairPlan::default()
     };
     if src.algos.is_empty() {
-        // `--hash none`: nothing to ask for, so nothing to read and nothing to be
+        // `--hash-all-of none`: nothing to ask for, so nothing to read and nothing to be
         // short of.
         return Ok(plan);
     }
@@ -340,6 +366,7 @@ pub fn plan_pairs(
             return Err(Coverage {
                 side: ["src", "dst"][idx],
                 label: req.label.to_string(),
+                repopulate: req.repopulate.clone(),
                 mode,
                 missing: std::mem::take(&mut tally[idx].missing),
                 coverage: std::mem::take(&mut tally[idx].coverage),
@@ -386,9 +413,9 @@ fn record_shortfalls(
 /// nothing.
 ///
 /// **Then the user's flag order.** `min_by_key` keeps the *first* minimum, and
-/// `algos` is the flag order, so `--hash-any-of md5 --hash sha256` prefers md5 and
-/// the choice is visible in the command they typed rather than in a rule they would
-/// have to look up.
+/// `algos` is the flag order, so `--hash-any-of md5 --hash-any-of sha256` prefers
+/// md5 and the choice is visible in the command they typed rather than in a rule
+/// they would have to look up.
 fn pick_one(
     algos: &[HashAlg],
     s: &SideEntry,
@@ -479,7 +506,7 @@ mod tests {
         let d = map(vec![("d", dir())]);
         assert!(plan(&s, &d, true, false).src.pending().is_empty());
     }
-    /// `--hash none` is a mode, not all-of over an empty set: no path may reach
+    /// `--hash-all-of none` is a mode, not all-of over an empty set: no path may reach
     /// either plan, so phase C never runs and no file is opened.
     #[test]
     fn an_empty_algorithm_set_plans_nothing_on_any_pair_state() {
@@ -496,7 +523,7 @@ mod tests {
         assert!(p.src.by_rel.is_empty() && p.dst.by_rel.is_empty());
     }
 
-    /// `--hash none` is also not a coverage failure, and that needs no special
+    /// `--hash-all-of none` is also not a coverage failure, and that needs no special
     /// case: nothing was asked for, so nothing can be short of it. With a record
     /// on one side and a completely empty row, the run still succeeds.
     #[test]
@@ -565,7 +592,7 @@ mod tests {
     /// case-only match as "already a difference" would plan nothing here, and the
     /// content disagreement would go unreported.
     #[test]
-    fn insensitive_mode_pairs_by_lowercase() {
+    fn insensitive_mode_pairs_by_the_folded_key() {
         let s = map(vec![("a.txt", file(10, 100))]);
         let d = map(vec![("A.txt", file(10, 100))]);
         let p = plan(&s, &d, false, false);
@@ -591,5 +618,39 @@ mod tests {
         let p = plan(&s, &d, false, false);
         assert_eq!(p.src.pending(), vec!["a.txt", "same.txt"]);
         assert_eq!(p.dst.pending(), vec!["A.txt", "same.txt"]);
+    }
+
+    /// The folded key folds ASCII case only, matching `path_key` and
+    /// `diff_maps`. A non-ASCII case variant is two paths, so neither spelling is
+    /// paired and nothing is hashed for it; the byte-identical non-ASCII name
+    /// beside it still pairs and needs a digest, which is what tells "outside the
+    /// fold" apart from "pairing stopped working".
+    #[test]
+    fn insensitive_mode_does_not_fold_non_ascii_case() {
+        let s = map(vec![
+            ("Ärger.txt", file(10, 100)),
+            ("Привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let d = map(vec![
+            ("ärger.txt", file(10, 100)),
+            ("привет.txt", file(10, 100)),
+            ("café.txt", file(10, 100)),
+        ]);
+        let p = plan(&s, &d, false, false);
+        assert_eq!(p.src.pending(), vec!["café.txt"]);
+        assert_eq!(p.dst.pending(), vec!["café.txt"]);
+    }
+
+    /// A Unicode fold would map the Kelvin sign onto `k` and pair two paths the
+    /// filesystem keeps apart. The ASCII-only key does not, so an insensitive run
+    /// has no pair here and plans no digest.
+    #[test]
+    fn insensitive_mode_keeps_a_non_ascii_lookalike_distinct() {
+        let s = map(vec![("\u{212A}.txt", file(10, 100))]);
+        let d = map(vec![("k.txt", file(10, 100))]);
+        let p = plan(&s, &d, false, false);
+        assert!(p.src.pending().is_empty());
+        assert!(p.dst.pending().is_empty());
     }
 }

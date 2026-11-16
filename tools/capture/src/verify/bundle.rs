@@ -4,6 +4,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use super::list::canonical_under_root;
+
 use crate::assemble::PatchMap;
 use crate::blobs::ChunkIndex;
 use crate::emit::index::{Checksums, Manifest};
@@ -14,9 +16,10 @@ use crate::rejections::RejectionsDocument;
 
 /// A bundle loaded from disk.
 ///
-/// Every document is read back through the same type it was written with, so a
-/// schema drift surfaces as a parse error naming the file rather than as a
-/// silently missing field.
+/// Every document is read back through the same type it was written with, and
+/// each one's schema version is checked before its full shape, so a schema
+/// drift surfaces at the file that caused it rather than as a silently missing
+/// field.
 #[derive(Debug, Clone)]
 pub struct Bundle {
     /// The bundle root, as given.
@@ -105,19 +108,24 @@ impl Bundle {
                 root.display(),
             ));
         }
+        // The manifest's version was checked above with its tailored refusal.
         let manifest: Manifest = read_json(&manifest_path)?;
-        let index: ChunkIndex = read_json(&root.join("chunks/index.json"))?;
+        // Every other document carries its own version, checked before its full
+        // shape: a document written to another schema is refused at the file
+        // that caused it, not reported as a missing field at some consumer.
+        let index: ChunkIndex = read_versioned_json(&root.join("chunks/index.json"))?;
         // Arithmetic on the index's offsets and sizes is checked before any
         // command assembles a byte: a crafted `offset` must not reach
         // `Layout::of` as a panic. See `ChunkIndex::validate_arithmetic`.
         index.validate_arithmetic()?;
-        let checksums: Checksums = read_json(&root.join("verify/checksums.json"))?;
-        let recorded: Selfcheck = read_json(&root.join("verify/selfcheck.json"))?;
-        let error_shapes: ErrorShapes = read_json(&root.join("api/error_shapes.json"))?;
+        let checksums: Checksums = read_versioned_json(&root.join("verify/checksums.json"))?;
+        let recorded: Selfcheck = read_versioned_json(&root.join("verify/selfcheck.json"))?;
+        let error_shapes: ErrorShapes = read_versioned_json(&root.join("api/error_shapes.json"))?;
         let error_responses: crate::http::ErrorResponses =
-            read_json(&root.join("api/error_responses.json"))?;
-        let rejections: RejectionsDocument = read_json(&root.join("diagnostics/rejections.json"))?;
-        let path_map: PathMapDocument = read_json(&root.join(crate::pathmap::DOCUMENT))?;
+            read_versioned_json(&root.join("api/error_responses.json"))?;
+        let rejections: RejectionsDocument =
+            read_versioned_json(&root.join("diagnostics/rejections.json"))?;
+        let path_map: PathMapDocument = read_versioned_json(&root.join(crate::pathmap::DOCUMENT))?;
         let patchmaps = read_patchmaps(root)?;
         // **The shape of every document-supplied path is checked at the door.**
         // `verify` is the command an operator runs on a bundle they may not have
@@ -208,7 +216,9 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
     let mut out = BTreeMap::new();
     let mut from: BTreeMap<String, PathBuf> = BTreeMap::new();
     for p in paths {
-        let map: PatchMap = read_json(&p)?;
+        // The version is checked per file, before its full shape, so a bad
+        // patchmap is named here rather than the directory it came from.
+        let map: PatchMap = read_versioned_json(&p)?;
         let id = map.capture_id.clone();
         if let Some(first) = from.get(&id) {
             return Err(format!(
@@ -225,13 +235,16 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
 
 /// Refuse a bundle whose own documents name a path that leaves it.
 ///
-/// Three fields become filesystem joins inside the offline commands:
+/// These fields become filesystem joins inside the offline commands:
 ///
 /// - `chunks/index.json`'s `stored_path` is read by A6 and by every chunk
 ///   decode;
 /// - `chunks/index.json`'s `references[].path` and `patchmaps/*.json`'s `path`
 ///   key the rebuild, and `materialize` turns the rebuilt path back into
 ///   `--out/<tree>/<path>`;
+/// - `patchmaps/*.json`'s `expectations.result_path` names where the rebuilt
+///   bytes end up, under the bundle's `expected/` tree. Its tail is the game's
+///   own path, so it follows the logical rule and may name a device component;
 /// - `MANIFEST.json`'s `capture.id` names the default `materialize` output when
 ///   the artifact itself is a filesystem root.
 ///
@@ -280,6 +293,20 @@ fn validate_document_paths(
         if let Some(problem) = crate::paths::logical_path_problem(&map.path) {
             return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
         }
+        // `result_path` carries the `expected/` tree, but its tail is written
+        // from the game's own path (`expected/<path>`), so it uses the logical
+        // rule: a device component there is legitimate and escaped on disk,
+        // while an escape, a drive, a backslash or an empty component is not a
+        // path the writer could have produced and cannot point inside the
+        // bundle.
+        if let Some(result_path) = map.expectations.result_path.as_deref()
+            && let Some(problem) = crate::paths::logical_path_problem(result_path)
+        {
+            return Err(format!(
+                "patchmaps/{}.json expectations.result_path {problem}",
+                map.capture_id
+            ));
+        }
     }
     for row in &error_responses.responses {
         if let Some(rel) = row.stored_path.as_deref()
@@ -324,6 +351,47 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
     serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Read one JSON document whose schema version must match this build's.
+///
+/// The version is read **on its own, first**, exactly as [`schema_version_of`]
+/// does for `MANIFEST.json`: it is the diagnosis, and a field the current type
+/// expects but the document does not have is only a symptom of a version
+/// mismatch. Parsing the full type first would report the missing field and say
+/// nothing about the version that caused it, or — worse — apply current
+/// semantics to a document that means something else.
+///
+/// A document whose version is not this build's is refused naming the file, the
+/// version found and the version expected. A document with no readable version
+/// is refused too: every document this bundle requires carries one, so there is
+/// no safe default to fall back to.
+fn read_versioned_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    match value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+    {
+        Some(v) if v == u64::from(crate::SCHEMA_VERSION) => {}
+        Some(v) => {
+            return Err(format!(
+                "{}: schema version {v} is not the current {}; this document was \
+                 written by a different gircap schema and cannot be read safely",
+                path.display(),
+                crate::SCHEMA_VERSION
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{}: no schema_version; this document was not written by a gircap \
+                 build this reader understands",
+                path.display()
+            ));
+        }
+    }
+    serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// What a directory's `MANIFEST.json` says about whether it is a bundle.
 ///
 /// Three outcomes, kept apart because conflating them loses a bundle:
@@ -341,6 +409,23 @@ pub enum ManifestProbe {
     Version(u32),
 }
 
+/// Whether the manifest at `path` resolves inside `root`, the bundle root that
+/// holds it.
+///
+/// Both ends are canonicalized, so a symlinked root is legitimate — its
+/// canonical form is the target, and the manifest under it is contained — while
+/// a `MANIFEST.json` that is itself a link to a tree outside the root resolves
+/// elsewhere and is refused. This is the same decision the walkers make for
+/// directories and files, applied to the one document they do not descend
+/// through before reading. A path that cannot be resolved (a broken link, or a
+/// root that is gone) is not contained either.
+pub(super) fn manifest_under_root(root: &Path, manifest: &Path) -> bool {
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    canonical_under_root(&canonical_root, manifest).is_some()
+}
+
 /// Probe a `MANIFEST.json`, distinguishing absence from a read failure.
 ///
 /// **Nothing but the version.** The document is read as a JSON value rather
@@ -353,6 +438,14 @@ pub enum ManifestProbe {
 /// capture, or a directory that only looks like one — and says so. A document
 /// that could not be read at all is not the same fact: it is returned as
 /// `Err` naming the path and the I/O error, because a bundle may be behind it.
+///
+/// **The manifest is contained before it is read.** `metadata` follows links,
+/// so a symlinked `MANIFEST.json` pointing outside the bundle looks like an
+/// ordinary file here. Resolving it against its own directory first means a
+/// link out of the root is refused rather than surfacing bytes the root does
+/// not own — the same rule the recursive walkers apply to the files beneath a
+/// bundle. In `list` such a directory is simply stepped over; in
+/// [`Bundle::open`] the refusal is named by [`schema_version_of`].
 ///
 /// The reader is a parameter so [`list_with`] can inject a failing one; the
 /// only other caller passes [`std::fs::read`].
@@ -369,6 +462,17 @@ pub fn probe_manifest(
         // could not see, which is not the same as an empty one.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ManifestProbe::Missing),
         Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    }
+    // `metadata` followed the link; check containment before reading the bytes.
+    // The root a manifest belongs to is the directory that holds it.
+    let contained = path
+        .parent()
+        .is_some_and(|root| manifest_under_root(root, path));
+    if !contained {
+        return Ok(ManifestProbe::NotABundle(format!(
+            "{}: MANIFEST.json resolves outside the bundle root; refused",
+            path.display()
+        )));
     }
     let raw = read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let value: serde_json::Value = match serde_json::from_slice(&raw) {

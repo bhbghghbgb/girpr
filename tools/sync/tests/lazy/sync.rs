@@ -25,8 +25,11 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
     //
     // Both sides are folders, so coverage cannot fail here — which is the point
     // of `sync` sharing the check rather than skipping it.
-    let s_label = format!("folder {}", src.display());
-    let d_label = format!("folder {}", dst.display());
+    //
+    // The labels come from the same helper the commands use, so a test cannot
+    // keep a second spelling of how a side is named.
+    let s_label = side_label(&Side::Folder(src.to_path_buf()));
+    let d_label = side_label(&Side::Folder(dst.to_path_buf()));
     let plans = plan_pairs(
         SideRequest {
             entries: &src_a.map,
@@ -34,6 +37,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
             no_trust: trust.no_trust_src,
             cap: SideCapability::for_folder(&src_db, mode(trust.no_trust_src)),
             label: &s_label,
+            repopulate: side_folder(&Side::Folder(src.to_path_buf())),
         },
         SideRequest {
             entries: &dst_a.map,
@@ -41,6 +45,7 @@ fn sync_counts(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) ->
             no_trust: trust.no_trust_dst,
             cap: SideCapability::for_folder(&dst_db, mode(trust.no_trust_dst)),
             label: &d_label,
+            repopulate: side_folder(&Side::Folder(dst.to_path_buf())),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -127,7 +132,7 @@ fn a_lazy_sync_records_no_digest_it_never_needed() {
     let t = temp_root("lz_sync_lazy");
     let (src, dst) = four_differing(&t);
     let mut o = sync_opts(src.clone(), dst.clone());
-    o.common.case_sensitive = true;
+    o.common.set_case_sensitive(true);
     assert_eq!(cmd_sync(o, &log()).unwrap(), 0);
 
     // Every pair differed in size, so every pair was decided by stat.

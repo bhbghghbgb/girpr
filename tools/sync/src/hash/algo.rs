@@ -11,7 +11,7 @@
 ///
 /// **It is not what a cache row stores.** A row may carry a digest under a name
 /// this build has never heard of — a cache written by a newer binary with
-/// `--hash blake3` has to stay readable here — so the persistence layer cannot be
+/// `--hash-all-of blake3` has to stay readable here — so the persistence layer cannot be
 /// an enum without giving that up. See `crate::cache::codec`, which keeps names
 /// inline for exactly that reason, and [`super::DigestSet`]'s `foreign` arm for the
 /// in-memory end of the same guarantee. A closed enum here and an open set there
@@ -44,6 +44,45 @@ impl HashAlg {
         }
     }
 
+    /// The algorithm this name means, if it names one.
+    ///
+    /// The allocation-free half of [`std::str::FromStr`]. `from_str` has to
+    /// build an [`UnknownHash`] around a copy of the offending spelling,
+    /// because a refusal has to name it — but a **match** has nothing to
+    /// refuse and nothing to keep, so a caller that only asks "which
+    /// algorithm does this name mean, if any?" must not pay for the error
+    /// path.
+    ///
+    /// **A `const fn`, so the property is the compiler's.** A const fn may
+    /// not allocate, so this resolver cannot: the guarantee does not rest on
+    /// reading the body, and a caller that resolves a name for every row of a
+    /// tree can rely on it without measuring anything. The comparison is
+    /// therefore reached through the *slice* form of `eq_ignore_ascii_case`,
+    /// which is a const fn, rather than the string form, which is not — the
+    /// two are the same rule on the same bytes.
+    ///
+    /// ASCII case only, which is all an algorithm name can be and the rule
+    /// [`std::str::FromStr::from_str`] applies too. A Unicode fold would map
+    /// the Kelvin sign `\u{212A}` onto `k` and rewrite a name this build does
+    /// not know into one it does.
+    ///
+    /// Visible to the whole `hash` module tree (`pub(super)` relative to
+    /// `algo`) because [`super::DigestSet`]'s lookups resolve stored names
+    /// through it, and because it is the one spelling of "which algorithm is
+    /// this name" the crate has.
+    pub(super) const fn from_name(name: &str) -> Option<Self> {
+        let bytes = name.as_bytes();
+        let mut i = 0;
+        while i < Self::ALL.len() {
+            let a = Self::ALL[i];
+            if a.as_str().as_bytes().eq_ignore_ascii_case(bytes) {
+                return Some(a);
+            }
+            i += 1;
+        }
+        None
+    }
+
     /// Raw digest bytes — never hex. See `FileRec::hashes`.
     ///
     /// Also the length a decoded row of this algorithm must have: a name with a
@@ -56,7 +95,7 @@ impl HashAlg {
         }
     }
 
-    /// The bit this algorithm occupies in an [`AlgoSet`].
+    /// The bit this algorithm occupies in an [`super::AlgoSet`].
     ///
     /// Private because it is an encoding detail: `AlgoSet` is the only thing that
     /// should be manipulating a bitfield, and a public `bit()` would invite a
@@ -68,18 +107,97 @@ impl HashAlg {
         1u16 << (self as u8)
     }
 
-    /// `md5,sha256` — the supported list as the existing `--hash` refusal names it.
+    /// `md5,sha256` — the supported list as the existing `--hash-all-of` refusal
+    /// names it.
     pub fn names() -> String {
         HashAlg::ALL.map(|a| a.as_str()).join(",")
     }
 }
 
+/// **The resolver's `const` context, checked by every build.**
+///
+/// A `const fn` may not allocate, so the resolver cannot: the
+/// allocation-free property is the compiler's guarantee rather than a matter
+/// of reading the body. Calling it in a const context is what pins that — a
+/// resolver that stopped being `const` would not compile here, and neither
+/// would one that allocated.
+///
+/// The pin is here, in the crate itself, rather than in the crate's tests,
+/// so it holds for every build and not only for the ones that build the
+/// tests: a resolver that stopped being `const` has to fail a plain build
+/// too, and a plain build is what most of the time is what runs.
+///
+/// The answers are checked in the same place, because a const context checks
+/// them without a runtime.
+///
+/// **The answers are derived from [`HashAlg::ALL`], not written out.** A
+/// list of answers written beside the vocabulary is a subset of it until the
+/// day somebody adds an algorithm: the runtime case would cover the new one
+/// and this one would not, and nothing would say so. So the whole vocabulary
+/// is asked here instead — every algorithm's own name answers for that
+/// algorithm, and no other algorithm's name does — and an algorithm added to
+/// the list is covered the moment it is added.
+///
+/// The two algorithms are told apart by their discriminants rather than with
+/// `==`, because a derived `PartialEq` is not a `const fn` and cannot become
+/// one: the comparison has to be a `const fn` before the context that holds
+/// it can be.
+///
+/// **The ASCII-case spelling is the one answer this block cannot hold.** A
+/// name in another case is a string built at runtime — `to_ascii_uppercase`
+/// allocates, and a `const fn` may not — so that answer is asked in the
+/// crate's tests, where it is asked of the whole vocabulary as well.
+const _: () = {
+    /// Every algorithm the vocabulary has, answered here.
+    ///
+    /// The whole of [`HashAlg::ALL`], asked twice over: once for the answer
+    /// each of its own names gives, and once for the answer every *other*
+    /// name gives — which must not be that algorithm, because the resolver
+    /// answers "which algorithm does this name mean", and two names meaning
+    /// one algorithm would make that answer a property of the order the
+    /// vocabulary is written in rather than of the name.
+    const fn every_algorithm_is_answered() {
+        let mut i = 0;
+        while i < HashAlg::ALL.len() {
+            let alg = HashAlg::ALL[i];
+            match HashAlg::from_name(alg.as_str()) {
+                Some(answered) => assert!(
+                    answered as u8 == alg as u8,
+                    "an algorithm's own name answers for that algorithm"
+                ),
+                None => panic!("an algorithm's own name answers for that algorithm"),
+            }
+            let mut j = 0;
+            while j < HashAlg::ALL.len() {
+                let other = HashAlg::ALL[j];
+                if other as u8 != alg as u8
+                    && let Some(answered) = HashAlg::from_name(other.as_str())
+                {
+                    assert!(
+                        answered as u8 != alg as u8,
+                        "and no other algorithm's name answers for it"
+                    );
+                }
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+
+    every_algorithm_is_answered();
+    // The names this build does not know answer nothing: the empty one, and
+    // a name a newer build might have written into a cache — which is the
+    // case the cache's open vocabulary exists for.
+    assert!(HashAlg::from_name("blake3").is_none());
+    assert!(HashAlg::from_name("").is_none());
+};
+
 /// The name an algorithm was parsed from that this build does not know.
 ///
 /// Carries the offending name and nothing else. **The supported list is not part
 /// of it**, because that list is the caller's sentence to finish: `Display` here
-/// says what was wrong, and the `--hash` refusal appends what would have been
-/// right. Two copies of one message is two spellings to keep in step.
+/// says what was wrong, and the `--hash-all-of` refusal appends what would have
+/// been right. Two copies of one message is two spellings to keep in step.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnknownHash {
     name: String,
@@ -123,17 +241,23 @@ impl std::str::FromStr for HashAlg {
     type Err = UnknownHash;
 
     /// Case-insensitive **on its own**, not because a caller remembered to
-    /// lowercase first. `--hash MD5` works today for a reason that lives in
+    /// lowercase first. `--hash-all-of MD5` works today for a reason that lives in
     /// `parse_hash_list`, which is one caller's private detail; a parser whose
     /// contract depends on someone else having normalised the input first is a
     /// parser every new caller gets wrong. ASCII case only, which is all an
     /// algorithm name can be.
+    ///
+    /// The match is `HashAlg::from_name`'s, so this parser and the lookups
+    /// that resolve a *stored* name cannot drift apart. Only the refusal is
+    /// this function's own: only a refusal has to name the spelling, and only
+    /// a refusal may allocate to keep it.
+    ///
+    /// The resolver is named in plain text rather than linked: it is private to
+    /// the module tree, and a public doc that links to a private item is a
+    /// warning, not a link.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        HashAlg::ALL
-            .into_iter()
-            .find(|a| a.as_str().eq_ignore_ascii_case(s))
-            .ok_or_else(|| UnknownHash {
-                name: s.to_string(),
-            })
+        HashAlg::from_name(s).ok_or_else(|| UnknownHash {
+            name: s.to_string(),
+        })
     }
 }

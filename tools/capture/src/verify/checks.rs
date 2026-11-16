@@ -1,9 +1,11 @@
 //! Per-blob and per-patchmap re-verification checks: A6, A7, A8, A11, A18 and A20.
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::assemble::{Decision, PatchMap};
 use crate::blobs::ChunkIndex;
+use crate::blobs::chunks::Set;
 use crate::blobs::props::BlobProps;
 use crate::emit::index::Manifest;
 use crate::emit::selfcheck::Assertion;
@@ -11,6 +13,7 @@ use crate::hash;
 
 use super::bundle::Bundle;
 use super::materialize;
+use super::materialize::ChunksByFile;
 use super::report::{A18, A18_ID, REDERIVED};
 
 /// A6, one row per stored blob.
@@ -410,6 +413,318 @@ pub fn check_patchmap_arithmetic(map: &PatchMap) -> Vec<Assertion> {
     rows
 }
 
+/// The index's view of one patch, in the three roles the plan talks about.
+///
+/// Built once per capture and shared by every plan entry *and* the converse
+/// walk, so a chunk placed twice in one file is matched by offset rather than
+/// by id alone. The keys are offsets: the plan names a chunk by where it lands,
+/// and the same id may legitimately land in more than one place.
+struct IndexedPatch<'i> {
+    /// New-side chunk id at each target offset.
+    new_by_offset: BTreeMap<i64, &'i str>,
+    /// Target offsets the index retains for the patch's fetch set.
+    fetch_offsets: BTreeSet<i64>,
+    /// Old-side chunk id at each source offset.
+    old_by_offset: BTreeMap<i64, &'i str>,
+}
+
+/// Group one capture's index references into the view the plan is checked
+/// against. [`materialize::ChunksByFile`] already holds the grouping; this only
+/// picks the three runs out of it once.
+fn indexed_patch<'i>(map: &PatchMap, by_file: &ChunksByFile<'i>) -> IndexedPatch<'i> {
+    let tag_new = map.new.as_ref().map_or("", |s| s.tag.as_str());
+    let tag_old = map.old.as_ref().map_or("", |s| s.tag.as_str());
+    let mut new_by_offset = BTreeMap::new();
+    for (id, offset) in by_file
+        .get(tag_new, &map.capture_id, &map.path, Set::MaterializeNew)
+        .unwrap_or_default()
+    {
+        new_by_offset.entry(offset).or_insert(id);
+    }
+    let fetch_offsets = by_file
+        .get(tag_new, &map.capture_id, &map.path, Set::PatchFetch)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, offset)| offset)
+        .collect();
+    let mut old_by_offset = BTreeMap::new();
+    for (id, offset) in by_file
+        .get(tag_old, &map.capture_id, &map.path, Set::MaterializeOld)
+        .unwrap_or_default()
+    {
+        old_by_offset.entry(offset).or_insert(id);
+    }
+    IndexedPatch {
+        new_by_offset,
+        fetch_offsets,
+        old_by_offset,
+    }
+}
+
+/// A20-family: a patchmap's `plan` and the blob closure in `chunks/index.json`
+/// must describe the same patch.
+///
+/// [`check_patchmap_arithmetic`] re-derives a plan's arithmetic from the plan
+/// itself. That proves the plan agrees with *itself*, which is exactly what a
+/// stale but tidy plan does. This check holds the plan against the index the
+/// rebuilt sides came from: the target offsets and chunk ids, the decision the
+/// index recorded with its `patch_fetch` role, the old-side source of each
+/// reuse, the sizes the index measured, and the converse — no new-side
+/// reference is left without a plan entry.
+///
+/// No network: the URL of a FETCH is only checked for naming its chunk id.
+pub fn check_plan_against_index(
+    map: &PatchMap,
+    by_file: &ChunksByFile<'_>,
+    index: &ChunkIndex,
+) -> Vec<Assertion> {
+    let mut rows = Vec::new();
+    let subject = format!("patchmaps/{}.json", map.capture_id);
+    let Some(plan) = map.plan.as_ref() else {
+        // `removed` has no target and so no plan; there is nothing to compare.
+        return rows;
+    };
+    if map.new.is_none() {
+        rows.push(Assertion::fail(
+            A20_ID,
+            A20,
+            &subject,
+            "a plan implies a new side",
+            "a plan with no new side to target",
+        ));
+        return rows;
+    }
+
+    let view = indexed_patch(map, by_file);
+    let tag_old = map.old.as_ref().map_or("", |s| s.tag.as_str());
+    let mut planned_offsets: BTreeMap<i64, usize> = BTreeMap::new();
+
+    for (pi, e) in plan.iter().enumerate() {
+        let where_ = format!("{subject} [plan {pi}]");
+        let offset = e.target_range.start;
+
+        // Duplicate target offsets are never a legitimate placement: two
+        // entries writing the same offset tell two different stories about one
+        // byte range. A repeated *chunk id* at different offsets is fine.
+        if let Some(first) = planned_offsets.insert(offset, pi) {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{where_} (target_range.start)"),
+                "one plan entry per target offset",
+                &format!("offset {offset} is also the target of plan entry {first}"),
+            ));
+        }
+
+        // The chunk id a plan places at an offset must be the one the index
+        // places there. Matching on offset (not on id alone) is what keeps a
+        // repeated placement honest.
+        match view.new_by_offset.get(&offset) {
+            None => rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{where_} (target_range.start)"),
+                "a new-side index reference at the target offset",
+                &format!("the index has none at offset {offset}"),
+            )),
+            Some(indexed_id) if *indexed_id != e.chunk_id => rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{where_} (chunk_id)"),
+                &format!("{} (index, at offset {offset})", indexed_id),
+                &e.chunk_id,
+            )),
+            Some(_) => {}
+        }
+
+        // Decision, and the fields that decision brings with it.
+        let indexed_fetch = view.fetch_offsets.contains(&offset);
+        match e.decision {
+            Decision::Fetch => {
+                if e.source_range.is_some() {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (source_range)"),
+                        "no source range for a FETCH",
+                        "a source range",
+                    ));
+                }
+                if !indexed_fetch {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (decision)"),
+                        "FETCH: the index retains this offset for patch_fetch",
+                        &format!("FETCH, but the index has no patch_fetch reference at {offset}"),
+                    ));
+                }
+                if !fetch_url_names(&e.chunk_id, e.url.as_deref()) {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (url)"),
+                        "a URL naming the fetched chunk id",
+                        e.url.as_deref().unwrap_or("no URL"),
+                    ));
+                }
+            }
+            Decision::Reuse => {
+                if indexed_fetch {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (decision)"),
+                        "REUSE: the index does not retain this offset for patch_fetch",
+                        &format!("REUSE, but the index has a patch_fetch reference at {offset}"),
+                    ));
+                }
+                let Some(src) = e.source_range.as_ref() else {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (source_range)"),
+                        "a source range for a REUSE",
+                        "no source range",
+                    ));
+                    continue;
+                };
+                if src.file_tag != tag_old {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (source_range.file_tag)"),
+                        tag_old,
+                        &src.file_tag,
+                    ));
+                }
+                match view.old_by_offset.get(&src.start) {
+                    None => rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (source_range.start)"),
+                        "an old-side index reference at the source offset",
+                        &format!("the index has none at offset {}", src.start),
+                    )),
+                    Some(old_id) => {
+                        let len = by_file.size(old_id);
+                        let span = src.end.saturating_sub(src.start);
+                        if src.end <= src.start || span != len {
+                            rows.push(Assertion::fail(
+                                A20_ID,
+                                A20,
+                                &format!("{where_} (source_range.end)"),
+                                &format!("{} B, the indexed size of {old_id}", len),
+                                &format!("{span} B from offset {}", src.start),
+                            ));
+                        }
+                        // A reuse is a claim about bytes, not about the opaque
+                        // id prefix: two builds may publish the same content
+                        // under different ids. Accept the same id or the same
+                        // decompressed digest on the old side.
+                        let content_matches = *old_id == e.chunk_id
+                            || index
+                                .get(old_id)
+                                .is_some_and(|b| b.props.md5_decompressed == e.uncompressed_md5);
+                        if !content_matches {
+                            rows.push(Assertion::fail(
+                                A20_ID,
+                                A20,
+                                &format!("{where_} (source_range chunk)"),
+                                "the old-side source holds the reused bytes",
+                                &format!(
+                                    "old chunk {old_id} at {} is not {} ({})",
+                                    src.start, e.chunk_id, e.uncompressed_md5
+                                ),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sizes, against the blob the index holds for this chunk. An unmeasured
+        // row's compressed length is a placeholder zero, so only the declared
+        // length is compared there.
+        match index.get(&e.chunk_id) {
+            None => rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{where_} (chunk_id)"),
+                "a blob in chunks/index.json",
+                "no indexed blob with that id",
+            )),
+            Some(blob) => {
+                if let Ok(indexed) = i64::try_from(blob.props.uncompressed_size) {
+                    if indexed != e.uncompressed_size {
+                        rows.push(Assertion::fail(
+                            A20_ID,
+                            A20,
+                            &format!("{where_} (uncompressed_size)"),
+                            &format!("{indexed} (index)"),
+                            &e.uncompressed_size.to_string(),
+                        ));
+                    }
+                }
+                if blob.props.verified.is_some() {
+                    if let Ok(indexed) = i64::try_from(blob.props.bytes) {
+                        if indexed != e.compressed_size {
+                            rows.push(Assertion::fail(
+                                A20_ID,
+                                A20,
+                                &format!("{where_} (compressed_size)"),
+                                &format!("{indexed} (index)"),
+                                &e.compressed_size.to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The converse: a plan that leaves an index reference out is as wrong as
+    // one that invents a chunk.
+    for (offset, id) in &view.new_by_offset {
+        if !planned_offsets.contains_key(offset) {
+            rows.push(Assertion::fail(
+                A20_ID,
+                A20,
+                &format!("{subject} (new-side coverage)"),
+                &format!("a plan entry for chunk {id} at offset {offset}"),
+                "no plan entry names that reference",
+            ));
+        }
+    }
+
+    if rows.is_empty() {
+        rows.push(Assertion::pass(
+            A20_ID,
+            A20,
+            &subject,
+            &format!(
+                "{} plan entry/entries match the {} new-side and {} old-side index references",
+                plan.len(),
+                view.new_by_offset.len(),
+                view.old_by_offset.len()
+            ),
+        ));
+    }
+    rows
+}
+
+/// Whether a fetch URL names the chunk it is for.
+///
+/// A URL is `{prefix}/{id}{suffix}` — the suffix is published by the API and
+/// may be empty, and a query string may follow. Checking the last path segment
+/// starts with the id catches a URL for a different chunk without prescribing
+/// the prefix or forbidding a suffix.
+fn fetch_url_names(chunk_id: &str, url: Option<&str>) -> bool {
+    url.and_then(|u| u.split(['?', '#']).next())
+        .and_then(|path| path.rsplit('/').next())
+        .is_some_and(|last| last.starts_with(chunk_id))
+}
+
 /// A13, re-read from disk.
 ///
 /// **Delegates to [`crate::emit::selfcheck::check_config_ini`]**, which the
@@ -429,13 +744,22 @@ pub fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
 /// it was written. A row that previously failed and now holds is an improvement,
 /// and is reported through the row counts rather than as a disagreement.
 pub fn check_agreement(b: &Bundle, rows: &[Assertion]) -> bool {
-    let recomputed = |id: &str| rows.iter().filter(|r| r.id == id).all(|r| r.ok);
+    // One value per id: whether *all* rows carrying it are green. `all` over an
+    // empty iterator is true, so an id with no recomputed rows defaults to green
+    // — exactly what the old per-id scan returned for an id it never matched.
+    let mut recomputed: HashMap<&str, bool> = HashMap::new();
+    for r in rows {
+        recomputed
+            .entry(r.id.as_str())
+            .and_modify(|all_green| *all_green &= r.ok)
+            .or_insert(r.ok);
+    }
     let mut ok = true;
     for a in &b.recorded.assertions {
         if !REDERIVED.contains(&a.id.as_str()) || !a.ok {
             continue;
         }
-        if recomputed(&a.id) {
+        if recomputed.get(a.id.as_str()).copied().unwrap_or(true) {
             continue;
         }
         tracing::error!(

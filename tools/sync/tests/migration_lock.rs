@@ -190,15 +190,15 @@ fn lock_cache_writes_merge_unless_stat_changed() {
     cmd_update(with_algos(dir.clone(), both()), &log()).unwrap();
     assert_eq!(recs(&dir)["a.txt"].hashes, full);
 
-    // stat unchanged + `--hash none` -> nothing recomputed, nothing lost.
+    // stat unchanged + `--hash-all-of none` -> nothing recomputed, nothing lost.
     cmd_update(with_algos(dir.clone(), vec![]), &log()).unwrap();
     assert_eq!(
         recs(&dir)["a.txt"].hashes,
         full,
-        "--hash none must not destroy existing digests"
+        "--hash-all-of none must not destroy existing digests"
     );
 
-    // stat unchanged + narrower --hash -> unrequested algo rides along.
+    // stat unchanged + narrower --hash-all-of -> unrequested algo rides along.
     cmd_update(with_algos(dir.clone(), md5s()), &log()).unwrap();
     let kept = recs(&dir)["a.txt"].hashes.clone();
     assert!(
@@ -235,7 +235,7 @@ fn lock_cache_writes_merge_unless_stat_changed() {
     );
 }
 
-/// `--hash none` records stat rows with no hashes, and they still compare
+/// `--hash-all-of none` records stat rows with no hashes, and they still compare
 /// equal and sync cleanly.
 #[test]
 fn lock_hash_none_tracks_without_digests() {
@@ -245,7 +245,7 @@ fn lock_hash_none_tracks_without_digests() {
     wfile(&src, "a.txt", b"same bytes");
     wfile(&dst, "a.txt", b"same bytes");
     // Same size but fresh writes differ by mtime; pin it so size+mtime
-    // equality (the only signal under --hash none) holds.
+    // equality (the only signal under --hash-all-of none) holds.
     common::sync_mtime(&src.join("a.txt"), &dst.join("a.txt"));
 
     let none_opts = |d: std::path::PathBuf| UpdateOpts {
@@ -259,14 +259,14 @@ fn lock_hash_none_tracks_without_digests() {
     let r = recs(&src);
     assert!(
         r["a.txt"].hashes.is_empty(),
-        "--hash none stores no digests"
+        "--hash-all-of none stores no digests"
     );
     assert_eq!(r["a.txt"].size, 10);
 
-    // Compare + sync under --hash none converge.
+    // Compare + sync under --hash-all-of none converge.
     let mut c = compare_mem(src.clone(), dst.clone());
     c.common.algos = vec![];
-    // dst has no cache yet; folder side builds one lazily under --hash none.
+    // dst has no cache yet; folder side builds one lazily under --hash-all-of none.
     assert_eq!(cmd_compare(c, &log()).unwrap(), 0);
 
     let mut s = sync_mem(src.clone(), dst.clone());

@@ -43,11 +43,13 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use girsync::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
 use girsync::diff::{Diff, diff_maps};
 use girsync::effective::{
     Side, SideCapability, classify, ensure_distinct_sides, load_record_side_from,
     open_folder_cache, open_side, resolve_folder, resolve_record, resolve_side, scan_stat_only,
+    side_folder,
 };
 use girsync::hash::{AlgoSet, HashAlg};
 use girsync::planner::{CasePairing, Required, SideRequest, StatTrust, plan_pairs};
@@ -102,8 +104,11 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
 
     // Labels only so a coverage error can name a side. Every case here is two
     // folders, so coverage cannot fail and the labels are never read.
-    let s_label = format!("src {}", s_side.cache_path().display());
-    let d_label = format!("dst {}", d_side.cache_path().display());
+    //
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let s_label = side_label(&s_side);
+    let d_label = side_label(&d_side);
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
@@ -111,6 +116,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
+            repopulate: side_folder(&s_side),
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -118,6 +124,7 @@ fn run_pair(src: &Path, dst: &Path, common: &CommonOpts, trust: TrustOpts) -> Ru
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
+            repopulate: side_folder(&d_side),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,
@@ -175,7 +182,7 @@ fn four_differing(t: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 /// not perturbed by a rename pass; a case that wants insensitive sets it.
 fn sync_opts(src: std::path::PathBuf, dst: std::path::PathBuf) -> girsync::SyncOpts {
     let mut common = opts_mem();
-    common.case_sensitive = true;
+    common.set_case_sensitive(true);
     girsync::SyncOpts {
         src,
         dst,

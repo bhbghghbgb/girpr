@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::effective::Repopulate;
 use crate::hash::{AlgoSet, HashAlg};
 
 use super::HashMode;
@@ -33,6 +34,22 @@ pub struct Coverage {
     /// which is `'static`; the alternative would be for every caller to keep its
     /// labels alive for the life of the error.
     pub label: String,
+    /// Where a repopulation of this side would run.
+    ///
+    /// A record that **is** a folder's own `girpr-cache` lives in that folder,
+    /// and that folder is what `girsync update --dir` takes. A record that is
+    /// not a folder's own cache — a `girpr-cache-backup-*` copy, say — has no
+    /// folder to repopulate: a repopulation there rebuilds the folder's *own*
+    /// cache, which is a different file. The planner is handed a side's
+    /// *contents* and not the path of the file they came from, so the caller is
+    /// the one who says which case this is.
+    ///
+    /// **Required, in two named cases.** [`Repopulate::Folder`] is the folder a
+    /// repopulation would run on and [`Repopulate::NotAFolderCache`] is a side
+    /// that has none. The field is not an `Option` because a caller that left it
+    /// out would lose the remedy bullet without saying so, and the bullet is the
+    /// one line in this message a user pastes.
+    pub repopulate: Repopulate,
     /// Which mode was asked for. Carried because the two modes fail differently and
     /// so are *remedied* differently — an all-of failure can be answered by asking
     /// for any one algorithm, which is the whole of `any-of`.
@@ -114,6 +131,17 @@ impl fmt::Display for Coverage {
              pair\nwould fall back to size+mtime and this run would report a confident answer \
              about\ncontent it never read."
         )?;
+        // Whether a repopulation would rebuild this side at all, said **before**
+        // the remedy list rather than inside it: a list that is one line shorter
+        // is a question the user cannot answer from the list alone, and the
+        // answer is not the user's to guess.
+        if let Repopulate::NotAFolderCache = &self.repopulate {
+            writeln!(
+                f,
+                "\nThis side is not a folder's own cache, so nothing would rebuild it: a \
+                 repopulation\nrebuilds a folder's own `girpr-cache`, which is a different file."
+            )?;
+        }
         // Remedies a user can act on without reading the rest of the message. Every
         // one of them names a flag that exists.
         writeln!(f, "\nTo answer this question, one of:")?;
@@ -134,8 +162,8 @@ impl fmt::Display for Coverage {
                 } else if self.coverage.len() > 1 {
                     writeln!(
                         f,
-                        "  - require only one of them: --hash-any-of {}",
-                        self.names()
+                        "  - require only one of them: {}",
+                        self.request("--hash-any-of")
                     )?;
                 }
             }
@@ -143,16 +171,20 @@ impl fmt::Display for Coverage {
                 writeln!(
                     f,
                     "  - require every one of them, which is stricter but equally \
-                     unanswerable:\n    --hash-all-of {}",
-                    self.names()
+                     unanswerable:\n    {}",
+                    self.request("--hash-all-of")
                 )?;
             }
         }
-        writeln!(
-            f,
-            "  - repopulate it, then run this again: girsync update --dir <the folder \
-             this record describes>"
-        )?;
+        // The one remedy that names a path, so it is the one that has to be
+        // copy-pasteable: the folder the caller named, never a placeholder.
+        if let Repopulate::Folder(folder) = &self.repopulate {
+            writeln!(
+                f,
+                "  - repopulate it, then run this again: girsync update --dir {}",
+                folder.display()
+            )?;
+        }
         writeln!(
             f,
             "  - compare by stat only, and accept that content is unchecked: \
@@ -165,15 +197,21 @@ impl fmt::Display for Coverage {
 impl std::error::Error for Coverage {}
 
 impl Coverage {
-    /// The requested algorithms, in map order, space-joined for a remedy line.
+    /// The requested algorithms as a command line: the flag, then one occurrence
+    /// of it per algorithm.
+    ///
+    /// **One algorithm per occurrence**, because that is what the parser takes.
+    /// A flag that named two algorithms in one occurrence would be refused
+    /// before the run started, so a remedy printed in that shape would be a
+    /// command the user cannot paste — the one thing a remedy must not be.
     ///
     /// A helper rather than a third inline `join`, because the two remedies that
     /// name the whole request must not be able to spell it differently from each
     /// other.
-    fn names(&self) -> String {
+    fn request(&self, flag: &str) -> String {
         self.coverage
             .keys()
-            .map(|a| a.as_str())
+            .map(|a| format!("{flag} {}", a.as_str()))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -188,7 +226,9 @@ const EXAMPLE_PATHS: usize = 5;
 
 #[cfg(test)]
 mod tests {
-    use super::Coverage;
+    use std::path::PathBuf;
+
+    use super::{Coverage, Repopulate};
     use crate::hash::{AlgoSet, HashAlg};
     use crate::planner::HashMode;
     use crate::planner::fixtures::{Shape, cached_entry, dir, file, map};
@@ -216,6 +256,48 @@ mod tests {
         assert!(msg.contains("a.txt"), "names the path: {msg}");
         assert!(msg.contains("md5"), "names the algorithm: {msg}");
         assert!(msg.contains("1/1"), "reports coverage: {msg}");
+    }
+
+    /// **A known algorithm under an unusual spelling is still that algorithm.**
+    ///
+    /// The counterpart to the case above: there the record's `sha256` sat in
+    /// the foreign arm under its canonical spelling — its length was
+    /// unexpected — and the planner found it by name, so only `md5` was short.
+    /// Here the spelling is unusual too, and the planner must reach the same
+    /// answer. A row that holds the digest is a row that *has* the algorithm;
+    /// refusing it for coverage turns the user away from work they could have
+    /// had, over a difference of case.
+    ///
+    /// Asserted by **comparing the two spellings**, so the case states what it
+    /// is about — the two rows must plan identically — rather than that the run
+    /// happened not to fail. A test that passed whether the planner accepted or
+    /// refused the row would assert nothing.
+    #[test]
+    fn a_record_holding_a_known_algorithm_under_another_spelling_is_accepted() {
+        let canonical = map(vec![("a.txt", cached_entry(&["sha256"]))]);
+        let unusual = map(vec![("a.txt", cached_entry(&["SHA256"]))]);
+        let d = map(vec![("a.txt", file(10, 100))]);
+
+        let by_canonical = Shape::record_src(&["sha256"])
+            .run(&canonical, &d, true, StatTrust::default())
+            .expect("the record holds sha256, whatever it spells it");
+        let by_unusual = Shape::record_src(&["sha256"])
+            .run(&unusual, &d, true, StatTrust::default())
+            .expect("the record holds sha256, whatever it spells it");
+
+        assert_eq!(
+            by_unusual, by_canonical,
+            "the unusual spelling is the same algorithm as the canonical one"
+        );
+        assert!(
+            by_unusual.src.pending().is_empty(),
+            "a record has nothing to compute, so it owes nothing"
+        );
+        assert_eq!(
+            by_unusual.dst.pending(),
+            vec!["a.txt"],
+            "and the folder side still reads the file it has no digest for"
+        );
     }
 
     /// **Scoped to the undecided set.** A record full of stat-differing or
@@ -369,6 +451,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
+                repopulate: Repopulate::Folder(PathBuf::from("D:\\game\\old")),
                 mode: HashMode::AllOf,
                 missing: BTreeMap::from([(
                     "a.txt".to_string(),
@@ -387,14 +470,131 @@ mod tests {
             // The shortfall line: the path, then the algorithms it lacks.
             "    a.txt                            md5, sha256",
             // Neither algorithm alone covers, so the remedy is the weaker mode
-            // over the whole request — the string the user will paste.
-            "  - require only one of them: --hash-any-of md5 sha256",
+            // over the whole request — the string the user will paste, and it
+            // names one algorithm per occurrence because that is what the
+            // parser takes.
+            "  - require only one of them: --hash-any-of md5 --hash-any-of sha256",
+            // And the repopulation names the folder itself, so the line is a
+            // command that can be pasted as it stands.
+            "  - repopulate it, then run this again: girsync update --dir D:\\game\\old",
         ] {
             assert!(
                 msg.contains(want),
                 "missing from the message:\n{want}\n\n{msg}"
             );
         }
+    }
+
+    /// **The remedy is a command the user can paste.**
+    ///
+    /// The remedy is the only command line this crate prints for the user, so
+    /// the printed text and the parser have to agree about what a flag looks
+    /// like. A flag takes **one algorithm per occurrence**, so a remedy that
+    /// named two in one occurrence would be refused before the run started — the
+    /// line would be a dead end rather than a way out.
+    ///
+    /// Asserted by parsing the printed text rather than by comparing it with a
+    /// second spelling written out here: a string written twice is a second
+    /// thing that can drift. The order the remedy prints is checked too,
+    /// because the request's order is a contract with the user.
+    #[test]
+    fn the_remedy_is_a_command_the_parser_accepts() {
+        use std::collections::BTreeMap;
+
+        use clap::Parser;
+
+        use crate::cli::{Cli, Cmd};
+        use crate::config::CommonOpts;
+
+        let coverage = |mode| Coverage {
+            side: "src",
+            label: "rec".into(),
+            repopulate: Repopulate::NotAFolderCache,
+            mode,
+            missing: BTreeMap::new(),
+            // Neither algorithm covers the undecided set, so the all-of remedy
+            // is the weaker mode over the whole request rather than a narrower
+            // one.
+            coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 2usize)), (HashAlg::Sha256, (1, 2))]),
+        };
+
+        for (mode, flag) in [
+            (HashMode::AllOf, "--hash-any-of"),
+            (HashMode::AnyOf, "--hash-all-of"),
+        ] {
+            let msg = format!("{:#}", coverage(mode));
+            // The remedy line carries the command after its label, and the
+            // any-of remedy puts it on the next line — so the command is what
+            // follows the flag wherever it sits.
+            let command = msg
+                .lines()
+                .find_map(|l| l.find(flag).map(|at| l[at..].trim()))
+                .unwrap_or_else(|| panic!("the message offers {flag}:\n{msg}"));
+            let argv: Vec<String> = ["girsync", "compare", "--src", "s", "--dst", "d"]
+                .iter()
+                .map(|s| s.to_string())
+                .chain(command.split_whitespace().map(str::to_string))
+                .collect();
+            let cli = Cli::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("the remedy must parse: {command:?}: {e}"));
+            let common = match cli.cmd {
+                Cmd::Compare { common, .. } => common,
+                _ => unreachable!("the argv names compare"),
+            };
+            let opts = CommonOpts::try_from(common).expect("the remedy is a valid request");
+            let asked: Vec<&str> = opts.algos.iter().map(|a| a.as_str()).collect();
+            assert_eq!(
+                asked,
+                vec!["md5", "sha256"],
+                "the remedy asks for the algorithms in the order it prints them: {command}"
+            );
+        }
+    }
+
+    /// **The remedy is copy-pasteable, so it names a folder and not a
+    /// placeholder.** The planner is handed a side's contents and not the path
+    /// of the file they came from, so the caller says which folder the record
+    /// lives in and the message ends with that.
+    ///
+    /// Two cases, and the second is the one that matters: a side that has
+    /// nothing to repopulate offers **no** repopulation at all, rather than a
+    /// line with a placeholder in it that nobody can paste — and it *says* why,
+    /// so the shorter list is an answer rather than an absence.
+    #[test]
+    fn the_repopulate_remedy_names_a_folder_or_says_why_there_is_none() {
+        use std::collections::BTreeMap;
+
+        let coverage = |repopulate: Repopulate| Coverage {
+            side: "src",
+            label: "record D:\\game\\old\\girpr-cache".into(),
+            repopulate,
+            mode: HashMode::AllOf,
+            missing: BTreeMap::new(),
+            coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 1usize))]),
+        };
+
+        let named = format!(
+            "{:#}",
+            coverage(Repopulate::Folder(PathBuf::from("D:\\game\\old")))
+        );
+        assert!(
+            named.contains("girsync update --dir D:\\game\\old"),
+            "the remedy names the folder the record lives in:\n{named}"
+        );
+        assert!(
+            !named.contains("the folder this record describes"),
+            "and no placeholder is left in it:\n{named}"
+        );
+
+        let unnamed = format!("{:#}", coverage(Repopulate::NotAFolderCache));
+        assert!(
+            !unnamed.contains("girsync update"),
+            "a side with nothing to repopulate offers no repopulation:\n{unnamed}"
+        );
+        assert!(
+            unnamed.contains("This side is not a folder's own cache"),
+            "and the message says why there is none:\n{unnamed}"
+        );
     }
 
     /// One algorithm *does* cover the undecided set, so the remedy is to narrow the
@@ -409,6 +609,7 @@ mod tests {
             Coverage {
                 side: "src",
                 label: "rec".into(),
+                repopulate: Repopulate::NotAFolderCache,
                 mode: HashMode::AllOf,
                 missing: BTreeMap::new(),
                 coverage: BTreeMap::from([

@@ -42,8 +42,11 @@
 //!
 //! **The `build_id` invariant (`docs/06` §4.1).** Every blob request carries
 //! `<build_id>` as the second-to-last path segment, and it must name the build
-//! that declared the id. That is enforced strictly for manifests (the map is
-//! built while rewriting, `docs/06` §4.2). For chunks it is enforced as "the
+//! that declared the id. That is enforced strictly for manifests: the index is
+//! keyed by `(build_id, id)` as it is built while rewriting (`docs/06` §4.2),
+//! so two builds declaring the same id keep separate entries and a request
+//! under a build that did not declare it is refused. For chunks it is enforced
+//! as "the
 //! latest build's id, or `blob_wrong_build`", because that is every request
 //! `girpr` can make — chunk URLs come from the *latest* build's
 //! `chunk_download.url_prefix` (`repair::manifest::fetch_latest`), and the
@@ -66,7 +69,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use serde_json::Value;
 
@@ -242,16 +245,24 @@ pub struct Origins {
 /// over `manifests[]` is where every id in the bundle passes through, and a
 /// filesystem scan over `manifests/*/*.meta.json` would answer a different
 /// question — "is this archive in the bundle" rather than "did *this build*
-/// declare it", which is exactly the `build_id` distinction.
+/// declare it", which is exactly the `build_id` distinction. Entries are keyed
+/// by `(build_id, id)`: two builds may declare the same id, and keying by id
+/// alone would let the second overwrite the first's tag, field and archive.
 #[derive(Clone, Debug)]
 struct ManifestEntry {
     id: String,
     field: String,
     tag: String,
     build_id: String,
-    /// `manifests/<tag>/<field>.manifest.zst`, if the bundle carries it. A
-    /// `getBuild` body declares five manifests and the bundle stores two, so
-    /// this is `None` more often than not — and that is the `404` a
+    /// `manifests/<tag>/<field>.manifest.zst`, if the bundle carries it.
+    ///
+    /// Three counts, three different things: one `getBuild` body **declares
+    /// five** manifest entries (`game` plus four audio languages), the bundle
+    /// stores the **two** the capture kept (`game` and `en-us`) per tag, and
+    /// a run **selects two** of them per build — so it fetches **four**
+    /// archives per run, the latest build's two and the local build's two.
+    ///
+    /// So this is `None` more often than not — and that is the `404` a
     /// `--audio` widening would hit (`docs/06` §4.5).
     archive: Option<PathBuf>,
 }
@@ -261,7 +272,10 @@ struct Served {
     bundle: Bundle,
     /// Rewritten `getBuild` bodies, keyed by the tag they answer for.
     builds: HashMap<String, Vec<u8>>,
-    manifest_index: HashMap<String, ManifestEntry>,
+    /// Manifest declarations keyed by `(build_id, id)`. Two builds may declare
+    /// the same id; keying by id alone would let the second overwrite the
+    /// first's tag, field and archive.
+    manifest_index: HashMap<(String, String), ManifestEntry>,
     /// `api/error_shapes.json`, when the bundle has one.
     shapes: Option<HashMap<String, Shape>>,
     /// `true` when the bundle predates the file and the not-found shapes are
@@ -351,9 +365,29 @@ impl Bridge {
         &self.served.bundle
     }
 
+    /// How many requests have been recorded so far.
+    ///
+    /// A test that shares its bridge with others captures this before its run
+    /// and passes the value as the `start` checkpoint to the `_since` methods,
+    /// so its assertions see only its own requests.
+    pub fn log_len(&self) -> usize {
+        self.served.log.lock().expect("request log").len()
+    }
+
     /// Everything the server has been asked for, in order.
     pub fn hits(&self) -> Vec<Hit> {
-        self.served.log.lock().expect("request log").clone()
+        self.hits_from(0)
+    }
+
+    /// The requests recorded at or after `start`, in order. One test's share
+    /// of a log shared with earlier tests in the same process.
+    pub fn hits_since(&self, start: usize) -> Vec<Hit> {
+        self.hits_from(start)
+    }
+
+    fn hits_from(&self, start: usize) -> Vec<Hit> {
+        let log = self.served.log.lock().expect("request log");
+        log.iter().skip(start).cloned().collect()
     }
 
     /// The chunk ids requested so far — the set `must_not_fetch` is checked
@@ -361,8 +395,16 @@ impl Bridge {
     /// which is what makes "asked once and 404'd" visible rather than "never
     /// asked".
     pub fn chunk_ids(&self) -> Vec<String> {
-        self.hits()
-            .into_iter()
+        Self::chunk_ids_from(self.hits())
+    }
+
+    /// The chunk ids recorded at or after `start`.
+    pub fn chunk_ids_since(&self, start: usize) -> Vec<String> {
+        Self::chunk_ids_from(self.hits_since(start))
+    }
+
+    fn chunk_ids_from(hits: Vec<Hit>) -> Vec<String> {
+        hits.into_iter()
             .filter(|h| h.kind == HitKind::Chunk)
             .map(|h| h.id)
             .collect()
@@ -371,8 +413,16 @@ impl Bridge {
     /// The `<build_id>` each chunk request carried, paired with its id. The
     /// `build_id` invariant (`docs/06` §4.1) is assertable from this.
     pub fn chunk_requests(&self) -> Vec<(String, String)> {
-        self.hits()
-            .into_iter()
+        Self::chunk_requests_from(self.hits())
+    }
+
+    /// The chunk requests recorded at or after `start`.
+    pub fn chunk_requests_since(&self, start: usize) -> Vec<(String, String)> {
+        Self::chunk_requests_from(self.hits_since(start))
+    }
+
+    fn chunk_requests_from(hits: Vec<Hit>) -> Vec<(String, String)> {
+        hits.into_iter()
             .filter(|h| h.kind == HitKind::Chunk)
             .map(|h| (h.build.unwrap_or_default(), h.id))
             .collect()
@@ -400,28 +450,52 @@ impl Bridge {
         self.served.builds.get(tag).cloned()
     }
 
-    /// Where a manifest id resolves: `(tag, field, declaring build_id)`, and
-    /// whether the bundle actually carries that field's archive.
+    /// Where a manifest id declared by `build_id` resolves:
+    /// `(tag, field, declaring build_id)`, and whether the bundle actually
+    /// carries that field's archive.
+    ///
+    /// The key is `(build_id, id)`: both builds may declare the same id, so a
+    /// bare id cannot name a single declaration. A request always knows the
+    /// build it is asking under (it is the second-to-last URL segment), so
+    /// callers key by both.
     ///
     /// The last element is the `docs/06` §4.5 fact stated as data: a `getBuild`
-    /// body declares five manifests and the bundle stores two, so three ids
-    /// resolve to an archive that does not exist — and that is exactly what a
-    /// widened `--audio` would ask for.
-    pub fn manifest_resolution(&self, id: &str) -> Option<(String, String, String, bool)> {
-        self.served.manifest_index.get(id).map(|e| {
-            (
-                e.tag.clone(),
-                e.field.clone(),
-                e.build_id.clone(),
-                e.archive.is_some(),
-            )
-        })
+    /// body declares five manifest entries and the bundle stores two of them,
+    /// so three of that body's five ids resolve to an archive that does not
+    /// exist — and that is exactly what a widened `--audio` would ask for.
+    ///
+    /// Those are the *bundle's* counts, not a run's: a run selects two of the
+    /// five per build (`game` and `en-us`) and fetches **four** archives per
+    /// run, the latest build's two and the local build's two.
+    pub fn manifest_resolution_for(
+        &self,
+        build_id: &str,
+        id: &str,
+    ) -> Option<(String, String, String, bool)> {
+        self.served
+            .manifest_index
+            .get(&(build_id.to_string(), id.to_string()))
+            .map(|e| {
+                (
+                    e.tag.clone(),
+                    e.field.clone(),
+                    e.build_id.clone(),
+                    e.archive.is_some(),
+                )
+            })
     }
 
-    /// Every manifest id the served `getBuild` bodies declare.
+    /// Every manifest id the served `getBuild` bodies declare, deduplicated:
+    /// an id both builds declare is still one id in this list.
     pub fn declared_manifest_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.served.manifest_index.keys().cloned().collect();
+        let mut ids: Vec<String> = self
+            .served
+            .manifest_index
+            .keys()
+            .map(|(_, id)| id.clone())
+            .collect();
         ids.sort();
+        ids.dedup();
         ids
     }
 }
@@ -439,7 +513,7 @@ impl Drop for Bridge {
 impl Served {
     fn load(bundle: Bundle, manifest_origin: &str, chunk_origin: &str) -> Self {
         let mut builds = HashMap::new();
-        let mut manifest_index: HashMap<String, ManifestEntry> = HashMap::new();
+        let mut manifest_index: HashMap<(String, String), ManifestEntry> = HashMap::new();
 
         // The rewrite loop, over every tag the bundle recorded.
         for tag in [&bundle.old_tag, &bundle.new_tag] {
@@ -455,8 +529,9 @@ impl Served {
                 .unwrap_or_else(|| panic!("api/getBuild.{tag}.json declares no manifests"));
 
             // The same loop does both jobs `docs/06` §4.2 asks for: rewrite the
-            // prefix, and index the id. Every id in the bundle passes through
-            // here exactly once.
+            // prefix, and index the id under the build that declared it. Two
+            // builds may declare the same id, so the key is (build_id, id) —
+            // keying by id alone would lose the earlier build's declaration.
             let mut declared: Vec<(String, String)> = Vec::with_capacity(manifests.len());
             for m in manifests.iter_mut() {
                 // ONLY these two fields change, and only their scheme and
@@ -489,13 +564,14 @@ impl Served {
 
             for (id, field) in declared {
                 manifest_index.insert(
-                    id.clone(),
+                    (build_id.clone(), id.clone()),
                     ManifestEntry {
                         id,
-                        // A `getBuild` body declares five manifests and the
-                        // bundle stores the two the capture kept, so `archive`
-                        // is `None` more often than not. That is the `404` a
-                        // widened `--audio` hits (`docs/06` §4.5).
+                        // One `getBuild` body declares five manifest entries
+                        // and the bundle stores the two the capture kept
+                        // (`game` and `en-us`), so `archive` is `None` for
+                        // three of the five. That is the `404` a widened
+                        // `--audio` hits (`docs/06` §4.5).
                         archive: bundle.manifest_archive(tag, &field),
                         field,
                         tag: tag.to_string(),
@@ -561,44 +637,56 @@ impl Served {
     fn build_response(&self, tag: Option<&str>) -> Response {
         let tag = tag.unwrap_or(&self.bundle.new_tag);
         let Some(body) = self.builds.get(tag) else {
-            return self.error_shape("getbuild_unknown_tag", "", None);
+            return self.error_shape("getbuild_unknown_tag", "");
         };
         Response::ok_json(body.clone())
     }
 
     fn manifest_response(&self, path: &str) -> Response {
         let Some((build_id, id)) = last_two(path) else {
-            return self.error_shape("blob_missing", path, None);
+            return self.error_shape("blob_missing", path);
         };
-        match self.manifest_index.get(&id) {
-            None => self.error_shape("blob_missing", path, None),
-            // `docs/06` §4.1: the id exists, but not under *this* build. The
-            // same id under the other build's prefix is a 404 in production,
-            // and that is the whole reason the two namespaces are separate
-            // ports.
-            Some(e) if e.build_id != build_id => self.error_shape("blob_wrong_build", path, None),
+        match self.manifest_index.get(&(build_id, id.clone())) {
             Some(e) => match &e.archive {
                 Some(archive) => Response::octet_stream(manifest_bytes(archive)),
                 // Declared by the build, absent from the bundle.
-                None => self.error_shape("blob_missing", path, None),
+                None => self.error_shape("blob_missing", path),
             },
+            None => {
+                // `docs/06` §4.1: the id is declared by some build, but not by
+                // *this* one. The same id under the other build's prefix is a
+                // 404 in production — never that other build's bytes. An id
+                // no build declared is simply missing.
+                let declared_elsewhere = self
+                    .manifest_index
+                    .keys()
+                    .any(|(_, declared)| declared == &id);
+                self.error_shape(
+                    if declared_elsewhere {
+                        "blob_wrong_build"
+                    } else {
+                        "blob_missing"
+                    },
+                    path,
+                )
+            }
         }
     }
 
     fn chunk_response(&self, path: &str) -> Response {
         let Some((build_id, id)) = last_two(path) else {
-            return self.error_shape("chunk_missing", path, None);
+            return self.error_shape("chunk_missing", path);
         };
         // Every chunk download goes to the latest build's prefix
         // (`repair::manifest::fetch_latest`), so any other build id is wrong by
         // construction — and a shim that crossed the two blob prefixes would
         // produce exactly that.
         if build_id != self.bundle.new_build {
-            return self.error_shape("blob_wrong_build", path, None);
+            return self.error_shape("blob_wrong_build", path);
         }
         match self.bundle.chunk_blob(&id) {
             Some(blob) => Response::chunk(std::fs::read(blob).expect("read chunk blob")),
-            None => self.error_shape("chunk_missing", path, None),
+            None => self.error_shape("chunk_missing", path),
         }
     }
 
@@ -613,7 +701,7 @@ impl Served {
     /// instead, and [`Bridge::shapes_synthesized`] says so, so the bridge can
     /// report that those assertions were skipped for lack of evidence rather
     /// than inventing a status it has no record of.
-    fn error_shape(&self, id: &str, path: &str, extra: Option<&str>) -> Response {
+    fn error_shape(&self, id: &str, path: &str) -> Response {
         let key = path.trim_start_matches('/');
         let Some(shape) = self.shapes.as_ref().and_then(|s| s.get(id)) else {
             return Response {
@@ -627,7 +715,6 @@ impl Served {
         for (tag, value) in [("Key", key), ("RequestId", request_id.as_str())] {
             body = replace_element(&body, tag, value);
         }
-        let _ = extra;
         Response {
             status: shape.status,
             content_type: shape.content_type.clone(),
@@ -686,7 +773,7 @@ fn xml_escape(s: &str) -> String {
 /// replayed body's length differ for a second, undocumented reason — and the
 /// length is one of the two things the not-found assertions compare.
 fn synthetic_request_id(key: &str) -> String {
-    format!("{:x}", md5::compute(key.as_bytes()))
+    super::digest::md5hex(key.as_bytes())
         .to_uppercase()
         .chars()
         .take(24)
@@ -730,25 +817,52 @@ fn last_two(path: &str) -> Option<(String, String)> {
 // served-manifest bytes cache (`docs/06` §4.6)
 // ---------------------------------------------------------------------------
 
-/// Manifest archives are immutable per bundle and ~40 MB of a ~130 MB bundle,
-/// so every run re-reading them is ~320 MB across eight runs for nothing.
+/// Manifest archives are immutable per bundle, and the four a run fetches —
+/// `game` and `en-us` for the latest build and for the local build — are
+/// ~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB,
+/// but the rest of it is the `.manifest.json.gz` copies and the `.meta.json` /
+/// `.paths.tsv` sidecars, which the server never serves: the cache holds the
+/// archives and nothing else. So re-reading them is ≈228 MiB across the
+/// suite's twelve `girpr` runs — six cases, each a `--print-plan` pre-pass and
+/// a real run — for nothing.
 ///
-/// The cache is **outside the listeners and shared by all of them** — including
-/// across the eight per-capture bridges — because it holds bytes that are a
-/// function of the bundle alone, so nothing about per-capture isolation
-/// (`docs/06` §6.2) is lost by sharing it, and every capture pays the disk read
-/// once instead of eight times.
-static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
+/// The cache is **outside the listeners and process-global within one test
+/// binary** — one static per binary, not per bridge and not per capture. Both
+/// `tests/artifact_bridge.rs` and `tests/artifact_server.rs` compile this
+/// module, so each binary has its own static and the two never share one.
+/// Within the bridge binary, `cargo test` runs the six per-capture bridges in
+/// one process, so they share the cache; under `cargo nextest` every case gets
+/// a process of its own, so there the cache is per case. Sharing it is safe
+/// either way, because it holds bytes that are a function of the bundle alone:
+/// nothing about per-capture isolation (`docs/06` §6.2) is lost by sharing it.
+///
+/// What the cache saves is the **read**, not the request: each of the four
+/// archives is read from disk once per process instead of once per request,
+/// and every run asks for all four.
+///
+/// The lock is only ever held to look up or insert an `Arc`, never across the
+/// disk read itself. A read lock serves concurrent hits, and a miss reads the
+/// archive with no lock held before taking the write lock to insert — so
+/// concurrent first requests do not serialize their IO.
+static MANIFEST_CACHE: OnceLock<RwLock<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 
 fn manifest_bytes(path: &Path) -> Arc<Vec<u8>> {
-    let cache = MANIFEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().expect("manifest cache");
-    if let Some(b) = guard.get(path) {
-        return b.clone();
+    let cache = MANIFEST_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    // A read lock is enough for a hit, and readers do not block one another.
+    if let Some(bytes) = cache.read().expect("manifest cache").get(path) {
+        return bytes.clone();
     }
+    // A miss: read the archive with no lock held, so concurrent first
+    // requests do not serialize their disk IO.
     let bytes = Arc::new(std::fs::read(path).expect("read manifest archive"));
-    guard.insert(path.to_path_buf(), bytes.clone());
-    bytes
+    // Insert only if another thread has not already done so, and return
+    // whichever `Arc` is in the map now.
+    cache
+        .write()
+        .expect("manifest cache")
+        .entry(path.to_path_buf())
+        .or_insert(bytes)
+        .clone()
 }
 
 // ---------------------------------------------------------------------------

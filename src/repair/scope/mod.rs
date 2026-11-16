@@ -31,5 +31,6 @@ pub mod limits;
 pub mod report;
 
 pub use filter::PathScope;
-pub use limits::{LimitHit, Limits, Preflight};
-pub use report::{PlanDocument, PlanTotals, plan_record};
+#[cfg(test)]
+pub use limits::LimitHit;
+pub use limits::{Limits, Preflight};

@@ -210,9 +210,12 @@ fn a_blob_is_found_whether_or_not_the_index_is_sorted() {
         sets: Vec::new(),
     };
     let build = |order: &[&str]| {
-        let entries: Vec<(IndexedBlob, Vec<Set>)> = order
+        let entries: Vec<IndexedBlob> = order
             .iter()
-            .map(|id| (blob(id), vec![Set::MaterializeOld]))
+            .map(|id| IndexedBlob {
+                sets: vec![Set::MaterializeOld],
+                ..blob(id)
+            })
             .collect();
         ChunkIndex::build(entries)
     };
@@ -356,17 +359,12 @@ fn a_capture_from_another_field_gets_its_sides_from_that_field() {
 #[test]
 fn the_index_role_lists_are_derived_from_the_blobs_that_carry_them() {
     let w = chunks::wants(&[pair()]);
-    let entries: Vec<(IndexedBlob, Vec<Set>)> = w
+    let entries: Vec<IndexedBlob> = w
         .iter()
-        .map(|x| {
-            (
-                IndexedBlob {
-                    props: BlobProps::unmeasured(&x.chunk),
-                    referenced_by: x.references.clone(),
-                    sets: x.sets.clone(),
-                },
-                x.sets.clone(),
-            )
+        .map(|x| IndexedBlob {
+            props: BlobProps::unmeasured(&x.chunk),
+            referenced_by: x.references.clone(),
+            sets: x.sets.clone(),
         })
         .collect();
     let idx = ChunkIndex::build(entries);
@@ -400,20 +398,50 @@ fn the_index_role_lists_are_derived_from_the_blobs_that_carry_them() {
     }
 }
 
+/// The role lists are read from each blob's own `sets`, so the index built from
+/// a representative store is exactly the union of the wants' sets — including
+/// the blob that is retained for two roles. A blob with no roles is filed under
+/// none of them.
+#[test]
+fn build_derives_each_role_list_from_the_blobs_sets() {
+    let w = chunks::wants(&[pair()]);
+    assert!(
+        w.iter().any(|x| x.sets.len() > 1),
+        "the representative store must include a blob in two roles"
+    );
+    let index = ChunkIndex::build(Store::plan_only(&w));
+    for set in Set::ALL {
+        let expected: Vec<String> = w
+            .iter()
+            .filter(|x| x.sets.contains(&set))
+            .map(|x| x.chunk.id.clone())
+            .collect();
+        assert_eq!(index.sets[set.id()], expected, "{} role list", set.id());
+    }
+
+    let index = ChunkIndex::build(vec![IndexedBlob {
+        props: BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
+            id: "aaa".into(),
+            ..Default::default()
+        }),
+        referenced_by: Vec::new(),
+        sets: Vec::new(),
+    }]);
+    assert!(
+        index.sets.values().all(|ids| ids.is_empty()),
+        "a blob with no roles is in none of the role lists"
+    );
+}
+
 #[test]
 fn the_index_lists_blobs_sorted_by_id_so_two_runs_agree() {
     let w = chunks::wants(&[pair()]);
-    let entries = w
+    let entries: Vec<IndexedBlob> = w
         .iter()
-        .map(|x| {
-            (
-                IndexedBlob {
-                    props: BlobProps::unmeasured(&x.chunk),
-                    referenced_by: x.references.clone(),
-                    sets: x.sets.clone(),
-                },
-                x.sets.clone(),
-            )
+        .map(|x| IndexedBlob {
+            props: BlobProps::unmeasured(&x.chunk),
+            referenced_by: x.references.clone(),
+            sets: x.sets.clone(),
         })
         .collect();
     let ids: Vec<String> = ChunkIndex::build(entries)
@@ -439,13 +467,41 @@ fn a_url_needs_a_registered_tag_and_says_which_one_it_wanted() {
     assert_eq!(s.tags(), vec!["7.0.0", "7.1.0"]);
 }
 
+/// Fixture shape: a hand-built manifest whose `chunk_download` declares a
+/// non-empty `url_suffix`. `Sources` — the path chunk downloads actually use —
+/// joins prefix/id/suffix through the same helper as `CapturedManifest::chunk_url`,
+/// so a suffix can no longer be silently dropped. The empty-suffix control shows
+/// the two paths still agree, and that the URL is unchanged, when nothing is
+/// appended.
+#[test]
+fn sources_retains_a_nonempty_chunk_url_suffix() {
+    let mut m = CapturedManifest::empty("7.1.0", "game", vec![]);
+    m.meta.declared.chunk_download.url_prefix = "https://c/x".into();
+
+    // Control: no suffix — both paths yield the old URL.
+    m.meta.declared.chunk_download.url_suffix.clear();
+    assert_eq!(m.chunk_url("abc"), "https://c/x/abc");
+    assert_eq!(
+        Sources::from_manifests([&m]).url("7.1.0", "abc").unwrap(),
+        "https://c/x/abc"
+    );
+
+    // With a suffix, both paths carry it.
+    m.meta.declared.chunk_download.url_suffix = ".zst".into();
+    assert_eq!(m.chunk_url("abc"), "https://c/x/abc.zst");
+    assert_eq!(
+        Sources::from_manifests([&m]).url("7.1.0", "abc").unwrap(),
+        "https://c/x/abc.zst"
+    );
+}
+
 #[test]
 fn plan_only_still_lists_every_chunk_and_its_roles() {
     let w = chunks::wants(&[pair()]);
     let entries = Store::plan_only(&w);
     assert_eq!(entries.len(), 5);
-    assert!(entries.iter().all(|(b, _)| b.props.stored_path.is_none()));
-    assert!(entries.iter().all(|(b, _)| b.props.verified.is_none()));
+    assert!(entries.iter().all(|b| b.props.stored_path.is_none()));
+    assert!(entries.iter().all(|b| b.props.verified.is_none()));
     let idx = ChunkIndex::build(entries);
     assert_eq!(idx.sets["patch_fetch"].len(), 2, "the plan survives");
 }
@@ -481,7 +537,7 @@ fn a_hostile_projected_download_saturates() {
 fn a_crafted_index_reference_offset_is_refused_with_its_values() {
     let w = chunks::wants(&[pair()]);
     let mut entries = Store::plan_only(&w);
-    let blob = &mut entries[0].0;
+    let blob = &mut entries[0];
     let id = blob.props.chunk_id.clone();
     blob.referenced_by[0].offset = i64::MAX;
     let idx = ChunkIndex::build(entries);
@@ -499,8 +555,8 @@ fn a_crafted_index_reference_offset_is_refused_with_its_values() {
 fn an_index_size_that_does_not_fit_i64_is_refused() {
     let w = chunks::wants(&[pair()]);
     let mut entries = Store::plan_only(&w);
-    let id = entries[0].0.props.chunk_id.clone();
-    entries[0].0.props.uncompressed_size = u64::MAX;
+    let id = entries[0].props.chunk_id.clone();
+    entries[0].props.uncompressed_size = u64::MAX;
     let idx = ChunkIndex::build(entries);
     let e = idx.validate_arithmetic().expect_err("unrepresentable size");
     assert!(e.contains(&id), "names the blob: {e}");
@@ -526,19 +582,16 @@ fn a_description_names_the_numbers_a_reader_wants_first() {
 #[test]
 fn a_description_counts_what_was_actually_stored() {
     let w = chunks::wants(&[pair()]);
-    let entries: Vec<(IndexedBlob, Vec<Set>)> = w
+    let entries: Vec<IndexedBlob> = w
         .iter()
         .map(|x| {
             let mut props = BlobProps::unmeasured(&x.chunk);
             props.stored_path = Some(BlobProps::stored_path_for(&x.chunk.id));
-            (
-                IndexedBlob {
-                    props,
-                    referenced_by: x.references.clone(),
-                    sets: x.sets.clone(),
-                },
-                x.sets.clone(),
-            )
+            IndexedBlob {
+                props,
+                referenced_by: x.references.clone(),
+                sets: x.sets.clone(),
+            }
         })
         .collect();
     let d = describe(&w, &ChunkIndex::build(entries));
@@ -564,8 +617,8 @@ fn an_unfilled_want_still_has_a_row_and_carries_the_fetch_failure() {
         attempts: 1,
         detail: "old-zero via 7.1.0: HTTP 404 Not Found".into(),
     };
-    let (entry, roles) = store.unfilled(&w[0], &failure);
-    assert_eq!(roles, w[0].sets);
+    let entry = store.unfilled(&w[0], &failure);
+    assert_eq!(entry.sets, w[0].sets);
     assert!(entry.props.stored_path.is_none());
     assert!(
         entry.props.decode_error.is_none(),
@@ -619,14 +672,13 @@ async fn a_chunk_the_cdn_will_not_serve_is_one_failure_with_its_reason_in_the_ro
     );
     assert_eq!(entries.len(), w.len(), "every want still has a row");
     for (entry, want) in entries.iter().zip(&w) {
-        assert_eq!(entry.0.props.chunk_id, want.chunk.id);
-        assert!(entry.0.props.stored_path.is_none());
+        assert_eq!(entry.props.chunk_id, want.chunk.id);
+        assert!(entry.props.stored_path.is_none());
         assert!(
-            entry.0.props.decode_error.is_none(),
+            entry.props.decode_error.is_none(),
             "a fetch that produced no bytes has nothing to decode"
         );
         let why = entry
-            .0
             .props
             .fetch_error
             .as_ref()
@@ -766,7 +818,7 @@ async fn an_undecodable_body_is_stored_and_measured_rather_than_a_failed_fetch()
         "an unframed body is a measured row, not a failed fetch: {errors:?}"
     );
     assert_eq!(entries.len(), 1);
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     assert_eq!(
         props.bytes,
         xml.len() as u64,
@@ -888,7 +940,7 @@ async fn a_successful_empty_body_is_stored_and_measured_as_undecodable() {
         "a successful empty body is not a failed fetch: {errors:?}"
     );
     assert_eq!(entries.len(), 1, "the chunk still has a row");
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     assert_eq!(
         props.stored_path.as_deref(),
         Some(BlobProps::stored_path_for(&c.id).as_str()),
@@ -1015,7 +1067,7 @@ async fn a_truncated_response_keeps_its_prefix_and_marks_the_row_partial() {
 
     assert_eq!(errors.len(), 1, "the failed fetch is reported once");
     assert_eq!(entries.len(), 1, "and its bytes still have a row");
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     assert!(props.partial, "the row says the body is a prefix");
     assert!(props.stored_path.is_some(), "the prefix was published");
     assert_eq!(
@@ -1104,7 +1156,7 @@ async fn a_complete_older_source_wins_over_a_truncated_newer_one() {
         errors.is_empty(),
         "a complete fallback is a success, not a failed fetch: {errors:?}"
     );
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     let rel = BlobProps::stored_path_for(&c.id);
     assert!(!props.partial, "the complete body is not a prefix");
     assert!(
@@ -1197,7 +1249,7 @@ async fn the_longest_prefix_wins_when_no_source_completes() {
         .expect("the older server served its prefix");
 
     assert_eq!(errors.len(), 1, "only the published failure is reported");
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     let rel = BlobProps::stored_path_for(&c.id);
     assert!(props.partial);
     assert_eq!(
@@ -1290,7 +1342,7 @@ async fn a_shorter_later_prefix_keeps_the_newest_candidate() {
         .expect("the older server served its prefix");
 
     assert_eq!(errors.len(), 1, "only the published failure is reported");
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     let rel = BlobProps::stored_path_for(&c.id);
     assert!(props.partial);
     assert_eq!(
@@ -1375,7 +1427,7 @@ async fn a_zero_byte_failure_after_a_prefix_keeps_the_prefix() {
         .expect("the newest server served its prefix");
 
     assert_eq!(errors.len(), 1, "only the published failure is reported");
-    let props = &entries[0].0.props;
+    let props = &entries[0].props;
     let rel = BlobProps::stored_path_for(&c.id);
     assert!(props.partial);
     assert_eq!(props.bytes, prefix_len as u64);
@@ -1467,4 +1519,59 @@ async fn a_panicking_measurement_keeps_the_published_blob_and_the_cause() {
             .contains("measurement failed"),
         "the reason distinguishes this from a fetch that never arrived"
     );
+}
+
+/// A row whose four A6 checks are green but whose blob was never published is
+/// unusable for the dullest possible reason: there is no blob. The diagnosis
+/// has to name that rather than render "all four A6 checks hold", which reads
+/// as if the row were fine.
+#[test]
+fn a_green_row_with_no_stored_path_names_the_missing_blob() {
+    let payload = b"a chunk that was measured but never written".repeat(16);
+    let c = chunk(&payload, 0, 0xb100);
+    let raw = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+    let p = BlobProps::measure(&raw, &c).expect("a zstd frame");
+
+    assert!(p.verified.expect("measured").all_green());
+    assert!(p.stored_path.is_none(), "the fixture attaches no path");
+    assert!(
+        !p.is_usable(),
+        "green checks are not enough without a stored blob"
+    );
+    let why = p.why_unusable().expect("an unusable row has a reason");
+    assert!(why.contains("no stored blob"), "{why}");
+    assert!(
+        !why.contains("all four"),
+        "must not read as verified: {why}"
+    );
+}
+
+/// A body shorter than the four magic bytes is a malformed answer, and the
+/// reason has to say how many bytes actually arrived. A one-byte reply is a
+/// different finding from an empty one, and neither is a valid frame.
+#[test]
+fn a_file_shorter_than_the_magic_is_undecodable_with_the_byte_count() {
+    let dir = scratch("short-magic");
+    let c = chunk(b"a chunk served as a one-byte body", 0, 0xb101);
+    let short = b"\x28"; // the first magic byte, and then EOF
+    let path = dir.join(BlobProps::stored_path_for(&c.id));
+    std::fs::create_dir_all(path.parent().expect("a parent dir")).expect("blob dir");
+    std::fs::write(&path, short).expect("write the short body");
+
+    let p = BlobProps::measure_file(
+        &path,
+        &c,
+        hash::md5_sha256(short),
+        hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+    )
+    .expect("a short body is recorded, not raised");
+
+    let why = p.decode_error.as_deref().expect("the row says why");
+    assert!(why.contains("not a zstd frame"), "{why}");
+    assert!(
+        why.contains("1 byte"),
+        "the diagnostic names the byte count: {why}"
+    );
+    let v = p.verified.expect("measured");
+    assert!(!v.md5_decompressed_matches && !v.decoded_size_matches);
 }

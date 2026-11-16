@@ -2,14 +2,16 @@
 //! remove-unknown-dirs, and prune-dst-cache. `copy_files` delegates the
 //! per-file work to [`super::copy::copy_one`].
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex};
 use tracing::{debug, info, trace};
 
 use super::super::plan::{DirPrefixes, Plan};
 use super::Applier;
 use super::copy::copy_one;
+use crate::hash::AlgoSet;
 use crate::report::Record;
 use crate::util::path_within;
 
@@ -113,11 +115,21 @@ impl<'a> Applier<'a> {
     /// [`CacheWrite`](crate::cache::CacheWrite) is not `Sync` (it owns a live write
     /// transaction), not because the writes want to be serialised: the lock is held
     /// for one `put`, never across a copy.
+    ///
+    /// **Every copy is attempted, and the failure reported is the lowest-index
+    /// one.** More than one copy can fail, and the run reports one of them: the
+    /// failure of the copy that comes first *in the plan*, whatever order the
+    /// workers finished in. The plan's order is the order the report speaks in,
+    /// so a run that named the first failure to *finish* would name a different
+    /// file on a different run. Aborting the pool at the first failure would
+    /// change what the run did — the copies after it would never be attempted,
+    /// and their `COPY` lines and cache rows would never happen.
     pub(crate) fn copy_files(&self, plan: &Plan) -> Result<usize> {
+        let threads = self.rw.pool()?.current_num_threads();
         info!(
             files = plan.copy.len(),
             rw = %self.rw.describe(),
-            threads = self.rw.pool().current_num_threads(),
+            threads,
             "copy start"
         );
         let copy_total = plan.copy.len();
@@ -150,74 +162,131 @@ impl<'a> Applier<'a> {
         // inside `put` only makes another worker's `put` wait; that worker holds no
         // permit and needs none.
         let cache = std::sync::Mutex::new(self.dst_db.begin_write()?);
-        let results = self.rw.pool().install(|| {
+        // The algorithms every copy in this phase computes and judges, built
+        // once for the whole phase rather than once per copied file. The set is
+        // the run's request, and the verify judges exactly what the copy
+        // produced — so there is one list of algorithms in the copy path, not a
+        // set beside a request that could disagree with it.
+        let algos = AlgoSet::from_iter(self.common.algos.iter().copied());
+        let pool = self.rw.pool()?;
+        // **The one failure this phase reports.**
+        //
+        // Every copy is attempted and more than one of them can fail, so the
+        // phase has to choose which failure to report: the one of the **lowest
+        // index in the plan**, because the plan's order is the order the report
+        // speaks in. The index is the plan's, not the completion's — a worker
+        // that finished first has no claim on the report.
+        //
+        // Keeping the best failure rather than every failure is what makes this
+        // a fixed-size value instead of one entry per copied file.
+        let failure: std::sync::Mutex<Option<(usize, anyhow::Error)>> = std::sync::Mutex::new(None);
+        let copied = std::sync::atomic::AtomicUsize::new(0);
+        // The test-only rendezvous between two copies of this run, if the
+        // environment asks for one. Absent in production, and absent in every
+        // run that does not ask.
+        let gate = CopyGate::from_env();
+        pool.install(|| {
             use rayon::prelude::*;
             plan.copy
                 .par_iter()
-                .map_init(Vec::<u8>::new, |buf, item| -> Result<()> {
-                    // The permit covers the copy itself. Writing the row is cache
-                    // work, which the rw gate deliberately does not cover, so it is
-                    // done after the permit is released rather than stretching the
-                    // permit over an unrelated fsync.
-                    let r = {
-                        let _rw = self.rw.acquire_copy();
-                        debug!(rel = %item.rel, "copy start");
-                        copy_one(
-                            self.src,
-                            self.src_canonical,
-                            self.dst,
-                            &item.rel,
-                            &self.common.algos,
-                            buf,
-                        )
-                    };
-                    let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                    if n.is_multiple_of(25) || n == copy_total {
-                        info!(done = n, total = copy_total, "copy progress");
-                    } else {
-                        trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
+                .enumerate()
+                .for_each_init(Vec::<u8>::new, |buf, (idx, item)| {
+                    let r: Result<()> = (|| {
+                        // The permit covers the copy itself. Writing the row is cache
+                        // work, which the rw gate deliberately does not cover, so it is
+                        // done after the permit is released rather than stretching the
+                        // permit over an unrelated fsync.
+                        let r = {
+                            // The test-only gate, waited on **before** the permit: a
+                            // copy that waits holds nothing another copy needs.
+                            if let Some(gate) = &gate {
+                                gate.wait(&item.rel)?;
+                            }
+                            let _rw = self.rw.acquire_copy();
+                            debug!(rel = %item.rel, "copy start");
+                            copy_one(
+                                self.src,
+                                self.src_canonical,
+                                self.dst,
+                                &item.rel,
+                                algos,
+                                buf,
+                            )
+                        };
+                        let n = copy_done_cb.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        if n.is_multiple_of(25) || n == copy_total {
+                            info!(done = n, total = copy_total, "copy progress");
+                        } else {
+                            trace!(done = n, total = copy_total, rel = %item.rel, "copy progress");
+                        }
+                        // A failed copy aborts the run before the summary, so no `COPY`
+                        // line is announced and no row is written: a cache must never
+                        // claim content the dst does not have.
+                        let rec = r?;
+                        // **As done.** Announced the moment the file is in place, not
+                        // after every copy finishes — so with more than one rw operation
+                        // permitted the `COPY` lines come out in completion order rather
+                        // than plan order.
+                        {
+                            let _guard =
+                                emit.lock().map_err(|_| anyhow!("emit lock is poisoned"))?;
+                            self.report.emit(
+                                Record::path("COPY", &item.rel)
+                                    .put("because", item.because.as_str()),
+                            );
+                        }
+                        // Only verified copies reach here, and the row is put now — while
+                        // the copy phase is still running — so the batch handle's
+                        // `CommitLimits` bound uncommitted work instead of checking three
+                        // thresholds after the last file is already durable.
+                        cache
+                            .lock()
+                            .map_err(|_| anyhow!("cache lock is poisoned"))?
+                            .put(&item.rel, &rec)?;
+                        Ok(())
+                    })();
+                    match r {
+                        Ok(()) => {
+                            copied.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        Err(e) => {
+                            // The lock guards one value and never runs user code, so a
+                            // poisoned guard still holds a usable answer.
+                            let mut best = failure.lock().unwrap_or_else(|e| e.into_inner());
+                            keep_lowest_index(&mut best, idx, e);
+                            // The gate is released **after** the failure is recorded,
+                            // so a copy waiting on it is released only once the failure
+                            // it waits for is already the one the phase would report.
+                            if let Some(gate) = &gate {
+                                gate.release(&item.rel);
+                            }
+                        }
                     }
-                    // A failed copy aborts the run before the summary, so no `COPY`
-                    // line is announced and no row is written: a cache must never
-                    // claim content the dst does not have.
-                    let rec = r?;
-                    // **As done.** Announced the moment the file is in place, not
-                    // after every copy finishes — so with more than one rw operation
-                    // permitted the `COPY` lines come out in completion order rather
-                    // than plan order.
-                    {
-                        let _guard = emit.lock().expect("emit lock is never poisoned");
-                        self.report.emit(
-                            Record::path("COPY", &item.rel).put("because", item.because.as_str()),
-                        );
-                    }
-                    // Only verified copies reach here, and the row is put now — while
-                    // the copy phase is still running — so the batch handle's
-                    // `CommitLimits` bound uncommitted work instead of checking three
-                    // thresholds after the last file is already durable.
-                    cache
-                        .lock()
-                        .expect("cache lock is never poisoned")
-                        .put(&item.rel, &rec)?;
-                    Ok(())
-                })
-                .collect::<Vec<_>>()
+                });
         });
-        let mut copied = 0usize;
         // Plan order, so the failure reported is the lowest-index one rather than
         // whichever worker happened to lose. The `COPY` lines were already emitted
         // above, as each copy completed, and the rows were already written.
-        for (item, r) in plan.copy.iter().zip(results) {
-            r.with_context(|| format!("copy {}", item.rel))?;
-            copied += 1;
+        if let Some((idx, e)) = failure.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            // The index came from this loop over the plan's copies, so it
+            // names one of them. A plan that does not have it cannot have the
+            // report name a copy, and the failure in hand is the copy's own,
+            // so both are reported: the naming error says what went wrong and
+            // the copy's failure rides along as its cause.
+            let rel = match copy_at(plan, idx) {
+                Ok(rel) => rel,
+                Err(naming) => return Err(e.context(naming)),
+            };
+            return Err(e).with_context(|| format!("copy {rel}"));
         }
+        let copied = copied.load(std::sync::atomic::Ordering::SeqCst);
         info!(copied, total = copy_total, "copy done");
         // The final partial batch. Batches the thresholds committed during the copy
         // phase are already durable; a run that errored above never reaches this, so
         // its uncommitted rows are discarded with the transaction.
         cache
             .into_inner()
-            .expect("cache lock is never poisoned")
+            .map_err(|_| anyhow!("cache lock is poisoned"))?
             .commit()?;
         Ok(copied)
     }
@@ -379,6 +448,256 @@ impl<'a> Applier<'a> {
     }
 }
 
+/// How long a gated copy waits for the copy it is gated on.
+///
+/// A **deadlock guard**, not a deadline anything depends on: the gate is
+/// released by the failure of another copy of the same run, which is a fact
+/// about the run and not about the clock. The bound is here so that a gate
+/// that is never released fails that one copy loudly instead of hanging the
+/// run.
+const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A rendezvous between two copies of one run.
+///
+/// **Test-only, default off.** The gate is asked for by
+/// `GIRSYNC_TEST_GATE_COPY=<wait>:<on>`: the copy of `<wait>` does not begin
+/// until the copy of `<on>` has **failed**. A run that asks for no gate never
+/// waits, and an unset variable names no gate at all — so this is a switch
+/// that is off in production and says nothing a user can meet.
+///
+/// **Both names are relative paths inside the mirror**, and that is what makes
+/// the colon split unambiguous: the rule is checked where the value is read,
+/// and it refuses a half that carries a colon of its own. A value that is not
+/// two such paths asks for no gate — and says so — see [`CopyGate::from_env`].
+///
+/// The release happens when the failure has been **recorded**, so a copy
+/// waiting on it is released only once the failure it waits for is already
+/// the one the phase would report. That is what makes the wait an *ordering*
+/// statement rather than a delay: the two failures are recorded in a known
+/// order, whatever the workers happen to be doing and however fast the host
+/// is. A fixture that merely made one copy slow would say the same thing only
+/// while the host stayed slow enough.
+///
+/// The wait happens before the copy takes a rw permit, so a copy that waits
+/// holds nothing another copy needs.
+struct CopyGate {
+    /// The copy that waits.
+    wait: String,
+    /// The copy whose failure releases it.
+    on: String,
+    /// Whether that failure has been recorded.
+    released: Mutex<bool>,
+    /// Signalled when it has.
+    signal: Condvar,
+}
+
+impl CopyGate {
+    /// The gate the environment asks for, or `None` when it asks for none.
+    ///
+    /// Read once per process, like the other test-only switches: the answer
+    /// cannot change under a run. A malformed specification asks for no gate
+    /// **and is reported** — see [`gate_from_spec`].
+    fn from_env() -> Option<Arc<Self>> {
+        static GATE: std::sync::OnceLock<Option<Arc<CopyGate>>> = std::sync::OnceLock::new();
+        GATE.get_or_init(|| {
+            let spec = std::env::var("GIRSYNC_TEST_GATE_COPY").ok()?;
+            gate_from_spec(&spec)
+        })
+        .clone()
+    }
+
+    /// Wait for the named copy's failure, if this copy is the one that waits.
+    fn wait(&self, rel: &str) -> Result<()> {
+        if rel != self.wait {
+            return Ok(());
+        }
+        let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        while !*released {
+            let (guard, timeout) = self
+                .signal
+                .wait_timeout(released, GATE_WAIT)
+                .unwrap_or_else(|e| e.into_inner());
+            released = guard;
+            if timeout.timed_out() && !*released {
+                bail!(
+                    "test: the copy gate was never released: `{}` waited for `{}` to fail",
+                    self.wait,
+                    self.on
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Release the gate, if this copy is the one whose failure releases it.
+    fn release(&self, rel: &str) {
+        if rel != self.on {
+            return;
+        }
+        let mut released = self.released.lock().unwrap_or_else(|e| e.into_inner());
+        *released = true;
+        self.signal.notify_all();
+    }
+}
+
+/// The gate a specification names, or `None` when it names none.
+///
+/// **The value is two relative paths, split on the first colon.** Both halves
+/// name a path inside the mirror — the shape [`is_relative_path`] states — and
+/// the split is unambiguous because the rule is checked here: a half that is
+/// not such a path is not a path this run can copy, and the whole
+/// specification asks for no gate.
+///
+/// That is worth being strict about, because a specification that names a
+/// copy no run can produce is not inert: the waiting copy would sit on the
+/// guard until it timed out, and then fail for a reason the specification
+/// never stated.
+///
+/// **A specification that names no gate is reported.** The value is in the
+/// log beside the fact that it names no copy, so a typo in a test-only switch
+/// is visible rather than silent — the way the commit-limit overrides report
+/// a limit they cannot read.
+///
+/// The report is what makes the refusal safe to rely on: a test that asked
+/// for a barrier and did not get one has lost the ordering it was written
+/// for, and a test without its ordering is a race rather than a failure. A
+/// silent "no gate" would leave the case passing or failing according to how
+/// fast the host happened to be.
+fn gate_from_spec(spec: &str) -> Option<Arc<CopyGate>> {
+    let Some((wait, on)) = gate_paths(spec) else {
+        tracing::warn!(
+            var = "GIRSYNC_TEST_GATE_COPY",
+            value = %spec,
+            "ignoring copy-gate specification: it does not name two relative paths"
+        );
+        return None;
+    };
+    Some(Arc::new(CopyGate {
+        wait: wait.to_string(),
+        on: on.to_string(),
+        released: Mutex::new(false),
+        signal: Condvar::new(),
+    }))
+}
+
+/// The two paths a gate specification names, or `None` when it names none.
+///
+/// The specification is `<wait>:<on>`, split on the **first** colon, and the
+/// two halves are the two paths. The split is unambiguous because the shape
+/// [`is_relative_path`] states refuses a colon as well: there is never a
+/// second one for the split to be ambiguous about.
+///
+/// A half that is not such a path names no copy a run can produce, so the
+/// whole specification asks for no gate.
+fn gate_paths(spec: &str) -> Option<(&str, &str)> {
+    let (wait, on) = spec.split_once(':')?;
+    if !is_relative_path(wait) || !is_relative_path(on) {
+        return None;
+    }
+    Some((wait, on))
+}
+
+/// Whether `path` is a relative path inside the mirror, as each half of the
+/// gate's specification has to be.
+///
+/// **The shape is the one a path inside the mirror is spelled in.** Such a
+/// path is:
+///
+/// - **relative to the mirror's root** — it starts at a name, not at the root
+///   itself and not at a drive;
+/// - **`/`-separated**, the separator the plan spells a path with, and the
+///   only separator a component may hold;
+/// - **made of ordinary names** — one or more components, each of them
+///   non-empty and neither `.` nor `..`.
+///
+/// The plan spells a copy's path as the components the walk reported, and
+/// nothing else, so **no copy's path holds a parent component, a trailing
+/// separator, or a separator of the host's own**: the walk reports
+/// `/`-separated names relative to the root. A value of another shape names
+/// no copy at all — and a specification that names no copy is not inert: the
+/// copy waiting on it would sit on the guard until it timed out, and then
+/// fail for a reason the specification never stated. So a value of another
+/// shape is refused rather than accepted.
+///
+/// **And a half holds no colon.** That is the one rule here that is about the
+/// specification rather than about the path: the specification is split on a
+/// colon, and a colon is the drive separator's character, so a half that
+/// carries one is not a path but the tail of a longer specification.
+fn is_relative_path(path: &str) -> bool {
+    // The empty path is no path; the colon is refused for the split's sake.
+    if path.is_empty() || path.contains(':') {
+        return false;
+    }
+    // The separator is `/`, the one the plan spells a path with, and a
+    // component holds no other: a Windows-rooted `\aaa` starts at a root
+    // rather than at a name, and a `dir\aaa` is not the spelling the plan
+    // gives a copy inside `dir`.
+    if path.contains('\\') {
+        return false;
+    }
+    // The components are ordinary names: one or more of them, each of them
+    // non-empty and neither `.` nor `..`. A path that starts at the root has
+    // an empty first component, a path with a parent component has one that
+    // is not a name, and a path with a trailing separator has an empty last
+    // one — so all three are refused here.
+    path.split('/')
+        .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
+/// Keep the failure with the **lowest plan index**.
+///
+/// Every copy is attempted and more than one of them can fail, so the phase
+/// reports one of them: the one whose copy comes **first in the plan**, because
+/// the plan's order is the order the report speaks in. The index is the plan's,
+/// not the completion's — a worker that happened to finish first has no claim
+/// on the report, and a run that named the first failure to *finish* would name
+/// a different file on a different run.
+///
+/// The first failure recorded is kept, since there is nothing to compare it
+/// against; a later one replaces it only if its index is lower. So the rule is
+/// a comparison and not a choice between two orders, and the error that comes
+/// with the winning index is the error that came with it.
+///
+/// The slot is `Option<(usize, anyhow::Error)>`: the plan index of the copy
+/// that failed, and the error it failed with. The index becomes the path the
+/// report names through [`copy_at`], and only there.
+fn keep_lowest_index(
+    slot: &mut Option<(usize, anyhow::Error)>,
+    index: usize,
+    error: anyhow::Error,
+) {
+    if slot.as_ref().is_none_or(|(kept, _)| index < *kept) {
+        *slot = Some((index, error));
+    }
+}
+
+/// The copy a plan index names.
+///
+/// The failure the phase reports is a plan **index**, and the report names a
+/// **path**, so the two are joined here: the copy at index *n* is the *n*-th
+/// entry of the plan's copy list. The plan's order is the order the report
+/// speaks in, so the join is a rule of its own and not a detail of a lookup —
+/// stated in one place, and pinned by a case of its own, so a plan whose order
+/// is not the order a reader would guess cannot make the report name a copy
+/// that did not fail.
+///
+/// **An index that names no copy is an error and not a panic.** The index
+/// comes from this phase's own loop over the plan's copies, so it names one
+/// today; a plan and a phase that disagreed would otherwise take the run down
+/// with an index-out-of-bounds panic inside a worker, and the copy's own
+/// failure would be lost with it. The error names the index and the size of
+/// the list instead.
+fn copy_at(plan: &Plan, index: usize) -> Result<&str> {
+    plan.copy
+        .get(index)
+        .map(|item| item.rel.as_str())
+        .ok_or_else(|| {
+            let listed = plan.copy.len();
+            let noun = if listed == 1 { "copy" } else { "copies" };
+            anyhow!("the plan has no copy at index {index}: it lists {listed} {noun}")
+        })
+}
+
 /// Refuse a removal whose target's directory resolves inside `src`.
 ///
 /// This is defence in depth, not the primary guard. `validate_src_links`
@@ -446,6 +765,164 @@ fn remove_dir_all(p: &std::path::Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::sync::plan::{CopyBecause, CopyItem};
+
+    /// **The rule that picks the failure a run reports, on its own.**
+    ///
+    /// More than one copy can fail, and the phase reports one of them: the one
+    /// whose copy comes **first in the plan**. That is not the same answer as
+    /// "the first copy to fail", and the difference is the whole point of the
+    /// rule — the plan's order is the order the report speaks in, so a run
+    /// that named the first failure to *finish* would name a different file on
+    /// a different run.
+    ///
+    /// The rule is pinned here, on the comparison itself, so the case says
+    /// something about the rule rather than about the machinery that applies
+    /// it: no pool, no dispatcher, no filesystem and no timing. Three
+    /// recordings in a known order, and the one that survives.
+    #[test]
+    fn the_reported_failure_is_the_lowest_plan_index_one() {
+        let mut failure: Option<(usize, anyhow::Error)> = None;
+
+        // Nothing has failed yet, so the first failure is simply kept.
+        assert!(
+            failure.is_none(),
+            "a phase that has not seen a failure has none to report"
+        );
+        keep_lowest_index(&mut failure, 3, anyhow!("the third copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(3),
+            "the first failure recorded is the one reported"
+        );
+
+        // A later copy fails. Its index is higher, so the earlier one stays:
+        // the report names the plan's first, not the last to arrive.
+        keep_lowest_index(&mut failure, 5, anyhow!("the fifth copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(3),
+            "a later copy does not displace the earlier one"
+        );
+
+        // An earlier copy fails now, and it takes the report: the lowest index
+        // wins, whatever order the failures arrived in.
+        keep_lowest_index(&mut failure, 1, anyhow!("the first copy"));
+        assert_eq!(
+            failure.as_ref().map(|(index, _)| *index),
+            Some(1),
+            "an earlier copy displaces a later one"
+        );
+
+        // And the error that comes with the winning index is the error that
+        // came with it — the report names the copy that failed and why.
+        let (index, error) = failure.expect("a failure was recorded");
+        assert_eq!(index, 1);
+        assert_eq!(error.to_string(), "the first copy");
+    }
+
+    /// **The path the report names is the copy the plan lists at that index.**
+    ///
+    /// The failure is recorded as a plan **index** and reported as a **path**,
+    /// and the join between them is a rule of its own: the copy at index *n* is
+    /// the *n*-th entry of the plan's copy list. The rule that picks the
+    /// failure is pinned by
+    /// [`the_reported_failure_is_the_lowest_plan_index_one`]; this pins the
+    /// join, so a plan whose order is not the order a reader would guess
+    /// cannot make the report name a copy that did not fail.
+    ///
+    /// **The plan's order is deliberately not the alphabetical one.** The
+    /// copies are listed `mmm.bin`, `aaa.bin`, `zzz.bin`, so the plan's first
+    /// copy is not the copy whose name sorts first. A join that sorted the
+    /// list before indexing it would name `aaa.bin` at index 0 and fail this
+    /// case, which is what makes the case able to tell the plan's order from
+    /// the sorted one.
+    ///
+    /// The plan is built by hand rather than by a run, so the case says what
+    /// the join is rather than what a fixture happened to produce.
+    #[test]
+    fn the_reported_failure_names_the_copy_the_plan_lists_at_that_index() {
+        let plan = Plan {
+            copy: vec![
+                CopyItem {
+                    rel: "mmm.bin".into(),
+                    because: CopyBecause::Changed,
+                },
+                CopyItem {
+                    rel: "aaa.bin".into(),
+                    because: CopyBecause::Missing,
+                },
+                CopyItem {
+                    rel: "zzz.bin".into(),
+                    because: CopyBecause::Missing,
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Every index names its own copy, and nothing else. The plan's order
+        // is the order the list is written in, not the alphabetical one.
+        assert_eq!(
+            copy_at(&plan, 0).expect("the first copy is named"),
+            "mmm.bin"
+        );
+        assert_eq!(
+            copy_at(&plan, 1).expect("the second copy is named"),
+            "aaa.bin"
+        );
+        assert_eq!(
+            copy_at(&plan, 2).expect("the third copy is named"),
+            "zzz.bin"
+        );
+
+        // The failures arrive in the opposite order to the plan's, so the
+        // report names the plan's first of them rather than the first to
+        // arrive.
+        let mut failure: Option<(usize, anyhow::Error)> = None;
+        keep_lowest_index(&mut failure, 2, anyhow!("the third copy"));
+        keep_lowest_index(&mut failure, 0, anyhow!("the first copy"));
+        let (index, error) = failure.expect("a failure was recorded");
+        assert_eq!(index, 0);
+        assert_eq!(
+            copy_at(&plan, index).expect("the index names a copy"),
+            "mmm.bin",
+            "the report names the copy the plan lists first"
+        );
+        assert_eq!(error.to_string(), "the first copy", "and why it failed");
+    }
+
+    /// **An index that names no copy is an error, not a panic.**
+    ///
+    /// The index the phase reports comes from its own loop over the plan's
+    /// copies, so it names one today. A plan and a phase that disagreed would
+    /// otherwise take the whole run down with an index-out-of-bounds panic
+    /// inside a worker, and the copy's own failure would be lost with it — so
+    /// the helper says what is wrong instead, and names the index and the size
+    /// of the list.
+    #[test]
+    fn an_index_that_names_no_copy_is_an_error_rather_than_a_panic() {
+        let plan = Plan {
+            copy: vec![CopyItem {
+                rel: "aaa.bin".into(),
+                because: CopyBecause::Missing,
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            copy_at(&plan, 0).expect("the first copy is named"),
+            "aaa.bin",
+            "an index the plan holds names that copy"
+        );
+
+        let err = copy_at(&plan, 1).expect_err("an index past the end names no copy");
+        let msg = err.to_string();
+        assert!(msg.contains("index 1"), "names the index: {msg}");
+        assert!(
+            msg.contains("1 copy"),
+            "names how many copies the plan holds: {msg}"
+        );
+    }
 
     /// The removal guard compares the target's **resolved** directory with the
     /// canonical src, so a path that starts under dst but resolves elsewhere is
@@ -472,5 +949,208 @@ mod tests {
             .expect("an ordinary dst path is not inside src");
         guard_removal_outside_src(&src_canonical, &dst, "gone/x")
             .expect("a missing parent is nothing to remove");
+    }
+
+    /// **The gate's specification is two relative paths, and anything else
+    /// asks for no gate.**
+    ///
+    /// The value is split on the first colon, and the split is unambiguous
+    /// because the rule is checked on the parsing: a half that is not a path
+    /// inside the mirror — the shape [`is_relative_path`] states — names no
+    /// copy a run can produce, and the copy waiting on it would sit on the
+    /// guard until it timed out, rather than learn at once that it waits for
+    /// nothing.
+    ///
+    /// The rule is pinned on the parsing, so the case says what a
+    /// specification means rather than how it is read.
+    #[test]
+    fn the_gate_specification_is_two_relative_paths() {
+        assert_eq!(
+            gate_paths("aaa.bin:mmm.bin"),
+            Some(("aaa.bin", "mmm.bin")),
+            "two relative paths are two paths"
+        );
+        assert_eq!(
+            gate_paths("dir/aaa.bin:mmm.bin"),
+            Some(("dir/aaa.bin", "mmm.bin")),
+            "a path inside a directory is a relative path too"
+        );
+
+        // No colon at all: there is no second path to name.
+        assert_eq!(gate_paths("aaa.bin"), None, "one path is not a gate");
+
+        // An empty half names no copy.
+        assert_eq!(gate_paths("aaa.bin:"), None, "an empty half names no copy");
+        assert_eq!(gate_paths(":mmm.bin"), None, "an empty half names no copy");
+
+        // A second colon means the value is not two paths.
+        assert_eq!(
+            gate_paths("aaa.bin:mmm.bin:zzz.bin"),
+            None,
+            "three parts are not two paths"
+        );
+
+        // An absolute path is not the relative path the plan spells.
+        assert_eq!(
+            gate_paths("/aaa.bin:mmm.bin"),
+            None,
+            "an absolute path names no copy"
+        );
+
+        // A parent component names no copy either: the plan spells a copy's
+        // path as the components the walk reported, and no copy's path has
+        // one.
+        assert_eq!(
+            gate_paths("../aaa.bin:mmm.bin"),
+            None,
+            "a parent component names no copy"
+        );
+        assert_eq!(
+            gate_paths("dir/../aaa.bin:mmm.bin"),
+            None,
+            "a parent component names no copy"
+        );
+
+        // A trailing separator names no copy: the plan spells a copy's path
+        // as the components it reported, and none of them ends in one.
+        assert_eq!(
+            gate_paths("aaa.bin/:mmm.bin"),
+            None,
+            "a trailing separator names no copy"
+        );
+
+        // A Windows-rooted path starts at a root rather than under the
+        // mirror's root, so it names no copy either.
+        assert_eq!(
+            gate_paths(r"\aaa.bin:mmm.bin"),
+            None,
+            "a rooted path names no copy"
+        );
+    }
+
+    /// **The shape a gate's path has, stated as what it is.**
+    ///
+    /// A path inside the mirror is relative to the mirror's root,
+    /// `/`-separated, and made of ordinary names — and the case says that
+    /// shape in the positive first, so the refusals that follow read as the
+    /// shapes that are *not* it rather than as a list of accidents.
+    ///
+    /// The two rules that are not about the components are the colon — which
+    /// is the separator the specification is split on, and the drive
+    /// separator's character — and the separator itself: the plan spells a
+    /// path with `/` and nothing else, so a component holding another
+    /// separator is not a component the plan spells.
+    #[test]
+    fn a_gate_path_is_relative_to_the_root_and_made_of_ordinary_names() {
+        for path in ["aaa.bin", "dir/aaa.bin", "dir/sub/aaa.bin"] {
+            assert!(
+                is_relative_path(path),
+                "`{path}` is a path inside the mirror"
+            );
+        }
+
+        for path in [
+            // Empty: no path at all.
+            "",
+            // The root itself: not under the mirror's.
+            "/aaa.bin",
+            // A parent component: the plan spells no copy's path with one.
+            "..",
+            "../aaa.bin",
+            "dir/../aaa.bin",
+            // The current directory: not a name either.
+            ".",
+            "dir/./aaa.bin",
+            // A trailing separator, and a doubled one: a component is empty.
+            "aaa.bin/",
+            "dir//aaa.bin",
+            // A separator other than `/`: the plan spells a path with `/`.
+            r"\aaa.bin",
+            r"dir\aaa.bin",
+            // A colon: the specification is split on one, and it is the
+            // drive separator's character.
+            "C:aaa.bin",
+            "dir/a:aaa.bin",
+        ] {
+            assert!(!is_relative_path(path), "`{path}` names no copy");
+        }
+    }
+
+    /// **A gate specification that names no gate is reported.**
+    ///
+    /// A test-only switch that asks for a barrier and does not get one leaves
+    /// the test without the ordering it was written for, and a test without
+    /// its ordering is a race rather than a failure. So a malformed value is
+    /// not silently "no gate": it is in the log, beside the fact that it
+    /// names no copy — the way the commit-limit overrides report a limit they
+    /// cannot read.
+    ///
+    /// The case pins the log line a reader sees: the switch the value came
+    /// from, and the value itself.
+    #[test]
+    fn a_malformed_gate_specification_is_reported() {
+        let (gate, log) = capture_log(|| gate_from_spec("aaa.bin"));
+        assert!(
+            gate.is_none(),
+            "a value that names no copy asks for no gate"
+        );
+        assert!(
+            log.contains("ignoring copy-gate specification"),
+            "the log says the specification was ignored: {log}"
+        );
+        assert!(
+            log.contains("GIRSYNC_TEST_GATE_COPY"),
+            "the log names the switch the value came from: {log}"
+        );
+        assert!(log.contains("aaa.bin"), "the log names the value: {log}");
+    }
+
+    /// A writer that appends to a shared buffer, so a case can read what the
+    /// run logged.
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with a subscriber that writes the events it emits into a
+    /// buffer, and return what it wrote.
+    ///
+    /// The interest cache is rebuilt first: a callsite that another test in
+    /// this process already triggered was registered against the subscriber
+    /// that was installed then, and a cached "never" would swallow the event
+    /// here.
+    fn capture_log<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
+        let text = String::from_utf8_lossy(&buffer.0.lock().unwrap_or_else(|e| e.into_inner()))
+            .into_owned();
+        (out, text)
     }
 }

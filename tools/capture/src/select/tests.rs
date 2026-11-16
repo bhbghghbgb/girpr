@@ -64,8 +64,20 @@ fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
         path: path.into(),
         state,
         size,
+        // These fixtures carry no chunks, so for an added row `size` stands in
+        // for the compressed charge the real diff would read off its chunks.
+        // The dedicated cost tests below spell out a compressed size that
+        // differs from the declared one.
+        download_bytes: (state == State::Added).then(|| size.max(0) as u64),
         score: s,
+        is_folder: false,
     }
+}
+
+fn folder_row(path: &str, state: State, size: i64) -> PathRow {
+    let mut r = row(path, state, None, size);
+    r.is_folder = true;
+    r
 }
 
 fn field(field: &str, rows: Vec<PathRow>) -> FieldDiff {
@@ -163,23 +175,83 @@ fn the_pool_is_built_from_every_row_with_its_shape_and_classes() {
     );
 }
 
-/// `removed` has no new side and `added` has to be fetched whole. Charging
-/// `total_cost` to both would make `removed` free and `added` cost nothing.
+/// An added path is charged the compressed bytes a fetch downloads, not its
+/// declared size on the new side.
 #[test]
-fn a_one_sided_path_is_charged_its_own_size() {
+fn an_added_path_is_charged_its_compressed_download_size() {
+    let pool = candidates(&[field(
+        "game",
+        vec![PathRow {
+            path: "x/fresh".into(),
+            state: State::Added,
+            size: 1_000,
+            download_bytes: Some(100),
+            score: None,
+            is_folder: false,
+        }],
+    )]);
+    assert_eq!(pool[0].budget_cost(), 100);
+}
+
+/// A removed path has no new side to fetch: its charge is still the bytes it
+/// occupies in `game/`.
+#[test]
+fn a_removed_path_is_still_charged_its_old_size() {
     let pool = all_six();
-    let g = pool.iter().find(|c| c.candidate.path == "j/added").unwrap();
     let h = pool
         .iter()
         .find(|c| c.candidate.path == "k/removed")
         .unwrap();
+    assert_eq!(h.budget_cost(), 1_730_000);
+}
+
+/// A common path still charges `total_cost`, not either side's own size.
+#[test]
+fn a_common_path_is_still_charged_total_cost() {
+    let pool = all_six();
     let d = pool
         .iter()
         .find(|c| c.candidate.path == "d/in_place")
         .unwrap();
-    assert_eq!(g.budget_cost(), 114_000);
-    assert_eq!(h.budget_cost(), 1_730_000);
-    assert_eq!(d.budget_cost(), 1_826_067, "a common path is old + new");
+    assert_eq!(d.budget_cost(), 1_826_067);
+}
+
+/// A byte ceiling admits an added path by the compressed download cost, not by
+/// its declared size — whichever of the two the ceiling sits between.
+#[test]
+fn a_budget_admits_an_added_path_by_compressed_size_not_declared_size() {
+    let pool = |declared: i64, download: u64| {
+        candidates(&[field(
+            "game",
+            vec![PathRow {
+                path: "x/fresh".into(),
+                state: State::Added,
+                size: declared,
+                download_bytes: Some(download),
+                score: None,
+                is_folder: false,
+            }],
+        )])
+    };
+
+    // Declared bigger than the ceiling, download under it: admitted.
+    let s = select(&pool(1_000, 100), 1, Budget::capped(100), &[]);
+    assert_eq!(s.paths(), vec!["x/fresh"]);
+    assert_eq!(s.bytes_admitted, 100);
+
+    // One byte below the download cost: refused, and the reason names 100.
+    let s = select(&pool(1_000, 100), 1, Budget::capped(99), &[]);
+    assert!(s.admitted.is_empty());
+    let r = s.rejected.iter().find(|r| r.path == "x/fresh").unwrap();
+    assert_eq!(r.budget_cost, 100);
+    assert!(r.reason.contains("100"), "the reason names the charge");
+
+    // Reverse the two numbers: a large download under a small declared size is
+    // refused even though the declared size would have fitted.
+    let s = select(&pool(100, 1_000), 1, Budget::capped(100), &[]);
+    assert!(s.admitted.is_empty());
+    let r = s.rejected.iter().find(|r| r.path == "x/fresh").unwrap();
+    assert_eq!(r.budget_cost, 1_000);
 }
 
 #[test]
@@ -394,6 +466,41 @@ fn two_forced_paths_of_one_class_get_distinct_ids() {
     let added = s.matrix.iter().find(|r| r.class == Class::Added).unwrap();
     assert_eq!(added.capture_id.as_deref(), Some("added"));
     assert_eq!(added.path.as_deref(), Some("x/a"));
+}
+
+/// A forced path refused by the budget must not lend its `<class>` id to a
+/// cheaper pick of the same class that *is* funded.
+///
+/// The refused path is not in `taken` (only funded captures are), so phase 1
+/// still considers its class and can pick a cheaper sibling. With two ordinal
+/// counters — one for forced paths, one for wants — both paths claim `added`:
+/// the rejection record describes one patchmap while the funded capture writes
+/// another, and the two can overwrite each other in release builds. The ordinal
+/// has to be shared by every selection that could produce an id.
+#[test]
+fn a_refused_forced_path_and_a_funded_pick_do_not_share_an_id() {
+    let pool = candidates(&[field(
+        "game",
+        vec![
+            row("x/forced", State::Added, None, 500),
+            row("x/cheap", State::Added, None, 100),
+        ],
+    )]);
+    // Only `x/cheap` fits: the forced `x/forced` is refused in phase 0, then
+    // `x/cheap` is wanted for `added` and funded in phase 2.
+    let s = select(&pool, 1, Budget::capped(100), &["x/forced".into()]);
+
+    assert_eq!(s.paths(), vec!["x/cheap"], "the cheaper pick is funded");
+    let rejected: Vec<&str> = s.rejected.iter().map(|r| r.path.as_str()).collect();
+    assert_eq!(rejected, vec!["x/forced"], "the forced path is refused");
+
+    let admitted_id = &s.admitted[0].capture_id;
+    let rejected_id = &s.rejected[0].capture_id;
+    assert_ne!(
+        admitted_id, rejected_id,
+        "the funded capture and the rejection cannot claim one patchmap"
+    );
+    debug_validate_unique_ids(&s).expect("every id in the selection is unique");
 }
 
 /// A forced path the pool carries but which answers **no** class is
@@ -721,6 +828,80 @@ fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
     assert_eq!(s.admitted.len(), 6, "the six real ones still went in");
 }
 
+/// The per-class candidate lists are **keyed by `Class`**, not by a position
+/// that happens to line up with `Class::ALL`.
+///
+/// `REQUIRED_ORDER` and `ALL` are the same list today, but the lookup must not
+/// rely on that: reordering either one would silently pair a class with another
+/// class's candidates. Every assertion here goes through the class itself.
+#[test]
+fn candidate_lists_are_keyed_by_class_not_by_array_position() {
+    let pool = all_six();
+    let by_class = candidates_by_class(&pool);
+
+    for class in Class::ALL {
+        let expected: Vec<usize> = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.candidate.satisfies(class))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            by_class.get(&class),
+            Some(&expected),
+            "the list for `{class}` must be the pool indices that satisfy it"
+        );
+    }
+
+    // A concrete pairing, independent of where either class sits in the array:
+    // `added` points at the added path and `removed` at the removed one.
+    let idx_of = |path: &str| {
+        pool.iter()
+            .position(|c| c.candidate.path == path)
+            .expect("the fixture carries it")
+    };
+    assert_eq!(by_class[&Class::Added], vec![idx_of("j/added")]);
+    assert_eq!(by_class[&Class::Removed], vec![idx_of("k/removed")]);
+}
+
+/// A folder row is dropped from the pool, so no `SizedCandidate` can describe a
+/// folder — the diff still carries the row for its counts and sidecar.
+#[test]
+fn candidates_exclude_folder_rows() {
+    let diffs = [field(
+        "game",
+        vec![
+            folder_row("d/folder", State::Added, 0),
+            row(
+                "a/file",
+                State::Changed,
+                Some(scored("a/file", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+        ],
+    )];
+    let pool = candidates(&diffs);
+    assert_eq!(pool.len(), 1, "only the real file is a candidate");
+    assert!(
+        pool.iter().all(|c| c.candidate.path != "d/folder"),
+        "a folder must never become a SizedCandidate"
+    );
+    assert_eq!(pool[0].candidate.path, "a/file");
+}
+
+/// A run whose only change is a folder admits nothing for it.
+#[test]
+fn a_folder_only_change_admits_no_capture() {
+    let diffs = [field("game", vec![folder_row("d/only", State::Added, 0)])];
+    let decided = super::decide::decide(&diffs, 1, None, &[]);
+    assert_eq!(decided.pool_len, 0, "the folder is not in the pool");
+    assert!(
+        decided.selection.admitted.is_empty(),
+        "a folder is not a file capture"
+    );
+    assert!(!decided.selection.paths().contains(&"d/only"));
+}
+
 #[test]
 fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     let diffs = [field(
@@ -754,6 +935,7 @@ fn candidates_document_carries_the_columns_and_a_one_based_rank() {
         "total_cost",
         "classes",
         "rank",
+        "admission_rank",
     ] {
         assert!(cols.iter().any(|x| x == c), "missing {c}");
     }
@@ -761,9 +943,116 @@ fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["rank"], 1);
     assert_eq!(rows[1]["rank"], 2);
-    // Both have identical total_cost, so the path breaks the tie.
+    // `a` is cheaper, so the scoring order puts it first here; the pool agrees.
     assert_eq!(rows[0]["path"], "a");
+    assert_eq!(rows[0]["admission_rank"], 1);
+    assert_eq!(rows[1]["admission_rank"], 2);
     assert_eq!(rows[0]["classes"][0], Class::ReuseInPlace.id());
+}
+
+#[test]
+fn cost_tie_scoring_rank_and_admission_rank_can_differ() {
+    // Equal total_cost and field, so `by_cost` breaks the tie by `moved` desc
+    // (`b` first) while `candidates` breaks it by path (`a` first). The two
+    // ranks must therefore be swapped between the two published columns.
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "a",
+                State::Changed,
+                Some(scored("a", 40, (20, 20), (1, 0, 0), false)),
+                20,
+            ),
+            row(
+                "b",
+                State::Changed,
+                Some(scored("b", 40, (20, 20), (1, 0, 1), false)),
+                20,
+            ),
+        ],
+    )];
+
+    // Confirm the premise before checking the document that rests on it: the
+    // two comparators really do disagree about which of `a` / `b` comes first.
+    let scoring: Vec<String> = by_cost(&diffs).into_iter().map(|(_, s)| s.path).collect();
+    assert_eq!(scoring, vec!["b", "a"]);
+    let admission: Vec<String> = candidates(&diffs)
+        .into_iter()
+        .map(|c| c.candidate.path)
+        .collect();
+    assert_eq!(admission, vec!["a", "b"]);
+
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    // Rows stay in scoring order: `rank` climbs 1, 2; `admission_rank` does not.
+    assert_eq!(rows[0]["path"], "b");
+    assert_eq!(rows[0]["rank"], 1);
+    assert_eq!(rows[0]["admission_rank"], 2);
+    assert_eq!(rows[1]["path"], "a");
+    assert_eq!(rows[1]["rank"], 2);
+    assert_eq!(rows[1]["admission_rank"], 1);
+}
+
+#[test]
+fn every_common_row_carries_a_unique_admission_rank() {
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "a",
+                State::Changed,
+                Some(scored("a", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+            row(
+                "b",
+                State::Changed,
+                Some(scored("b", 40, (20, 20), (1, 0, 0), false)),
+                20,
+            ),
+            row(
+                "c",
+                State::Changed,
+                Some(scored("c", 60, (30, 30), (2, 1, 1), false)),
+                30,
+            ),
+        ],
+    )];
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    let mut ranks: Vec<u64> = rows
+        .iter()
+        .map(|r| {
+            r["admission_rank"]
+                .as_u64()
+                .expect("every common row has a numeric admission_rank")
+        })
+        .collect();
+    ranks.sort_unstable();
+    assert_eq!(ranks, vec![1, 2, 3], "unique paths carry unique ranks");
+}
+
+#[test]
+fn one_sided_rows_are_not_in_the_scoring_table() {
+    let diffs = [field(
+        "game",
+        vec![
+            row(
+                "common",
+                State::Changed,
+                Some(scored("common", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+            row("added", State::Added, None, 50),
+            row("removed", State::Removed, None, 50),
+        ],
+    )];
+    let doc = candidates_document(&diffs);
+    let rows = doc["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one-sided rows are not scoring rows");
+    assert_eq!(rows[0]["path"], "common");
 }
 
 #[test]
@@ -777,7 +1066,94 @@ fn capture_ids_are_the_class_then_the_ordinal() {
     let c = SizedCandidate {
         candidate: all_six()[0].candidate.clone(),
         size: 54,
+        download_bytes: 0,
     };
     assert_eq!(c.candidate.capture_id(Class::Identical, 0), "identical");
     assert_eq!(c.candidate.capture_id(Class::Identical, 2), "identical+2");
+}
+
+fn empty_selection() -> Selection {
+    Selection {
+        admitted: Vec::new(),
+        rejected: Vec::new(),
+        forced_skipped: Vec::new(),
+        forced_unscored: Vec::new(),
+        matrix: Vec::new(),
+        bytes_admitted: 0,
+        budget: Budget::unlimited(),
+    }
+}
+
+fn admission(id: &str) -> Admission {
+    Admission {
+        capture_id: id.into(),
+        primary_class: Class::Identical,
+        path: format!("path/{id}"),
+        matching_field: "game".into(),
+        state: State::Identical,
+        also_satisfies: Vec::new(),
+        budget_cost: 0,
+        patch_bytes: 0,
+    }
+}
+
+fn rejection(id: &str) -> Rejection {
+    Rejection {
+        capture_id: id.into(),
+        primary_class: Class::Identical,
+        path: format!("path/{id}"),
+        matching_field: "game".into(),
+        state: State::Identical,
+        budget_cost: 0,
+        reason: String::new(),
+    }
+}
+
+#[test]
+fn capture_ids_are_unique_in_a_normal_selection() {
+    let s = select(&all_six(), 1, Budget::unlimited(), &[]);
+    assert_eq!(s.admitted.len(), 6, "one capture per class");
+    debug_validate_unique_ids(&s).expect("one capture per class means unique, valid ids");
+}
+
+#[test]
+fn duplicate_admitted_capture_ids_are_reported() {
+    let mut s = empty_selection();
+    s.admitted.push(admission("identical"));
+    s.admitted.push(admission("identical"));
+    let err = debug_validate_unique_ids(&s).expect_err("two admissions claim one patchmap");
+    assert!(err.contains("duplicate admitted"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn duplicate_rejected_capture_ids_are_reported() {
+    let mut s = empty_selection();
+    s.rejected.push(rejection("identical"));
+    s.rejected.push(rejection("identical"));
+    let err = debug_validate_unique_ids(&s).expect_err("two rejections claim one id");
+    assert!(err.contains("duplicate rejected"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn an_admitted_id_may_not_equal_a_rejected_id() {
+    let mut s = empty_selection();
+    s.admitted.push(admission("identical"));
+    s.rejected.push(rejection("identical"));
+    let err =
+        debug_validate_unique_ids(&s).expect_err("the funded and the would-be capture collide");
+    assert!(err.contains("both admitted and rejected"), "{err}");
+    assert!(err.contains("identical"), "{err}");
+}
+
+#[test]
+fn capture_ids_must_be_single_file_stems() {
+    for bad in ["", "a/b", "a\\b", "a..b"] {
+        let mut s = empty_selection();
+        s.admitted.push(admission(bad));
+        let err =
+            debug_validate_unique_ids(&s).expect_err("an id that is not a single stem is refused");
+        assert!(err.contains("valid file stem"), "{err}");
+    }
 }

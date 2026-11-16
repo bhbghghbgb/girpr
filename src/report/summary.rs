@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use super::record::Record;
 use crate::repair::scope::ledger::Meter;
+use crate::util::counter::add_saturating;
 
 /// A byte ceiling whose "no ceiling" sentinel is `u64::MAX`.
 ///
@@ -40,6 +41,10 @@ impl Ceiling {
 
 /// Run counters. The atomic fields are shared with the per-file tasks, hence
 /// [`Summary::snapshot`] to read them back out once the tasks are joined.
+///
+/// The types of the public counter fields — [`SummaryFlags`], [`Meter`] and
+/// [`Ceiling`] — are re-exported alongside [`Summary`](crate::Summary), so a
+/// caller outside the crate can name every value it can read.
 #[derive(Debug, Default)]
 pub struct Summary {
     pub files_total: u64,
@@ -56,19 +61,19 @@ pub struct Summary {
     /// actually caused — the bytes are spent whether they turn out to be good
     /// or not.
     ///
-    /// See [`Meter`] for the rule that tells the two apart.
+    /// See `Meter` for the rule that tells the two apart.
     pub download: Meter,
     /// Unified cleanup counter (Collapse files-cleanup parity): every byte
     /// deleted by `--purge-before` / `--purge-after` (temps, orphans,
     /// deprecated files) lands here. No split accounting.
     pub deleted_extra_bytes: AtomicU64,
-    /// Conditional keys — see [`SummaryFlags`]. Set once, before the tasks
+    /// Conditional keys — see `SummaryFlags`. Set once, before the tasks
     /// start; plain values, so no atomics are needed.
     pub flags: SummaryFlags,
     /// Which runtime ceiling bound, if any. `0` = none; the numbers are
-    /// [`crate::repair::scope::ledger::StoppedBy`]'s. A single marker rather
-    /// than a flag per ceiling, because the *value* the `SUMMARY` reports is
-    /// the flag that bound — see [`SummaryFlags::stopped`].
+    /// `StoppedBy`'s. A single marker rather than a flag per ceiling, because
+    /// the *value* the `SUMMARY` reports is the flag that bound — see
+    /// `SummaryFlags::stopped`.
     pub stopped_by: AtomicU8,
     /// The disk meter: the bytes that landed in the install (**live**) and the
     /// bytes written from sources that passed their gate (**settled**).
@@ -80,13 +85,13 @@ pub struct Summary {
     /// fails its digest has already been written, and the bytes are spent
     /// whether they are good or not.
     ///
-    /// See [`Meter`] for the rule that tells the two apart.
+    /// See `Meter` for the rule that tells the two apart.
     pub write: Meter,
     /// `--fail-fast` armed.
     pub fail_fast: AtomicBool,
     /// `--fail-fast` has tripped: stop starting files, stop retrying.
     pub aborted: AtomicBool,
-    /// `--max-ram-bytes`; see [`Ceiling`] for the `u64::MAX` sentinel.
+    /// `--max-ram-bytes`; see `Ceiling` for the `u64::MAX` sentinel.
     pub ram_limit: Ceiling,
     /// RAM currently reserved for staging the bytes a file has to move
     /// inside itself. Live, not cumulative: a file gives its reservation
@@ -118,6 +123,28 @@ pub struct Summary {
     /// that made this counter over-report, and a run that had to retry claimed
     /// it had touched fewer bytes than it had.
     pub kept_bytes: AtomicU64,
+    /// The chunks the check phase found wrong where they belong, across the
+    /// verified plan. Zero when the check read the digests itself, because that
+    /// path does not map a mismatch to chunks; the `--scan` path does.
+    ///
+    /// Kept apart from [`SummaryFlags::damaged_chunks`], which is the
+    /// plan-phase scan's figure and a conditional `SUMMARY` key. This is an
+    /// internal tally: it lets a caller of `--check-only` see the same total
+    /// the phase logs without changing the emitted keys.
+    ///
+    /// Read it through the `check_damaged_chunks()` accessor: this raw counter
+    /// is zero both before the check has run and after a clean one. Writes go
+    /// through `publish_check_damaged_chunks`, which sets the tally and then
+    /// marks it measured, so no production store reaches this field without
+    /// the flag.
+    pub(super) check_damaged_chunks: AtomicU64,
+    /// Whether the check has published its raw damaged-chunk tally.
+    /// `false` on a default `Summary`, so "not measured" is not read as
+    /// "measured zero".
+    ///
+    /// The store is `Release` and the accessor's load is `Acquire`: a reader
+    /// that observes the flag also observes the tally it publishes.
+    pub(super) check_damaged_chunks_measured: AtomicBool,
 }
 
 impl Summary {
@@ -149,7 +176,46 @@ impl Summary {
             files_inplace: AtomicU64::new(self.files_inplace.load(Ordering::Relaxed)),
             files_temp: AtomicU64::new(self.files_temp.load(Ordering::Relaxed)),
             kept_bytes: AtomicU64::new(self.kept_bytes.load(Ordering::Relaxed)),
+            check_damaged_chunks: AtomicU64::new(self.check_damaged_chunks.load(Ordering::Relaxed)),
+            check_damaged_chunks_measured: AtomicBool::new(
+                self.check_damaged_chunks_measured.load(Ordering::Relaxed),
+            ),
         }
+    }
+
+    /// Add the bytes a cleanup pass deleted to the unified counter.
+    ///
+    /// The total is a sum of on-disk sizes, so it can only exceed `u64::MAX` if
+    /// the volume itself could. Saturation keeps that unreachable case from
+    /// wrapping, on the same rule the per-entry sums inside the passes follow.
+    /// For every reachable input the result is the exact sum.
+    pub(crate) fn add_deleted_bytes(&self, bytes: u64) {
+        add_saturating(&self.deleted_extra_bytes, bytes);
+    }
+
+    /// Publish the check's damaged-chunk tally, then mark it measured.
+    ///
+    /// The store order is the point: a reader that observes the measured flag
+    /// through [`Summary::check_damaged_chunks`] also observes the tally it
+    /// publishes.
+    pub(crate) fn publish_check_damaged_chunks(&self, chunks: u64) {
+        self.check_damaged_chunks.store(chunks, Ordering::Relaxed);
+        self.check_damaged_chunks_measured
+            .store(true, Ordering::Release);
+    }
+
+    /// The chunks the check phase found wrong, or `None` when the check has
+    /// not run.
+    ///
+    /// The raw `check_damaged_chunks` counter is zero both before the check
+    /// and after a clean one; this accessor tells those apart. A measured zero
+    /// does not by itself mean the run was clean: a check that reads the
+    /// digests itself cannot locate the bad chunks, so a damaged file found
+    /// that way contributes nothing here.
+    pub fn check_damaged_chunks(&self) -> Option<u64> {
+        self.check_damaged_chunks_measured
+            .load(Ordering::Acquire)
+            .then(|| self.check_damaged_chunks.load(Ordering::Relaxed))
     }
 }
 

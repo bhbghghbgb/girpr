@@ -17,6 +17,10 @@ mod common;
 
 use common::{TempDir, parse_ndjson, strip_ansi, summary_of, sync_mtime, temp_root, wfile};
 use girsync::hash::AlgoSet;
+// The walk's heartbeat period, read from the crate rather than written here:
+// the case below builds its tree from the same number the walk divides by, so
+// the two cannot drift apart. The constant is public for that reason alone.
+use girsync::scan::HEARTBEAT_ENTRIES;
 use serde_json::Value;
 use std::path::Path;
 
@@ -83,6 +87,18 @@ fn compare_args<'a>(src: &'a Path, dst: &'a Path, extra: &[&'a str]) -> Vec<Stri
     args
 }
 
+/// The log events that carry this message, in the order they were written.
+///
+/// The log file is the run's own narration, one JSON object per event, and the
+/// `message` field is what the console renders — so it is what a reader looks
+/// at. The payload is beside it, in the same object, under named fields.
+fn events_with<'a>(logged: &'a [Value], message: &str) -> Vec<&'a Value> {
+    logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == message)
+        .collect()
+}
+
 #[test]
 fn compare_json_is_one_object_per_line_with_a_single_summary() {
     let t = temp_root("out_cmp");
@@ -103,6 +119,55 @@ fn compare_json_is_one_object_per_line_with_a_single_summary() {
         "the default is insensitive mode, so the case-only pair is a case-mismatch \
          rather than a missing plus an extra; and a_dir's contents are src-only \
          while a_dir itself is a kind conflict\n{}",
+        r.show()
+    );
+}
+
+/// Case folding is ASCII-only, so a non-ASCII case variant is two paths rather
+/// than a `CASE-MISMATCH`. The ASCII pair beside it still folds, which keeps
+/// this from passing merely because insensitive mode stopped pairing anything.
+#[test]
+fn compare_folds_ascii_case_but_not_non_ascii_case() {
+    let t = temp_root("out_nonascii_case");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "Readme.TXT", b"same");
+    wfile(&dst, "readme.txt", b"same");
+    sync_mtime(&src.join("Readme.TXT"), &dst.join("readme.txt"));
+    wfile(&src, "Ärger.txt", b"same");
+    wfile(&dst, "ärger.txt", b"same");
+    sync_mtime(&src.join("Ärger.txt"), &dst.join("ärger.txt"));
+
+    let r = run(&compare_args(&src, &dst, &["--output", "json"]));
+    assert_eq!(r.code, 4, "the differences exit 4: {}", r.show());
+    assert_eq!(
+        summary_of(&r.records),
+        serde_json::json!({"event": "summary", "missing": 1, "extra": 1, "changed": 0,
+                           "type_conflict": 0, "case_mismatch": 1, "total_diff": 2}),
+        "ASCII casing pairs, non-ASCII casing does not\n{}",
+        r.show()
+    );
+    assert!(
+        r.records.iter().any(|rec| {
+            rec["event"] == "case-mismatch"
+                && rec["src"] == "Readme.TXT"
+                && rec["dst"] == "readme.txt"
+        }),
+        "the ASCII pair is a case mismatch: {}",
+        r.show()
+    );
+    assert!(
+        r.records
+            .iter()
+            .any(|rec| rec["event"] == "missing" && rec["path"] == "Ärger.txt"),
+        "the non-ASCII src spelling is missing: {}",
+        r.show()
+    );
+    assert!(
+        r.records
+            .iter()
+            .any(|rec| rec["event"] == "extra" && rec["path"] == "ärger.txt"),
+        "the non-ASCII dst spelling is extra: {}",
         r.show()
     );
 }
@@ -686,6 +751,433 @@ fn the_environment_names_the_log_file_when_the_flag_does_not() {
         text.contains("\"log start\""),
         "and it holds the run's own records:\n{text}"
     );
+}
+
+/// **The walk's counters are in the log, and they are the walk's own.**
+///
+/// `walk_live` counts the files and the directories it found, and the "scan
+/// done" event carries both. Nothing else reports them: the run's own record
+/// counts the *effective* map, which is the walk's output after the filter has
+/// hidden what the run excludes. A tree with an excluded file is therefore the
+/// fixture that tells the two apart — and the only way to notice that the
+/// walk's counters stopped counting.
+#[test]
+fn the_scan_counts_the_entries_the_walk_saw() {
+    let t = temp_root("out_scan_counts");
+    let dir = t.subdir("tree");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    wfile(&dir, "skip.log", b"excluded");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--exclude",
+            "*.log",
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+    let scans: Vec<&Value> = logged
+        .iter()
+        .filter(|e| e["fields"]["message"] == "scan done")
+        .collect();
+    assert_eq!(
+        scans.len(),
+        1,
+        "one walk, one scan-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    // The excluded file is counted: these are the walk's counts, and the walk
+    // does not know what the run excludes.
+    assert_eq!(
+        scans[0]["fields"]["files"], 3,
+        "the walk counted every file"
+    );
+    assert_eq!(scans[0]["fields"]["dirs"], 1, "and every directory");
+    assert_eq!(scans[0]["fields"]["entries"], 4, "and the two add up");
+
+    // The run's own record counts the effective map, which the filter has
+    // already pruned — so the excluded file is not in it.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(
+        recs[0]["files"], 2,
+        "the run's own count leaves the excluded file out"
+    );
+}
+
+/// **The walk counts what it saw, and the map counts what it kept.**
+///
+/// The walk's counters and the effective map's counters answer different
+/// questions, and a run reports both: the walk says how many entries it
+/// pushed, and the map says how many paths survived the filter. A run with an
+/// `--exclude` is where the two part company, so it is the fixture that tells
+/// them apart.
+///
+/// The walk's own **heartbeat** is here too, and it is the walk's count and
+/// not the map's: it reports the entries it has pushed, every heartbeat
+/// period, so the tree has to be big enough to reach it. The excluded file is
+/// in that count — the walk does not know what the run excludes.
+///
+/// The map's counters are in the "effective" events, and there are **two** of
+/// them: one per phase, and each names the phase it came from. The first
+/// phase reads no bytes at all, so it hashes nothing; the second one hashes
+/// what the **plan** asked for and says how many were cache hits.
+#[test]
+fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
+    let t = temp_root("out_walk_progress");
+    let dir = t.subdir("tree");
+    // As many entries as the walk's heartbeat period, so the heartbeat fires
+    // exactly once: it reports every period's worth of entries it has pushed.
+    for i in 0..HEARTBEAT_ENTRIES - 1 {
+        wfile(&dir, &format!("f{i:04}.txt"), b"x");
+    }
+    // The last of them is the one the run excludes.
+    wfile(&dir, "skip.log", b"excluded");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--exclude",
+            "*.log",
+            // A depth cap of its own, so the event's number is the one the run
+            // was asked for rather than whatever the default happens to be.
+            "--max-depth",
+            "3",
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    // The walk says which root it is walking and how deep it is going, before
+    // it walks anything.
+    let starts = events_with(&logged, "scan start");
+    assert_eq!(
+        starts.len(),
+        1,
+        "one walk, one scan-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        starts[0]["fields"]["root"],
+        dir.display().to_string(),
+        "the walk names the root it is walking"
+    );
+    assert_eq!(
+        starts[0]["fields"]["max_depth"], 3,
+        "and the depth cap it is walking to"
+    );
+
+    // The walk's heartbeat. Its name says what produced it, so it needs no
+    // field of its own to be told apart from the phases' own progress events
+    // — those count the work they have done, not the tree.
+    let heartbeats = events_with(&logged, "scan progress: walk");
+    assert_eq!(
+        heartbeats.len(),
+        1,
+        "the walk reports its progress every heartbeat period, so a tree of \
+         one period has one heartbeat: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        heartbeats[0]["fields"]["entries"], HEARTBEAT_ENTRIES,
+        "the heartbeat counts the entries the walk pushed, the excluded file \
+         included"
+    );
+
+    // The phases report their progress, and they count the work they have
+    // done rather than the tree. The first phase's total is every entry the
+    // walk saw — the filter has not been applied yet — and the second's is
+    // the **plan's pending count**: the paths the plan asked this side to
+    // hash. That count is not the map's file count: a comparison plans a
+    // digest only for the pairs stat cannot settle, so a side can hold a file
+    // and plan nothing for it. They agree here because this run is an
+    // `update`, whose plan asks for a digest for every file it holds. Each
+    // event names its phase, so the case says which phase reports which
+    // count, rather than stating the two phases' counts as a set.
+    let phase_a_progress = events_with(&logged, "effective progress: phase a");
+    let phase_c_progress = events_with(&logged, "effective progress: phase c");
+    assert!(
+        !phase_a_progress.is_empty() && !phase_c_progress.is_empty(),
+        "the phases report their progress: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert!(
+        phase_a_progress
+            .iter()
+            .all(|e| e["fields"]["total"] == HEARTBEAT_ENTRIES),
+        "the phase that reads no bytes counts every entry the walk saw: {}",
+        serde_json::to_string(&phase_a_progress).unwrap()
+    );
+    assert!(
+        phase_c_progress
+            .iter()
+            .all(|e| e["fields"]["total"] == HEARTBEAT_ENTRIES - 1),
+        "the phase that hashes counts the paths the plan asked it to hash, \
+         which here is every file the map kept: {}",
+        serde_json::to_string(&phase_c_progress).unwrap()
+    );
+
+    // The map starts from the walk's count: the filter has not been applied
+    // yet at this point, so the excluded file is in it.
+    let effective = events_with(&logged, "effective start: phase a");
+    assert_eq!(
+        effective.len(),
+        1,
+        "one map, one effective-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        effective[0]["fields"]["live"], HEARTBEAT_ENTRIES,
+        "the map starts from every entry the walk saw"
+    );
+
+    // The second phase's start names its phase the same way, and it says how
+    // much work that phase has: the paths the plan named and the digests they
+    // still owe.
+    let phase_c_start = events_with(&logged, "effective start: phase c");
+    assert_eq!(
+        phase_c_start.len(),
+        1,
+        "one phase C, one effective-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        phase_c_start[0]["fields"]["pending"],
+        HEARTBEAT_ENTRIES - 1,
+        "the phase that hashes owes a digest for every path the plan named, \
+         which here is every file the map kept"
+    );
+
+    // The map's own counts, one event per phase, and each event names the
+    // phase it came from: the phase that reads no bytes and the phase that
+    // hashes are told apart by the message rather than by a field or by the
+    // order they happen to be written in.
+    let phase_a = events_with(&logged, "effective done: phase a");
+    assert_eq!(
+        phase_a.len(),
+        1,
+        "one phase A, one effective-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    let phase_c = events_with(&logged, "effective done: phase c");
+    assert_eq!(
+        phase_c.len(),
+        1,
+        "one phase C, one effective-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        phase_a[0]["fields"]["files"],
+        HEARTBEAT_ENTRIES - 1,
+        "the map leaves the excluded file out"
+    );
+    assert_eq!(phase_a[0]["fields"]["dirs"], 0);
+    assert_eq!(
+        phase_a[0]["fields"]["hashed"], 0,
+        "the first phase reads no bytes, so it hashes nothing"
+    );
+    assert_eq!(phase_a[0]["fields"]["cache_hit"], 0);
+    assert_eq!(phase_a[0]["fields"]["pruned"], 0);
+    assert_eq!(
+        phase_c[0]["fields"]["files"],
+        HEARTBEAT_ENTRIES - 1,
+        "the map is the same map"
+    );
+    assert_eq!(phase_c[0]["fields"]["dirs"], 0);
+    assert_eq!(
+        phase_c[0]["fields"]["hashed"],
+        HEARTBEAT_ENTRIES - 1,
+        "the second phase hashed what the map held"
+    );
+    assert_eq!(
+        phase_c[0]["fields"]["cache_hit"], 0,
+        "and the cache was cold"
+    );
+    assert_eq!(
+        phase_c[0]["fields"]["pruned"], 0,
+        "and there was nothing to prune"
+    );
+}
+
+/// **A `girpr-cache*` subtree is in no count.**
+///
+/// The tool's own namespace is not mirror content. The walk prunes it, and
+/// nothing under a cache directory is even visited — so a cache subtree is in
+/// none of the counts: not the walk's, not the map's, and not the run's own
+/// record.
+///
+/// The fixture puts one there on purpose. A run makes its own backup beside
+/// the cache before it walks, so this shape is in every run's way; what the
+/// case pins is that the tool's own state never shows up as content.
+#[test]
+fn a_pruned_cache_subtree_is_in_no_count() {
+    let t = temp_root("out_cache_pruned");
+    let dir = t.subdir("tree");
+    wfile(&dir, "a.txt", b"hello");
+    wfile(&dir, "sub/b.txt", b"world");
+    // The tool's own namespace: a published copy of a cache, and a snapshot of
+    // one, with content under both.
+    wfile(&dir, "girpr-cache-backup-1/inner.bin", b"tool state");
+    wfile(&dir, "girpr-cache-old-2/deep/inner.bin", b"tool state");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "update",
+            "--dir",
+            dir.to_str().unwrap(),
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "update failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    // The walk's own count: the two files and the directory between them, and
+    // nothing of the cache subtrees.
+    let scans = events_with(&logged, "scan done");
+    assert_eq!(
+        scans.len(),
+        1,
+        "one walk, one scan-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        scans[0]["fields"]["entries"], 3,
+        "the pruned subtree is not walked"
+    );
+    assert_eq!(scans[0]["fields"]["files"], 2);
+    assert_eq!(scans[0]["fields"]["dirs"], 1);
+
+    // The map's count: the same tree, minus the pruned subtree.
+    let phase_a = events_with(&logged, "effective done: phase a");
+    assert_eq!(
+        phase_a.len(),
+        1,
+        "one phase A, one effective-done event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(phase_a[0]["fields"]["files"], 2, "the map holds two files");
+    assert_eq!(
+        phase_a[0]["fields"]["dirs"], 1,
+        "and the directory between them"
+    );
+
+    // And the run's own record, which counts the map.
+    let recs = parse_ndjson(&out.stdout);
+    assert_eq!(recs[0]["files"], 2, "the record counts the map");
+    assert_eq!(recs[0]["dirs"], 1);
+}
+
+/// **A sync run counts each side on its own.**
+///
+/// A sync run walks **two** trees, and each walk reports its own counts: the
+/// src's are the src's and the dst's are the dst's. A run that added them
+/// together, or reported one side's count for both, would be a run whose
+/// counters describe a tree that does not exist.
+///
+/// The dst's counts are the counts of the tree as it was **before** the run
+/// copied into it: both sides are walked before the plan, so the dst's walk
+/// sees the dst as it was, and the copy that follows is in neither count.
+#[test]
+fn a_sync_run_counts_each_side_separately() {
+    let t = temp_root("out_sync_counts");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a.txt", b"hello");
+    wfile(&src, "sub/b.txt", b"world");
+    wfile(&dst, "a.txt", b"hello");
+    let logfile = t.subdir("logs").join("run.json");
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_girsync"))
+        .args([
+            "sync",
+            "--src",
+            src.to_str().unwrap(),
+            "--dst",
+            dst.to_str().unwrap(),
+            "--output",
+            "json",
+            "--log-file",
+            logfile.to_str().unwrap(),
+        ])
+        .env("GIRSYNC_TEST_CACHE", "memory")
+        .output()
+        .expect("spawn girsync");
+    assert!(
+        out.status.success(),
+        "sync failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let logged = parse_ndjson(&std::fs::read(&logfile).expect("the run wrote its log"));
+
+    let scans = events_with(&logged, "scan done");
+    assert_eq!(
+        scans.len(),
+        2,
+        "a sync run walks both sides, once each: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+
+    // The src's counts: two files and the directory between them.
+    let src_scan = scans
+        .iter()
+        .find(|e| e["fields"]["root"] == src.display().to_string())
+        .expect("the src's walk reports its own counts");
+    assert_eq!(src_scan["fields"]["entries"], 3);
+    assert_eq!(src_scan["fields"]["files"], 2);
+    assert_eq!(src_scan["fields"]["dirs"], 1);
+
+    // The dst's counts: the one file it held before the run copied into it.
+    let dst_scan = scans
+        .iter()
+        .find(|e| e["fields"]["root"] == dst.display().to_string())
+        .expect("the dst's walk reports its own counts");
+    assert_eq!(
+        dst_scan["fields"]["entries"], 1,
+        "the dst is counted as it was before the copy"
+    );
+    assert_eq!(dst_scan["fields"]["files"], 1);
+    assert_eq!(dst_scan["fields"]["dirs"], 0);
 }
 
 /// The directory the executable is in — where the default log file lands.

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use tracing::info;
 
 use crate::report::{Record, Report};
+use crate::util::folded_keys;
 
 /// The point of a case-fix step a test hook asks to fail at.
 ///
@@ -20,6 +21,12 @@ use crate::report::{Record, Report};
 /// (so the entry is in the temporary). The three are separately named because
 /// they exercise three different cleanup paths: nothing to clean, placeholder
 /// removal, and rollback.
+///
+/// **The stage is the switch's name and not part of its value.** Every failure
+/// hook's value is then a plain relative path — the shape the copy and flush
+/// hooks use — so the family has one kind of value to parse. Each stage reads
+/// its own variable and holds its own path, so a test names a stage and a path
+/// per variable.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     BeforeClaim,
@@ -50,40 +57,39 @@ fn test_fail_rename(rel: &str, stage: Stage) -> bool {
 ///
 /// The decision, with no filesystem or cache involved, so it can be stated as a
 /// set. **A dst path is renamed exactly when src holds the same path under
-/// different casing** — the pair whose lowercase key matches and whose exact key
+/// different casing** — the pair whose folded key matches and whose exact key
 /// does not.
 ///
-/// Both sides are indexed by lowercase key and every src key is looked up, rather
-/// than every src key scanning every dst key and lowercasing as it goes. The result
-/// is the same set, and it is the same set because a lowercase key maps to exactly
+/// Both sides are indexed by folded key and every src key is looked up, rather
+/// than every src key scanning every dst key and folding as it goes. The result
+/// is the same set, and it is the same set because a folded key maps to exactly
 /// one path per side: `check_mixed_case` has already made a mixed-case collision
 /// within one side fatal, and this pass runs only in the insensitive mode that check
 /// guards. Without that invariant the two forms could disagree on *which* of two
 /// colliding keys they pick, which is why this is not a free substitution.
 ///
-/// Ordered by lowercase src key, because these become `RENAME` records in report
+/// Ordered by folded src key, because these become `RENAME` records in report
 /// order and `HashMap` iteration is seeded per process — an unsorted pass would
 /// reshuffle between two runs over the same tree.
 fn case_renames<'a>(
     src: &'a HashMap<String, crate::effective::EffRec>,
     dm: &'a HashMap<String, crate::effective::EffRec>,
 ) -> Vec<(&'a String, &'a String)> {
-    // lower -> rel, per side.
-    let mut slow: HashMap<String, &String> = HashMap::new();
-    for k in src.keys() {
-        slow.insert(k.to_lowercase(), k);
-    }
-    let mut dlow: HashMap<String, &String> = HashMap::new();
-    for k in dm.keys() {
-        dlow.insert(k.to_lowercase(), k);
-    }
-    let mut by_lower: Vec<(String, &String)> = slow.into_iter().collect();
-    by_lower.sort();
+    // folded key -> rel, per side.
+    let src_folded_keys = folded_keys(src);
+    let dst_folded_keys = folded_keys(dm);
+    let mut by_folded_key: Vec<(String, &String)> = src_folded_keys
+        .into_iter()
+        .map(|(folded_key, (srel, _))| (folded_key, srel))
+        .collect();
+    by_folded_key.sort();
     let mut out: Vec<(&String, &String)> = Vec::new();
-    for (lk, srel) in &by_lower {
-        // The same path on both sides is not a rename: it is already correct.
-        if let Some(drel) = dlow.get(lk).copied().filter(|d| *d != *srel) {
-            out.push((drel, srel));
+    for (folded_key, srel) in &by_folded_key {
+        if let Some(drel) = dst_folded_keys.get(folded_key).map(|&(drel, _)| drel) {
+            // The same path on both sides is not a rename: it is already correct.
+            if drel != *srel {
+                out.push((drel, srel));
+            }
         }
     }
     out
@@ -153,7 +159,7 @@ fn moved_prefix<'m>(
 /// Turn the rename pairs into steps in a parent-first order, rewriting each
 /// `from` through the directory renames already planned.
 ///
-/// `case_renames` sorts by lowercase src key, so a directory always precedes
+/// `case_renames` sorts by folded src key, so a directory always precedes
 /// everything beneath it. Renaming the parent moves its whole subtree, so a
 /// child whose only difference was the parent's casing is already correct when
 /// its turn comes: it is kept as a no-op step so its cache row and map key can
@@ -292,6 +298,29 @@ fn fail_step2(step2: std::io::Error, from: &Path, tmp: &Path, to: &Path) -> anyh
             from.display()
         )),
     }
+}
+
+/// The read transactions the re-key pass has opened on the cache, on this
+/// thread.
+///
+/// A test seam: what the pass costs the cache is a **count**, and a count is
+/// the only honest way to say "one transaction for every moved row" or "no
+/// transaction at all". It is per thread so two tests running side by side
+/// cannot see each other's reads.
+#[cfg(test)]
+pub(crate) fn cache_reads() -> u64 {
+    CACHE_READS.with(|c| c.get())
+}
+
+/// Record the read transactions one pass of the re-key opened.
+#[cfg(test)]
+fn note_cache_reads(n: u64) {
+    CACHE_READS.with(|c| c.set(c.get() + n));
+}
+
+#[cfg(test)]
+thread_local! {
+    static CACHE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// What the pass did, and — in a dry run — where the entries still are.
@@ -476,23 +505,47 @@ pub(super) fn rename_to_src_casing(
         // Move the cache rows with the files. A row under a renamed directory
         // moves even when that path is dst-only, or `compare-self` would report
         // the path it just moved as missing.
-        let keys = dst_db.load_keys()?;
-        let mut moves = Vec::new();
-        for key in keys {
-            let to = final_moves.apply(&key);
-            if to != key
-                && let Some(rec) = dst_db.get(&key)?
-            {
-                moves.push((key, to, rec));
+        //
+        // Nothing moves when nothing was renamed: no path changed its
+        // spelling, so no row changes its key either. The pass is therefore
+        // skipped whole, and a run with no rename does not read the cache at
+        // all.
+        if !renames.is_empty() {
+            // The rows to move, as pairs, before any of them is read: the
+            // read is one transaction for the whole set, not one per key.
+            #[cfg(test)]
+            let reads_before = dst_db.entries_read_count();
+            let keys = dst_db.load_keys()?;
+            let mut pairs: Vec<(String, String)> = Vec::new();
+            for key in keys {
+                let to = final_moves.apply(&key);
+                if to != key {
+                    pairs.push((key, to));
+                }
             }
-        }
-        if !moves.is_empty() {
-            let mut w = dst_db.begin_write()?;
-            for (from, to, rec) in &moves {
-                w.remove(from)?;
-                w.put(to, rec)?;
+            // One read transaction for every moved row, where the loop this
+            // replaces opened one per row. The write below still begins after
+            // every read, so it sees the state the reads saw.
+            //
+            // The borrowing read: the keys are already here, so copying them
+            // back out of the cache would buy nothing.
+            let rows = dst_db.get_many_borrowed(pairs.iter().map(|(from, _)| from.as_str()))?;
+            #[cfg(test)]
+            note_cache_reads(dst_db.entries_read_count() - reads_before);
+            let mut moves = Vec::new();
+            for ((from, to), (_, rec)) in pairs.iter().zip(rows) {
+                if let Some(rec) = rec {
+                    moves.push((from.clone(), to.clone(), rec));
+                }
             }
-            w.commit()?;
+            if !moves.is_empty() {
+                let mut w = dst_db.begin_write()?;
+                for (from, to, rec) in &moves {
+                    w.remove(from)?;
+                    w.put(to, rec)?;
+                }
+                w.commit()?;
+            }
         }
     }
     let on_disk = dry_run.then(|| DiskSpelling::new(&renames, &dir_moves));
@@ -504,6 +557,7 @@ mod tests {
     use super::*;
     use crate::effective::EffRec;
     use crate::report::OutputFormat;
+    use crate::util::path_key;
 
     fn file_rec() -> EffRec {
         EffRec {
@@ -522,6 +576,16 @@ mod tests {
             mtime_ns: 0,
             hashes: crate::hash::DigestSet::default(),
             is_link: false,
+        }
+    }
+
+    /// A cache row, as the cache stores one.
+    fn cache_rec() -> crate::cache::FileRec {
+        crate::cache::FileRec {
+            kind: "file".into(),
+            size: 4,
+            mtime_ns: 0,
+            hashes: crate::hash::DigestSet::default(),
         }
     }
 
@@ -577,7 +641,7 @@ mod tests {
     }
 
     /// Zero renames is the common case and the one a lookup can get wrong: the
-    /// dst path *is* the src path, so the lowercase key matches and only the
+    /// dst path *is* the src path, so the folded key matches and only the
     /// exact-key check stands between the two and a spurious self-rename.
     #[test]
     fn a_tree_already_in_step_renames_nothing() {
@@ -617,18 +681,35 @@ mod tests {
         );
     }
 
-    /// The order is by lowercase src key, not `HashMap` order. These become
+    /// The order is by folded src key, not `HashMap` order. These become
     /// `RENAME` records in both modes, and the seed is per process, so unsorted
     /// order would reshuffle between two runs over the same tree.
+    ///
+    /// The expectation folds the key the way the pass does — with `path_key` —
+    /// rather than with a Unicode lowercase of its own, so the case states the
+    /// rule it is about.
+    ///
+    /// **The names mix case on purpose.** Sorted by the exact key, these three
+    /// src names come out `Mid.txt`, `Zeta.txt`, `alpha.txt`; sorted by the
+    /// folded key they come out `alpha.txt`, `mid.txt`, `zeta.txt`. A fixture
+    /// whose names all started with the same case would have one order under
+    /// both rules, and the case would pass whichever of the two the pass used.
     #[test]
-    fn the_rename_order_is_by_lowercase_key() {
-        let s = side(&["Zeta.txt", "Alpha.txt", "Mid.txt"]);
-        let d = side(&["zeta.txt", "alpha.txt", "mid.txt"]);
+    fn the_rename_order_is_by_the_folded_key() {
+        let s = side(&["Zeta.txt", "alpha.txt", "Mid.txt"]);
+        let d = side(&["zeta.txt", "Alpha.txt", "mid.txt"]);
         let ordered: Vec<String> = case_renames(&s, &d)
             .into_iter()
-            .map(|(_, s)| s.to_lowercase())
+            .map(|(_, s)| path_key(s))
             .collect();
         assert_eq!(ordered, vec!["alpha.txt", "mid.txt", "zeta.txt"]);
+
+        // The exact order, which is a different order: a pass that sorted on
+        // the exact key would have produced this one, and the assertion above
+        // would not have held.
+        let mut exact = vec!["Zeta.txt", "alpha.txt", "Mid.txt"];
+        exact.sort();
+        assert_eq!(exact, vec!["Mid.txt", "Zeta.txt", "alpha.txt"]);
     }
 
     /// A dry run must re-key the dst map to src's casing, not just report that it
@@ -854,5 +935,170 @@ mod tests {
         assert_eq!(spelling.disk_rel("Dir/g.txt"), "dir/g.txt");
         assert_eq!(spelling.plan_rel("dir/f.txt"), "Dir/F.txt");
         assert_eq!(spelling.plan_rel("dir/g.txt"), "Dir/g.txt");
+    }
+
+    /// Several rows move, and none is left behind under the old spelling:
+    /// the cache follows the files onto src's casing, every one of them, and
+    /// a row that had no rename of its own stays where it was.
+    ///
+    /// The read cost is the other half of the claim: the moved rows came out
+    /// of **one** read transaction, where a read per moved row would have
+    /// cost one each.
+    #[test]
+    fn several_rows_move_and_leave_no_old_key() {
+        let root = girpr_tempdir::TempDir::new("girsync_rename_rows", "moves");
+        let dst = root.join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        for name in ["one.txt", "two.txt", "three.txt", "dst_only.txt"] {
+            std::fs::write(dst.join(name), b"x").unwrap();
+        }
+
+        let db = crate::cache::CacheDb::open_temp(false).unwrap();
+        for name in ["one.txt", "two.txt", "three.txt", "dst_only.txt"] {
+            db.put(name, &cache_rec()).unwrap();
+        }
+
+        let mut sm = HashMap::new();
+        for name in ["One.txt", "Two.txt", "Three.txt"] {
+            sm.insert(name.to_string(), file_rec());
+        }
+        let mut dm = HashMap::new();
+        for name in ["one.txt", "two.txt", "three.txt", "dst_only.txt"] {
+            dm.insert(name.to_string(), file_rec());
+        }
+
+        let report = Report::new(OutputFormat::Text);
+        let out = rename_to_src_casing(&sm, &dst, &db, &mut dm, false, &report).unwrap();
+        assert_eq!(out.renamed, 3);
+        assert_eq!(
+            cache_reads(),
+            2,
+            "one transaction for the key scan, one for the moved rows"
+        );
+
+        let rows = db.load_all().unwrap();
+        for name in ["One.txt", "Two.txt", "Three.txt"] {
+            assert!(rows.contains_key(name), "{name} moved");
+        }
+        for name in ["one.txt", "two.txt", "three.txt"] {
+            assert!(!rows.contains_key(name), "{name} is not left behind");
+        }
+        assert!(
+            rows.contains_key("dst_only.txt"),
+            "a row with no rename of its own does not move"
+        );
+    }
+
+    /// A src and a dst that are already in step: the same file, the same
+    /// bytes, the same mtime. A run over this pair has nothing to do.
+    ///
+    /// The temp directory comes back as the guard that owns it, so the tree
+    /// is removed when the test ends rather than when it remembers to ask.
+    fn no_op_pair(tag: &str) -> (girpr_tempdir::TempDir, PathBuf, PathBuf) {
+        let root = girpr_tempdir::TempDir::new("girsync_rename_sync", tag);
+        let src = root.join("src");
+        let dst = root.join("dst");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(src.join("a.txt"), b"same").unwrap();
+        std::fs::write(dst.join("a.txt"), b"same").unwrap();
+        // The same stat on both sides, so the two are equal and the plan is
+        // empty.
+        let mtime = std::fs::metadata(src.join("a.txt"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dst.join("a.txt"))
+            .unwrap()
+            .set_modified(mtime)
+            .unwrap();
+        (root, src, dst)
+    }
+
+    /// A no-op sync does not enter the re-key at all: the pass reads the
+    /// cache only when something moved, so a run with nothing to rename does
+    /// not scan the cache.
+    ///
+    /// The count is the observable — a duration would be a measurement of the
+    /// machine — and it is the re-key's own count, so the other passes a run
+    /// makes cannot be mistaken for it.
+    #[test]
+    fn a_no_op_sync_does_not_read_the_cache_in_the_rekey() {
+        let (_root, src, dst) = no_op_pair("noop");
+
+        let code = super::super::cmd_sync(sync_opts(&src, &dst), &log_ctx()).unwrap();
+        assert_eq!(code, 0, "the run succeeded");
+        assert_eq!(
+            cache_reads(),
+            0,
+            "the re-key did not read the cache: nothing moved"
+        );
+    }
+
+    /// A no-op run reads each side's cache once, and no more.
+    ///
+    /// The re-key's own count is not the run's count: the run opens a cache
+    /// per side, and each side's scan reads it. This case pins the **run's**
+    /// reads, so a second read of the same cache anywhere in the run — a
+    /// pass that re-reads the entries table because it could not see the
+    /// rows another pass had — shows up as a number that moved.
+    ///
+    /// The count is per cache, so the two sides are told apart: a run that
+    /// scanned one side twice and the other side not at all would not pass.
+    #[test]
+    fn a_no_op_sync_reads_each_cache_once() {
+        let (_root, src, dst) = no_op_pair("scans");
+
+        let code = super::super::cmd_sync(sync_opts(&src, &dst), &log_ctx()).unwrap();
+        assert_eq!(code, 0, "the run succeeded");
+        for (side, root) in [("src", &src), ("dst", &dst)] {
+            let cache =
+                crate::cache::CacheDb::memory_cache_at(&root.join(crate::cache::CACHE_PREFIX))
+                    .expect("the run opened this side's cache");
+            assert_eq!(
+                cache.entries_read_count(),
+                1,
+                "{side}'s cache was read once"
+            );
+        }
+    }
+
+    /// The options a no-op sync runs with: one algorithm, no filters, and the
+    /// case-insensitive mode the rename pass runs in.
+    fn sync_opts(src: &Path, dst: &Path) -> crate::config::SyncOpts {
+        crate::config::SyncOpts {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+            trust: crate::config::TrustOpts::default(),
+            missing_only: false,
+            keep_extra: false,
+            common: crate::config::CommonOpts {
+                algos: vec![crate::hash::HashAlg::Md5],
+                stat: crate::planner::StatTrust::default(),
+                hash_mode: crate::planner::HashMode::default(),
+                why: false,
+                show_identical: false,
+                filter: crate::filter::Filter::new(vec![], vec![], false),
+                case_sensitive: false,
+                max_depth: 10,
+                ignore_cache: false,
+                dry_run: false,
+                rw: crate::rw::RwLimits::default(),
+                test_cache: crate::cache::TestCacheBackend::Memory,
+                backup: crate::config::BackupPolicy::default(),
+            },
+        }
+    }
+
+    /// A quiet log context; tracing is a no-op without a subscriber anyway.
+    fn log_ctx() -> crate::config::LogCtx {
+        crate::config::LogCtx {
+            level: crate::Level::Error,
+            file_level: crate::Level::Debug,
+            file: None,
+            output: OutputFormat::Text,
+        }
     }
 }

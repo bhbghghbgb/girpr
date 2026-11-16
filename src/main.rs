@@ -1,19 +1,21 @@
 //! Thin entry point: parse, install tracing, run the pipeline, print `SUMMARY`,
-//! exit. All behavior lives in the library.
+//! flush the log, return the exit code. All behavior lives in the library.
+
+use std::process::ExitCode;
 
 use clap::Parser;
 use clap::error::ErrorKind;
 
-use girpr::cli::Args;
-use girpr::{logging, repair, report};
+use girpr::{
+    Args, RunCtx, RunExit, emit, flush_log, init_tracing, run as repair_run, summary_record,
+};
 
-#[tokio::main]
-async fn main() {
+fn main() -> ExitCode {
     let args = parse_args();
     // Logging first: everything after this point is diagnosable from the file.
     // Read off `args` before `into_ctx` consumes it — the flag layer is live
     // even for a run that is about to fail validation.
-    let plan = logging::init_tracing(
+    let plan = init_tracing(
         args.log_level,
         args.log_file_level,
         args.log_file.as_deref(),
@@ -29,21 +31,80 @@ async fn main() {
         eprintln!("log file: {}", path.display());
     }
 
-    let output = args.output;
     let ctx = match args.into_ctx() {
         Ok(c) => c,
         Err(e) => {
-            // Post-parse validation failures are usage errors, exit 1
-            // (README / docs/02 §1).
+            // Post-parse validation failures are usage errors
+            // (`RunExit::Usage`, README / docs/02 §1).
             tracing::error!("usage error: {e:#}");
             eprintln!("ERROR {e:#}");
-            std::process::exit(1);
+            flush_log();
+            return exit_code(RunExit::Usage);
         }
     };
+
+    // The file tasks inside the run do blocking disk I/O on the async
+    // runtime's workers. One worker beyond the file window keeps timers and
+    // network polling able to run while every file task is waiting on the
+    // disk, so raising `--jobs` does not starve the runtime itself.
+    let available = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    let workers = worker_threads(available, ctx.jobs);
+    tracing::info!(
+        worker_threads = workers,
+        jobs = ctx.jobs,
+        "runtime sized for requested file window"
+    );
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers)
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            // A runtime that cannot start is an environment failure, not a
+            // repair failure: `RunExit::Usage` like any other usage-level error.
+            eprintln!("ERROR failed to start runtime: {e:#}");
+            flush_log();
+            return exit_code(RunExit::Usage);
+        }
+    };
+
+    let code = runtime.block_on(run(ctx));
+    flush_log();
+    exit_code(code)
+}
+
+/// Map a documented exit status to what the process returns.
+///
+/// [`RunExit`] is the pipeline's only exit type; this is where it becomes the
+/// process status. `#[repr(u8)]` makes the byte conversion infallible, so a
+/// documented variant cannot wrap into an unrelated status.
+fn exit_code(status: RunExit) -> ExitCode {
+    ExitCode::from(status.process_status())
+}
+
+/// Worker threads for a run that admits `jobs` files at once.
+///
+/// At least the host's parallelism, and always one more than the file window
+/// so the runtime keeps a worker for timers and network progress. The addition
+/// saturates: an absurd `jobs` must not overflow the thread count.
+fn worker_threads(available: usize, jobs: usize) -> usize {
+    available.max(jobs.saturating_add(1))
+}
+
+/// Run the pipeline and return the process exit code.
+///
+/// The caller builds the runtime first, so nothing here decides *how* the
+/// pipeline is scheduled.
+async fn run(ctx: RunCtx) -> RunExit {
     // `output` is logged with the rest of the run's shape because every data-plane
     // line in the file after this one is rendered in it. A log file with no
     // record of the plane is a log file whose `SUMMARY` line cannot be parsed
     // by the same reader that parses stdout.
+    let output = ctx.output;
     tracing::info!(
         "girpr start game_path={} biz={} jobs={} purge_after={} purge_before={} check_only={} dry_run={} output={}",
         ctx.game_dir.display(),
@@ -56,35 +117,112 @@ async fn main() {
         output
     );
 
-    match repair::run(ctx).await {
+    match repair_run(ctx).await {
         Ok((summary, code)) => {
+            // The run's last record. This is the only `SUMMARY` call site: a
+            // phase never emits it, so every non-fatal return path ends with
+            // exactly one. A fatal `Err` below prints `FATAL` and no `SUMMARY`.
             // stdout for parsing + log so a stderr-only capture still keeps it.
-            report::emit(&report::summary_record(&summary, code), output);
-            std::process::exit(code);
+            emit(&summary_record(&summary, code.code()), output);
+            code
         }
         Err(f) => {
-            tracing::error!("fatal(exit={}): {:#}", f.exit_code, f.source);
+            tracing::error!("fatal(exit={}): {:#}", f.exit_code.code(), f.source);
             eprintln!("FATAL {:#}", f.source);
-            std::process::exit(f.exit_code);
+            RunExit::from(f)
         }
     }
 }
 
-/// Parse the command line, mapping every argument-level failure to exit `1`.
+/// Parse the command line, mapping every argument-level failure to
+/// [`RunExit::Usage`].
 ///
-/// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with the
-/// documented "2 = metadata/network" code; only `--help` / `--version` keep the
-/// conventional `0`. clap prints the message (and the usage block) either way.
+/// `clap`'s own `parse()` exits `2` on a bad flag, which would collide with
+/// [`RunExit::Metadata`]; only `--help` / `--version` keep the conventional
+/// `0`. clap prints the message (and the usage block) either way.
 /// This runs before `init_tracing`, so a usage error creates no log file.
 fn parse_args() -> Args {
     match Args::try_parse() {
         Ok(a) => a,
         Err(e) => {
             let _ = e.print();
-            std::process::exit(match e.kind() {
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
-                _ => 1,
-            });
+            std::process::exit(i32::from(match e.kind() {
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+                    RunExit::Success.process_status()
+                }
+                _ => RunExit::Usage.process_status(),
+            }));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{exit_code, worker_threads};
+    use girpr::RunExit;
+    use std::process::ExitCode;
+
+    #[test]
+    fn a_single_job_keeps_runtime_headroom_on_one_core() {
+        assert!(worker_threads(1, 1) >= 2);
+    }
+
+    #[test]
+    fn host_parallelism_wins_when_it_exceeds_the_file_window() {
+        assert_eq!(worker_threads(8, 1), 8);
+    }
+
+    #[test]
+    fn a_huge_file_window_saturates_instead_of_overflowing() {
+        assert_eq!(worker_threads(1, usize::MAX), usize::MAX);
+    }
+
+    #[test]
+    fn the_runtime_keeps_a_worker_beyond_every_file_window() {
+        // The oversized-window warning is about CPU oversubscription, not about
+        // the runtime running out of workers: `jobs + 1` is always one more,
+        // even on a single-CPU host.
+        for jobs in [1, 4, 8, 1000] {
+            assert!(
+                worker_threads(1, jobs) > jobs,
+                "{jobs} files must leave a worker for timers and network polling"
+            );
+        }
+    }
+
+    /// The documented exit statuses, in numeric order.
+    ///
+    /// `RunExit`'s exhaustive list is crate-internal, so this binary target,
+    /// unlike the crate's own unit tests, cannot read it and names the
+    /// statuses itself. The wildcard-free `match` is generated from the same
+    /// list: a new `RunExit` variant stops the build here until it is added,
+    /// and the numeric pin in the test then holds it to its documented number.
+    /// That makes the duplicate list deliberate — only a `pub` item crosses
+    /// the target boundary, and widening the API for one test list is not
+    /// worth it.
+    ///
+    /// The type is spelled `RunExit` because it is the only enum with this
+    /// process-status guard. A second one would make the type a parameter
+    /// (`$ty:ident`, used as `fn($ty)` and `$ty::$variant`) so the call site
+    /// names the enum it pins.
+    macro_rules! documented_exit_codes {
+        ($($variant:ident),+ $(,)?) => {{
+            let _: fn(RunExit) = |status| match status {
+                $(RunExit::$variant => {}),+
+            };
+            [$(RunExit::$variant),+]
+        }};
+    }
+
+    #[test]
+    fn the_documented_exit_codes_reach_the_process_unchanged() {
+        let codes = documented_exit_codes!(Success, Usage, Metadata, Write, CheckFailed, Limit,);
+        for (number, status) in codes.into_iter().enumerate() {
+            assert_eq!(
+                exit_code(status),
+                ExitCode::from(number as u8),
+                "{status:?}"
+            );
         }
     }
 }

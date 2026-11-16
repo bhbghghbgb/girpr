@@ -15,6 +15,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::report::Summary;
+use crate::util::counter::add_saturating;
 
 /// Which runtime ceiling bound, if any.
 ///
@@ -118,6 +119,11 @@ impl StoppedBy {
 /// way. The **settled** figure is what a *verified* ceiling bounds: the bytes
 /// the repair was allowed to spend, which is a function of the install rather
 /// than of the transport.
+///
+/// This type is part of [`crate::Summary`]'s public field surface, so it is
+/// re-exported at the crate root: a caller can name the meter behind
+/// [`Summary::download`](crate::Summary#structfield.download) and
+/// [`Summary::write`](crate::Summary#structfield.write).
 #[derive(Debug)]
 pub struct Meter {
     /// The bytes the run has spent.
@@ -195,6 +201,16 @@ impl Meter {
     /// blocks the charge, which is the caller's signal to stop the run.
     pub fn charge_live(&self, n: u64) -> bool {
         let limit = self.live_limit.load(Ordering::Relaxed);
+        if limit == u64::MAX {
+            // No ceiling: there is nothing to compare against, so a plain
+            // `fetch_add` answers "yes" without a compare-exchange loop. The
+            // ceiling is installed once, before any task starts (and stored as
+            // this sentinel), so it cannot appear mid-run; a meter whose
+            // sentinel is replaced between this load and the add would merely
+            // charge one reservation it would otherwise have refused.
+            add_saturating(&self.live, n);
+            return true;
+        }
         let mut cur = self.live.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
@@ -217,8 +233,33 @@ impl Meter {
     /// This is the **only** way the live figure goes down. A resource that was
     /// consumed and then failed is *not* refunded: those bytes were spent, and
     /// the difference between the two numbers is exactly what says so.
+    ///
+    /// A refund larger than the live figure saturates at zero and warns: the
+    /// counter is what a ceiling bounds, and wrapping it to a figure near
+    /// `u64::MAX` would switch the ceiling off for the rest of the run. The
+    /// warning keeps the caller's logic error visible without panicking a
+    /// release run.
     pub fn refund_live(&self, n: u64) {
-        self.live.fetch_sub(n, Ordering::Relaxed);
+        let mut cur = self.live.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_sub(n);
+            match self
+                .live
+                .compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => {
+                    if cur < n {
+                        tracing::warn!(
+                            refund = n,
+                            live = cur,
+                            "refund exceeds the live byte figure; saturating at zero"
+                        );
+                    }
+                    return;
+                }
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// Correct a charge once the real byte count is known.
@@ -228,11 +269,14 @@ impl Meter {
     /// construction* rather than by assumption, which is what `gircap`'s
     /// `download_bytes == patchmaps/<id>.json → totals.download_bytes`
     /// assertion is written against.
+    ///
+    /// A negative delta takes the hardened [`Self::refund_live`] path, and a
+    /// positive one saturates rather than wrapping.
     pub fn adjust_live(&self, delta: i64) {
         if delta < 0 {
             self.refund_live(delta.unsigned_abs());
         } else if delta > 0 {
-            self.live.fetch_add(delta as u64, Ordering::Relaxed);
+            add_saturating(&self.live, delta as u64);
         }
     }
 
@@ -249,6 +293,14 @@ impl Meter {
     /// is exact, and the one that crossed it is the one that says so.
     pub fn settle(&self, n: u64) -> bool {
         let limit = self.settled_limit.load(Ordering::Relaxed);
+        if limit == u64::MAX {
+            // No ceiling: the charge can never report "out of budget", so the
+            // compare-and-swap that fuses charge and check has nothing to
+            // check. See `charge_live` for the install-once assumption and the
+            // saturation note. The limited path below keeps its single CAS.
+            add_saturating(&self.settled, n);
+            return true;
+        }
         let mut cur = self.settled.load(Ordering::Relaxed);
         loop {
             let next = cur.saturating_add(n);
@@ -302,7 +354,7 @@ impl Summary {
     /// counter — all or nothing.
     ///
     /// Reserving *before* the fetch is what bounds the run under
-    /// `--io-threads N`: with N files in flight, a check-then-add would
+    /// `--jobs N`: with N files in flight, a check-then-add would
     /// overshoot by up to N-1 chunks. Returns `false` — having added nothing —
     /// when the ceiling blocks the reservation, which is the caller's signal
     /// to stop the run.
@@ -474,8 +526,35 @@ impl Summary {
     }
 
     /// Give a reservation back: the file that held it is done.
+    ///
+    /// A release larger than the reserved figure saturates at zero and warns:
+    /// the counter is what the next reservation compares against its ceiling,
+    /// and wrapping it to a figure near `u64::MAX` would refuse every later
+    /// reservation for the rest of the run. The warning keeps the caller's
+    /// logic error visible without panicking a release run.
     pub fn release_ram_bytes(&self, n: u64) {
-        self.ram_reserved.fetch_sub(n, Ordering::Relaxed);
+        let mut cur = self.ram_reserved.load(Ordering::Relaxed);
+        loop {
+            let next = cur.saturating_sub(n);
+            match self.ram_reserved.compare_exchange_weak(
+                cur,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    if cur < n {
+                        tracing::warn!(
+                            release = n,
+                            reserved = cur,
+                            "release exceeds the staged RAM figure; saturating at zero"
+                        );
+                    }
+                    return;
+                }
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// The peak staged payload of the run.
@@ -508,7 +587,9 @@ impl Summary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::sync::{Arc, Barrier};
+
+    use crate::util::counter::test_support::pause_before_cas_of;
 
     /// The meter's two numbers, and the rule that tells them apart.
     ///
@@ -536,6 +617,38 @@ mod tests {
         assert!(m.charge_live(10));
         assert_eq!(m.live(), 110);
         assert_eq!(m.settled(), 60);
+    }
+
+    /// A refund larger than the live figure saturates at zero and warns: a
+    /// wrapped figure would switch the ceiling off for the rest of the run.
+    #[test]
+    fn a_refund_never_takes_the_live_figure_below_zero() {
+        let m = Meter::new();
+        assert!(m.charge_live(100));
+        m.refund_live(30);
+        m.refund_live(30);
+        assert_eq!(m.live(), 40);
+        let logs = crate::repair::test_support::logs_of(|| m.refund_live(1000));
+        assert_eq!(m.live(), 0, "the refund saturates instead of wrapping");
+        assert!(
+            logs.contains("refund") && logs.contains("1000"),
+            "the attempted refund is reported: {logs}"
+        );
+    }
+
+    /// The negative branch of `adjust_live` goes through the same hardened
+    /// refund, so an oversized correction cannot disable the ceiling either.
+    #[test]
+    fn a_negative_adjustment_saturates_at_zero() {
+        let mut m = Meter::new();
+        m.set_live_limit(Some(100));
+        assert!(m.charge_live(40));
+        m.adjust_live(-1000);
+        assert_eq!(m.live(), 0, "the adjustment saturates instead of wrapping");
+        // The ceiling still bounds the figure after the oversized correction.
+        assert!(m.charge_live(100));
+        assert!(!m.charge_live(1), "the ceiling still binds");
+        assert_eq!(m.live(), 100);
     }
 
     /// The two ceilings bound different numbers: the live one is checked when
@@ -572,6 +685,118 @@ mod tests {
         assert!(s.reserve_download_bytes(1));
         assert!(s.reserve_download_bytes(u64::MAX / 2));
         assert_eq!(s.download.live(), 1 + u64::MAX / 2);
+    }
+
+    /// The no-ceiling charge takes the `fetch_add` fast path: every call
+    /// answers yes, and concurrent charges still add up to the exact sum.
+    #[test]
+    fn an_unlimited_charge_accepts_concurrently_and_counts_exactly() {
+        let s = Arc::new(Summary::default());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        assert!(s.reserve_write_bytes(7), "no ceiling ever refuses");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(s.write.live(), 8 * 100 * 7);
+    }
+
+    /// The same for the settled figure: with no verified ceiling the settle
+    /// always reports "within limit" and still counts every byte.
+    #[test]
+    fn an_unlimited_settle_accepts_concurrently_and_counts_exactly() {
+        let s = Arc::new(Summary::default());
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..100 {
+                        assert!(s.note_write_bytes(11), "no ceiling ever refuses");
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(s.write.settled(), 8 * 100 * 11);
+    }
+
+    /// The fast path saturates rather than wrapping at the top of the range:
+    /// a meter cannot be pushed back to a small figure that would switch a
+    /// ceiling off.
+    #[test]
+    fn the_unlimited_path_saturates_at_the_top_of_the_range() {
+        let m = Meter::new();
+        assert!(m.charge_live(u64::MAX));
+        assert_eq!(m.live(), u64::MAX);
+        assert!(m.charge_live(1));
+        assert_eq!(m.live(), u64::MAX, "the charge saturates, not wraps");
+
+        let m = Meter::new();
+        assert!(m.settle(u64::MAX));
+        assert_eq!(m.settled(), u64::MAX);
+        assert!(m.settle(1));
+        assert_eq!(m.settled(), u64::MAX, "the settle saturates, not wraps");
+    }
+
+    /// A charge within `n` of the top is decided by the same atomic step that
+    /// performs it, so two threads that both see room cannot both take it and
+    /// wrap the counter. A load followed by `fetch_add` loses exactly this
+    /// race: every thread sees `MAX - 1` as room for one more byte.
+    ///
+    /// The test installs a pause after the load, so every thread is guaranteed
+    /// to have read `MAX - 1` before any of them commits. That is the exact
+    /// interleaving the compare-exchange loop has to survive, without a
+    /// probabilistic loop of thousands of spawned threads.
+    #[test]
+    fn concurrent_charges_cannot_wrap_a_meter_near_the_top() {
+        const THREADS: usize = 8;
+        let s = Arc::new(Summary::default());
+        assert!(s.reserve_download_bytes(u64::MAX - 1));
+        let paused = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let s = s.clone();
+                let paused = paused.clone();
+                std::thread::spawn(move || {
+                    let _pause = pause_before_cas_of(&s.download.live, paused);
+                    assert!(s.reserve_download_bytes(1), "no ceiling ever refuses");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            s.download.live(),
+            u64::MAX,
+            "charges at the top saturate, never wrap"
+        );
+    }
+
+    /// A ceiling installed after construction is still honored: the setter
+    /// allows it, and the fast path must not have cached the sentinel.
+    #[test]
+    fn a_limit_installed_after_construction_still_binds() {
+        let mut m = Meter::new();
+        assert!(m.charge_live(100), "no ceiling yet");
+        assert!(m.settle(100), "no verified ceiling yet");
+        m.set_live_limit(Some(100));
+        m.set_settled_limit(Some(100));
+        assert_eq!(m.live_limit(), Some(100));
+        assert_eq!(m.settled_limit(), Some(100));
+        assert!(!m.charge_live(1), "the late live ceiling binds");
+        assert_eq!(m.live(), 100, "the refused charge added nothing");
+        assert!(!m.settle(1), "the late verified ceiling binds");
+        assert_eq!(m.settled(), 101, "the settle counted before reporting");
     }
 
     #[test]
@@ -707,6 +932,32 @@ mod tests {
         assert_eq!(s.max_ram_bytes(), None);
         assert!(s.reserve_ram_bytes(1 << 30));
         assert!(s.reserve_ram_bytes(u64::MAX / 2));
+    }
+
+    /// A release larger than the reservation saturates at zero and warns: a
+    /// wrapped figure would sit near `u64::MAX` and refuse every later
+    /// reservation for the rest of the run.
+    #[test]
+    fn a_ram_release_never_takes_the_reserved_figure_below_zero() {
+        let mut s = Summary::default();
+        s.set_ram_limit(Some(100));
+        assert!(s.reserve_ram_bytes(100));
+        s.release_ram_bytes(30);
+        s.release_ram_bytes(30);
+        assert_eq!(s.ram_reserved.load(Ordering::Relaxed), 40);
+        let logs = crate::repair::test_support::logs_of(|| s.release_ram_bytes(1000));
+        assert_eq!(
+            s.ram_reserved.load(Ordering::Relaxed),
+            0,
+            "the release saturates instead of wrapping"
+        );
+        assert!(
+            logs.contains("release") && logs.contains("1000"),
+            "the attempted release is reported: {logs}"
+        );
+        // The ceiling still bounds the figure after the oversized release.
+        assert!(s.reserve_ram_bytes(100));
+        assert!(!s.reserve_ram_bytes(1), "the ceiling still binds");
     }
 
     #[test]

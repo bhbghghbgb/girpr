@@ -27,6 +27,7 @@ use crate::hash;
 use crate::hash::Encoding;
 use crate::http::{ApiError, Fetched, Fetcher, Kind, RequestLog};
 use crate::hyp::GetBuild;
+use crate::hyp::types::join;
 
 pub mod diff;
 pub mod dump;
@@ -335,11 +336,16 @@ impl CapturedManifest {
     }
 
     /// The archive URL it came from.
+    ///
+    /// Joined through the same helper as
+    /// [`crate::hyp::BuildManifest::archive_url`], which documents why a
+    /// non-empty `url_suffix` is appended even though the reference Sophon
+    /// clients ignore the field.
     pub fn url(&self) -> String {
-        self.meta.declared.manifest_download.url_prefix.to_owned()
-            + "/"
-            + &self.meta.manifest.id
-            + &self.meta.declared.manifest_download.url_suffix
+        join(
+            &self.meta.declared.manifest_download,
+            &self.meta.manifest.id,
+        )
     }
 
     /// The base its **chunk** blobs are served from.
@@ -352,12 +358,22 @@ impl CapturedManifest {
         &self.meta.declared.chunk_download.url_prefix
     }
 
+    /// The declared chunk download, whose prefix and suffix together decide
+    /// every chunk URL.
+    ///
+    /// Exposed so other URL builders can reuse the declaration rather than
+    /// keeping a prefix of their own and silently dropping the suffix.
+    pub fn chunk_download(&self) -> &crate::hyp::types::Download {
+        &self.meta.declared.chunk_download
+    }
+
     /// The URL of one of its chunks.
+    ///
+    /// Uses the same join as [`crate::hyp::BuildManifest::archive_url`]: every
+    /// measured response has an empty `url_suffix`, so appending one is a
+    /// conservative reading the reference Sophon clients do not make.
     pub fn chunk_url(&self, chunk_id: &str) -> String {
-        self.meta.declared.chunk_download.url_prefix.clone()
-            + "/"
-            + chunk_id
-            + &self.meta.declared.chunk_download.url_suffix
+        join(&self.meta.declared.chunk_download, chunk_id)
     }
 }
 
@@ -740,15 +756,21 @@ pub fn decode_counts(entries: &[SophonChunkFile]) -> Decoded {
         }
         // A folder carries no bytes, so none of the byte-level properties apply
         // to it; counting one would report a violation on every folder entry and
-        // mean nothing.
+        // mean nothing. A non-folder with no chunks still runs these checks:
+        // with nothing to violate, `ascending` and `gapless` stay true, but the
+        // zero `chunk_bytes` is compared to `size`, so a file that claims bytes
+        // without any chunks is reported as a size mismatch. A zero-byte empty
+        // file (`size == 0`) stays clean.
         //
-        // `gapless` deliberately asks only whether the chunks *tile* — each one
-        // starting where the last ended. Whether they then reach `size` is
-        // `size_mismatch_files`, and folding it in here would double-count every
-        // disagreement and blur two properties into one counter. It is in fact
-        // redundant: with no gap, the cursor equals `Σ uncompressed_size`, so
-        // the extra clause could only ever fire when the length already did.
-        if e.is_folder || e.chunks.is_empty() {
+        // An empty chunk list is not additionally counted as non-gapless: there
+        // is no tiling to violate. `gapless` deliberately asks only whether the
+        // chunks *tile* — each one starting where the last ended. Whether they
+        // then reach `size` is `size_mismatch_files`, and folding it in here
+        // would double-count every disagreement and blur two properties into
+        // one counter. It is in fact redundant: with no gap, the cursor equals
+        // `Σ uncompressed_size`, so the extra clause could only ever fire when
+        // the length already did.
+        if e.is_folder {
             continue;
         }
         if !ascending {

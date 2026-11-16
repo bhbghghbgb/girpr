@@ -1,9 +1,21 @@
 //! Link storage, alias resolution, and the on-disk/dst spellings.
 //!
-//! These helpers are pure over the effective maps plus the link-resolution
-//! primitives in [`crate::link`]. They are plan-time only: no filesystem write
-//! happens here, only `read_link`/`canonicalize` probes to learn which paths a
-//! kept dst file link depends on.
+//! Most of the helpers here are pure: they answer from what the run already
+//! knows — the effective maps, the disk-spelling map, the paths themselves —
+//! and touch nothing. Two of them ask the disk as well, because the plan
+//! needs what only the disk can say — where a link's target sits inside dst
+//! ([`target_rel`]) and which of a target's prefixes are links
+//! ([`spare_link_components`], which asks the link primitive
+//! [`try_is_link`]). On Windows a third does: [`on_disk_name`], which lists a
+//! directory to learn which spelling the OS would open. On POSIX the name
+//! already is the spelling, so that lookup asks nothing at all, and the two
+//! above are the whole of the disk-asking helpers there.
+//!
+//! They are plan-time only: no filesystem write happens here, only the
+//! link probes [`DIRECT_QUESTIONS`](super::safety::DIRECT_QUESTIONS)
+//! names, and they are asked to learn which paths a kept dst file link
+//! depends on. The probes are made directly rather than through the guard
+//! seam.
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +28,9 @@ use anyhow::{Context, Result};
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
 use crate::link::try_is_link;
+#[cfg(windows)]
+use crate::util::unicode_case_eq;
+use crate::util::{path_key, slash_rel};
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
@@ -200,6 +215,19 @@ pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 /// has to come from the directory listing: an exact entry wins, otherwise the
 /// unique case-insensitive match is the one the OS would open.
 ///
+/// **Neither of the other two rules.** The path key
+/// ([`crate::util::path_key`]) folds ASCII case only and answers which bucket
+/// of a run's map a path belongs to; the identity rule
+/// ([`crate::util::same_path`]) keeps a Unicode fallback and answers whether
+/// two spellings open the same place on disk. This lookup asks a third
+/// question — which directory entry the OS would open — and the OS's own table
+/// is a Unicode one, so the comparison folds Unicode case.
+///
+/// The comparison is [`crate::util::unicode_case_eq`], the comparison the
+/// identity rule's fallback uses as well, over the shared mapping
+/// [`crate::util::unicode_lowercase`]: one implementation for two
+/// questions, not one rule.
+///
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
 /// no lookup is needed; case folding stays Windows-only, as in
 /// [`util::same_path`](crate::util::same_path). `None` means the directory holds
@@ -215,7 +243,7 @@ pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsStrin
         if candidate == name {
             return Ok(Some(candidate));
         }
-        if candidate.to_string_lossy().to_lowercase() == name.to_string_lossy().to_lowercase() {
+        if unicode_case_eq(&candidate, name) {
             // A directory can be case-sensitive per directory on Windows; two
             // case-only names then make "the" entry ambiguous, and the name the
             // OS would open is the exact one that is not there.
@@ -267,7 +295,7 @@ pub(super) fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<S
     };
     let name = on_disk_name(&parent, name)?.unwrap_or_else(|| name.to_owned());
     let rel = parent_rel.join(name);
-    let rel = rel.to_string_lossy().replace('\\', "/");
+    let rel = slash_rel(&rel.to_string_lossy());
     Ok((!rel.is_empty()).then_some(rel))
 }
 
@@ -305,17 +333,24 @@ pub(super) fn spare_link_components(
     Ok(())
 }
 
-/// Lowercase key → the map's spelling, for a Windows filesystem that matches
+/// Folded key → the map's spelling, for a Windows filesystem that matches
 /// names case-insensitively.
+///
+/// The fold is the path key's — ASCII case only — so this index finds a map
+/// key whose spelling differs from the wanted one in ASCII case alone.
 ///
 /// Two `dm` keys cannot differ only by case (the walk's mixed-case check is
 /// fatal and the rename pass collapses them), so the mapping is unambiguous.
 /// On POSIX two spellings are two paths and folding would join them, so the
 /// index is empty there.
+///
+/// Not the shared `util::folded_keys` index: this one owns its spellings
+/// instead of borrowing them from `dm`, and it answers only for a
+/// case-insensitive filesystem.
 pub(super) fn folded_keys(dm: &HashMap<String, EffRec>) -> HashMap<String, String> {
     #[cfg(windows)]
     {
-        dm.keys().map(|k| (k.to_lowercase(), k.clone())).collect()
+        dm.keys().map(|k| (path_key(k), k.clone())).collect()
     }
     #[cfg(not(windows))]
     {
@@ -334,7 +369,7 @@ pub(super) fn map_spelling<'a>(
     if let Some((key, _)) = dm.get_key_value(rel) {
         return Some(key.as_str());
     }
-    folded.get(&rel.to_lowercase()).map(String::as_str)
+    folded.get(&path_key(rel)).map(String::as_str)
 }
 
 /// Spare `alias` and every link on its way to the root.

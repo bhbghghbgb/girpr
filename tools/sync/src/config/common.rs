@@ -6,8 +6,7 @@
 //! command runs — and `ScanMode` is the same idea one level down: how a single
 //! folder scan treats the cache and the filesystem.
 
-use anyhow::Result;
-use glob::Pattern;
+use anyhow::{Result, bail};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
@@ -15,7 +14,7 @@ use girpr_log::Level;
 
 use crate::cache::TestCacheBackend;
 use crate::cli::{CommonArgs, RwArgs};
-use crate::filter::compile_patterns;
+use crate::filter::{Filter, compile_patterns};
 use crate::hash::{HashAlg, parse_any_of, parse_hash_list};
 use crate::planner::{HashMode, StatTrust};
 use crate::report::{OutputFormat, Report};
@@ -112,16 +111,34 @@ pub struct CommonOpts {
     /// mean asking a question the diff has already answered. It is off by default
     /// because it is one record per equal file.
     pub show_identical: bool,
-    /// `--include` globs; empty means "everything".
-    pub includes: Vec<Pattern>,
-    /// `--exclude` globs; these win over `includes`.
-    pub excludes: Vec<Pattern>,
+    /// `--include` / `--exclude` globs, compiled and ready to match.
+    ///
+    /// The patterns and the options they are matched with live together, so a
+    /// path is always tested against the rules this run was configured with.
+    /// Empty includes mean "everything"; the excludes win over them.
+    pub filter: Filter,
     /// Default false: insensitive, with rename/abort rules.
+    ///
+    /// **A run-wide mode, not a filter property.** It also selects the cache's
+    /// case flag, the planner's pairing, the rename pass and the mkdir check,
+    /// so it stays here rather than inside [`Filter`], where it would look as
+    /// though it belonged to globbing alone.
+    ///
+    /// The filter's matching options are built from this value, so the two have
+    /// to agree: use [`CommonOpts::set_case_sensitive`] to change the mode
+    /// rather than assigning the field.
     pub case_sensitive: bool,
     /// Walk depth cap for the whole tree (default 10).
     pub max_depth: usize,
     /// Back up + delete the cache before opening, forcing a rebuild.
     pub ignore_cache: bool,
+    /// What a run copies aside, and how much of it it keeps.
+    ///
+    /// A policy rather than a fixed step, because the copies are a recovery
+    /// aid rather than part of the answer: the live cache is authoritative,
+    /// and nothing reads a backup or an `old-*` snapshot back. See
+    /// [`BackupPolicy`].
+    pub backup: BackupPolicy,
     /// `--dry-run`: write nothing at all.
     ///
     /// Lives here rather than on a command because it applies to all four and
@@ -138,7 +155,71 @@ pub struct CommonOpts {
     /// Test-only: `Memory` opens folder caches in redb's in-memory backend
     /// instead of the real `<root>/girpr-cache` file. `File` (default) opens
     /// the real file, which production and cache-focused tests keep.
+    ///
+    /// **The field is the answer.** `GIRSYNC_TEST_CACHE=memory` is read once,
+    /// at command start, by [`CommonOpts::try_from`] — the CLI path — and
+    /// nowhere else; a caller that builds these options by hand gets exactly
+    /// what it put here, whatever the environment holds.
     pub test_cache: TestCacheBackend,
+}
+
+impl CommonOpts {
+    /// Set the run's case mode, and rebuild the filter's matching options to
+    /// match it.
+    ///
+    /// The filter caches the options it matches with, and the case mode is one
+    /// of them, so the two move together: changing the mode without rebuilding
+    /// the filter would leave the filter matching under the old one.
+    pub fn set_case_sensitive(&mut self, case_sensitive: bool) {
+        self.case_sensitive = case_sensitive;
+        self.filter = Filter::new(
+            self.filter.includes().to_vec(),
+            self.filter.excludes().to_vec(),
+            case_sensitive,
+        );
+    }
+}
+
+/// What a run copies aside, and how much of it it keeps.
+///
+/// A **policy**, not a fixed step, because the copies are a recovery aid and
+/// not part of the answer: the live `<root>/girpr-cache` is authoritative, and
+/// a `girpr-cache-backup-*` copy or a `girpr-cache-old-*` snapshot is never
+/// read back automatically. So this decides what a run *leaves behind*, and
+/// nothing about what it reports.
+///
+/// The default is "back up, keep everything" — the copies are cheap insurance
+/// and nobody has to think about them. `--no-backup` turns the copying off
+/// and `--backup-retain N` bounds what accumulates; both are opt-in, because
+/// a run that quietly stopped keeping a recovery point would be a surprise in
+/// the direction that hurts.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackupPolicy {
+    /// `--no-backup`: copy nothing aside.
+    pub disabled: bool,
+    /// `--backup-retain N`: bound each prefix to N copies.
+    ///
+    /// The oldest copies are removed until the folder holds N of them. A
+    /// copy another run is still using is kept as well, and it does not
+    /// spend the removal budget: the bound walks on to the next copy in age
+    /// order, and that one may be among the newest. The copies a folder
+    /// keeps are therefore not necessarily its newest, and a folder holds
+    /// more than N while there are not enough copies the bound may remove
+    /// to make the count up.
+    ///
+    /// `None` keeps them all, which is the default.
+    pub retain: Option<NonZeroUsize>,
+}
+
+impl BackupPolicy {
+    /// Whether this run copies a cache aside at all.
+    ///
+    /// The one question every backup site asks, so that "no backups" is
+    /// answered in one place rather than at each site that would otherwise
+    /// have to remember the flag.
+    pub fn wants_backup(&self) -> bool {
+        !self.disabled
+    }
 }
 
 impl TryFrom<RwArgs> for RwLimits {
@@ -277,22 +358,64 @@ impl TryFrom<CommonArgs> for CommonOpts {
                 named.join(" and "),
             );
         }
+        // The test-only cache backend, resolved once, here, at command start.
+        //
+        // This is the only place the environment is read for it: every later
+        // reader asks the field, so a run cannot change its mind halfway
+        // through, and two cache opens in one run cannot disagree. The
+        // subprocess suites set `GIRSYNC_TEST_CACHE=memory` on the *child*,
+        // and the child runs the CLI — which comes through here — so they
+        // still get the in-memory backend.
+        //
+        // Anything other than exactly `memory` means the real file, which is
+        // what production uses and what the cache-focused suites need.
+        let test_cache = if std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory") {
+            TestCacheBackend::Memory
+        } else {
+            TestCacheBackend::File
+        };
         Ok(Self {
             algos,
             hash_mode,
             stat,
             why: a.why,
             show_identical: a.show_identical,
-            includes: compile_patterns(&a.include)?,
-            excludes: compile_patterns(&a.exclude)?,
+            filter: Filter::new(
+                compile_patterns(&a.include)?,
+                compile_patterns(&a.exclude)?,
+                a.case_sensitive,
+            ),
             case_sensitive: a.case_sensitive,
             max_depth: a.max_depth,
             ignore_cache: a.ignore_cache,
+            backup: backup_policy(a.no_backup, a.backup_retain)?,
             dry_run: a.dry_run,
             rw: RwLimits::try_from(a.rw)?,
-            test_cache: TestCacheBackend::default(),
+            test_cache,
         })
     }
+}
+
+/// Resolve the two backup flags into one policy.
+///
+/// `--backup-retain 0` is refused here rather than by clap, so it exits `3`
+/// with a message naming the flag — the code the README documents for a
+/// runtime usage mistake, as distinct from the `2` a parse error gets.
+/// Keeping *none* of the copies is not a retention request, it is a
+/// contradiction: the user asked for a bound and named a bound of zero, and
+/// `--no-backup` is the flag that says what they meant.
+fn backup_policy(disabled: bool, retain: Option<usize>) -> Result<BackupPolicy> {
+    let retain = match retain {
+        Some(n) => match NonZeroUsize::new(n) {
+            Some(nz) => Some(nz),
+            None => bail!(
+                "--backup-retain must be >= 1 (got {n}); it is how many backups or \
+                 snapshots to keep per prefix, and --no-backup is how you ask for none"
+            ),
+        },
+        None => None,
+    };
+    Ok(BackupPolicy { disabled, retain })
 }
 
 /// How a single folder scan treats the cache and the filesystem.

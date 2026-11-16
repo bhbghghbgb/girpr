@@ -56,12 +56,13 @@ use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, open_db};
 use crate::config::{CompareSelfOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
-    SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
+    Side, SideCapability, load_record_side_from, resolve_folder, resolve_record, scan_stat_only,
+    side_folder,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
-use super::report_and_finish;
+use super::{report_and_finish, side_label};
 
 /// Audit `<dir>` against `<dir>/girpr-cache`. Returns the process exit code:
 /// `0` if the cache is in step, `4` if it has drifted.
@@ -83,8 +84,8 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
         dir = %dir.display(),
         algos = ?common.algos,
         no_trust_cached_hashes,
-        include = ?common.includes,
-        exclude = ?common.excludes,
+        include = ?common.filter.includes(),
+        exclude = ?common.filter.excludes(),
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         rw_mode = common.rw.mode(),
@@ -188,11 +189,18 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     let disk_a = scan_stat_only(&dir, &cold, &common, mode)?;
     // Labels for a coverage error. The record is `src` here, so the record is what
     // a failure names — which is the side that cannot fill a gap, and the one the
-    // remedy is about. The record's label carries the folder too, because on this
-    // command the remedy is `girsync update --dir <that folder>` and the user
-    // should not have to work out which directory a cache path belongs to.
-    let rec_label = format!("record {} (for {})", db_path.display(), dir.display());
-    let disk_label = format!("folder {}", dir.display());
+    // remedy is about. The record is named by its path and by nothing else, the
+    // same way `compare` names it: the path is `<folder>/girpr-cache`, so the
+    // folder it describes is its parent, and that folder is what the remedy
+    // repopulates — so the message ends with a command the user can paste.
+    let rec_side = Side::Record(db_path.clone());
+    let rec_label = side_label(&rec_side);
+    let disk_side = Side::Folder(dir.clone());
+    let disk_label = side_label(&disk_side);
+    // Where each side's cache lives, for the same reason the labels are needed:
+    // the planner knows what a side can do, not where its cache is.
+    let rec_repopulate = side_folder(&rec_side);
+    let disk_repopulate = side_folder(&disk_side);
     // The `?` stops the run before either side reads anything: a record that
     // cannot supply a requested digest must fail rather than let the pair fall
     // back to size+mtime, which for an audit means reporting "in step" about
@@ -210,6 +218,7 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::record(),
             label: &rec_label,
+            repopulate: rec_repopulate,
         },
         SideRequest {
             entries: &disk_a.map,
@@ -217,6 +226,8 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
             no_trust: false,
             cap: SideCapability::for_folder(&cold, mode),
             label: &disk_label,
+            // A folder side can always backfill, so it is never the short one.
+            repopulate: disk_repopulate,
         },
         pairing,
         common.hash_mode,
@@ -237,9 +248,10 @@ pub fn cmd_compare_self(opts: CompareSelfOpts, log: &LogCtx) -> Result<i32> {
     // it is not worth refusing the flag over, but it is worth the `info!` below —
     // a user who asked for two counters should be able to see what they got.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         note = "only the disk side has a filesystem; the record side draws no permit",
         "rw limits"
     );

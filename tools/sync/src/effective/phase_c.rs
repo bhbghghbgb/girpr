@@ -5,7 +5,7 @@
 //! [`resolve_folder`] reads, [`resolve_record`] does not have anything to read,
 //! and [`resolve_side`] picks between them.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, info, trace};
@@ -73,22 +73,35 @@ pub fn resolve_folder(
 ) -> Result<SideScan> {
     let ScanMode { dry_run, .. } = mode;
     let t_eff = std::time::Instant::now();
+    // The plan's own pending list: the paths this side still owes a digest for,
+    // already filtered and already sorted.
+    //
+    // **Sorted even though writes are completion-ordered**: it gives the pool the
+    // same starting order every run, so which paths are in flight when a failure
+    // aborts the run does not depend on `HashMap` iteration order.
+    //
+    // **The plan names files this side's map holds.** Every entry the planner
+    // writes comes from a file in `phase_a.map` — a directory is never planned,
+    // and a path the map does not hold is not a path this side could read — so
+    // the plan's pending list and the map's unsettled files are the same set.
+    // The assertion below is that invariant said out loud, rather than assumed.
+    let pending = plan.pending();
+    debug_assert!(
+        pending
+            .iter()
+            .all(|rel| phase_a.map.get(rel.as_str()).is_some_and(|e| e.is_file())),
+        "every planned path is a file this side's map holds"
+    );
+    // The message names the phase. Both phases report a start, a progress and
+    // a done, so the phase is the only thing that tells these three events
+    // from the other three — and it is named the same way in all six of
+    // them: by its letter.
     info!(
         root = %root.display(),
-        pending = plan.pending().len(),
+        pending = pending.len(),
         digests = plan.digest_count(),
-        "resolve start"
+        "effective start: phase c"
     );
-    // Sorted even though writes are completion-ordered: it gives the pool the same
-    // starting order every run, so which paths are in flight when a failure aborts
-    // the run does not depend on `HashMap` iteration order.
-    let mut pending: Vec<&String> = phase_a
-        .map
-        .iter()
-        .filter(|(rel, e)| e.is_file() && !plan.is_settled(rel))
-        .map(|(rel, _)| rel)
-        .collect();
-    pending.sort();
 
     // What the workers share: the batch handle, the map they are building, and the
     // counters that drive the heartbeat. One mutex covers all three because a row
@@ -111,7 +124,8 @@ pub fn resolve_folder(
         last_prog: std::time::Instant::now(),
     });
     let total = pending.len();
-    let outcome = rw.pool().install(|| {
+    let pool = rw.pool()?;
+    let outcome = pool.install(|| {
         use rayon::prelude::*;
         pending.par_iter().try_for_each(|rel| -> Result<()> {
             // The permit covers the read. The row write is cache work, which the
@@ -133,7 +147,9 @@ pub fn resolve_folder(
             };
             let e = &phase_a.map[*rel];
             let row = merge_row(e.size, e.mtime_ns, computed, e.prior().as_ref());
-            let mut sink = sink.lock().expect("resolve lock is never poisoned");
+            let mut sink = sink
+                .lock()
+                .map_err(|_| anyhow!("resolve lock is poisoned"))?;
             if let Some(w) = sink.batch.as_mut() {
                 w.put(rel, &row)?;
             }
@@ -150,6 +166,13 @@ pub fn resolve_folder(
             sink.hashed += 1;
             // Logged under the lock so the `done` counts appear in the order they
             // were reached rather than the order workers got scheduled to log.
+            //
+            // The message names the phase. Two phases report progress under one
+            // name, and the fields do not tell them apart: the phase that
+            // reads no bytes reports `hashed = 0` for the whole run, so a
+            // reader (or a parser) that cannot say which phase an event came
+            // from cannot say anything about it. The name says, and it says
+            // it the way this phase's start and done events say it.
             if sink.hashed.is_multiple_of(100)
                 || sink.hashed == total
                 || sink.last_prog.elapsed().as_secs() >= 5
@@ -161,7 +184,7 @@ pub fn resolve_folder(
                     hashed = sink.hashed,
                     cache_hit = 0,
                     elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "scan progress"
+                    "effective progress: phase c"
                 );
                 sink.last_prog = std::time::Instant::now();
             }
@@ -175,7 +198,9 @@ pub fn resolve_folder(
         mut map,
         hashed: n_hashed,
         ..
-    } = sink.into_inner().expect("resolve lock is never poisoned");
+    } = sink
+        .into_inner()
+        .map_err(|_| anyhow!("resolve lock is poisoned"))?;
     if let Some(w) = batch {
         w.commit()?;
     }
@@ -214,16 +239,23 @@ pub fn resolve_folder(
         hashed: n_hashed,
         cache_hit: n_cache_hit,
         stat_only: n_stat_only,
-        // Phase A owns `files`, `dirs` and `pruned` — it is the only phase that
-        // walks the tree, so it is the only one that can count them. Carried
-        // across explicitly: a `..ScanStats::default()` here would silently
-        // reset `pruned` to 0 on every run, and the log line (which reads
-        // phase A directly) would then disagree with the returned stats.
+        // Phase A owns `files`, `dirs`, `pruned` and `alt_lookups` — it is the
+        // only phase that walks the tree, so it is the only one that can count
+        // them. Carried across explicitly: a `..ScanStats::default()` here would
+        // silently reset `pruned` to 0 on every run, and the log line (which
+        // reads phase A directly) would then disagree with the returned stats.
         files: phase_a.stats.files,
         dirs: phase_a.stats.dirs,
         pruned: phase_a.stats.pruned,
         live: phase_a.stats.live,
+        alt_lookups: phase_a.stats.alt_lookups,
     };
+    // The message names the phase. The map is finished in two phases and each
+    // of them says so, because the fields do not: only the phase that hashes
+    // reports the stat-only count, so an event without that field is the other
+    // phase's — a thing a reader has to know to read the log at all. The
+    // phase is named by its letter, the way its start and progress events
+    // name it.
     info!(
         root = %root.display(),
         files = phase_a.stats.files,
@@ -233,7 +265,7 @@ pub fn resolve_folder(
         stat_only = stats.stat_only,
         pruned = phase_a.stats.pruned,
         elapsed_s = elapsed_s(t_eff),
-        "effective done"
+        "effective done: phase c"
     );
     Ok(SideScan { map, stats })
 }

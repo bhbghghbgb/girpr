@@ -1,7 +1,7 @@
 //! What a cache row *is*: [`Meta`] and [`FileRec`].
 //!
-//! The types, with no encoding and no redb. [`codec`] turns them into bytes and
-//! this module says what the bytes mean.
+//! The types, with no encoding and no redb. [`super::codec`] turns them into
+//! bytes and this module says what the bytes mean.
 
 use crate::hash::DigestSet;
 

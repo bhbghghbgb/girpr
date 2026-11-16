@@ -273,26 +273,43 @@ impl Retention {
 
     /// Which half of A12 failed, if either.
     ///
-    /// One set over `materialize_new`, built once: both conditions are
-    /// membership tests against it, and the naive form is O(new²) per file.
+    /// The subset half builds one set over `materialize_new` and tests
+    /// membership; the overlap half delegates to
+    /// [`fetch_is_disjoint_from_reuse`]. Both are linear rather than a scan of
+    /// one side per fetched id.
     pub fn a12_failure(&self) -> Option<&'static str> {
         let new: std::collections::HashSet<&str> = self
             .ids(Set::MaterializeNew)
             .iter()
             .map(String::as_str)
             .collect();
-        let reuse: std::collections::HashSet<&str> =
-            self.reuse.iter().map(String::as_str).collect();
         for id in self.ids(Set::PatchFetch) {
             if !new.contains(id.as_str()) {
                 return Some("patch_fetch is not a subset of materialize_new");
             }
-            if reuse.contains(id.as_str()) {
-                return Some("patch_fetch overlaps the reuse set");
-            }
+        }
+        if !fetch_is_disjoint_from_reuse(
+            self.ids(Set::PatchFetch).iter().map(String::as_str),
+            self.reuse.iter().map(String::as_str),
+        ) {
+            return Some("patch_fetch overlaps the reuse set");
         }
         None
     }
+}
+
+/// Whether no id fetched by a patch is also in the reuse set — one half of A12.
+///
+/// One definition shared by the capture plan and the written patchmap, so the
+/// two cannot disagree about what "disjoint" means. A `HashSet` over the reuse
+/// side makes this linear in the two inputs rather than a scan of reuse per
+/// fetched id.
+pub fn fetch_is_disjoint_from_reuse<'a>(
+    mut fetch: impl Iterator<Item = &'a str>,
+    reuse: impl Iterator<Item = &'a str>,
+) -> bool {
+    let reuse: std::collections::HashSet<&str> = reuse.collect();
+    fetch.all(|id| !reuse.contains(id))
 }
 
 /// What retaining one file costs: which chunks, in which roles.
@@ -352,9 +369,29 @@ pub fn retention(pair: &FilePair) -> Retention {
 /// Returned in a deterministic order so that a capture which stored the same
 /// blobs in a different order depending on scheduling would not produce two
 /// artifacts for one world.
+///
+/// Computes each pair's [`Retention`] and delegates to [`wants_with`]. Callers
+/// that already computed retentions (because they checked A12 first) should use
+/// [`wants_with`] directly so a pair is retained only once.
 pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
+    let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+    wants_with(pairs, &retentions)
+}
+
+/// [`wants`] with retentions already computed, one per pair in the same order.
+///
+/// `retentions` must be index-aligned with `pairs`; a mismatch is a programming
+/// error and is caught by a debug assertion. Only [`Retention::reuse`] is read —
+/// the planner computes the full retention once for its A12 check and hands it
+/// here, rather than rebuilding it for every pair.
+pub fn wants_with(pairs: &[FilePair], retentions: &[Retention]) -> Vec<Want> {
+    debug_assert_eq!(
+        retentions.len(),
+        pairs.len(),
+        "one precomputed retention per pair, index-aligned"
+    );
     let mut by_id: BTreeMap<String, Want> = BTreeMap::new();
-    for pair in pairs {
+    for (pair, r) in pairs.iter().zip(retentions) {
         // One chunk, one role. Taking the whole entry here and looping outside
         // meant the first non-reusable new chunk pushed `patch_fetch` onto
         // *every* new chunk, reusable ones included — which silently broke A12
@@ -418,7 +455,6 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
             }
         }
         if let Some(n) = &pair.new {
-            let r = retention(pair);
             // A set, not `r.reuse.contains(&c.id)` per chunk: that was a linear
             // scan with a 49-byte string compare, once per new chunk — quadratic
             // per file. `reuse` stays a `Vec` because its order is recorded.
@@ -566,6 +602,35 @@ mod tests {
                 "{id} would be both reused and fetched"
             );
         }
+    }
+
+    /// The shared predicate must agree with the quadratic spelling, on a plan
+    /// large enough that a scan of reuse per fetched id would be conspicuous.
+    #[test]
+    fn fetch_is_disjoint_from_reuse_agrees_with_the_quadratic_form() {
+        let fetch: Vec<String> = (0..512).map(|i| format!("fetch-{i}")).collect();
+        let reuse: Vec<String> = (0..512).map(|i| format!("reuse-{i}")).collect();
+
+        let quadratic =
+            |fetch: &[String], reuse: &[String]| fetch.iter().all(|f| !reuse.contains(f));
+        let shared = |fetch: &[String], reuse: &[String]| {
+            fetch_is_disjoint_from_reuse(
+                fetch.iter().map(String::as_str),
+                reuse.iter().map(String::as_str),
+            )
+        };
+
+        assert!(quadratic(&fetch, &reuse));
+        assert_eq!(shared(&fetch, &reuse), quadratic(&fetch, &reuse));
+
+        // Make the last fetch collide with the first reuse id.
+        let mut overlapping = reuse.clone();
+        overlapping[0] = fetch.last().unwrap().clone();
+        assert!(!quadratic(&fetch, &overlapping));
+        assert_eq!(
+            shared(&fetch, &overlapping),
+            quadratic(&fetch, &overlapping)
+        );
     }
 
     /// Reuse is by *content*, not by chunk id — which is why the old and new
@@ -929,6 +994,33 @@ mod tests {
         assert!(both.contains(&removed_id));
         // And the order does not depend on which pair is visited first.
         assert_eq!(both, ids(&[removal_pair(), hoyo()]));
+    }
+
+    /// The cached builder must produce exactly what the uncached one does: the
+    /// same `Want`s, in the same order, with the same cross-build shared chunk
+    /// merged into one blob. `hoyo()` carries that shared chunk; `removal_pair()`
+    /// is one-sided, so the set exercises both alignment and merging.
+    #[test]
+    fn wants_with_matches_wants_for_a_representative_set() {
+        let pairs = vec![hoyo(), removal_pair()];
+        let uncached = wants(&pairs);
+        let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+        let cached = wants_with(&pairs, &retentions);
+        assert_eq!(cached, uncached);
+        // Keep the test honest: the set really does contain a chunk declared by
+        // both builds, or this is not the case it claims to be about.
+        assert!(uncached.iter().any(|w| w.sources.len() == 2));
+    }
+
+    /// A retentions slice that is not index-aligned with `pairs` is a caller
+    /// bug. The debug assertion catches it instead of letting `zip` silently
+    /// truncate the store to the shorter slice.
+    #[test]
+    #[should_panic(expected = "one precomputed retention per pair, index-aligned")]
+    fn wants_with_rejects_a_mismatched_retention_count() {
+        let pairs = vec![hoyo(), removal_pair()];
+        let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+        wants_with(&pairs, &retentions[..1]);
     }
 
     fn removal_pair() -> FilePair {

@@ -8,11 +8,11 @@
 //! # Why this is one function
 //!
 //! Not because the four writes belong together aesthetically, but because they
-//! share a **`written` list** that A14 and the close-out both read, and because
-//! they share a rule about how that list is built: it is counted from what each
-//! writer returned, never restated by hand. A hand-written count goes stale
-//! silently the moment a document is added, and nothing fails when it does —
-//! which is the kind of bug that survives every test in this crate.
+//! share a **`written` list** that the close-out and the run summary both read,
+//! and because they share a rule about how that list is built: it is counted
+//! from what each writer returned, never restated by hand. A hand-written count
+//! goes stale silently the moment a document is added, and nothing fails when
+//! it does — which is the kind of bug that survives every test in this crate.
 //!
 //! # Why `manifests` is borrowed mutably
 //!

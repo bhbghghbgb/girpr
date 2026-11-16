@@ -371,7 +371,7 @@ fn cases() -> Vec<Case> {
         //
         // The row that guards the planner's case flag, and the reason this file
         // exists rather than a golden. `plan_pairs` runs before the rename pass,
-        // so it has to pair by lowercase here; pairing by exact key makes this pair
+        // so it has to pair by the folded key here; pairing by exact key makes this pair
         // look one-sided, skips the digest it needs, and the rename then collapses
         // the keys with `hashes_differ` silent on dst's absent digest — a bare
         // rename, nothing copied, dst left holding the wrong bytes. Every other

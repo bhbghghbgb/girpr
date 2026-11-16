@@ -136,6 +136,41 @@ fn a_quote_or_backslash_in_a_value_survives_the_json_encoding() {
     );
 }
 
+/// The common path is untouched: a plain ASCII key is still written straight
+/// into the buffer between one pair of quotes.
+#[test]
+fn push_json_key_keeps_the_plain_ascii_fast_path() {
+    let mut out = String::new();
+    push_json_key(&mut out, "exit_code");
+    assert_eq!(out, "\"exit_code\"");
+}
+
+/// A key that needs escaping is quoted exactly once, so the bytes match what
+/// `serde_json` would emit and the surrounding object parses with the key
+/// intact. A double-quoted key (`""a\"b""`) would corrupt the line.
+#[test]
+fn push_json_key_quotes_an_escaped_key_exactly_once() {
+    let key = "a\"b\\c\u{1}\t"; // quote, backslash, control, tab
+    let mut quoted = String::new();
+    push_json_key(&mut quoted, key);
+    assert_eq!(quoted, serde_json::to_string(key).unwrap());
+
+    let obj = format!("{{{quoted}:1}}");
+    let v: Json = serde_json::from_str(&obj).expect("one valid object");
+    assert_eq!(v.as_object().unwrap().len(), 1);
+    assert_eq!(v[key], Json::from(1));
+}
+
+/// A full record carrying a non-plain key still produces one parseable line.
+#[test]
+fn a_report_line_with_an_escaped_dynamic_key_parses() {
+    let key = "odd\"key\\with\u{1}control";
+    let line = Record::summary("x").set(key, 7_i32).to_json_line();
+    let v: Json = serde_json::from_str(&line).expect("one valid object");
+    assert_eq!(v[key], Json::from(7));
+    assert_eq!(v["event"], "x");
+}
+
 /// The text form encodes whitespace but does **not** escape quotes. Inventing an
 /// escaping scheme for `"` would be a second, different encoding on the same
 /// line; the one rule is "whitespace and `%` are encoded", and a quote is

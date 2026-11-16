@@ -124,6 +124,11 @@ pub(super) fn decode_rec(bytes: &[u8]) -> Result<FileRec> {
     if !cur.is_empty() {
         bail!("trailing bytes in cache entry");
     }
+    // The row is finished here, so the arm gives back the room it grew into:
+    // a vector grows in steps, and a row that carries one unknown name would
+    // otherwise hold room for four. The rows a record keeps are decoded rows,
+    // so this is where the room is worth giving back.
+    hashes.shrink_to_fit();
     Ok(FileRec {
         kind,
         size,
@@ -250,6 +255,27 @@ mod tests {
         );
     }
 
+    /// **A decoded row holds no room beyond its entries.** A vector grows in
+    /// steps, so a row that carries one unknown name would hold room for
+    /// four — and the rows a record keeps are decoded rows, so the room is
+    /// worth giving back where the row is finished.
+    #[test]
+    fn a_decoded_row_holds_no_spare_capacity() {
+        let mut rec = file_rec();
+        rec.hashes.insert_named("blake3", &[7u8; 32]);
+        let back = decode_rec(&encode_rec(&rec).unwrap()).unwrap();
+        assert_eq!(
+            back.hashes.foreign_capacity(),
+            back.hashes.foreign_iter().count(),
+            "the decoded row holds no room beyond its entries"
+        );
+        assert_eq!(
+            back.hashes.get_named("blake3"),
+            Some(&[7u8; 32][..]),
+            "and the name it was carried under is still there"
+        );
+    }
+
     /// Byte offset of the first occurrence of `needle` in `hay`.
     fn find(hay: &[u8], needle: &[u8]) -> usize {
         hay.windows(needle.len())
@@ -259,7 +285,7 @@ mod tests {
 
     #[test]
     fn codec_preserves_unknown_algorithms() {
-        // Forward compat: a future `--hash blake3` row must survive a
+        // Forward compat: a future `--hash-all-of blake3` row must survive a
         // roundtrip through this binary, which never drops opaque entries.
         let mut rec = FileRec {
             kind: "file".into(),

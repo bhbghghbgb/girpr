@@ -1,5 +1,6 @@
 //! The `list` command: walking a root and inventorying every bundle under it.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::bundle::Bundle;
@@ -61,13 +62,22 @@ pub struct Unreadable {
 /// top level first. The spec does not promise an order; this one is stable and
 /// decides the summary's `first` and `last`.
 ///
+/// **The walk stays inside the root it was given.** Before descending, each
+/// child directory is resolved against the canonical root: a directory that
+/// resolves outside it (through a symlink or junction) is skipped, and one that
+/// resolves to a directory already visited is skipped too, so a cycle cannot
+/// loop the walk. A root that is itself a link still works — its canonical form
+/// is the target that bounds the walk.
+///
 /// **A bundle that fails to open is not an error, and it is not dropped.**
 /// `list` is an index, and a half-written capture next to a good one is
 /// exactly what an operator wants to see listed — so a directory that is not a
-/// bundle at all is stepped over silently. A directory that *is* a bundle this
-/// build refuses — an older schema, which is a permanent condition with a
+/// bundle at all is stepped over silently, and the walk descends through it so
+/// a bundle nested beneath one is still found. A directory that *is* a bundle
+/// this build refuses — an older schema, which is a permanent condition with a
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
-/// operator's inventory is complete.
+/// operator's inventory is complete; it is a boundary, so the walk does not
+/// descend into it.
 ///
 /// **A walk that cannot read a directory or a manifest is an error, not a
 /// shorter inventory.** The `unreadable` list can name a bundle that does not
@@ -98,38 +108,64 @@ pub fn list_with(
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
+    let canonical_root =
+        std::fs::canonicalize(root).map_err(|e| format!("cannot read {}: {e}", root.display()))?;
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    visited.insert(canonical_root.clone());
     let mut found = Vec::new();
     let mut unreadable = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let manifest = dir.join("MANIFEST.json");
         let probe = super::bundle::probe_manifest(&manifest, &mut read_manifest)?;
-        if !matches!(probe, super::bundle::ManifestProbe::Missing) {
-            match Bundle::open(&dir) {
-                Ok(b) => found.push(listed_of(root, &b)),
-                Err(e) => {
-                    // A directory that is not a bundle at all is stepped over;
-                    // one that is a bundle this build refuses is named.
-                    if matches!(probe, super::bundle::ManifestProbe::Version(_)) {
+        match probe {
+            // No manifest, or a manifest that is not a bundle this build can
+            // read: step over it silently and keep descending, so a bundle
+            // nested under a half-written directory is still found.
+            super::bundle::ManifestProbe::Missing | super::bundle::ManifestProbe::NotABundle(_) => {
+            }
+            // A manifest declaring this schema version is a real bundle
+            // boundary: list it, or name it as unreadable if it does not open,
+            // and do not descend into it. A bundle does not contain a bundle.
+            super::bundle::ManifestProbe::Version(_) => {
+                match Bundle::open(&dir) {
+                    Ok(b) => found.push(listed_of(root, &b)),
+                    Err(e) => {
                         unreadable.push(Unreadable {
                             path: crate::emit::index::rel(root, &dir),
                             reason: e.clone(),
                         });
+                        tracing::warn!(
+                            dir = %dir.display(),
+                            error = %e,
+                            "a directory under --root looks like a bundle but does not open; skipped"
+                        );
                     }
-                    tracing::warn!(
-                        dir = %dir.display(),
-                        error = %e,
-                        "a directory under --root looks like a bundle but does not open; skipped"
-                    );
                 }
+                continue;
             }
-            // A bundle does not contain another bundle.
-            continue;
         }
         // Sorted so the walk is the same on every filesystem; reversed because
-        // the stack pops from the back.
+        // the stack pops from the back. A child is only queued when its canonical
+        // path is inside the canonical root and has not been seen: a link back
+        // up the tree would loop, and a link out of the root would put bytes
+        // the root does not own into the inventory.
         let subs = child_dirs(&dir, |d| read(d))?;
-        stack.extend(subs.into_iter().rev());
+        let mut next = Vec::new();
+        for sub in subs {
+            let Some(canonical) = canonical_under_root(&canonical_root, &sub) else {
+                tracing::warn!(
+                    dir = %sub.display(),
+                    "a directory under --root resolves outside the root through a link; skipped"
+                );
+                continue;
+            };
+            if !visited.insert(canonical) {
+                continue;
+            }
+            next.push(sub);
+        }
+        stack.extend(next.into_iter().rev());
     }
     found.sort_by(|a, b| a.path.cmp(&b.path));
     unreadable.sort_by(|a, b| a.path.cmp(&b.path));
@@ -145,9 +181,12 @@ pub fn list_with(
 /// The reader is injected so the entry-error arm can be exercised without
 /// platform-specific permissions: a test hands over a synthetic `Err` for one
 /// entry, which is otherwise only reachable when a share disconnects between
-/// `read_dir` and the stat. `metadata` follows symlinks, as the `is_dir` it
-/// replaces did, and an entry that cannot be stat'ed is an error rather than a
-/// file: losing it would be the same silent omission this walk is fixing.
+/// `read_dir` and the stat. `metadata` follows symlinks to decide which entries
+/// are directories, and an entry that cannot be stat'ed is an error rather than
+/// a file: losing it would be the same silent omission this walk is fixing.
+/// [`list_with`] resolves each returned directory against the canonical root
+/// before descending, so a link that leaves the root or returns to a directory
+/// already visited is not walked.
 pub fn child_dirs(
     dir: &Path,
     read: impl FnOnce(&Path) -> std::io::Result<Vec<std::io::Result<PathBuf>>>,
@@ -165,6 +204,19 @@ pub fn child_dirs(
     }
     subs.sort();
     Ok(subs)
+}
+
+/// The canonical form of `path`, but only when it resolves inside
+/// `canonical_root`; `None` when it resolves outside the root or cannot be
+/// resolved at all (a broken link). Comparing canonical paths is what makes a
+/// symlinked root legitimate while a link that escapes it is rejected.
+///
+/// Shared with [`super::bundle`] so the one-shot manifest read applies the same
+/// rule as the walkers: a file reached through a link out of the root is not
+/// owned by that root.
+pub(super) fn canonical_under_root(canonical_root: &Path, path: &Path) -> Option<PathBuf> {
+    let canonical = std::fs::canonicalize(path).ok()?;
+    canonical.starts_with(canonical_root).then_some(canonical)
 }
 
 /// One `Listed` row from an opened bundle.

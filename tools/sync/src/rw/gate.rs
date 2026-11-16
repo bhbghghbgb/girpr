@@ -32,7 +32,9 @@ impl Gate {
     fn acquire(&self) {
         let mut n = self.lock();
         while *n >= self.limit {
-            n = self.freed.wait(n).expect("rw gate mutex is never poisoned");
+            // The critical section holds no user code, so a poisoned guard still
+            // contains a valid count; recover it rather than fail the run.
+            n = self.freed.wait(n).unwrap_or_else(|e| e.into_inner());
         }
         *n += 1;
     }
@@ -63,9 +65,9 @@ impl Gate {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, usize> {
-        self.in_flight
-            .lock()
-            .expect("rw gate mutex is never poisoned")
+        // The counter is the whole critical section: no user code can run while
+        // it is held, so a poisoned guard is still a valid count.
+        self.in_flight.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

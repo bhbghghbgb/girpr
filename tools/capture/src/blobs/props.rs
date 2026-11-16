@@ -350,15 +350,17 @@ impl BlobProps {
         })?;
         let mut reader = std::io::BufReader::new(file);
         let mut head = [0_u8; 4];
-        use std::io::Read as _;
-        let n = reader
-            .read(&mut head)
+        // A single `read` may return fewer than four bytes without being at EOF,
+        // which would make a valid frame look unframed. Fill the magic instead;
+        // `n` is then the real byte count whether the file ended early or not.
+        let n = hash::read_upto(&mut reader, &mut head)
             .map_err(|e| ApiError::shape("chunk", format!("{what}: reading the magic: {e}")))?;
-        if !hash::is_zstd(&head[..n]) {
+        if n < head.len() || !hash::is_zstd(&head) {
             // **A fetched body, not a failed fetch.** The rename has already
             // published the bytes; refusing here would leave the file on disk
             // while the index said "not stored". The row carries the digests the
-            // write computed and the real reason.
+            // write computed and the real reason — with the number of bytes that
+            // actually arrived when the magic itself is short.
             let why = Self::not_a_frame(&what, &head[..n]).to_string();
             return Ok(Self::undecodable_from_digests(compressed, chunk, why));
         }
@@ -590,12 +592,16 @@ impl BlobProps {
                 &self.fetch_error,
                 &self.decode_error,
                 self.verified,
+                self.stored_path.is_none(),
             ) {
-                (Some(e), _, _, _) => format!("{}: measurement failed: {e}", self.chunk_id),
-                (_, Some(e), _, _) => format!("{}: fetch failed: {}", self.chunk_id, e.detail),
-                (_, _, Some(e), _) => format!("{}: {e}", self.chunk_id),
-                (_, _, _, None) => format!("{}: never measured", self.chunk_id),
-                (_, _, _, Some(v)) => format!("{}: {v}", self.chunk_id),
+                (Some(e), _, _, _, _) => format!("{}: measurement failed: {e}", self.chunk_id),
+                (_, Some(e), _, _, _) => format!("{}: fetch failed: {}", self.chunk_id, e.detail),
+                (_, _, Some(e), _, _) => format!("{}: {e}", self.chunk_id),
+                (_, _, _, None, _) => format!("{}: never measured", self.chunk_id),
+                // Green checks with no published blob are not a verified row:
+                // the thing to name is that no bytes were stored at all.
+                (_, _, _, Some(_), true) => format!("{}: no stored blob", self.chunk_id),
+                (_, _, _, Some(v), false) => format!("{}: {v}", self.chunk_id),
             },
         )
     }

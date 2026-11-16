@@ -75,6 +75,10 @@ pub struct Cli {
 pub struct CommonArgs {
     /// Hash algorithm; repeatable (md5, sha256). "none" disables hashing entirely.
     ///
+    /// **One algorithm per occurrence**: `--hash-all-of md5 --hash-all-of sha256`
+    /// names two. A flag that names two values at once is refused before the run
+    /// starts.
+    ///
     /// **Every** algorithm named here must be available on both sides of a pair that
     /// size+mtime cannot settle. A folder backfills one it lacks; a record has no
     /// filesystem to read from, so a record that lacks one is an error naming the
@@ -89,9 +93,12 @@ pub struct CommonArgs {
     pub hash_all_of: Vec<String>,
     /// As `--hash-all-of`, but only **one** of the named algorithms is required.
     ///
+    /// **One algorithm per occurrence**, as above, so two of them are written
+    /// `--hash-any-of sha256 --hash-any-of md5`.
+    ///
     /// The run picks which, per pair: cheapest first — one both sides already hold
     /// costs nothing, one costs a read, two cost two — and within a tier, the order
-    /// given here. So `--hash-any-of sha256 md5` prefers sha256.
+    /// given here, so the example above prefers sha256.
     ///
     /// Use it when a side holds only some of what you would otherwise demand, which
     /// is the common case for a record written by an older run: any-of then reads
@@ -190,6 +197,42 @@ pub struct CommonArgs {
     /// Back up and rebuild the cache instead of trusting it.
     #[arg(long, default_value_t = false)]
     pub ignore_cache: bool,
+    /// Do not copy the cache aside: no backup, and no dst snapshot.
+    ///
+    /// A backup is a **recovery aid**, not a correctness mechanism. The live
+    /// cache is authoritative, and a backup or an `old-*` snapshot is never
+    /// read back automatically, so skipping the copies changes what a run
+    /// *leaves behind* — never what it answers.
+    ///
+    /// `--ignore-cache` still removes the caches; only the copies are skipped.
+    /// That combination throws the cache away with no copy of it, so it is the
+    /// one to be deliberate about.
+    #[arg(long, default_value_t = false)]
+    pub no_backup: bool,
+    /// Keep N backups/snapshots with this prefix.
+    ///
+    /// The default keeps everything, so the copies accumulate until they are
+    /// removed by hand. This bounds that: the oldest siblings of each prefix
+    /// are removed until the folder holds N of them. A copy another run is
+    /// still using is left alone, and does not spend the removal budget
+    /// either, so a folder can hold more than N while one is there — and the
+    /// copy the bound takes in its place can be one of the newest. The copies
+    /// a folder keeps are therefore not necessarily its newest.
+    ///
+    /// The bound is about the **folder**, not about the run: it is applied
+    /// whether or not this run copied anything aside, and it covers both
+    /// prefixes in every folder the run touches — the `girpr-cache-backup-…`
+    /// copies and the `girpr-cache-old-…` snapshots beside that folder's
+    /// cache alike.
+    ///
+    /// A copy is published whole — its name appears only once the copy is
+    /// complete — and the copy this run made is never the one its own bound
+    /// removes.
+    ///
+    /// `N` must be at least 1 — keeping none of them is what `--no-backup` is
+    /// for. A value of 0 is refused with exit `3`.
+    #[arg(long, value_name = "N")]
+    pub backup_retain: Option<usize>,
     /// Write nothing at all: no cache created, no cache updated, no backup, and
     /// for a command that moves files, no filesystem change.
     ///

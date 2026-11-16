@@ -219,23 +219,25 @@ impl<'a> FullDecode<'a> {
 
 /// The `paths.tsv` sidecar: `path \t size \t md5 \t nchunks \t is_folder`.
 ///
-/// Header line, `\n` endings, one row per entry in decode order. Sorted by path
-/// so `diff` between two tags' sidecars reads as a diff rather than as a
-/// reordering — decode order is an implementation detail of the archive, and a
-/// reader comparing two versions is comparing *paths*.
+/// Header line, `\n` endings, one row per *entry*. Sorted by path so `diff`
+/// between two tags' sidecars reads as a diff rather than as a reordering —
+/// decode order is an implementation detail of the archive, and a reader
+/// comparing two versions is comparing *paths*. Duplicate paths produce one row
+/// per entry, in entry order within the shared path: the sidecar is a per-entry
+/// document, not a path index, so each row carries that entry's own size, md5,
+/// chunk count and folder flag.
 pub fn paths_tsv(entries: &[SophonChunkFile]) -> String {
     const HEADER: &str = "path\tsize\tmd5\tnchunks\tis_folder\n";
-    // Sorted references, no tuples: this built a `Vec<(String, i64, String,
-    // usize, bool)>` with two `String` clones per entry, sorted that, and only
-    // then rendered. Zero clones and one allocation to start with.
-    let mut paths: Vec<&str> = entries.iter().map(|e| e.file.as_str()).collect();
-    paths.sort_unstable();
-    let by_path: std::collections::HashMap<&str, &SophonChunkFile> =
-        entries.iter().map(|e| (e.file.as_str(), e)).collect();
-    let mut s = String::with_capacity(HEADER.len() + paths.len() * 96);
+    // One reference per entry, paired with its original index. Sorting by
+    // (path, index) keeps the path-sorted order for clean diffs while giving
+    // equal paths a stable, defined entry-order tie-break. Rendering straight
+    // from each entry (no path→entry map) means a duplicate never loses its own
+    // values to the last entry sharing that path. One allocation, no clones.
+    let mut ordered: Vec<(usize, &SophonChunkFile)> = entries.iter().enumerate().collect();
+    ordered.sort_by(|(i, a), (j, b)| a.file.cmp(&b.file).then_with(|| i.cmp(j)));
+    let mut s = String::with_capacity(HEADER.len() + ordered.len() * 96);
     s.push_str(HEADER);
-    for p in paths {
-        let e = by_path[p];
+    for (_, e) in ordered {
         use std::fmt::Write as _;
         let _ = write!(
             s,
@@ -593,6 +595,94 @@ mod tests {
     #[test]
     fn a_manifest_with_no_entries_still_produces_a_header() {
         assert_eq!(paths_tsv(&[]), "path\tsize\tmd5\tnchunks\tis_folder\n");
+    }
+
+    /// Two entries share one `file` path. The sidecar is a per-entry document,
+    /// so each row carries that entry's own values, in entry order within the
+    /// shared path rather than collapsing onto the last entry.
+    #[test]
+    fn duplicate_manifest_paths_emit_one_row_per_entry_with_its_own_values() {
+        let mut first = entry("GenshinImpact_Data/x.txt", 10, 1, false);
+        first.md5 = "md5-first".into();
+        let mut second = entry("GenshinImpact_Data/x.txt", 99, 3, true);
+        second.md5 = "md5-second".into();
+        let dupes = vec![first, second];
+        let rows = paths_tsv(&dupes);
+        let lines: Vec<&str> = rows.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "GenshinImpact_Data/x.txt\t10\tmd5-first\t1\tfalse",
+                "GenshinImpact_Data/x.txt\t99\tmd5-second\t3\ttrue",
+            ]
+        );
+    }
+
+    /// Distinct paths still sort by path when duplicates are present, and the
+    /// duplicate pair stays together in entry order with each row's own values.
+    #[test]
+    fn duplicates_and_distinct_paths_sort_by_path_with_an_entry_order_tie_break() {
+        let mut first = entry("b.txt", 10, 1, false);
+        first.md5 = "md5-first".into();
+        let mut second = entry("b.txt", 99, 3, true);
+        second.md5 = "md5-second".into();
+        let entries = vec![
+            first,
+            entry("a.txt", 5, 1, false),
+            second,
+            entry("c.txt", 7, 2, false),
+        ];
+        let rows = paths_tsv(&entries);
+        let lines: Vec<&str> = rows.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "a.txt\t5\tmd5-a.txt\t1\tfalse",
+                "b.txt\t10\tmd5-first\t1\tfalse",
+                "b.txt\t99\tmd5-second\t3\ttrue",
+                "c.txt\t7\tmd5-c.txt\t2\tfalse",
+            ]
+        );
+    }
+
+    /// The sidecar depends only on the entries, not on how they were collected:
+    /// repeated calls are byte-identical, and reversing two equal-path entries
+    /// reverses their rows while distinct paths stay path-sorted either way.
+    #[test]
+    fn sidecar_rows_are_deterministic_across_input_order() {
+        let mut a = entry("dup.txt", 10, 1, false);
+        a.md5 = "md5-a".into();
+        let mut b = entry("dup.txt", 99, 3, true);
+        b.md5 = "md5-b".into();
+        let distinct = entry("aaa.txt", 5, 1, false);
+
+        let forward = vec![a.clone(), b.clone(), distinct.clone()];
+        let reversed = vec![b, a, distinct];
+
+        // Same input, same bytes.
+        assert_eq!(paths_tsv(&forward), paths_tsv(&forward));
+
+        let forward_rows = paths_tsv(&forward);
+        let reversed_rows = paths_tsv(&reversed);
+        let f: Vec<&str> = forward_rows.lines().skip(1).collect();
+        let r: Vec<&str> = reversed_rows.lines().skip(1).collect();
+        // The distinct path leads both outputs; the equal-path rows follow
+        // entry order in each input.
+        assert_eq!(f[0], r[0], "distinct paths sort by path either way");
+        assert_eq!(
+            &f[1..],
+            &[
+                "dup.txt\t10\tmd5-a\t1\tfalse",
+                "dup.txt\t99\tmd5-b\t3\ttrue",
+            ]
+        );
+        assert_eq!(
+            &r[1..],
+            &[
+                "dup.txt\t99\tmd5-b\t3\ttrue",
+                "dup.txt\t10\tmd5-a\t1\tfalse",
+            ]
+        );
     }
 
     /// `--manifest-detail paths-only`: the archive, the sidecar and the meta

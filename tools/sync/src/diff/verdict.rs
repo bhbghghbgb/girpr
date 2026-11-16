@@ -133,9 +133,9 @@ impl Verdict {
 ///
 /// **Canonical order, not the user's flag order**, and that is the one deliberate
 /// change to what a run prints. `AlgoSet` has no order of its own, so
-/// `--hash-all-of sha256 md5` now reports `digest-differs:md5+sha256` where it used
-/// to report `digest-differs:sha256+md5`. The tag is now a function of *the
-/// disagreement* rather than of *how two flags were ordered*, which is what a
+/// `--hash-all-of sha256 --hash-all-of md5` now reports `digest-differs:md5+sha256`
+/// where it used to report `digest-differs:sha256+md5`. The tag is now a function of
+/// *the disagreement* rather than of *how two flags were ordered*, which is what a
 /// parser wants: `md5+sha256` means the same thing whichever way round the user
 /// typed them.
 fn join(algos: AlgoSet) -> String {

@@ -438,8 +438,6 @@ pub struct ErrorProbes<'a> {
     pub manifest_prefix: &'a str,
     /// `…/chunks/<series>/<build_id>` for the new build.
     pub chunk_prefix: &'a str,
-    /// The old build's manifest prefix.
-    pub other_manifest_prefix: &'a str,
     /// The old build's chunk prefix.
     pub other_chunk_prefix: &'a str,
     /// A chunk id the **new build declares and the old one does not**.

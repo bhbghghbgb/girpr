@@ -125,12 +125,13 @@ impl Bundle {
             Blob {
                 chunk: b.clone(),
                 raw: br,
+                // A chunk the old file already holds is REUSEd, not fetched:
+                // a real capture never puts it in `patch_fetch`.
                 refs: vec![
                     reference(OLD_TAG, DLL, Set::MaterializeOld, 64),
                     reference(NEW_TAG, DLL, Set::MaterializeNew, 64),
-                    reference(NEW_TAG, DLL, Set::PatchFetch, 64),
                 ],
-                sets: vec![Set::MaterializeOld, Set::MaterializeNew, Set::PatchFetch],
+                sets: vec![Set::MaterializeOld, Set::MaterializeNew],
             },
             Blob {
                 chunk: c.clone(),
@@ -169,14 +170,11 @@ impl Bundle {
             std::fs::write(&p, &b.raw).expect("blob");
             let mut props = BlobProps::measure(&b.raw, &b.chunk).expect("measure");
             props.set_stored(rel);
-            entries.push((
-                IndexedBlob {
-                    props,
-                    referenced_by: b.refs.clone(),
-                    sets: b.sets.clone(),
-                },
-                b.sets.clone(),
-            ));
+            entries.push(IndexedBlob {
+                props,
+                referenced_by: b.refs.clone(),
+                sets: b.sets.clone(),
+            });
         }
         let index = ChunkIndex::build(entries);
         write_json(&root.join("chunks/index.json"), &index);
@@ -215,7 +213,13 @@ impl Bundle {
                 file_tag: OLD_TAG.into(),
             }),
             chunk_id: c.id.clone(),
-            url: None,
+            // A capture always records the URL it would download a FETCH from;
+            // the shared chunks are REUSEd and need none.
+            url: if reuse_from.is_none() {
+                Some(format!("https://cdn.test/chunks/{}", c.id))
+            } else {
+                None
+            },
             compressed_size: c.compressed_size,
             uncompressed_size: c.uncompressed_size,
             uncompressed_md5: c.uncompressed_md5.clone(),
@@ -979,6 +983,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     // The rebuild must agree with what `materialize::rebuild` says, not with
     // itself: a second implementation of the same wrong thing is not a check.
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
+    let map: PatchMap = read_json(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
     let direct = materialize::rebuild(
         &materialize::ChunksByFile::build(&index),
         &gircap::assemble::ChunkSource::from_index(
@@ -990,6 +995,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
         CAPTURE,
         DLL,
         Set::MaterializeOld,
+        map.old.as_ref().expect("an old side").size,
     )
     .expect("rebuilds");
     assert_eq!(&direct.bytes, o);
