@@ -29,7 +29,11 @@ impl Budget {
         }
     }
 
-    /// A hard ceiling on `Σ total_cost`.
+    /// A hard ceiling on the sum of the per-path budget charges.
+    ///
+    /// See [`crate::select::SizedCandidate::budget_cost`] for the charge of each
+    /// path state: `total_cost` for a common path, compressed download bytes for
+    /// an added one, old size for a removed one.
     pub const fn capped(limit: u64) -> Self {
         Budget {
             limit: Some(limit),

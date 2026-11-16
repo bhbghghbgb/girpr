@@ -595,9 +595,19 @@ two spellings is a silent change of which file is admitted.
 
 ### Budget
 
-`--max-download-bytes N` is a hard ceiling on `Σ total_cost` over admitted
-files. Admission is **smallest-first**: files are sorted by `total_cost` asc and
-taken until the budget is exhausted; the rest are recorded as
+`--max-download-bytes N` is a hard ceiling on the sum of the **budget charge**
+over admitted files. The charge depends on the path's state:
+
+- a **common** path (identical / changed) charges `total_cost` — the compressed
+  bytes of both sides, because the old file has to be materialized in full for
+  the fixture to be real;
+- an **`added`** path charges the compressed bytes its chunks will download —
+  the whole new file has to be fetched, so the declared uncompressed size is not
+  the number that matters;
+- a **`removed`** path charges its old size — the bytes it occupies in `game/`.
+
+Admission is **smallest-first** by that charge: files are sorted by it ascending
+and taken until the budget is exhausted; the rest are recorded as
 `status="over_budget"`. A single file that cannot fit is reported, not silently
 swallowed — and because the run's own assertions decide the exit code, a
 deliberate exclusion is a recorded status, not a failure.

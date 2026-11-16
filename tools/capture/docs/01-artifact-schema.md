@@ -728,9 +728,10 @@ and the picker's order is not the scorer's:
   the tie-break of field (`game` first), then `moved` descending, then `reused`
   descending, then `path`. Rows are listed in this order.
 - `admission_rank` is the **selection rank**: where this path sits in the pool
-  the picker actually walks. That pool adds the one-sided `added`/`removed` rows
-  (charged by their own size) and breaks a `total_cost` tie by field and then
-  `path` — it does not consult `moved` or `reused`. So for equal `total_cost` the
+  the picker actually walks. That pool adds the one-sided `added`/`removed` rows,
+  charged their compressed download bytes and old size respectively, and breaks
+  a `total_cost` tie by field and then `path` — it does not consult `moved` or
+  `reused`. So for equal `total_cost` the
   two ranks can disagree, and `admission_rank` is the one that answers "why was
   this picked?". A path that `by_cost` scores but the pool excludes keeps its
   scoring `rank` and carries a `null` `admission_rank`.
