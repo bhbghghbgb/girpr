@@ -1,7 +1,7 @@
 //! Assembling a file side from chunks, and the patch flow (REUSE / FETCH).
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 use crate::blobs::Sources;
 use crate::blobs::chunks::FilePair;
@@ -299,17 +299,17 @@ fn patch_flow(
     // lookup rather than a scan per chunk. `or_insert` keeps the *first* one:
     // two chunks of the same file with the same content are interchangeable,
     // and taking the earliest keeps the choice deterministic.
-    let mut old_by_identity: BTreeMap<(String, i64), &crate::manifest::proto::SophonChunk> =
-        BTreeMap::new();
+    let mut old_by_identity: HashMap<(&str, i64), &crate::manifest::proto::SophonChunk> =
+        HashMap::new();
     for c in &old_entry.entry.chunks {
         old_by_identity
-            .entry((c.uncompressed_md5.clone(), c.uncompressed_size))
+            .entry((c.uncompressed_md5.as_str(), c.uncompressed_size))
             .or_insert(c);
     }
 
     for (i, c) in new_entry.chunks.iter().enumerate() {
         let target = Range::at(c.offset, c.uncompressed_size);
-        let key = (c.uncompressed_md5.clone(), c.uncompressed_size);
+        let key = (c.uncompressed_md5.as_str(), c.uncompressed_size);
 
         // Each arm yields (decision, source_range, note, body): the bytes to
         // place at `target`. A REUSE body borrows the old file's verified
