@@ -12,7 +12,7 @@ See `ORCHESTRATION.md` for the transition rules.
 
 | ID | Title | Status | Commits | Notes |
 |---|---|---|---|---|
-| P0-01 | Capture/close-out characterization tests | todo | | |
+| P0-01 | Capture/close-out characterization tests | in_progress | | |
 | P0-02 | Data-edge and bridge characterization tests | todo | | |
 | P0-03 | Verify-surface characterization tests | todo | | |
 | P1-01 | Refuse identical resolved tags (A1) | todo | | |
