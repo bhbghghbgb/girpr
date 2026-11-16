@@ -576,16 +576,19 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
     for tag in [&bundle.old_tag, &bundle.new_tag] {
         let body: serde_json::Value =
             serde_json::from_slice(&bundle.recorded_build_body(tag)).expect("body");
+        let build = body["data"]["build_id"]
+            .as_str()
+            .expect("build_id")
+            .to_string();
         for m in body["data"]["manifests"].as_array().expect("[]") {
             let id = m["manifest"]["id"].as_str().expect("id");
-            let (got_tag, field, build, carried) = bridge
-                .manifest_resolution(id)
-                .unwrap_or_else(|| panic!("id {id} is not indexed"));
+            let (got_tag, field, got_build, carried) = bridge
+                .manifest_resolution_for(&build, id)
+                .unwrap_or_else(|| panic!("{build}/{id} is not indexed"));
             assert_eq!(got_tag, *tag, "the tag decides which archive");
             assert_eq!(field, m["matching_field"].as_str().expect("field"));
             assert_eq!(
-                build,
-                body["data"]["build_id"].as_str().expect("build_id"),
+                got_build, build,
                 "the declaring build is the one whose body declared it"
             );
             assert_eq!(
@@ -634,29 +637,69 @@ async fn a_manifest_id_resolves_to_the_field_archive_of_its_own_build() {
     );
 }
 
-/// Both `getBuild` bodies declare the same `game` id. `Served::load` keys its
-/// index by id alone and rewrites the old tag first, so the new build's entry
-/// overwrites the old one: the id resolves to the newer build's tag and field
-/// archive. This pins today's lossy behavior — the older declaration is gone
-/// from the index entirely.
+/// Both `getBuild` bodies declare the same `game` id. Because the index is
+/// keyed by `(build_id, id)`, neither declaration overwrites the other: each
+/// build resolves its own tag/field/archive and each route serves its own
+/// bytes. A build that never declared the id is refused rather than served the
+/// other build's archive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn currently_a_game_id_shared_by_both_builds_resolves_to_the_newer_one() {
+async fn a_game_id_shared_by_both_builds_resolves_and_serves_per_build() {
     let mini = MiniBundle::with_shared_game_id();
     let bridge = Bridge::start(Bundle::open(mini.dir())).await;
+    let o = bridge.origins().clone();
 
     assert_eq!(
-        bridge.manifest_resolution(SHARED_GAME_MANIFEST),
+        bridge.manifest_resolution_for(OLD_BUILD, SHARED_GAME_MANIFEST),
+        Some((
+            OLD_TAG.to_string(),
+            "game".to_string(),
+            OLD_BUILD.to_string(),
+            true,
+        )),
+        "the old build keeps its own declaration"
+    );
+    assert_eq!(
+        bridge.manifest_resolution_for(NEW_BUILD, SHARED_GAME_MANIFEST),
         Some((
             NEW_TAG.to_string(),
             "game".to_string(),
             NEW_BUILD.to_string(),
             true,
         )),
-        "the new build is rewritten last and wins the id"
+        "the new build keeps its own declaration too"
     );
     let mut ids = bridge.declared_manifest_ids();
     ids.retain(|id| id == SHARED_GAME_MANIFEST);
-    assert_eq!(ids.len(), 1, "one id, not one per build");
+    assert_eq!(ids.len(), 1, "the shared id is listed once, not twice");
+
+    let url = |build: &str| {
+        format!(
+            "{}/client_app/sophon/manifests/cxhpq4g4rgg0/{build}/{SHARED_GAME_MANIFEST}",
+            o.manifest_origin
+        )
+    };
+    let (old_status, _, old_body) = get(&url(OLD_BUILD)).await;
+    let (new_status, _, new_body) = get(&url(NEW_BUILD)).await;
+    assert_eq!(old_status, 200);
+    assert_eq!(new_status, 200);
+    assert_eq!(old_body, zstd_bytes(b"the old build's game manifest"));
+    assert_eq!(new_body, zstd_bytes(b"the new build's game manifest"));
+    assert_ne!(
+        old_body, new_body,
+        "each build serves the archive it declared"
+    );
+
+    // A build that declared no such id gets the recorded wrong-build 404, not
+    // either build's bytes.
+    let (status, ctype, body) = get(&url("OTHERbuild000001")).await;
+    assert_eq!(status, 404);
+    assert_eq!(ctype, "application/xml");
+    assert_ne!(body, old_body);
+    assert_ne!(body, new_body);
+    if let Some((rec_status, rec_ctype, _)) = bridge.recorded_shape("blob_wrong_build") {
+        assert_eq!(status, rec_status, "replayed status");
+        assert_eq!(ctype, rec_ctype, "replayed content-type");
+    }
 }
 
 /// The invariant `docs/06` §4.1 buys: **every blob request's `<build_id>` must

@@ -42,8 +42,11 @@
 //!
 //! **The `build_id` invariant (`docs/06` §4.1).** Every blob request carries
 //! `<build_id>` as the second-to-last path segment, and it must name the build
-//! that declared the id. That is enforced strictly for manifests (the map is
-//! built while rewriting, `docs/06` §4.2). For chunks it is enforced as "the
+//! that declared the id. That is enforced strictly for manifests: the index is
+//! keyed by `(build_id, id)` as it is built while rewriting (`docs/06` §4.2),
+//! so two builds declaring the same id keep separate entries and a request
+//! under a build that did not declare it is refused. For chunks it is enforced
+//! as "the
 //! latest build's id, or `blob_wrong_build`", because that is every request
 //! `girpr` can make — chunk URLs come from the *latest* build's
 //! `chunk_download.url_prefix` (`repair::manifest::fetch_latest`), and the
@@ -242,7 +245,9 @@ pub struct Origins {
 /// over `manifests[]` is where every id in the bundle passes through, and a
 /// filesystem scan over `manifests/*/*.meta.json` would answer a different
 /// question — "is this archive in the bundle" rather than "did *this build*
-/// declare it", which is exactly the `build_id` distinction.
+/// declare it", which is exactly the `build_id` distinction. Entries are keyed
+/// by `(build_id, id)`: two builds may declare the same id, and keying by id
+/// alone would let the second overwrite the first's tag, field and archive.
 #[derive(Clone, Debug)]
 struct ManifestEntry {
     id: String,
@@ -267,7 +272,10 @@ struct Served {
     bundle: Bundle,
     /// Rewritten `getBuild` bodies, keyed by the tag they answer for.
     builds: HashMap<String, Vec<u8>>,
-    manifest_index: HashMap<String, ManifestEntry>,
+    /// Manifest declarations keyed by `(build_id, id)`. Two builds may declare
+    /// the same id; keying by id alone would let the second overwrite the
+    /// first's tag, field and archive.
+    manifest_index: HashMap<(String, String), ManifestEntry>,
     /// `api/error_shapes.json`, when the bundle has one.
     shapes: Option<HashMap<String, Shape>>,
     /// `true` when the bundle predates the file and the not-found shapes are
@@ -442,8 +450,14 @@ impl Bridge {
         self.served.builds.get(tag).cloned()
     }
 
-    /// Where a manifest id resolves: `(tag, field, declaring build_id)`, and
-    /// whether the bundle actually carries that field's archive.
+    /// Where a manifest id declared by `build_id` resolves:
+    /// `(tag, field, declaring build_id)`, and whether the bundle actually
+    /// carries that field's archive.
+    ///
+    /// The key is `(build_id, id)`: both builds may declare the same id, so a
+    /// bare id cannot name a single declaration. A request always knows the
+    /// build it is asking under (it is the second-to-last URL segment), so
+    /// callers key by both.
     ///
     /// The last element is the `docs/06` §4.5 fact stated as data: a `getBuild`
     /// body declares five manifest entries and the bundle stores two of them,
@@ -453,21 +467,35 @@ impl Bridge {
     /// Those are the *bundle's* counts, not a run's: a run selects two of the
     /// five per build (`game` and `en-us`) and fetches **four** archives per
     /// run, the latest build's two and the local build's two.
-    pub fn manifest_resolution(&self, id: &str) -> Option<(String, String, String, bool)> {
-        self.served.manifest_index.get(id).map(|e| {
-            (
-                e.tag.clone(),
-                e.field.clone(),
-                e.build_id.clone(),
-                e.archive.is_some(),
-            )
-        })
+    pub fn manifest_resolution_for(
+        &self,
+        build_id: &str,
+        id: &str,
+    ) -> Option<(String, String, String, bool)> {
+        self.served
+            .manifest_index
+            .get(&(build_id.to_string(), id.to_string()))
+            .map(|e| {
+                (
+                    e.tag.clone(),
+                    e.field.clone(),
+                    e.build_id.clone(),
+                    e.archive.is_some(),
+                )
+            })
     }
 
-    /// Every manifest id the served `getBuild` bodies declare.
+    /// Every manifest id the served `getBuild` bodies declare, deduplicated:
+    /// an id both builds declare is still one id in this list.
     pub fn declared_manifest_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.served.manifest_index.keys().cloned().collect();
+        let mut ids: Vec<String> = self
+            .served
+            .manifest_index
+            .keys()
+            .map(|(_, id)| id.clone())
+            .collect();
         ids.sort();
+        ids.dedup();
         ids
     }
 }
@@ -485,7 +513,7 @@ impl Drop for Bridge {
 impl Served {
     fn load(bundle: Bundle, manifest_origin: &str, chunk_origin: &str) -> Self {
         let mut builds = HashMap::new();
-        let mut manifest_index: HashMap<String, ManifestEntry> = HashMap::new();
+        let mut manifest_index: HashMap<(String, String), ManifestEntry> = HashMap::new();
 
         // The rewrite loop, over every tag the bundle recorded.
         for tag in [&bundle.old_tag, &bundle.new_tag] {
@@ -501,8 +529,9 @@ impl Served {
                 .unwrap_or_else(|| panic!("api/getBuild.{tag}.json declares no manifests"));
 
             // The same loop does both jobs `docs/06` §4.2 asks for: rewrite the
-            // prefix, and index the id. Every id in the bundle passes through
-            // here exactly once.
+            // prefix, and index the id under the build that declared it. Two
+            // builds may declare the same id, so the key is (build_id, id) —
+            // keying by id alone would lose the earlier build's declaration.
             let mut declared: Vec<(String, String)> = Vec::with_capacity(manifests.len());
             for m in manifests.iter_mut() {
                 // ONLY these two fields change, and only their scheme and
@@ -535,7 +564,7 @@ impl Served {
 
             for (id, field) in declared {
                 manifest_index.insert(
-                    id.clone(),
+                    (build_id.clone(), id.clone()),
                     ManifestEntry {
                         id,
                         // One `getBuild` body declares five manifest entries
@@ -617,18 +646,31 @@ impl Served {
         let Some((build_id, id)) = last_two(path) else {
             return self.error_shape("blob_missing", path, None);
         };
-        match self.manifest_index.get(&id) {
-            None => self.error_shape("blob_missing", path, None),
-            // `docs/06` §4.1: the id exists, but not under *this* build. The
-            // same id under the other build's prefix is a 404 in production,
-            // and that is the whole reason the two namespaces are separate
-            // ports.
-            Some(e) if e.build_id != build_id => self.error_shape("blob_wrong_build", path, None),
+        match self.manifest_index.get(&(build_id, id.clone())) {
             Some(e) => match &e.archive {
                 Some(archive) => Response::octet_stream(manifest_bytes(archive)),
                 // Declared by the build, absent from the bundle.
                 None => self.error_shape("blob_missing", path, None),
             },
+            None => {
+                // `docs/06` §4.1: the id is declared by some build, but not by
+                // *this* one. The same id under the other build's prefix is a
+                // 404 in production — never that other build's bytes. An id
+                // no build declared is simply missing.
+                let declared_elsewhere = self
+                    .manifest_index
+                    .keys()
+                    .any(|(_, declared)| declared == &id);
+                self.error_shape(
+                    if declared_elsewhere {
+                        "blob_wrong_build"
+                    } else {
+                        "blob_missing"
+                    },
+                    path,
+                    None,
+                )
+            }
         }
     }
 
