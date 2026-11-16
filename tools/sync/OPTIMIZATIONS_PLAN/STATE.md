@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M46
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T06:20:30Z
+last_updated: 2026-11-16T06:37:04Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1043,8 +1043,22 @@ reviews:
     result: F193 fixed (7e12b998, the step-1 rename hook row claimed a placeholder that only a file claim leaves); F194 fixed (0f243257 gives the rule a reason that holds everywhere, since the old reason was a Windows fact); F198 kept (a3bff56e); 595 passed, 1 skipped; the rule itself was kept, because it enforces the precondition the split relies on and preserves every valid spec
     followups: [F276, F277]
   - batch: M46
-    status: pending
+    status: in_progress
     tasks: [F278, F279]
+    base: 496bd819
+    head: f92d995e
+    result: null
+    followups: []
+  - batch: M113
+    status: pending
+    tasks: [F431, F432]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M114
+    status: pending
+    tasks: [F433]
     base: null
     head: null
     result: null
@@ -2887,15 +2901,15 @@ followups:
   - id: F278
     source: F197
     description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
-    status: in_progress
+    status: pending_review
     batch: M46
-    commits: []
+    commits: [f217e1ca]
   - id: F279
     source: F197
     description: The start events name their phase by operation while the done and the progress events now name it by letter, so the family uses two spellings.
-    status: in_progress
+    status: pending_review
     batch: M46
-    commits: []
+    commits: [f92d995e]
   - id: F280
     source: F196
     description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
@@ -3821,6 +3835,31 @@ followups:
     status: pending
     batch: M109
     commits: []
+  - id: F431
+    source: F279
+    description: A record side's phase C writes no events at all, so the family is not symmetric across side kinds: a record side has a phase A with no events and no phase C events.
+    status: pending
+    batch: M113
+    commits: []
+  - id: F432
+    source: F279
+    description: The walk's events are logged before the phase they belong to, since phase A walks before it logs its own start, so a reader meets the walk before the phase that does it.
+    status: pending
+    batch: M113
+    commits: []
+  - id: F433
+    source: F279
+    description: The apply phase's progress events sit outside the event family and have no start or done siblings; they are named for what they do, so they are a second convention.
+    status: pending
+    batch: M114
+    commits: []
+  - id: F434
+    source: F279
+    description: The alternate-lookup counter is still returned but never logged.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F351, already scheduled in M75"
 ```
 
 ## Human checklist
@@ -3852,6 +3891,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M46 review checkpoint opened: F278 and F279
+  `in_progress` → `pending_review`, commits `f217e1ca`, `f92d995e`; review M46
+  `pending` → `in_progress`, base `496bd819`, head `f92d995e`.
 - 2026-11-16 — follow-up batch M46 started: F278 and F279 `pending` →
   `in_progress`; `active_batch: M45` → `M46`.
 - 2026-11-16 — review M45 `done`: F276 kept (14e67a4a), F277 fixed (de7cf1df,
