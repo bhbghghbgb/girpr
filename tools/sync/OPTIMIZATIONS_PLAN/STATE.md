@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M39
+active_batch: M40
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T00:56:49Z
 tasks:
@@ -2670,7 +2670,7 @@ followups:
   - id: F266
     source: F189
     description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
-    status: pending
+    status: in_progress
     batch: M40
     commits: []
   - id: F267
@@ -3502,6 +3502,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M40 started: F266 `pending` → `in_progress`;
+  `active_batch: M39` → `M40`.
 - 2026-11-16 — review M39 `done`: F263 kept (ec4566db), F264 kept (1c363bbb),
   F265 fixed (28a1a18b, c6663a65); follow-ups F394 and F395 appended with
   batches `M93` and `M88`, and F396 recorded as `skipped` as the same item as
