@@ -478,7 +478,7 @@ text.
 { "schema_version": 3,
   "cap_bytes": 512,                        // per-value cap this run used
   "total": 1,
-  "omitted": 0,                            // rows after the 4096-row cap
+  "omitted": 0,                            // refusals not retained (cap or duplicate key)
   "rejections": [
     { "source": "manifest 7.1.0/game entry 42 file",
       "value": "GenshinImpact_Data/Resources/aux.dll",
@@ -490,9 +490,11 @@ text.
 `rule` is a stable identifier — `path.device`, `path.windows-fold`,
 `chunk-id.shape`, `chunk-id.empty`, … — and is the thing to assert on. `value` is
 JSON-escaped and capped at `cap_bytes` (512); `truncated` says whether it was
-cut. `value` is text, never joined to a filesystem path. `omitted` counts
-refusals that happened after the 4096-row cap, so a hostile manifest cannot make
-the document unbounded and the loss is still visible.
+cut. `value` is text, never joined to a filesystem path. The store keeps the
+4096 smallest rows by `(source, value, rule)`; `omitted` counts refusals that
+were not retained — rows past the cap and repeats of a key already kept — so a
+hostile manifest cannot make the document unbounded, the sample is independent
+of fetch order, and the loss is still visible.
 
 A manifest refusal that stops the run before a bundle directory exists writes
 this document into the would-be bundle directory: the refusal is evidence even

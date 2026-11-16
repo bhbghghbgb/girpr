@@ -25,9 +25,9 @@
 //!   filename; a multi-megabyte "path" is an attack on the document, not
 //!   evidence worth keeping whole.
 //! - [`MAX_ROWS`] bounds the document. A manifest can hold 113 610 chunks, and a
-//!   hostile one can make every one of them invalid; the document records the
-//!   first [`MAX_ROWS`] and counts the rest in `omitted`, so the size is bounded
-//!   and the loss is still visible.
+//!   hostile one can make every one of them invalid; the document keeps the
+//!   [`MAX_ROWS`] smallest rows by key and counts the rest in `omitted`, so the
+//!   size is bounded, the sample is deterministic, and the loss is still visible.
 //!
 //! `serde_json` escapes the value on the way out: a NUL, a newline or a lone
 //! quote in a path cannot break the document. The value is text rather than a
@@ -78,10 +78,12 @@ pub struct RejectionsDocument {
     pub cap_bytes: u64,
     /// How many rows [`Self::rejections`] holds.
     pub total: u64,
-    /// How many refusals happened after [`MAX_ROWS`] was reached.
+    /// How many refusals were not retained: rows past the cap and repeats of a
+    /// key already kept.
     pub omitted: u64,
-    /// The rows, sorted by `(source, value, rule)` so two captures of one input
-    /// write the same document regardless of which manifest finished first.
+    /// The retained rows, in `(source, value, rule)` order — the smallest keys
+    /// seen, so two captures of one input write the same document regardless of
+    /// which manifest finished first.
     pub rejections: Vec<Rejection>,
 }
 
@@ -108,6 +110,12 @@ impl Rejections {
     /// `source` and `rule` are chosen by the call site and are trusted: they are
     /// the tool's own words. `value` is not, and is capped here rather than at
     /// every call site.
+    ///
+    /// The store keeps the [`MAX_ROWS`] smallest rows by `(source, value, rule)`
+    /// rather than the first arrivals, so the sample cannot depend on which
+    /// manifest finished first. A key already retained, or a key that is not
+    /// smaller than the largest retained one once the store is full, is counted
+    /// in `omitted` instead of being kept.
     pub fn record(
         &self,
         source: impl Into<String>,
@@ -122,18 +130,40 @@ impl Rejections {
             rule: rule.into(),
             truncated,
         };
-        if state.rows.len() < MAX_ROWS {
-            state.rows.push(row.clone());
-        } else {
-            state.omitted = state.omitted.saturating_add(1);
+        // The retention key is explicit: a future field on `Rejection` must not
+        // silently change which rows are kept.
+        let key = (&row.source, &row.value, &row.rule);
+        match state
+            .rows
+            .binary_search_by(|other| (&other.source, &other.value, &other.rule).cmp(&key))
+        {
+            Ok(_) => {
+                // Identical rows are interchangeable, so the one already kept
+                // stands for this refusal too.
+                state.omitted = state.omitted.saturating_add(1);
+            }
+            Err(pos) => {
+                if state.rows.len() < MAX_ROWS {
+                    // Room while not full: insert in key order.
+                    state.rows.insert(pos, row.clone());
+                } else if pos < state.rows.len() {
+                    // The new key sorts before the current largest, so drop
+                    // the largest to make room. `rows` stays key-sorted.
+                    state.rows.pop();
+                    state.omitted = state.omitted.saturating_add(1);
+                    state.rows.insert(pos, row.clone());
+                } else {
+                    state.omitted = state.omitted.saturating_add(1);
+                }
+            }
         }
         row
     }
 
-    /// Every row, in the order the document writes them.
+    /// Every retained row, in the order the document writes them.
     pub fn snapshot(&self) -> Vec<Rejection> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        sorted(&state)
+        state.rows.clone()
     }
 
     /// How many rows have been recorded, including rows the cap dropped.
@@ -156,20 +186,9 @@ impl Rejections {
             cap_bytes: MAX_RETAINED_VALUE_BYTES as u64,
             total: state.rows.len() as u64,
             omitted: state.omitted,
-            rejections: sorted(&state),
+            rejections: state.rows.clone(),
         }
     }
-}
-
-/// The rows in the one order both [`Rejections::snapshot`] and
-/// [`Rejections::document`] write them.
-///
-/// Sorting by the same key in one place is what lets two captures of one input
-/// agree regardless of which manifest finished first.
-fn sorted(state: &State) -> Vec<Rejection> {
-    let mut rows = state.rows.clone();
-    rows.sort_by(|a, b| (&a.source, &a.value, &a.rule).cmp(&(&b.source, &b.value, &b.rule)));
-    rows
 }
 
 /// Cut `value` at [`MAX_RETAINED_VALUE_BYTES`] without splitting a character.
