@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M40
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T01:22:59Z
+last_updated: 2026-11-16T01:41:48Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -847,10 +847,31 @@ reviews:
     result: F185 kept (f0cd71f7); F186 kept (a2bb2324); F187 kept (4c48b5cb); F188 kept (4d91eca7); F190 fixed (6c23cb4b corrects the two docs that still asserted the removed rule); F191 kept (4d91eca7); 594 passed without the feature and 609 with it, 1 skipped
     followups: [F263, F264, F265]
   - batch: M40
-    status: in_progress
+    status: done
     tasks: [F266]
     base: ee8a10a8
     head: a17b7270
+    result: F266 kept (a4740687, 4719ce4f, a17b7270); no fix or revert commits; 616 passed without the feature and 633 with it, 1 skipped; the reviewer mutated the remedy back to the space-joined spelling, made the planner ignore the request order and gave the argument two values, and saw each new pin fail; the grep found one surviving two-value spelling, which deliberately names the refused form
+    followups: [F400, F401, F402, F403, F404]
+  - batch: M95
+    status: pending
+    tasks: [F400, F401]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M96
+    status: pending
+    tasks: [F402, F404]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M97
+    status: pending
+    tasks: [F403]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M94
@@ -2677,9 +2698,10 @@ followups:
   - id: F266
     source: F189
     description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
-    status: pending_review
+    status: completed
     batch: M40
     commits: [a4740687, 4719ce4f, a17b7270]
+    note: review M40 kept; the reviewer confirmed the printed remedy parses with the crate's own parser, that the refusal is clap's own and not vacuous, and that one surviving two-value spelling deliberately names the refused form
   - id: F267
     source: F189
     description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
@@ -3497,6 +3519,36 @@ followups:
     batch: null
     commits: []
     note: "skipped: the trade-off is already recorded in the design notes"
+  - id: F400
+    source: F266
+    description: The design-notes section headed Two things that are one now holds five bolded paragraphs, so the heading understates its contents; it was already loose before this batch and the new spelling-rule paragraph adds one more.
+    status: pending
+    batch: M95
+    commits: []
+  - id: F401
+    source: F266
+    description: The new design-notes sentence names three places that spell the flags, the CLI's own help, the README and the remedy a coverage error prints, while the crate spells them in several source doc comments as well, so the enumeration reads narrower than the rule it states.
+    status: pending
+    batch: M95
+    commits: []
+  - id: F402
+    source: F266
+    description: The refusal pin covers the any-of flag only, while the all-of flag's two-value form is refused by the same clap shape and nothing pins it, and the pin asserts only that the message names the second algorithm rather than that the error is clap's unknown-argument kind.
+    status: pending
+    batch: M96
+    commits: []
+  - id: F403
+    source: F266
+    description: The coverage remedy prints the request in canonical order rather than the order the user typed, so the remedy's any-of line does not inherit the user's tie-break preference, and the new test's comment reads as if it did.
+    status: pending
+    batch: M97
+    commits: []
+  - id: F404
+    source: F266
+    description: The why-table's row label now reads hash-any-of md5 --hash-any-of sha256, record holds only md5, which is awkward for a label that is not a command.
+    status: pending
+    batch: M96
+    commits: []
 ```
 
 ## Human checklist
@@ -3528,6 +3580,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M40 `done`: F266 kept (a4740687, 4719ce4f, a17b7270); no fix
+  or revert commits; follow-ups F400–F404 appended with batches `M95`, `M96` and
+  `M97`, and F399 recorded as `skipped` because the trade-off is already
+  recorded in the design notes. F266 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M40 review checkpoint opened: F266 `in_progress` →
   `pending_review`, commits `a4740687`, `4719ce4f`, `a17b7270`; review M40
   `pending` → `in_progress`, base `ee8a10a8`, head `a17b7270`.
