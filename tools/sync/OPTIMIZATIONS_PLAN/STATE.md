@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M43
+active_batch: M44
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T04:48:45Z
 tasks:
@@ -2817,7 +2817,7 @@ followups:
   - id: F275
     source: F193
     description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
-    status: pending
+    status: in_progress
     batch: M44
     commits: []
   - id: F276
@@ -3740,6 +3740,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M44 started: F275 `pending` → `in_progress`;
+  `active_batch: M43` → `M44`.
 - 2026-11-16 — review M43 `done`: F273 kept (c582a5b5), F274 kept (df01aaf7); no
   fix or revert commits; follow-ups F419 and F420 appended with batch `M105`,
   and F418 recorded as `skipped` as not a defect. F273 and F274 `pending_review`
