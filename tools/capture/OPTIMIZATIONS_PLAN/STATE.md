@@ -45,7 +45,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P3-07 | Early A16 exit and larger digest buffer (C3, C4) | completed | 2db0cd0e 3b5a1e4f 02aff616 | |
 | P3-08 | Symlink containment and termination (C9) | completed | 635422a0 723ba9c9 1d8dab54 | |
 | P3-09 | One definition of A12 (C7) | completed | 6f288b25 d2fc7add b78e4c67 | |
-| P4-01 | One acceptable-state table (D1) | in_progress | | |
+| P4-01 | One acceptable-state table (D1) | pending_review | edbf8013 2ef89ac9 bd674692 | |
 | P4-02 | Remove remaining dead fields (D2) | todo | | |
 | P4-03 | Parse `getBuild` once (D3) | todo | | |
 | P4-04 | Allocation cleanups (C10, C11, C12) | todo | | |
