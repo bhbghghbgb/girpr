@@ -13,7 +13,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | ID | Title | Status | Commits | Notes |
 |---|---|---|---|---|
 | P0-01 | Capture/close-out characterization tests | pending_review | d1261aa6 310f28f9 | |
-| P0-02 | Data-edge and bridge characterization tests | todo | | |
+| P0-02 | Data-edge and bridge characterization tests | in_progress | | |
 | P0-03 | Verify-surface characterization tests | todo | | |
 | P1-01 | Refuse identical resolved tags (A1) | todo | | |
 | P1-02 | Carry encoding, not a `.gz` suffix (A2) | todo | | |
