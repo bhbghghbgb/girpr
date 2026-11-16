@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M46
+active_batch: M47
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T07:12:45Z
 tasks:
@@ -2929,19 +2929,19 @@ followups:
   - id: F280
     source: F196
     description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
-    status: pending
+    status: in_progress
     batch: M47
     commits: []
   - id: F281
     source: F196
     description: The helper that names the copy for a plan index indexes the plan's copy list and would panic on an out-of-range index, which cannot happen today, while a borrowing form would fail loudly instead.
-    status: pending
+    status: in_progress
     batch: M47
     commits: []
   - id: F282
     source: F196
     description: The new unit case hand-builds a plan whose copies are listed in alphabetical order, so it cannot tell the plan's order from the sorted order, and a fixture whose plan order was not alphabetical would make the pin sharper.
-    status: pending
+    status: in_progress
     batch: M47
     commits: []
   - id: F283
@@ -3933,6 +3933,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M47 started: F280, F281 and F282 `pending` →
+  `in_progress`; `active_batch: M46` → `M47`.
 - 2026-11-16 — review M46 `done`: F278 kept (f217e1ca), F279 kept (f92d995e); no
   fix or revert commits; follow-ups F435 and F436 appended with batches `M113`
   and `M115`, and F437 and F438 recorded as `skipped` as the same items as F431
