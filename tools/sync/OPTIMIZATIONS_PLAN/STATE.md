@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M44
+active_batch: M45
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T05:25:29Z
 tasks:
@@ -2838,13 +2838,13 @@ followups:
   - id: F276
     source: F194
     description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
-    status: pending
+    status: in_progress
     batch: M45
     commits: []
   - id: F277
     source: F194
     description: The relative-path check accepts shapes that were never spelled out, a Windows rooted path, a parent component and a trailing separator, and those name no copy and are therefore inert, so the check could name the shape it wants rather than only the ones it excludes.
-    status: pending
+    status: in_progress
     batch: M45
     commits: []
   - id: F278
@@ -3779,6 +3779,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M45 started: F276 and F277 `pending` →
+  `in_progress`; `active_batch: M44` → `M45`.
 - 2026-11-16 — review M44 `done`: F275 kept (819da84b, f6878407); no fix or revert
   commits; follow-ups F421–F424 appended with batches `M106` and `M107`.
   F275 `pending_review` → `completed`.
