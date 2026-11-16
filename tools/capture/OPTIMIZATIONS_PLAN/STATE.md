@@ -43,7 +43,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P3-05 | Avoid assembly copy-through (C6) | pending_review | a3b81a8e 9ca856c0 efc3c694 | |
 | P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | pending_review | 77ab4a58 3bfa3d46 602ef311 | |
 | P3-07 | Early A16 exit and larger digest buffer (C3, C4) | pending_review | 2db0cd0e 3b5a1e4f 02aff616 | |
-| P3-08 | Symlink containment and termination (C9) | in_progress | | |
+| P3-08 | Symlink containment and termination (C9) | pending_review | 635422a0 723ba9c9 1d8dab54 | |
 | P3-09 | One definition of A12 (C7) | todo | | |
 | P4-01 | One acceptable-state table (D1) | todo | | |
 | P4-02 | Remove remaining dead fields (D2) | todo | | |
