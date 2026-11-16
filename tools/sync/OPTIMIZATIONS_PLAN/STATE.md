@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M40
+active_batch: M41
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T01:41:48Z
 tasks:
@@ -2705,13 +2705,13 @@ followups:
   - id: F267
     source: F189
     description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
-    status: pending
+    status: in_progress
     batch: M41
     commits: []
   - id: F268
     source: F189
     description: The README update command names a placeholder where a real path would go, so it is prose rather than a runnable example, unlike the rest of the block it sits in.
-    status: pending
+    status: in_progress
     batch: M41
     commits: []
   - id: F269
@@ -3580,6 +3580,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M41 started: F267 and F268 `pending` →
+  `in_progress`; `active_batch: M40` → `M41`.
 - 2026-11-16 — review M40 `done`: F266 kept (a4740687, 4719ce4f, a17b7270); no fix
   or revert commits; follow-ups F400–F404 appended with batches `M95`, `M96` and
   `M97`, and F399 recorded as `skipped` because the trade-off is already
