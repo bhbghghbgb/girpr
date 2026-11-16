@@ -40,7 +40,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | completed | c4224d3e a2cfdfb6 | |
 | P3-02 | Bridge server correctness and locking (C8, E4-E6) | completed | 791f0b24 f6184c5a f8520b74 | |
 | P3-04 | Reuse retention per pair (C2) | pending_review | e46b6657 22939ee2 | |
-| P3-05 | Avoid assembly copy-through (C6) | todo | | |
+| P3-05 | Avoid assembly copy-through (C6) | in_progress | | |
 | P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | todo | | |
 | P3-07 | Early A16 exit and larger digest buffer (C3, C4) | todo | | |
 | P3-08 | Symlink containment and termination (C9) | todo | | |
