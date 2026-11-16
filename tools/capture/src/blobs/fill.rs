@@ -17,12 +17,12 @@ use crate::http::Fetcher;
 use std::sync::Arc;
 
 use super::chunks::Want;
-use super::{IndexedBlob, Set, Store};
+use super::{IndexedBlob, Store};
 
 /// What the store ended up holding.
 pub struct Filled {
-    /// One entry per chunk, with the roles it plays.
-    pub entries: Vec<(IndexedBlob, Vec<Set>)>,
+    /// One entry per chunk, with the roles it plays on the blob itself.
+    pub entries: Vec<IndexedBlob>,
     /// Fetches that failed, one entry per chunk, in `wants` order.
     ///
     /// **`wants` order, not completion order.** `fill` records each failure
@@ -77,6 +77,7 @@ pub async fn fill_or_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::blobs::chunks::Set;
     use crate::blobs::props::BlobProps;
     use crate::manifest::proto::SophonChunk;
 
@@ -111,7 +112,7 @@ mod tests {
             wants.len(),
             "one entry per distinct chunk, so a reader can see what was skipped"
         );
-        for ((blob, _roles), w) in entries.iter().zip(&wants) {
+        for (blob, w) in entries.iter().zip(&wants) {
             assert_eq!(blob.props.chunk_id, w.chunk.id);
             assert!(
                 blob.props.stored_path.is_none(),
@@ -132,7 +133,7 @@ mod tests {
         // big would this have been" has an answer from the manifests, and the
         // index should carry it rather than reporting a blob of unknown size.
         let entries = Store::plan_only(&[want("aaa")]);
-        let props: &BlobProps = &entries[0].0.props;
+        let props: &BlobProps = &entries[0].props;
         assert_eq!(props.uncompressed_size, 1_024);
         assert_eq!(props.md5_decompressed, "md5-aaa");
         assert!(

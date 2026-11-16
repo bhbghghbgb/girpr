@@ -518,14 +518,11 @@ mod tests {
                 std::fs::write(&path, raw).expect("blob");
                 let mut props = BlobProps::measure(raw, chunk).expect("measure");
                 props.set_stored(rel);
-                entries.push((
-                    IndexedBlob {
-                        props,
-                        referenced_by: refs.clone(),
-                        sets: sets.clone(),
-                    },
-                    sets.clone(),
-                ));
+                entries.push(IndexedBlob {
+                    props,
+                    referenced_by: refs.clone(),
+                    sets: sets.clone(),
+                });
             }
             Fixture {
                 index: ChunkIndex::build(entries),

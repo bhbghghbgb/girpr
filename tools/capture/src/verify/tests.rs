@@ -818,29 +818,26 @@ fn a_self_consistent_plan_fails_when_the_index_names_another_patch() {
     // The index describes a different patch for the same capture and path: one
     // blob, referenced at an offset, whose id is not the one the plan names.
     let indexed_id = "the-index-names-a-different-chunk";
-    let index = ChunkIndex::build(vec![(
-        IndexedBlob {
-            props: BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
-                id: indexed_id.into(),
-                uncompressed_md5: "22".repeat(16),
-                offset: 0,
-                compressed_size: 7,
-                uncompressed_size: 1,
-                unknown_field6: 0,
-                compressed_md5: "33".repeat(16),
-            }),
-            referenced_by: vec![Reference {
-                tag: "7.1.0".into(),
-                build_id: Some("new-build".into()),
-                capture_id: map.capture_id.clone(),
-                path: map.path.clone(),
-                role: Set::MaterializeNew,
-                offset: 0,
-            }],
-            sets: vec![Set::MaterializeNew],
-        },
-        vec![Set::MaterializeNew],
-    )]);
+    let index = ChunkIndex::build(vec![IndexedBlob {
+        props: BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
+            id: indexed_id.into(),
+            uncompressed_md5: "22".repeat(16),
+            offset: 0,
+            compressed_size: 7,
+            uncompressed_size: 1,
+            unknown_field6: 0,
+            compressed_md5: "33".repeat(16),
+        }),
+        referenced_by: vec![Reference {
+            tag: "7.1.0".into(),
+            build_id: Some("new-build".into()),
+            capture_id: map.capture_id.clone(),
+            path: map.path.clone(),
+            role: Set::MaterializeNew,
+            offset: 0,
+        }],
+        sets: vec![Set::MaterializeNew],
+    }]);
 
     // The index's only reference for this capture/path names a chunk the plan
     // does not, so the index cannot produce this plan.
@@ -913,14 +910,11 @@ fn plan_index_fixture() -> (crate::assemble::PatchMap, ChunkIndex) {
     let entry = |ch: &SophonChunk, raw: Vec<u8>, refs: Vec<Reference>, sets: Vec<Set>| {
         let mut props = BlobProps::measure(&raw, ch).expect("measure");
         props.set_stored(BlobProps::stored_path_for(&ch.id));
-        (
-            IndexedBlob {
-                props,
-                referenced_by: refs,
-                sets: sets.clone(),
-            },
+        IndexedBlob {
+            props,
+            referenced_by: refs,
             sets,
-        )
+        }
     };
     let index = ChunkIndex::build(vec![
         entry(
@@ -1205,14 +1199,11 @@ fn a_blob_indexed_but_not_stored_is_red_rather_than_skipped() {
         compressed_md5: "1".repeat(32),
     });
     assert!(props.stored_path.is_none());
-    let index = ChunkIndex::build(vec![(
-        crate::blobs::IndexedBlob {
-            props,
-            referenced_by: Vec::new(),
-            sets: Vec::new(),
-        },
-        Vec::new(),
-    )]);
+    let index = ChunkIndex::build(vec![crate::blobs::IndexedBlob {
+        props,
+        referenced_by: Vec::new(),
+        sets: Vec::new(),
+    }]);
     let rows = check_blobs(
         Path::new("."),
         &index,
@@ -1248,14 +1239,11 @@ fn a_blob_whose_bytes_were_altered_turns_its_row_red() {
     };
     let mut props = crate::blobs::props::BlobProps::measure(&raw, &chunk).unwrap();
     props.set_stored("chunks/ab/cd");
-    let index = ChunkIndex::build(vec![(
-        crate::blobs::IndexedBlob {
-            props,
-            referenced_by: Vec::new(),
-            sets: Vec::new(),
-        },
-        Vec::new(),
-    )]);
+    let index = ChunkIndex::build(vec![crate::blobs::IndexedBlob {
+        props,
+        referenced_by: Vec::new(),
+        sets: Vec::new(),
+    }]);
     assert!(
         check_blobs(&d, &index, crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES)[0].ok,
         "the good bundle's row is green"

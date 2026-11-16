@@ -170,14 +170,11 @@ impl Bundle {
             std::fs::write(&p, &b.raw).expect("blob");
             let mut props = BlobProps::measure(&b.raw, &b.chunk).expect("measure");
             props.set_stored(rel);
-            entries.push((
-                IndexedBlob {
-                    props,
-                    referenced_by: b.refs.clone(),
-                    sets: b.sets.clone(),
-                },
-                b.sets.clone(),
-            ));
+            entries.push(IndexedBlob {
+                props,
+                referenced_by: b.refs.clone(),
+                sets: b.sets.clone(),
+            });
         }
         let index = ChunkIndex::build(entries);
         write_json(&root.join("chunks/index.json"), &index);
