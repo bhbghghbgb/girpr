@@ -798,6 +798,67 @@ mod tests {
         assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "gzip");
     }
 
+    /// Fixture shape: a scratch root holding one plain-text file named `*.gz`.
+    /// `encoding_of` picks the encoding from the name, so the scan tries to
+    /// gunzip it and fails before any checksums document is produced.
+    #[test]
+    fn currently_a_plain_file_named_gz_fails_the_gzip_header_check() {
+        let root = scratch("notgzip");
+        let body: &[u8] = b"plain bytes, not a gzip stream";
+        std::fs::write(root.join("notgzip.gz"), body).unwrap();
+
+        let err = Checksums::scan(&root).unwrap_err();
+        assert_eq!(err.to_string(), "invalid gzip header");
+
+        // A16 trusts the entry's recorded encoding rather than the name, so the
+        // same bytes become a finding row instead of an error there.
+        let c = Checksums {
+            schema_version: crate::SCHEMA_VERSION,
+            algorithm: "sha256".into(),
+            file_count: 1,
+            total_bytes: body.len() as u64,
+            entries: vec![FileEntry {
+                path: "notgzip.gz".into(),
+                bytes: body.len() as u64,
+                md5: hash::md5_hex(body),
+                sha256: hash::sha256_hex(body),
+                encoding: crate::hash::Encoding::Gzip,
+            }],
+        };
+        assert_eq!(
+            c.findings(&root),
+            vec!["notgzip.gz: invalid gzip header".to_string()]
+        );
+        let (ok, detail) = c.a16(&root);
+        assert!(!ok);
+        assert_eq!(detail, "notgzip.gz: invalid gzip header");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Fixture shape: a real gzip stream at a captured-looking `assets/pack.gz`
+    /// path. Both ends of the extension rule are pinned here — the scan records
+    /// the decompressed digest, keyed by the name-derived encoding.
+    #[test]
+    fn a_real_gzip_stream_is_digested_as_its_decompressed_body() {
+        let root = scratch("realgzip");
+        let body: &[u8] = b"the decompressed document";
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(root.join("assets/pack.gz"), hash::gzip(body).unwrap()).unwrap();
+
+        let e = digest_file(&root.join("assets/pack.gz"), crate::hash::Encoding::Gzip).unwrap();
+        assert_eq!(e.bytes, body.len() as u64);
+        assert_eq!(e.md5, hash::md5_hex(body));
+        assert_eq!(e.sha256, hash::sha256_hex(body));
+        assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
+
+        let c = Checksums::scan(&root).unwrap();
+        assert_eq!(c.entries[0].path, "assets/pack.gz");
+        assert_eq!(c.entries[0].encoding, crate::hash::Encoding::Gzip);
+        assert_eq!(c.entries[0].bytes, body.len() as u64);
+        assert_eq!(c.entries[0].md5, hash::md5_hex(body));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// A synthetic entry, for the assertions that need a file that was never written.
     fn c_of(rel_path: &str) -> FileEntry {
         FileEntry {

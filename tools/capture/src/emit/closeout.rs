@@ -692,6 +692,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Fixture shape: `scratch()` + `seed()` give a `game/` with config.ini and
+    /// one captured file plus a `scan/` file; `run()` declares only
+    /// `game/config.ini` as written. Another file is left under `game/` before
+    /// the close-out runs, so it is on disk but absent from `written`.
+    #[test]
+    fn currently_a_stray_file_under_game_is_checksummed_but_a14_stays_green() {
+        let root = scratch("stray-game");
+        seed(&root);
+        std::fs::write(
+            root.join("game/stray.bin"),
+            b"left over from an earlier run",
+        )
+        .unwrap();
+
+        let closed = run(&root);
+
+        assert!(root.join("game/stray.bin").is_file());
+        assert!(
+            closed
+                .checksums
+                .entries
+                .iter()
+                .any(|e| e.path == "game/stray.bin"),
+            "the disk walk, not `written`, decides what is checksummed"
+        );
+        let a14 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A14")
+            .expect("an A14 row");
+        assert!(a14.ok, "A14 is built from `written`: {}", a14.actual);
+        assert_eq!(
+            a14.actual,
+            "1 files, all of them config.ini, the scan file, or a captured path"
+        );
+        assert!(
+            closed
+                .selfcheck
+                .assertions
+                .iter()
+                .find(|a| a.id == "A16")
+                .expect("an A16 row")
+                .ok,
+            "the stray is hashed, so A16 agrees too"
+        );
+        assert!(closed.fatal.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_failed_row_ends_the_run_with_exit_3() {
         // The behaviour change this commit makes. A bundle whose own rows did

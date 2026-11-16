@@ -301,6 +301,23 @@ fn an_identical_pair_is_refused_because_it_would_exercise_nothing() {
     assert!(e.message().contains("must differ"), "{}", e.message());
 }
 
+/// That guard covers only two explicit flags. When both halves resolve from the
+/// branch and `main.tag` happens to equal `diff_tags[0]`, `select` has no
+/// equal-tag refusal of its own and returns two halves that name the same tag.
+#[test]
+fn currently_an_equal_resolved_tag_pair_keeps_both_halves() {
+    let mut b = branch();
+    b.tag = b.diff_tags[0].clone();
+    let p = pair_plan(None, None);
+    let v = VersionPair::select(&b, p.new_selector(), p.old_selector())
+        .expect("select does not refuse an equal resolved tag");
+    assert_eq!(v.tags(), ["7.0.0", "7.0.0"]);
+    assert_eq!(v.new.tag, v.old.tag);
+    assert_eq!(v.new.source, "main.tag");
+    assert_eq!(v.old.source, "diff_tags[0]");
+    assert!(!v.new.resolved() && !v.old.resolved());
+}
+
 #[test]
 fn latest_is_accepted_for_new_tag_and_refused_for_a_probe() {
     assert!(
