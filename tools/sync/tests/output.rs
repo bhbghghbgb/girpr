@@ -917,11 +917,12 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     // done rather than the tree. The first phase's total is every entry the
     // walk saw — the filter has not been applied yet — and the second's is
     // the **plan's pending count**: the paths the plan asked this side to
-    // hash. The two are not the same kind of number — a comparison plans a
-    // digest only for the pairs stat cannot settle — and they agree here
-    // because this run is an `update`, whose plan asks for a digest for every
-    // file it holds. Each event names its phase, so the case says which phase
-    // reports which count, rather than stating the two numbers as a set.
+    // hash. That count is not the map's file count: a comparison plans a
+    // digest only for the pairs stat cannot settle, so a side can hold a file
+    // and plan nothing for it. They agree here because this run is an
+    // `update`, whose plan asks for a digest for every file it holds. Each
+    // event names its phase, so the case says which phase reports which
+    // count, rather than stating the two phases' counts as a set.
     let phase_a_progress = events_with(&logged, "effective progress: phase a");
     let phase_c_progress = events_with(&logged, "effective progress: phase c");
     assert!(
