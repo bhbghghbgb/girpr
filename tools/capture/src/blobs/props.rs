@@ -590,12 +590,16 @@ impl BlobProps {
                 &self.fetch_error,
                 &self.decode_error,
                 self.verified,
+                self.stored_path.is_none(),
             ) {
-                (Some(e), _, _, _) => format!("{}: measurement failed: {e}", self.chunk_id),
-                (_, Some(e), _, _) => format!("{}: fetch failed: {}", self.chunk_id, e.detail),
-                (_, _, Some(e), _) => format!("{}: {e}", self.chunk_id),
-                (_, _, _, None) => format!("{}: never measured", self.chunk_id),
-                (_, _, _, Some(v)) => format!("{}: {v}", self.chunk_id),
+                (Some(e), _, _, _, _) => format!("{}: measurement failed: {e}", self.chunk_id),
+                (_, Some(e), _, _, _) => format!("{}: fetch failed: {}", self.chunk_id, e.detail),
+                (_, _, Some(e), _, _) => format!("{}: {e}", self.chunk_id),
+                (_, _, _, None, _) => format!("{}: never measured", self.chunk_id),
+                // Green checks with no published blob are not a verified row:
+                // the thing to name is that no bytes were stored at all.
+                (_, _, _, Some(_), true) => format!("{}: no stored blob", self.chunk_id),
+                (_, _, _, Some(v), false) => format!("{}: {v}", self.chunk_id),
             },
         )
     }
