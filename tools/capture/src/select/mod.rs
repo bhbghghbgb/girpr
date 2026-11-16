@@ -881,16 +881,40 @@ const REPOOL_NOTE: &str = "widen --audio, or check the version pair";
 
 /// `diff/candidates.json` — the scoring table, for every common path.
 ///
-/// Column-oriented so a reader can sort without re-parsing objects, and carrying
-/// `rank` so "why did it pick that?" has an answer without re-running anything.
+/// Column-oriented so a reader can sort without re-parsing objects. Two ranks
+/// are published because two different orders are at work and neither can
+/// answer the other's question:
+///
+/// - `rank` is the **scoring rank**, the one-based position in [`by_cost`]'s
+///   `total_cost` order (with its field / `moved` / `reused` / path tie-break).
+/// - `admission_rank` is the **selection rank**, the one-based position of this
+///   path in the [`candidates`] pool the picker actually walks. Scoring and
+///   admission tie-break differently, so on a `total_cost` tie the two ranks can
+///   disagree, and "why was this picked?" is answered by the latter.
+///
 /// Only common *scored* paths appear here: one-sided paths have no patch cost to
 /// rank, and folder entries are directories rather than files, so neither is a
-/// row in this table.
+/// row in this table. A path that a [`candidates`] filter excludes (a folder) is
+/// absent from the pool; such a row keeps its scoring `rank` and carries a `null`
+/// `admission_rank` rather than being given a position it does not have.
 pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
+    // One walk of the pool, keyed by path. First occurrence wins if a malformed
+    // diff repeats a path; either way this is 0-based and becomes 1-based below.
+    let mut admission_by_path: BTreeMap<String, usize> = BTreeMap::new();
+    for (position, sized) in candidates(diffs).into_iter().enumerate() {
+        admission_by_path
+            .entry(sized.candidate.path)
+            .or_insert(position);
+    }
+
     let rows: Vec<serde_json::Value> = by_cost(diffs)
         .into_iter()
         .enumerate()
         .map(|(rank, (field, s))| {
+            let admission_rank = admission_by_path
+                .get(&s.path)
+                .map(|position| serde_json::Value::from(*position + 1))
+                .unwrap_or(serde_json::Value::Null);
             let all = Class::all_satisfied_by(Shape::from_row(
                 if s.same_md5 {
                     State::Identical
@@ -917,6 +941,7 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
                 "total_cost": s.total_cost,
                 "classes": all.iter().map(|c| c.id()).collect::<Vec<_>>(),
                 "rank": rank + 1,
+                "admission_rank": admission_rank,
             })
         })
         .collect();
@@ -926,6 +951,7 @@ pub fn candidates_document(diffs: &[FieldDiff]) -> serde_json::Value {
             "path", "matching_field", "old_size", "new_size", "nchunks", "reused",
             "moved", "moved_later", "moved_earlier", "old_max_end", "same_md5",
             "old_bytes", "new_bytes", "patch_bytes", "total_cost", "classes", "rank",
+            "admission_rank",
         ],
         "rows": rows,
     })
