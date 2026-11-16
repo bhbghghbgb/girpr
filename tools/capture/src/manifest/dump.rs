@@ -219,23 +219,25 @@ impl<'a> FullDecode<'a> {
 
 /// The `paths.tsv` sidecar: `path \t size \t md5 \t nchunks \t is_folder`.
 ///
-/// Header line, `\n` endings, one row per entry in decode order. Sorted by path
-/// so `diff` between two tags' sidecars reads as a diff rather than as a
-/// reordering — decode order is an implementation detail of the archive, and a
-/// reader comparing two versions is comparing *paths*.
+/// Header line, `\n` endings, one row per *entry*. Sorted by path so `diff`
+/// between two tags' sidecars reads as a diff rather than as a reordering —
+/// decode order is an implementation detail of the archive, and a reader
+/// comparing two versions is comparing *paths*. Duplicate paths produce one row
+/// per entry, in entry order within the shared path: the sidecar is a per-entry
+/// document, not a path index, so each row carries that entry's own size, md5,
+/// chunk count and folder flag.
 pub fn paths_tsv(entries: &[SophonChunkFile]) -> String {
     const HEADER: &str = "path\tsize\tmd5\tnchunks\tis_folder\n";
-    // Sorted references, no tuples: this built a `Vec<(String, i64, String,
-    // usize, bool)>` with two `String` clones per entry, sorted that, and only
-    // then rendered. Zero clones and one allocation to start with.
-    let mut paths: Vec<&str> = entries.iter().map(|e| e.file.as_str()).collect();
-    paths.sort_unstable();
-    let by_path: std::collections::HashMap<&str, &SophonChunkFile> =
-        entries.iter().map(|e| (e.file.as_str(), e)).collect();
-    let mut s = String::with_capacity(HEADER.len() + paths.len() * 96);
+    // One reference per entry, paired with its original index. Sorting by
+    // (path, index) keeps the path-sorted order for clean diffs while giving
+    // equal paths a stable, defined entry-order tie-break. Rendering straight
+    // from each entry (no path→entry map) means a duplicate never loses its own
+    // values to the last entry sharing that path. One allocation, no clones.
+    let mut ordered: Vec<(usize, &SophonChunkFile)> = entries.iter().enumerate().collect();
+    ordered.sort_by(|(i, a), (j, b)| a.file.cmp(&b.file).then_with(|| i.cmp(j)));
+    let mut s = String::with_capacity(HEADER.len() + ordered.len() * 96);
     s.push_str(HEADER);
-    for p in paths {
-        let e = by_path[p];
+    for (_, e) in ordered {
         use std::fmt::Write as _;
         let _ = write!(
             s,
@@ -595,22 +597,23 @@ mod tests {
         assert_eq!(paths_tsv(&[]), "path\tsize\tmd5\tnchunks\tis_folder\n");
     }
 
-    /// Two entries share one `file` path. The sorted path list still holds both
-    /// rows, but the `by_path` map keeps only the last entry, so both rows carry
-    /// the last entry's data and the first entry disappears from the sidecar.
+    /// Two entries share one `file` path. The sidecar is a per-entry document,
+    /// so each row carries that entry's own values, in entry order within the
+    /// shared path rather than collapsing onto the last entry.
     #[test]
-    fn currently_duplicate_manifest_paths_emit_two_rows_for_the_last_entry() {
-        let dupes = vec![
-            entry("GenshinImpact_Data/x.txt", 10, 1, false),
-            entry("GenshinImpact_Data/x.txt", 99, 3, true),
-        ];
+    fn duplicate_manifest_paths_emit_one_row_per_entry_with_its_own_values() {
+        let mut first = entry("GenshinImpact_Data/x.txt", 10, 1, false);
+        first.md5 = "md5-first".into();
+        let mut second = entry("GenshinImpact_Data/x.txt", 99, 3, true);
+        second.md5 = "md5-second".into();
+        let dupes = vec![first, second];
         let rows = paths_tsv(&dupes);
         let lines: Vec<&str> = rows.lines().skip(1).collect();
         assert_eq!(
             lines,
             vec![
-                "GenshinImpact_Data/x.txt\t99\tmd5-GenshinImpact_Data/x.txt\t3\ttrue",
-                "GenshinImpact_Data/x.txt\t99\tmd5-GenshinImpact_Data/x.txt\t3\ttrue",
+                "GenshinImpact_Data/x.txt\t10\tmd5-first\t1\tfalse",
+                "GenshinImpact_Data/x.txt\t99\tmd5-second\t3\ttrue",
             ]
         );
     }
