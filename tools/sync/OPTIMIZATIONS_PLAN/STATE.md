@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M46
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T06:37:04Z
+last_updated: 2026-11-16T07:12:45Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1043,10 +1043,24 @@ reviews:
     result: F193 fixed (7e12b998, the step-1 rename hook row claimed a placeholder that only a file claim leaves); F194 fixed (0f243257 gives the rule a reason that holds everywhere, since the old reason was a Windows fact); F198 kept (a3bff56e); 595 passed, 1 skipped; the rule itself was kept, because it enforces the precondition the split relies on and preserves every valid spec
     followups: [F276, F277]
   - batch: M46
-    status: in_progress
+    status: done
     tasks: [F278, F279]
     base: 496bd819
     head: f92d995e
+    result: F278 kept (f217e1ca); F279 kept (f92d995e); no fix or revert commits; 619 passed without the feature and 636 with it, 1 skipped; the reviewer reverted each of the five renamed events one at a time and saw the pinning case fail each time, and compared the pre-batch and post-batch binaries' log files event for event, with the same set, order, level and fields and only the messages changed
+    followups: [F435, F436]
+  - batch: M113
+    status: pending
+    tasks: [F431, F432, F435]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M115
+    status: pending
+    tasks: [F436]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M113
@@ -2901,15 +2915,17 @@ followups:
   - id: F278
     source: F197
     description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
-    status: pending_review
+    status: completed
     batch: M46
     commits: [f217e1ca]
+    note: review M46 kept; the reviewer confirmed every occurrence of the old name changed and that the pin still holds the field contract
   - id: F279
     source: F197
     description: The start events name their phase by operation while the done and the progress events now name it by letter, so the family uses two spellings.
-    status: pending_review
+    status: completed
     batch: M46
     commits: [f92d995e]
+    note: review M46 kept; the reviewer checked the extension past the two named events and agreed, and the pre- and post-batch binaries produced the same events in the same order with the same fields
   - id: F280
     source: F196
     description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
@@ -3860,6 +3876,32 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F351, already scheduled in M75"
+  - id: F435
+    source: F279
+    description: The README bullet spells phase C's three events only as the same three for phase C, so a reader looking for the exact string has to know the letter is lower case in the event names.
+    status: pending
+    batch: M113
+    commits: []
+  - id: F436
+    source: F278
+    description: The walk's start and heartbeat are debug-level while the walk's done and all six phase events are info-level, so the renamed family still spans two levels and a console run at the default level shows only the walk's end.
+    status: pending
+    batch: M115
+    commits: []
+  - id: F437
+    source: F279
+    description: The README bullet still says each phase reports a start, a progress and a done, but a record side runs neither the reading walk nor the hashing phase and so logs none of the six events.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F431, already scheduled in M113"
+  - id: F438
+    source: F279
+    description: The new phase C start pin asserts that the pending count equals the map's file count and words it as owing a digest for every path the map kept, but the pending count is the planner's and matches the map's size only because the fixture's cache is cold.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F284, already scheduled in M48"
 ```
 
 ## Human checklist
@@ -3891,6 +3933,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M46 `done`: F278 kept (f217e1ca), F279 kept (f92d995e); no
+  fix or revert commits; follow-ups F435 and F436 appended with batches `M113`
+  and `M115`, and F437 and F438 recorded as `skipped` as the same items as F431
+  and F284. F278 and F279 `pending_review` → `completed`.
 - 2026-11-16 — the state file's YAML block was repaired again: a follow-up
   description carrying an unquoted colon was quoted, which the block needs
   whenever a description contains one.
