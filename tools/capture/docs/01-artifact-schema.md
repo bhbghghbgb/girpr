@@ -262,8 +262,11 @@ One object per HTTP request, in `seq` order. In the reference capture: 43 rows �
   "attempts": 1 }
 ```
 
-Header keys are lowercased; values are strings exactly as received. `kind` lets a
-reader ask "what did the manifest fetch cost?" without string-matching URLs.
+Header keys are lowercased; values are strings exactly as received. If one name
+appears more than once in a response, its values are joined into a single string
+with `\n` (a header value cannot contain a raw newline, so the delimiter is
+unambiguous). `kind` lets a reader ask "what did the manifest fetch cost?"
+without string-matching URLs.
 
 `kind` is a closed set — `api`, `manifest`, `chunk`, `probe` — and two of the
 probes' paths share `probe` while differing in retry behaviour. A `getBuild?tag=`

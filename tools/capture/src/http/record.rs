@@ -94,7 +94,8 @@ pub struct RequestRecord {
     pub elapsed_ms: u64,
     /// What was sent. Keys lowercased.
     pub req_headers: BTreeMap<String, String>,
-    /// What came back. Keys lowercased; values exactly as received.
+    /// What came back. Keys lowercased; values exactly as received. A repeated
+    /// name is one key whose values are joined by `\n`.
     pub resp_headers: BTreeMap<String, String>,
     /// Body length in bytes.
     pub bytes_in: u64,
@@ -169,18 +170,33 @@ pub const ACCEPT_ENCODING: &str = "identity";
 /// to lowercase on construction and guarantees `as_str()` returns that form, so
 /// normalising again would allocate a `String` per header name and discard the
 /// distinction it was protecting. The output is unchanged; only the copy is gone.
+///
+/// A name with several values (repeated `Set-Cookie`, `Link`, `Warning`,
+/// `Cache-Control`) becomes **one** key whose value is every value joined by
+/// `\n`. A header value cannot contain a raw newline, so the delimiter is
+/// unambiguous and does not collide with the commas a single `Set-Cookie` may
+/// carry. The order is the order `HeaderMap` yields, which for repeated values
+/// is insertion order. A single value is byte-identical to before.
 pub(crate) fn header_map(h: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
-    h.iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().to_string(),
-                v.to_str()
-                    .map(str::to_string)
-                    // A header with non-UTF-8 bytes is recorded as its hex, not
-                    // dropped: losing it would make the record incomplete in a
-                    // way nobody could see.
-                    .unwrap_or_else(|_| hex_bytes(v.as_bytes())),
-            )
+    // Iterate by key, not by value: `HeaderMap::iter()` yields one entry per
+    // value, so collecting it into a map would overwrite every value but the
+    // last. `get_all` yields every value for a name.
+    h.keys()
+        .map(|k| {
+            let values = h
+                .get_all(k)
+                .into_iter()
+                .map(|v| {
+                    v.to_str()
+                        .map(str::to_string)
+                        // A header with non-UTF-8 bytes is recorded as its hex, not
+                        // dropped: losing it would make the record incomplete in a
+                        // way nobody could see.
+                        .unwrap_or_else(|_| hex_bytes(v.as_bytes()))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (k.as_str().to_string(), values)
         })
         .collect()
 }
@@ -190,11 +206,10 @@ mod tests {
     use super::*;
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-    /// A header with two values is collected into a `BTreeMap` keyed by name, so
-    /// the second `append` overwrites the first: one key, one value, the last
-    /// one seen. That is today's lossy behavior.
+    /// A header with two values is recorded under one key, both values joined
+    /// by `\n` in insertion order — nothing is dropped.
     #[test]
-    fn currently_repeated_response_headers_keep_only_the_last_value() {
+    fn repeated_response_headers_keep_every_value_joined_by_newline() {
         let name: HeaderName = "x-multi".parse().expect("header name");
         let mut h = HeaderMap::new();
         h.append(name.clone(), HeaderValue::from_static("first"));
@@ -204,8 +219,8 @@ mod tests {
         assert_eq!(map.len(), 1, "one key, not one row per value");
         assert_eq!(
             map.get("x-multi").map(String::as_str),
-            Some("second"),
-            "the last value wins; the earlier one is dropped"
+            Some("first\nsecond"),
+            "both values are kept, in order"
         );
     }
 }
