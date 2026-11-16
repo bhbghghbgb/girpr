@@ -139,12 +139,12 @@ question.
 the on-disk lookup compares with is the one the identity rule's fallback
 compares with (`util::unicode_lowercase`, through the comparison
 `util::unicode_case_eq`), so the mapping and the comparison that applies it
-are written once rather than twice in two modules. What is shared is the
-mapping and the comparison, not the question: the identity rule is an equality
-relation between two spellings, and the lookup is a choice among the entries
-of one directory — an exact match wins, and two entries that fold together
-are ambiguous rather than equal. Each site says which question it asks, and
-the ASCII-only path key stays a rule of its own.
+are written once, in `util`. What is shared is the mapping and the comparison,
+not the question: the identity rule is an equality relation between two
+spellings, and the lookup is a choice among the entries of one directory — an
+exact match wins, and two entries that fold together are ambiguous rather than
+equal. Each site says which question it asks, and the ASCII-only path key
+stays a rule of its own.
 
 **The cache reservation is a fourth site, and it folds the path key's way.**
 `util::has_cache_prefix` asks a narrower question than any of the three above:
