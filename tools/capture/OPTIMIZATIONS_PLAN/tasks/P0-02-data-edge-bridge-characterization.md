@@ -37,10 +37,13 @@ case. Do not fix it here.
 - Headers: `src/http/record.rs` (`header_map`) and its tests. Build a
   `HeaderMap` with two values for one name and assert the current single-value
   result.
-- Bridge id collision: `tests/artifact_bridge/server.rs` (`Served::load`,
-  `manifest_index`, `manifest_resolution`) and `tests/artifact_server.rs`. Add a
-  mini-bundle case where both tags declare the same manifest id and assert what
-  the current index resolves to.
+- Bridge id collision: `tests/artifact_bridge/server.rs` (`Served::load` around
+  line 490, `manifest_index`, `manifest_resolution` around line 420) and
+  `tests/artifact_server.rs`. The index is still keyed by manifest id alone, so
+  add a mini-bundle case where both tags declare the same id and assert what the
+  current index resolves to. The bridge test binaries now also include
+  `common/digest.rs` (`md5hex`) and `common/run_lock.rs` and use `--jobs`; test the
+  behavior, not those helpers.
 
 ## Steps
 

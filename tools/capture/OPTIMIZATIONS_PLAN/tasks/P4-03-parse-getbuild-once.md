@@ -18,8 +18,11 @@ already parsed it.
 ## Where to start
 
 - `src/hyp/mod.rs`: `Captured`, `CapturedBody`, `new_build`/`old_build`
-  (around line 153), `branch_params` (around line 145), `validate` (around line
-  170), `HypClient::capture` (around line 360).
+  (around lines 153-159), `branch_params` (around line 148), `validate` (around
+  line 168), `HypClient::capture` (around lines 318-430). The merge replaced the
+  `expect("four bodies")` / `expect("two builds")` calls in `capture` with
+  `.ok_or_else(...)` typed errors; preserve that error handling — it does not
+  change the re-parse finding this task addresses.
 - `src/run/mod.rs`: `validate()` call (around line 96), `branch_params()`
   (around line 110), `old_build()`/`new_build()` (around lines 159-165).
 - `src/manifest/fetch.rs`: `wants` takes `&GetBuild`; `fetch_all` uses them.

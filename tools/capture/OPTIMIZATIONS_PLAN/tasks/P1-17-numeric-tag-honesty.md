@@ -17,7 +17,8 @@ Two small honesty fixes:
 
 - `src/hyp/types.rs`: `IntOrStr` (around line 43), `From<u64>` (around line 78),
   `From<i64>`, `as_u64`, `as_i64`, serialization tests.
-- `src/config/mod.rs`: `tag_shape_rule_inner` (around line 623) and its tests.
+- `src/config/mod.rs`: `tag_shape_rule_inner` (around line 630; the message is
+  at line 630) and its tests.
 - `src/config/tests.rs` for tag-shape messages.
 
 ## Decision for `IntOrStr`

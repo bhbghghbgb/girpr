@@ -22,13 +22,18 @@ as a follow-up.
 
 ## Where to start
 
-- `tests/artifact_bridge/server.rs`: `Served` (around line 260),
-  `manifest_index`, `Served::load` (around line 440), the manifest route
-  (around line 573), `manifest_resolution` (around line 411),
-  `declared_manifest_ids`, `error_shape` (around line 616), `MANIFEST_CACHE`
-  (around line 741), `manifest_bytes` (around line 743), the response writer
-  (around line 877).
-- `tests/artifact_server.rs`: shared-id and route tests.
+- `tests/artifact_bridge/server.rs`: `Served` (around line 260), `manifest_index`
+  (used by `manifest_resolution` around line 420, still keyed by id alone),
+  `Served::load` (around line 490), the manifest route (around line 600),
+  `manifest_resolution`, `declared_manifest_ids`, `error_shape` (around line 627,
+  still taking and discarding `extra` via `let _ = extra;`), `MANIFEST_CACHE`
+  (around line 766), `manifest_bytes` (around line 768, still holding the mutex
+  guard across `std::fs::read`), and the response writer (around line 902, still
+  sending `Connection: close`).
+- `tests/artifact_server.rs`: shared-id and route tests. Both bridge test
+  binaries now include `common/digest.rs` (`md5hex`, replacing `md5::compute`)
+  and a `#![allow(clippy::unwrap_used, clippy::expect_used)]` header; neither
+  changes the three findings above.
 
 ## Steps
 

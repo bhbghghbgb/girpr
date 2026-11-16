@@ -18,8 +18,11 @@ Two small correctness/diagnostic fixes in `blobs::props`:
 
 - `src/blobs/props.rs`: `why_unusable` (around line 583), `measure_file`
   (around line 338), `not_a_frame`, `is_usable`, tests.
-- `src/hash/mod.rs`: `read_upto` (around line 588, currently private),
-  `is_zstd` (around line 325), `zstd_measure_from`.
+- `src/hash/mod.rs`: `read_upto` (around line 590, currently private),
+  `is_zstd` (around line 325), `zstd_measure_from`. The merge migrated this file
+  from the `md5` crate to `md-5` (`Md5::new`/`update`/`finalize`), which changed
+  `DualDigest`'s internals but not `read_upto`, `is_zstd` or the magic-sniff
+  behavior this task fixes.
 - `src/blobs/tests.rs` for `why_unusable` tests.
 
 ## Steps

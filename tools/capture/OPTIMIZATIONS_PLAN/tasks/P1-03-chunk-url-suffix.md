@@ -16,21 +16,27 @@ prefix and `Sources::url` drops a non-empty `chunk_download.url_suffix`.
   `from_pairs`, `url`, `tags`; call sites of `Sources::url` in
   `src/assemble/assembly.rs` and tests.
 - `src/manifest/mod.rs`: `CapturedManifest::chunk_url_prefix` (around line
-  351), `chunk_url` (around line 356), and the declared
-  `chunk_download.url_suffix` field.
-- `src/hyp/types.rs` around lines 595-613 documents the measured join order.
+  357), `chunk_url` (around line 366), and the declared
+  `chunk_download.url_suffix` field (on `Download`).
+- `src/hyp/types.rs`: `BuildManifest::archive_url` / `BuildManifest::chunk_url`
+  (around lines 601-608) and the shared `pub(crate) fn join(&Download, &str)`
+  (around line 621). `join` appends a non-empty `url_suffix` and is now the one
+  definition of the `{prefix}/{id}{suffix}` join.
 
 ## Steps
 
-1. Add a `chunk_url_suffix()` accessor next to `chunk_url_prefix()` on
-   `CapturedManifest`, returning the declared suffix. Keep `chunk_url`
-   consistent by using the same accessors.
-2. Change `Sources` to store one value per tag that contains both base and
-   suffix. A small private `SourceBase { prefix, suffix }` is clearer than two
-   parallel `BTreeMap`s. Keep `bases` private.
-3. `from_manifests` inserts both fields. `from_pairs` remains the test seam and
-   inserts an empty suffix.
-4. `Sources::url` returns `format!("{prefix}/{chunk_id}{suffix}")`.
+1. Expose the declared chunk `Download` on `CapturedManifest` (for example
+   `chunk_download() -> &Download`, or add `chunk_url_suffix()` next to
+   `chunk_url_prefix()`). `chunk_url` already calls `join`; keep it that way.
+2. Change `Sources` to store one value per tag that carries both prefix and
+   suffix (a private `SourceBase { prefix, suffix }`, or a stored `Download`).
+   A small struct is clearer than two parallel `BTreeMap`s. Keep `bases` private.
+3. `from_manifests` inserts both fields from the declared `chunk_download`.
+   `from_pairs` remains the test seam and inserts an empty suffix.
+4. `Sources::url` builds the URL through `crate::hyp::types::join(&Download,
+   chunk_id)` rather than a new `format!` spelling, so there is still exactly
+   one definition of the join. Pass the stored prefix/suffix as a `Download`
+   (or extend the helper to take prefix and suffix directly if that is smaller).
 5. Update `tags` and any iteration to the new value type.
 6. Add a test with a non-empty suffix (for example `.zst`) and an empty-suffix
    control. If the P0-02 characterization test exists, replace its expectation
@@ -59,4 +65,10 @@ prefix and `Sources::url` drops a non-empty `chunk_download.url_suffix`.
 ## Notes
 
 - No network test is needed; this is a pure URL construction change.
+- The merge that followed this plan extracted the shared `join` helper described
+  above and clarified its comment: appending a non-empty suffix is a deliberate
+  conservative choice (the reference Sophon clients ignore the field), not a
+  measured join order. That does not change the finding — `Sources::url` still
+  drops a suffix that every other URL builder appends — but it means the fix must
+  reuse `join` rather than introduce a second spelling.
 - Do not reference the report or plan in code comments.

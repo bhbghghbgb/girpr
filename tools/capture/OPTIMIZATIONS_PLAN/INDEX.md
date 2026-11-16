@@ -9,6 +9,38 @@ It is deleted, together with the report, when the work is finished.
 - `STATE.md` - the committed checklist/state file. The orchestrator owns it.
 - `tasks/*.md` - one implementation task per file.
 
+## Post-merge validation (2026-11-16)
+
+This plan was written on the pre-merge side of `opt/gircap` (commit `7be80de7`),
+before `opt/girsync` — which carries the completed `girpr` and `girsync` plans —
+was merged in. Every finding in `OPTIMIZATIONS_REPORT.md` was re-checked against
+the merged tree. All findings are still present in the code, so **no task was
+dropped**: the merged plans were dependency/lint/docs hygiene and did not fix any
+of the correctness, verification, selection, runtime, or clean-code findings this
+plan tracks.
+
+What the merge did change, and what the task files now reflect:
+
+- The `md5` crate was replaced by `md-5`, `tokio` was trimmed to
+  `rt-multi-thread`/`macros`/`time`, a `[lints]` table and `rust-version = "1.88"`
+  were added, and several `expect(...)` calls became typed errors. None of these
+  remove a finding; line numbers that shifted were corrected.
+- A shared `pub(crate) fn join(&Download, &str)` was extracted in `src/hyp/types.rs`
+  and is now used by `BuildManifest::archive_url`, `BuildManifest::chunk_url`,
+  `CapturedManifest::url` and `CapturedManifest::chunk_url`. Task P1-03 was revised
+  to route `Sources::url` through that helper instead of adding a fourth URL join.
+- `select::candidates_by_class` is now keyed by `Class` (`BTreeMap`) rather than a
+  positional array; this is independent of the reported findings and does not
+  change any selection task's premise.
+- The `girpr`-side bridge tests gained `common/digest.rs` (`md5hex`),
+  `common/run_lock.rs`, `--jobs` (was `--io-threads`), a new nextest invocation,
+  and a documented per-process cache. Tasks P0-02, P3-01 and P3-02 were updated
+  for that infrastructure; their premises (per-test verify/listeners, id-keyed
+  manifest index, discarded `extra`, cache lock held across the read) still hold.
+
+The report file itself was not touched by the merge, so all report line
+references in the task files remain valid.
+
 ## Report ordering
 
 Tasks follow the report's recommended ordering (`OPTIMIZATIONS_REPORT.md`

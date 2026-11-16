@@ -12,8 +12,8 @@ nonzero must count as a `size_mismatch_files` violation. Today the
 
 ## Where to start
 
-- `src/manifest/mod.rs`: `decode_counts` (around line 666), the guard near the
-  end of the per-entry loop, and the comment that explains it.
+- `src/manifest/mod.rs`: `decode_counts` (around line 673), the guard near the
+  end of the per-entry loop (around line 758), and the comment that explains it.
 - `src/manifest/tests.rs` for the counter tests.
 
 ## Steps
