@@ -65,6 +65,7 @@ fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
         state,
         size,
         score: s,
+        is_folder: false,
     }
 }
 

@@ -138,6 +138,7 @@ mod tests {
                 state: crate::manifest::diff::State::Changed,
                 size: 2_000,
                 score: Some(score("a/one.bin")),
+                is_folder: false,
             }],
             pool: Default::default(),
         }]

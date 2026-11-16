@@ -136,6 +136,11 @@ pub struct PathRow {
     pub size: i64,
     /// The score, absent for a one-sided path.
     pub score: Option<PathScore>,
+    /// Whether the manifest entry is a folder rather than a file.
+    ///
+    /// Carried so selection can keep folders out of the candidate pool while the
+    /// diff still shows them in its rows and sidecars.
+    pub is_folder: bool,
 }
 
 /// Headline counts over one field's pair of manifests.
@@ -316,18 +321,24 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                 if same_md5 {
                     counts.identical += 1;
                 }
-                let score = score(e, old_entry, file_index);
+                let state = if same_md5 {
+                    State::Identical
+                } else {
+                    State::Changed
+                };
+                // A folder has no patch cost: keep its row and state so the diff
+                // stays truthful, but never give it a score selection could use.
+                let score = (!e.is_folder).then(|| score(e, old_entry, file_index));
                 rows.push(PathRow {
                     path: e.file.clone(),
-                    state: if same_md5 {
-                        State::Identical
-                    } else {
-                        State::Changed
-                    },
+                    state,
                     size: e.size,
-                    score: Some(score.clone()),
+                    score: score.clone(),
+                    is_folder: e.is_folder,
                 });
-                scores.push(score);
+                if let Some(score) = score {
+                    scores.push(score);
+                }
             }
             None => {
                 counts.added += 1;
@@ -336,6 +347,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                     state: State::Added,
                     size: e.size,
                     score: None,
+                    is_folder: e.is_folder,
                 });
             }
         }
@@ -350,6 +362,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                 state: State::Removed,
                 size: e.size,
                 score: None,
+                is_folder: e.is_folder,
             });
         }
     }
