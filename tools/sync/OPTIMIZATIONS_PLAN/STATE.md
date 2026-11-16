@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M50
+active_batch: M51
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T09:56:32Z
 tasks:
@@ -3139,7 +3139,7 @@ followups:
   - id: F294
     source: F207
     description: The plan-safety module still names its folded index as if it held keys, though it maps a folded key to a value rather than being the key-shaped index the other modules name.
-    status: pending
+    status: in_progress
     batch: M51
     commits: []
   - id: F295
@@ -3151,7 +3151,7 @@ followups:
   - id: F296
     source: F206
     description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
-    status: pending
+    status: in_progress
     batch: M51
     commits: []
   - id: F297
@@ -4232,6 +4232,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M51 started: F294 and F296 `pending` →
+  `in_progress`; `active_batch: M50` → `M51`.
 - 2026-11-16 — review M50 `done`: F289 kept (e3ad0b31), F291 kept (f49ee66c); no
   fix or revert commits; follow-ups F466 and F467 appended with batch `M129`.
   F289 and F291 `pending_review` → `completed`.
