@@ -38,7 +38,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | completed | 0debdd91 3e7c981f | |
 | P2-04 | Capture-id uniqueness invariant (B5) | completed | 2588220d 7ceaeb32 | |
 | P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | pending_review | c4224d3e a2cfdfb6 | |
-| P3-02 | Bridge server correctness and locking (C8, E4-E6) | in_progress | | |
+| P3-02 | Bridge server correctness and locking (C8, E4-E6) | pending_review | 791f0b24 f6184c5a f8520b74 | |
 | P3-04 | Reuse retention per pair (C2) | todo | | |
 | P3-05 | Avoid assembly copy-through (C6) | todo | | |
 | P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | todo | | |
