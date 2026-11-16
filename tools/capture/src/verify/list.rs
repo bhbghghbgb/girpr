@@ -64,10 +64,12 @@ pub struct Unreadable {
 /// **A bundle that fails to open is not an error, and it is not dropped.**
 /// `list` is an index, and a half-written capture next to a good one is
 /// exactly what an operator wants to see listed — so a directory that is not a
-/// bundle at all is stepped over silently. A directory that *is* a bundle this
-/// build refuses — an older schema, which is a permanent condition with a
+/// bundle at all is stepped over silently, and the walk descends through it so
+/// a bundle nested beneath one is still found. A directory that *is* a bundle
+/// this build refuses — an older schema, which is a permanent condition with a
 /// known fix — is named, with the reason, in [`Index::unreadable`], so the
-/// operator's inventory is complete.
+/// operator's inventory is complete; it is a boundary, so the walk does not
+/// descend into it.
 ///
 /// **A walk that cannot read a directory or a manifest is an error, not a
 /// shorter inventory.** The `unreadable` list can name a bundle that does not
@@ -104,27 +106,32 @@ pub fn list_with(
     while let Some(dir) = stack.pop() {
         let manifest = dir.join("MANIFEST.json");
         let probe = super::bundle::probe_manifest(&manifest, &mut read_manifest)?;
-        if !matches!(probe, super::bundle::ManifestProbe::Missing) {
-            match Bundle::open(&dir) {
-                Ok(b) => found.push(listed_of(root, &b)),
-                Err(e) => {
-                    // A directory that is not a bundle at all is stepped over;
-                    // one that is a bundle this build refuses is named.
-                    if matches!(probe, super::bundle::ManifestProbe::Version(_)) {
+        match probe {
+            // No manifest, or a manifest that is not a bundle this build can
+            // read: step over it silently and keep descending, so a bundle
+            // nested under a half-written directory is still found.
+            super::bundle::ManifestProbe::Missing | super::bundle::ManifestProbe::NotABundle(_) => {
+            }
+            // A manifest declaring this schema version is a real bundle
+            // boundary: list it, or name it as unreadable if it does not open,
+            // and do not descend into it. A bundle does not contain a bundle.
+            super::bundle::ManifestProbe::Version(_) => {
+                match Bundle::open(&dir) {
+                    Ok(b) => found.push(listed_of(root, &b)),
+                    Err(e) => {
                         unreadable.push(Unreadable {
                             path: crate::emit::index::rel(root, &dir),
                             reason: e.clone(),
                         });
+                        tracing::warn!(
+                            dir = %dir.display(),
+                            error = %e,
+                            "a directory under --root looks like a bundle but does not open; skipped"
+                        );
                     }
-                    tracing::warn!(
-                        dir = %dir.display(),
-                        error = %e,
-                        "a directory under --root looks like a bundle but does not open; skipped"
-                    );
                 }
+                continue;
             }
-            // A bundle does not contain another bundle.
-            continue;
         }
         // Sorted so the walk is the same on every filesystem; reversed because
         // the stack pops from the back.
