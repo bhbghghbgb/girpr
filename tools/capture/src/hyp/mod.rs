@@ -105,6 +105,19 @@ pub struct Captured {
     pub versions: VersionPair,
 }
 
+/// The once-parsed view of a capture, created during validation and carried
+/// through the run.
+///
+/// The raw bodies stay on [`Captured`] for `emit::write_api`; this struct is only
+/// the typed view the run acts on, so the branch body and both `getBuild` bodies
+/// are decoded once and their facts live in one place.
+#[derive(Debug, Clone)]
+pub struct ValidatedCapture {
+    pub params: BranchParams,
+    pub old_build: GetBuild,
+    pub new_build: GetBuild,
+}
+
 impl Captured {
     /// Every body, in the order they were fetched.
     pub fn bodies(&self) -> [&CapturedBody; 6] {
@@ -159,13 +172,16 @@ impl Captured {
     }
 
     /// Assert the launcher is on chunk delivery, and that the two builds agree
-    /// with the pair they were fetched for.
+    /// with the pair they were fetched for, returning the once-parsed view.
     ///
     /// The tag echo is checked because a `getBuild` that answers with a *different*
     /// tag than was asked for is the one case where the whole capture would be
     /// silently about the wrong version pair: every URL in the bundle would be
     /// right and the bundle would be wrong.
-    pub fn validate(&self) -> Result<(), ApiError> {
+    ///
+    /// The returned [`ValidatedCapture`] is the single decoded copy of the branch
+    /// body and both builds; callers use it instead of re-parsing the raw bodies.
+    pub fn validate(&self) -> Result<ValidatedCapture, ApiError> {
         let configs = self.game_configs()?;
         configs.require_chunk_mode()?;
         // Fail here rather than at the fixture write: the scan directory is a
@@ -174,6 +190,7 @@ impl Captured {
         // costs no network work and no artifact directory.
         configs.audio_pkg_scan_dir()?;
 
+        let params = self.branch_params()?;
         let new = self.new_build()?;
         if new.tag != self.versions.new.tag {
             return Err(ApiError::shape(
@@ -207,7 +224,11 @@ impl Captured {
                     .require_zstd_plaintext(&format!("{which} chunk_download"))?;
             }
         }
-        Ok(())
+        Ok(ValidatedCapture {
+            params,
+            old_build: old,
+            new_build: new,
+        })
     }
 
     /// How stale the legacy package endpoint is, as `(major_versions, patches)`.
