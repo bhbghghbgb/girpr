@@ -19,7 +19,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-02 | Carry encoding, not a `.gz` suffix (A2) | pending_review | 0360ca2a 82d03428 | |
 | P1-03 | Keep chunk URL suffixes (A5) | pending_review | 4cbafd88 25f7da7b | |
 | P1-04 | A14 scans `game/` on disk (A6) | pending_review | c7dcbff9 35a94be2 | |
-| P1-05 | A11 checks the declared side size (A7) | todo | | |
+| P1-05 | A11 checks the declared side size (A7) | in_progress | | |
 | P1-06 | Independently check published checksums (A8) | todo | | |
 | P1-07 | Schema and path validation (A9) | todo | | |
 | P1-08 | Cross-check patchmap plan and index (A10) | todo | | |
