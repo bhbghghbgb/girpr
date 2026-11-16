@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M48
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T08:13:22Z
+last_updated: 2026-11-16T08:33:07Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1113,10 +1113,24 @@ reviews:
     result: null
     followups: []
   - batch: M48
-    status: in_progress
+    status: done
     tasks: [F283, F284, F285]
     base: 33819876
-    head: 3fb7ae34
+    head: 0900c482
+    result: F283 fixed (5a0a8400, 3c1b50bb changes read to kept, since the load event carries the rows the side kept); F284 fixed (fc00a27b, 0900c482 names the two numbers the comment compares); F285 kept (3fb7ae34); 621 passed without the feature and 638 with it, 1 skipped; the reviewer ran the binary for each claim, checked the warm-cache numbers a second update reports, and confirmed the diff is a paragraph, a doc comment and two assertion messages
+    followups: [F449, F450, F451]
+  - batch: M120
+    status: pending
+    tasks: [F448, F449]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M121
+    status: pending
+    tasks: [F450, F451]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M119
@@ -2992,21 +3006,24 @@ followups:
   - id: F283
     source: F197
     description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
-    status: pending_review
+    status: completed
     batch: M48
-    commits: [5a0a8400]
+    commits: [5a0a8400, 3c1b50bb]
+    note: review M48 fixed (3c1b50bb changes read to kept, since the load event carries the rows the side kept); the reviewer confirmed the record side logs no scan and no effective event
   - id: F284
     source: F199
     description: The hashing phase's total is the planner's pending count rather than the map's size, so the case's wording that it counts only what the map kept holds only because the fixture's cache is cold.
-    status: pending_review
+    status: completed
     batch: M48
-    commits: [fc00a27b]
+    commits: [fc00a27b, 0900c482]
+    note: review M48 fixed (0900c482 names the two numbers the comment compares, since it sat next to the two phases' totals, which do not agree)
   - id: F285
     source: F195
     description: The heartbeat constant is now public API purely so the integration test can read the same constant, and nothing else in the crate needs it public.
-    status: pending_review
+    status: completed
     batch: M48
     commits: [3fb7ae34]
+    note: review M48 kept; the reviewer confirmed the constant has no other caller and that the doc's claims are true
   - id: F286
     source: F197
     description: The walk's heartbeat keeps the bare progress name while the phases now name their phase, so a grep for that name still matches three events and only the fields separate them.
@@ -4008,6 +4025,31 @@ followups:
     status: pending
     batch: M120
     commits: []
+  - id: F449
+    source: F283
+    description: The README's folder-side bullet says each phase reports a start, a progress and a done, but the progress events are periodic, so a run over a small tree logs no progress event at all.
+    status: pending
+    batch: M120
+    commits: []
+  - id: F450
+    source: F284
+    description: No case pins the distinction the corrected comment now asserts, that a comparison's hashing phase has a pending count of zero while the side's map holds the file.
+    status: pending
+    batch: M121
+    commits: []
+  - id: F451
+    source: F284
+    description: The hashing phase's progress event hard-codes a cache-hit count of zero, so only the phase's done event carries the real count and a parser reading progress events never sees one.
+    status: pending
+    batch: M121
+    commits: []
+  - id: F452
+    source: F285
+    description: The commit that says the test says where it reads the constant from does not contain that note, since it landed in the preceding commit, and the mismatch cannot be repaired without rewriting history.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the mismatch is in a commit message and history must not be rewritten"
 ```
 
 ## Human checklist
@@ -4039,6 +4081,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M48 `done`: F283 fixed (5a0a8400, 3c1b50bb), F284 fixed
+  (fc00a27b, 0900c482), F285 kept (3fb7ae34); follow-ups F449–F451 appended with
+  batches `M120` and `M121`, and F452 recorded as `skipped` because the mismatch
+  is in a commit message and history must not be rewritten. F283–F285
+  `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M48 review checkpoint opened: F283, F284 and F285
   `in_progress` → `pending_review`, commits `5a0a8400`, `fc00a27b`, `3fb7ae34`;
   review M48 `pending` → `in_progress`, base `33819876`, head `3fb7ae34`.
