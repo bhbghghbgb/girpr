@@ -37,7 +37,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P2-02 | Reconcile `budget_cost` semantics (B2) | completed | 77c98275 578d5301 cf4e1c78 | |
 | P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | completed | 0debdd91 3e7c981f | |
 | P2-04 | Capture-id uniqueness invariant (B5) | completed | 2588220d 7ceaeb32 | |
-| P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | todo | | |
+| P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | in_progress | | |
 | P3-02 | Bridge server correctness and locking (C8, E4-E6) | todo | | |
 | P3-04 | Reuse retention per pair (C2) | todo | | |
 | P3-05 | Avoid assembly copy-through (C6) | todo | | |
