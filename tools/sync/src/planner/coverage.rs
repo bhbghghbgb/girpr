@@ -162,8 +162,8 @@ impl fmt::Display for Coverage {
                 } else if self.coverage.len() > 1 {
                     writeln!(
                         f,
-                        "  - require only one of them: --hash-any-of {}",
-                        self.names()
+                        "  - require only one of them: {}",
+                        self.request("--hash-any-of")
                     )?;
                 }
             }
@@ -171,8 +171,8 @@ impl fmt::Display for Coverage {
                 writeln!(
                     f,
                     "  - require every one of them, which is stricter but equally \
-                     unanswerable:\n    --hash-all-of {}",
-                    self.names()
+                     unanswerable:\n    {}",
+                    self.request("--hash-all-of")
                 )?;
             }
         }
@@ -197,15 +197,21 @@ impl fmt::Display for Coverage {
 impl std::error::Error for Coverage {}
 
 impl Coverage {
-    /// The requested algorithms, in map order, space-joined for a remedy line.
+    /// The requested algorithms as a command line: the flag, then one occurrence
+    /// of it per algorithm.
+    ///
+    /// **One algorithm per occurrence**, because that is what the parser takes.
+    /// A flag that named two algorithms in one occurrence would be refused
+    /// before the run started, so a remedy printed in that shape would be a
+    /// command the user cannot paste — the one thing a remedy must not be.
     ///
     /// A helper rather than a third inline `join`, because the two remedies that
     /// name the whole request must not be able to spell it differently from each
     /// other.
-    fn names(&self) -> String {
+    fn request(&self, flag: &str) -> String {
         self.coverage
             .keys()
-            .map(|a| a.as_str())
+            .map(|a| format!("{flag} {}", a.as_str()))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -464,8 +470,10 @@ mod tests {
             // The shortfall line: the path, then the algorithms it lacks.
             "    a.txt                            md5, sha256",
             // Neither algorithm alone covers, so the remedy is the weaker mode
-            // over the whole request — the string the user will paste.
-            "  - require only one of them: --hash-any-of md5 sha256",
+            // over the whole request — the string the user will paste, and it
+            // names one algorithm per occurrence because that is what the
+            // parser takes.
+            "  - require only one of them: --hash-any-of md5 --hash-any-of sha256",
             // And the repopulation names the folder itself, so the line is a
             // command that can be pasted as it stands.
             "  - repopulate it, then run this again: girsync update --dir D:\\game\\old",
@@ -473,6 +481,72 @@ mod tests {
             assert!(
                 msg.contains(want),
                 "missing from the message:\n{want}\n\n{msg}"
+            );
+        }
+    }
+
+    /// **The remedy is a command the user can paste.**
+    ///
+    /// The remedy is the only command line this crate prints for the user, so
+    /// the printed text and the parser have to agree about what a flag looks
+    /// like. A flag takes **one algorithm per occurrence**, so a remedy that
+    /// named two in one occurrence would be refused before the run started — the
+    /// line would be a dead end rather than a way out.
+    ///
+    /// Asserted by parsing the printed text rather than by comparing it with a
+    /// second spelling written out here: a string written twice is a second
+    /// thing that can drift. The order the remedy prints is checked too,
+    /// because the request's order is a contract with the user.
+    #[test]
+    fn the_remedy_is_a_command_the_parser_accepts() {
+        use std::collections::BTreeMap;
+
+        use clap::Parser;
+
+        use crate::cli::{Cli, Cmd};
+        use crate::config::CommonOpts;
+
+        let coverage = |mode| Coverage {
+            side: "src",
+            label: "rec".into(),
+            repopulate: Repopulate::NotAFolderCache,
+            mode,
+            missing: BTreeMap::new(),
+            // Neither algorithm covers the undecided set, so the all-of remedy
+            // is the weaker mode over the whole request rather than a narrower
+            // one.
+            coverage: BTreeMap::from([(HashAlg::Md5, (0usize, 2usize)), (HashAlg::Sha256, (1, 2))]),
+        };
+
+        for (mode, flag) in [
+            (HashMode::AllOf, "--hash-any-of"),
+            (HashMode::AnyOf, "--hash-all-of"),
+        ] {
+            let msg = format!("{:#}", coverage(mode));
+            // The remedy line carries the command after its label, and the
+            // any-of remedy puts it on the next line — so the command is what
+            // follows the flag wherever it sits.
+            let command = msg
+                .lines()
+                .find_map(|l| l.find(flag).map(|at| l[at..].trim()))
+                .unwrap_or_else(|| panic!("the message offers {flag}:\n{msg}"));
+            let argv: Vec<String> = ["girsync", "compare", "--src", "s", "--dst", "d"]
+                .iter()
+                .map(|s| s.to_string())
+                .chain(command.split_whitespace().map(str::to_string))
+                .collect();
+            let cli = Cli::try_parse_from(&argv)
+                .unwrap_or_else(|e| panic!("the remedy must parse: {command:?}: {e}"));
+            let common = match cli.cmd {
+                Cmd::Compare { common, .. } => common,
+                _ => unreachable!("the argv names compare"),
+            };
+            let opts = CommonOpts::try_from(common).expect("the remedy is a valid request");
+            let asked: Vec<&str> = opts.algos.iter().map(|a| a.as_str()).collect();
+            assert_eq!(
+                asked,
+                vec!["md5", "sha256"],
+                "the remedy asks for the algorithms in the order it prints them: {command}"
             );
         }
     }
