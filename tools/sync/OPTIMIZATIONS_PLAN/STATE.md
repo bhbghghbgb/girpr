@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M49
+active_batch: M50
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T09:27:56Z
 tasks:
@@ -3076,7 +3076,7 @@ followups:
   - id: F289
     source: F203
     description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
-    status: pending
+    status: in_progress
     batch: M50
     commits: []
   - id: F290
@@ -3089,7 +3089,7 @@ followups:
   - id: F291
     source: F203
     description: The new fourth fold site names the cache-prefix helper but not its exact-name counterpart, which states the same ASCII-only comparison.
-    status: pending
+    status: in_progress
     batch: M50
     commits: []
   - id: F292
@@ -4160,6 +4160,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M50 started: F289 and F291 `pending` →
+  `in_progress`; `active_batch: M49` → `M50`.
 - 2026-11-16 — review M49 `done`: F287, F288 and F292 all kept, with a docs-only
   fix commit 34196319 on top; no fix or revert commits; follow-ups F459 and F460
   appended with batches `M124` and `M125`. F287, F288 and F292 `pending_review`
