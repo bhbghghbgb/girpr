@@ -206,7 +206,7 @@ impl std::fmt::Display for MatrixStatus {
 
 #[cfg(test)]
 mod status_tests {
-    use super::MatrixStatus::*;
+    use super::MatrixStatus::{self, *};
 
     /// The spellings are what `MANIFEST.json`, A17 and the schema doc all agree
     /// on, and they are **not** the lowercased Rust variant names.
@@ -230,6 +230,38 @@ mod status_tests {
     fn display_is_the_id() {
         for s in [Captured, CoveredBy, OverBudget, Unavailable] {
             assert_eq!(s.to_string(), s.id());
+        }
+    }
+
+    /// `parse` is the exact inverse of `id()`: every variant's wire spelling
+    /// reads back to the same variant.
+    #[test]
+    fn parse_round_trips_every_id() {
+        for s in [Captured, CoveredBy, OverBudget, Unavailable] {
+            assert_eq!(MatrixStatus::parse(s.id()), Some(s), "{s:?}");
+        }
+    }
+
+    /// The wire vocabulary is exact: the old lowercased-variant spellings, an
+    /// empty string and a differently-cased one are all rejected.
+    #[test]
+    fn parse_rejects_spellings_outside_the_vocabulary() {
+        assert_eq!(MatrixStatus::parse("coveredby"), None);
+        assert_eq!(MatrixStatus::parse("overbudget"), None);
+        assert_eq!(MatrixStatus::parse(""), None);
+        assert_eq!(MatrixStatus::parse("CAPTURED"), None);
+    }
+
+    /// An unrecognized status is rejected by both halves of the shared rule:
+    /// the model cannot parse it and A17's checker will not call it okay.
+    #[test]
+    fn an_unknown_status_is_rejected_by_both_definitions() {
+        for s in ["coveredby", "", "CAPTURED", "something else"] {
+            assert_eq!(MatrixStatus::parse(s), None, "parse: {s:?}");
+            assert!(
+                !crate::emit::selfcheck::MatrixRow::ok_status(s),
+                "ok_status: {s:?}"
+            );
         }
     }
 
