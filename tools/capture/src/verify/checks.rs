@@ -1,6 +1,6 @@
 //! Per-blob and per-patchmap re-verification checks: A6, A7, A8, A11, A18 and A20.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::assemble::{Decision, PatchMap};
@@ -744,13 +744,22 @@ pub fn check_config_ini(root: &Path, manifest: &Manifest) -> Vec<Assertion> {
 /// it was written. A row that previously failed and now holds is an improvement,
 /// and is reported through the row counts rather than as a disagreement.
 pub fn check_agreement(b: &Bundle, rows: &[Assertion]) -> bool {
-    let recomputed = |id: &str| rows.iter().filter(|r| r.id == id).all(|r| r.ok);
+    // One value per id: whether *all* rows carrying it are green. `all` over an
+    // empty iterator is true, so an id with no recomputed rows defaults to green
+    // — exactly what the old per-id scan returned for an id it never matched.
+    let mut recomputed: HashMap<&str, bool> = HashMap::new();
+    for r in rows {
+        recomputed
+            .entry(r.id.as_str())
+            .and_modify(|all_green| *all_green &= r.ok)
+            .or_insert(r.ok);
+    }
     let mut ok = true;
     for a in &b.recorded.assertions {
         if !REDERIVED.contains(&a.id.as_str()) || !a.ok {
             continue;
         }
-        if recomputed(&a.id) {
+        if recomputed.get(a.id.as_str()).copied().unwrap_or(true) {
             continue;
         }
         tracing::error!(
