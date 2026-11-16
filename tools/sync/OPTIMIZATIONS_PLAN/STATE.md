@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M51
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T09:56:32Z
+last_updated: 2026-11-16T10:25:39Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1239,8 +1239,22 @@ reviews:
     result: F200 kept (7e40bfb6); F201 kept (b8b98771); F202 kept (c64275cf); F203 kept (cb20bfea); F204 kept (6b15098a); no fix or revert commits; 596 passed, 1 skipped; the reviewer confirmed all three fold sites keep their own rule and that nothing in the repo links to the retitled heading
     followups: [F291, F292]
   - batch: M51
-    status: pending
+    status: in_progress
     tasks: [F294, F296]
+    base: efdf302e
+    head: b78aa1a3
+    result: null
+    followups: []
+  - batch: M130
+    status: pending
+    tasks: [F468, F469, F472]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M131
+    status: pending
+    tasks: [F470, F471]
     base: null
     head: null
     result: null
@@ -3139,9 +3153,9 @@ followups:
   - id: F294
     source: F207
     description: The plan-safety module still names its folded index as if it held keys, though it maps a folded key to a value rather than being the key-shaped index the other modules name.
-    status: in_progress
+    status: pending_review
     batch: M51
-    commits: []
+    commits: [51660f8f]
   - id: F295
     source: F206
     description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
@@ -3151,9 +3165,9 @@ followups:
   - id: F296
     source: F206
     description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
-    status: in_progress
+    status: pending_review
     batch: M51
-    commits: []
+    commits: [0671b2d8, b78aa1a3]
   - id: F297
     source: F208
     description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
@@ -4201,6 +4215,36 @@ followups:
     status: pending
     batch: M129
     commits: []
+  - id: F468
+    source: F296
+    description: The mixed-case guard is crate-private while the keying rule it uses is now public, so a caller holding a public map cannot check a collision the way the crate does; either publish it or state why it stays inside.
+    status: pending
+    batch: M130
+    commits: []
+  - id: F469
+    source: F296
+    description: The identity rule's comparison is crate-private while the same-path and path-within helpers are published, the same half-published question for the identity rule.
+    status: pending
+    batch: M130
+    commits: []
+  - id: F470
+    source: F296
+    description: The plan link module's own folded-keys helper shares its name with the now-public shared index of a different shape.
+    status: pending
+    batch: M131
+    commits: []
+  - id: F471
+    source: F296
+    description: The alternate-index doc still says it is not the key-shaped folded-keys index one, which with that index now published could name it as the published one.
+    status: pending
+    batch: M131
+    commits: []
+  - id: F472
+    source: F296
+    description: The utility module's doc still opens by saying it holds no girsync-specific state, though the module now publishes the crate's keying rule and the cache vocabulary.
+    status: pending
+    batch: M130
+    commits: []
 ```
 
 ## Human checklist
@@ -4232,6 +4276,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M51 review checkpoint opened: F294 and F296
+  `in_progress` → `pending_review`, commits `51660f8f`, `0671b2d8`, `b78aa1a3`;
+  review M51 `pending` → `in_progress`, base `efdf302e`, head `b78aa1a3`.
 - 2026-11-16 — follow-up batch M51 started: F294 and F296 `pending` →
   `in_progress`; `active_batch: M50` → `M51`.
 - 2026-11-16 — review M50 `done`: F289 kept (e3ad0b31), F291 kept (f49ee66c); no
