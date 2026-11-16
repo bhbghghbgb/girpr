@@ -14,7 +14,7 @@
 //! the blobs alone are enough. A bundle whose manifests survived but whose index
 //! was incomplete fails here, and should.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::assemble::ChunkSource;
 use crate::assemble::ranges::Layout;
@@ -102,14 +102,14 @@ impl Ref<'_> {
 pub struct ChunksByFile<'i> {
     rows: Vec<Ref<'i>>,
     /// `chunk_id` -> decompressed size, for the layout check.
-    sizes: BTreeMap<&'i str, i64>,
+    sizes: HashMap<&'i str, i64>,
 }
 
 impl<'i> ChunksByFile<'i> {
     /// Read every reference in the index, once.
     pub fn build(index: &'i ChunkIndex) -> Self {
         let mut rows: Vec<Ref<'i>> = Vec::new();
-        let mut sizes = BTreeMap::new();
+        let mut sizes = HashMap::new();
         for b in &index.blobs {
             sizes.insert(b.props.chunk_id.as_str(), b.props.uncompressed_size as i64);
             rows.extend(b.referenced_by.iter().map(|r| Ref {
