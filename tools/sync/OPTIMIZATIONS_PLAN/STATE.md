@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M41
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T01:41:48Z
+last_updated: 2026-11-16T02:05:54Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -882,8 +882,22 @@ reviews:
     result: null
     followups: []
   - batch: M41
-    status: pending
+    status: in_progress
     tasks: [F267, F268]
+    base: d53d952c
+    head: 1f950a9a
+    result: null
+    followups: []
+  - batch: M98
+    status: pending
+    tasks: [F406, F407]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M99
+    status: pending
+    tasks: [F405]
     base: null
     head: null
     result: null
@@ -2705,15 +2719,15 @@ followups:
   - id: F267
     source: F189
     description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
-    status: in_progress
+    status: pending_review
     batch: M41
-    commits: []
+    commits: [a6850a91]
   - id: F268
     source: F189
     description: The README update command names a placeholder where a real path would go, so it is prose rather than a runnable example, unlike the rest of the block it sits in.
-    status: in_progress
+    status: pending_review
     batch: M41
-    commits: []
+    commits: [1f950a9a]
   - id: F269
     source: F192
     description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
@@ -3549,6 +3563,24 @@ followups:
     status: pending
     batch: M96
     commits: []
+  - id: F405
+    source: F268
+    description: DESIGN-NOTES.md still spells the repair as an update command with a placeholder folder, the same placeholder wording the README no longer uses.
+    status: pending
+    batch: M99
+    commits: []
+  - id: F406
+    source: F267
+    description: The synopsis lists the concurrency family of flags only on the sync line, though the family is on every subcommand and the README says so under Concurrency.
+    status: pending
+    batch: M98
+    commits: []
+  - id: F407
+    source: F267
+    description: The synopsis now shows the hash flags twice while the other repeatable flags are shown once, so the synopsis mixes two ways of writing a repeatable flag.
+    status: pending
+    batch: M98
+    commits: []
 ```
 
 ## Human checklist
@@ -3580,6 +3612,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M41 review checkpoint opened: F267 and F268
+  `in_progress` → `pending_review`, commits `a6850a91`, `1f950a9a`; review M41
+  `pending` → `in_progress`, base `d53d952c`, head `1f950a9a`.
 - 2026-11-16 — follow-up batch M41 started: F267 and F268 `pending` →
   `in_progress`; `active_batch: M40` → `M41`.
 - 2026-11-16 — review M40 `done`: F266 kept (a4740687, 4719ce4f, a17b7270); no fix
