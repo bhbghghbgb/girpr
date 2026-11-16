@@ -916,8 +916,8 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     // only what the map kept: the second phase never touches a path the
     // filter hid. Each event names its phase, so the case says which phase
     // reports which count, rather than stating the two numbers as a set.
-    let phase_a_progress = events_with(&logged, "scan progress: phase a");
-    let phase_c_progress = events_with(&logged, "scan progress: phase c");
+    let phase_a_progress = events_with(&logged, "effective progress: phase a");
+    let phase_c_progress = events_with(&logged, "effective progress: phase c");
     assert!(
         !phase_a_progress.is_empty() && !phase_c_progress.is_empty(),
         "the phases report their progress: {}",
@@ -940,7 +940,7 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
 
     // The map starts from the walk's count: the filter has not been applied
     // yet at this point, so the excluded file is in it.
-    let effective = events_with(&logged, "effective start");
+    let effective = events_with(&logged, "effective start: phase a");
     assert_eq!(
         effective.len(),
         1,
@@ -950,6 +950,22 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     assert_eq!(
         effective[0]["fields"]["live"], HEARTBEAT_ENTRIES,
         "the map starts from every entry the walk saw"
+    );
+
+    // The second phase's start names its phase the same way, and it says how
+    // much work that phase has: the paths the map kept and the digests they
+    // still owe.
+    let phase_c_start = events_with(&logged, "effective start: phase c");
+    assert_eq!(
+        phase_c_start.len(),
+        1,
+        "one phase C, one effective-start event: {}",
+        serde_json::to_string(&logged).unwrap()
+    );
+    assert_eq!(
+        phase_c_start[0]["fields"]["pending"],
+        HEARTBEAT_ENTRIES - 1,
+        "the phase that hashes owes a digest for every path the map kept"
     );
 
     // The map's own counts, one event per phase, and each event names the

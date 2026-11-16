@@ -92,11 +92,15 @@ pub fn resolve_folder(
             .all(|rel| phase_a.map.get(rel.as_str()).is_some_and(|e| e.is_file())),
         "every planned path is a file this side's map holds"
     );
+    // The message names the phase. Both phases report a start, a progress and
+    // a done, so the phase is the only thing that tells these three events
+    // from the other three — and it is named the same way in all six of
+    // them: by its letter.
     info!(
         root = %root.display(),
         pending = pending.len(),
         digests = plan.digest_count(),
-        "resolve start"
+        "effective start: phase c"
     );
 
     // What the workers share: the batch handle, the map they are building, and the
@@ -164,10 +168,11 @@ pub fn resolve_folder(
             // were reached rather than the order workers got scheduled to log.
             //
             // The message names the phase. Two phases report progress under one
-            // name, and the fields do not tell them apart: the phase that reads
-            // no bytes reports `hashed = 0` for the whole run, so a reader (or a
-            // parser) that cannot say which phase an event came from cannot say
-            // anything about it. The name says.
+            // name, and the fields do not tell them apart: the phase that
+            // reads no bytes reports `hashed = 0` for the whole run, so a
+            // reader (or a parser) that cannot say which phase an event came
+            // from cannot say anything about it. The name says, and it says
+            // it the way this phase's start and done events say it.
             if sink.hashed.is_multiple_of(100)
                 || sink.hashed == total
                 || sink.last_prog.elapsed().as_secs() >= 5
@@ -179,7 +184,7 @@ pub fn resolve_folder(
                     hashed = sink.hashed,
                     cache_hit = 0,
                     elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "scan progress: phase c"
+                    "effective progress: phase c"
                 );
                 sink.last_prog = std::time::Instant::now();
             }
@@ -248,7 +253,9 @@ pub fn resolve_folder(
     // The message names the phase. The map is finished in two phases and each
     // of them says so, because the fields do not: only the phase that hashes
     // reports the stat-only count, so an event without that field is the other
-    // phase's — a thing a reader has to know to read the log at all.
+    // phase's — a thing a reader has to know to read the log at all. The
+    // phase is named by its letter, the way its start and progress events
+    // name it.
     info!(
         root = %root.display(),
         files = phase_a.stats.files,

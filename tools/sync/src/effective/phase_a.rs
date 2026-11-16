@@ -317,13 +317,17 @@ pub fn scan_stat_only(
     // The ancestors an included entry pulled back in, collected during the walk
     // and inserted after it. The fix-up below says why they wait.
     let mut pending_ancestors: HashSet<&str> = HashSet::new();
+    // The message names the phase. Both phases report a start, a progress and
+    // a done, so the phase is the only thing that tells these three events
+    // from the other three — and it is named the same way in all six of
+    // them: by its letter.
     info!(
         root = %root.display(),
         live = live.len(),
         no_trust_cached_hashes,
         dry_run,
         algos = ?algos,
-        "effective start"
+        "effective start: phase a"
     );
     let t_eff = std::time::Instant::now();
     let mut n_done: usize = 0;
@@ -474,7 +478,8 @@ pub fn scan_stat_only(
             // one name, and the fields do not tell them apart: this one reads
             // no bytes, so it reports `hashed = 0` for the whole run, and a
             // reader (or a parser) that cannot say which phase an event came
-            // from cannot say anything about it. The name says.
+            // from cannot say anything about it. The name says, and it says
+            // it the way this phase's start and done events say it.
             if n_done.is_multiple_of(100) || last_prog.elapsed().as_secs() >= 5 {
                 info!(
                     root = %root.display(),
@@ -483,7 +488,7 @@ pub fn scan_stat_only(
                     hashed = 0,
                     cache_hit = 0,
                     elapsed_s = t_eff.elapsed().as_secs_f64(),
-                    "scan progress: phase a"
+                    "effective progress: phase a"
                 );
                 last_prog = std::time::Instant::now();
             }
@@ -651,7 +656,9 @@ pub fn scan_stat_only(
     // The message names the phase. The map is finished in two phases and each
     // of them says so, because the fields do not: only the phase that hashes
     // reports the stat-only count, so an event without that field is this
-    // phase's — a thing a reader has to know to read the log at all.
+    // phase's — a thing a reader has to know to read the log at all. The
+    // phase is named by its letter, the way its start and progress events
+    // name it.
     info!(
         root = %root.display(),
         files = stats.files,
