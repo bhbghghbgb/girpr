@@ -79,7 +79,7 @@ until the main tasks and rework are done.
 
 | ID | Source | Area | Description | Status |
 |---|---|---|---|---|
-| F-01 | P0-02 | manifest diff counts (`diff/paths.diff.json`) | `Counts::folders` is serialized but never incremented; folder rows are tallied as added/common, so the published `folders` count is always 0 even when folders exist. Increment it in `diff_field` or remove the dead field. Group with folder-policy / dead-fields work. | pending_review (FB-1) — commit a7c6ff6b |
+| F-01 | P0-02 | manifest diff counts (`diff/paths.diff.json`) | `Counts::folders` is serialized but never incremented; folder rows are tallied as added/common, so the published `folders` count is always 0 even when folders exist. Increment it in `diff_field` or remove the dead field. Group with folder-policy / dead-fields work. | completed (FB-1) — commit a7c6ff6b |
 | F-02 | P1-02 | test comparison helper (`tests/bundle_diff.rs`) | `normalize` (~L423) gunzips any path ending in `.gz` — the heuristic removed from production. Would fail comparing a non-gzip captured `.gz` asset; apply the same document-aware rule. | dropped: test-harness only and speculative; no published-artifact or user-visible impact |
 | F-03 | P1-05 | diagnostics wording (`src/assemble/ranges.rs`) | `Layout::of` (~L226) error says "the manifest declares" even on the verify path where the figure comes from a patchmap side. Tighten the wording for that caller. | dropped: pure wording nit, no behavior change |
 | F-04 | P2-04 | select ordinals (`src/select/mod.rs`) | A forced path rejected in phase 0 can share its `<class>` capture id with a different, cheaper phase-2 pick of the same class; the debug guard only detects this, release still emits a misleading rejection record. Fix ordinal assignment so ids are unique. | todo (FB-2) |
@@ -98,7 +98,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 
 | Batch | Follow-ups | Status | Notes |
 |---|---|---|---|
-| FB-1 | F-01 | todo | Published `folders` count is always 0 in `diff/paths.diff.json`; one-spot fix, no behavioral risk. Highest value / lowest risk. |
+| FB-1 | F-01 | done | Published `folders` count is always 0 in `diff/paths.diff.json`; one-spot fix, no behavioral risk. Highest value / lowest risk. Confirmed completed: count now truthful, document shape unchanged. |
 | FB-2 | F-04 | todo | Selection ordinal collision can silently overwrite a patchmap in release; debug guard only detects. Sensitive — careful review. |
 | FB-3 | F-12 | todo | Symlinked `MANIFEST.json` to outside the root is accepted and surfaces in `verify list`; verify other `probe_manifest` callers still work. |
 
