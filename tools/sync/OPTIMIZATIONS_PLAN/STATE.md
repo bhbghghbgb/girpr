@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M50
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T09:27:56Z
+last_updated: 2026-11-16T09:42:13Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1197,8 +1197,29 @@ reviews:
     result: null
     followups: []
   - batch: M50
-    status: pending
+    status: in_progress
     tasks: [F289, F291]
+    base: 0ee08518
+    head: f49ee66c
+    result: null
+    followups: []
+  - batch: M126
+    status: pending
+    tasks: [F461, F465]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M127
+    status: pending
+    tasks: [F462]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M128
+    status: pending
+    tasks: [F463, F464]
     base: null
     head: null
     result: null
@@ -3076,9 +3097,9 @@ followups:
   - id: F289
     source: F203
     description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
-    status: in_progress
+    status: pending_review
     batch: M50
-    commits: []
+    commits: [e3ad0b31]
   - id: F290
     source: F203
     description: The cache-prefix helper's doc names the ASCII-case comparison without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
@@ -3089,9 +3110,9 @@ followups:
   - id: F291
     source: F203
     description: The new fourth fold site names the cache-prefix helper but not its exact-name counterpart, which states the same ASCII-only comparison.
-    status: in_progress
+    status: pending_review
     batch: M50
-    commits: []
+    commits: [f49ee66c]
   - id: F292
     source: F204
     description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
@@ -4129,6 +4150,36 @@ followups:
     status: pending
     batch: M125
     commits: []
+  - id: F461
+    source: F289
+    description: The hash-list parser still says its ASCII-only fold is like the algorithm's own parser and the path key, the same conflation this batch removed from the digest set, in a module outside that file list.
+    status: pending
+    batch: M126
+    commits: []
+  - id: F462
+    source: F289
+    description: The design notes' fold section still covers only the path folds; it never names the algorithm-name fold or the event-name fold, so a reader scanning the notes for folds meets only paths.
+    status: pending
+    batch: M127
+    commits: []
+  - id: F463
+    source: F291
+    description: On POSIX the exact-match spelling of the cache reservation is written twice, once as the prefix helper's starts-with and once as the exact-name helper's equality, where the Windows branch has one comparison for both.
+    status: pending
+    batch: M128
+    commits: []
+  - id: F464
+    source: F291
+    description: The cache-relation entry point names the prefix helper but not the exact-name counterpart, so it is the one entry point where a reader following one rule does not meet the other.
+    status: pending
+    batch: M128
+    commits: []
+  - id: F465
+    source: F289
+    description: The name resolver the digest set's fold goes through states its ASCII-only rule but never says which question it answers relative to the path folds.
+    status: pending
+    batch: M126
+    commits: []
 ```
 
 ## Human checklist
@@ -4160,6 +4211,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M50 review checkpoint opened: F289 and F291
+  `in_progress` → `pending_review`, commits `e3ad0b31`, `f49ee66c`; review M50
+  `pending` → `in_progress`, base `0ee08518`, head `f49ee66c`.
 - 2026-11-16 — follow-up batch M50 started: F289 and F291 `pending` →
   `in_progress`; `active_batch: M49` → `M50`.
 - 2026-11-16 — review M49 `done`: F287, F288 and F292 all kept, with a docs-only
