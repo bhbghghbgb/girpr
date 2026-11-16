@@ -278,8 +278,10 @@ by doing *less* would be wrong.
 
 ### `--hash-all-of` / `--hash-any-of`
 
-Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive. They
-answer one question — *how many of the named algorithms must a comparison be able
+Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive, and
+**each occurrence names one algorithm** — `--hash-all-of md5 --hash-all-of sha256`
+asks for two, and `--hash-all-of md5 sha256` is refused before the run starts.
+They answer one question — *how many of the named algorithms must a comparison be able
 to use?* — and the difference is what happens when a side cannot supply them:
 
 | | requirement on an undecided pair | a folder side short of one | a **record** side short of one |
@@ -293,8 +295,8 @@ stat or presence, so no algorithm is required and no coverage is checked.
 
 `--hash-any-of` picks cheapest-first — an algorithm both sides already hold costs
 no read, one costs a read, two cost two — and within a tier it takes the **order you
-wrote the flags in**, so `--hash-any-of sha256 md5` prefers sha256. The
-choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
+wrote the flags in**, so `--hash-any-of sha256 --hash-any-of md5` prefers sha256.
+The choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
 
 That makes it strictly weaker than all-of, and never weaker than the pick: every
 algorithm it chooses is obtainable on *both* sides, so a pair settled this way is
@@ -302,11 +304,11 @@ settled by a digest both sides hold. That is what separates it from simply skipp
 whatever digest is missing and reporting the pair equal on size+mtime alone.
 
 Reach for it when a side holds only some of what you would otherwise demand — a
-record written by an older run, typically. An `--hash-all-of md5` history compared with
-`--hash-any-of md5 sha256` succeeds wherever the record has md5, reading one digest
-instead of refusing and without repopulating the tree. On two *folders* it is mostly
-free money: both can always backfill, so the saving is whatever the caches already
-cover.
+record written by an older run, typically. An `--hash-all-of md5` history compared
+with `--hash-any-of md5 --hash-any-of sha256` succeeds wherever the record has
+md5, reading one digest instead of refusing and without repopulating the tree. On
+two *folders* it is mostly free money: both can always backfill, so the saving is
+whatever the caches already cover.
 
 `--hash-all-of none` is the stat-only audit — no hashing at all, decisions by
 size+mtime only (verify-after-copy also size+mtime). `none` is **not** accepted by
@@ -428,9 +430,9 @@ the event's fields, and the error text is what the run says as it fails. The
 algorithm named is the **first in canonical order** among those that disagreed
 (`md5` before `sha256`), never the order the flags were typed in: the copy
 computes and judges a *set* of algorithms, and a set carries no order, so
-`--hash-all-of sha256 md5` still names `md5` first. It is the same fixed order
-the `digest-differs` tag uses, so a parser can switch on the algorithm named in
-either place.
+`--hash-all-of sha256 --hash-all-of md5` still names `md5` first. It is the same
+fixed order the `digest-differs` tag uses, so a parser can switch on the algorithm
+named in either place.
 
 Under `--hash-all-of none` there is no digest to fold into the loop, so the copy
 is left to `std::io::copy` and whatever fast path that has between two files.
@@ -641,7 +643,7 @@ Where the record holds *some* of what you asked for, it reads one algorithm inst
 of refusing:
 
 ```
-girsync compare-self --dir src --hash-any-of md5 sha256
+girsync compare-self --dir src --hash-any-of md5 --hash-any-of sha256
 ```
 
 An audit of an `--hash-all-of md5` record then succeeds wherever the record has md5,
@@ -764,11 +766,12 @@ Three things worth knowing:
 `digest-differs` names the algorithms that **actually disagreed**, which under
 `--hash-any-of` is not the list you asked for — the planner settles a pair with one
 digest, and the tag says which. The list is always in a **fixed order** (`md5` before
-`sha256`), not the order the flags were typed, so `--hash-all-of sha256 md5` reports
-`digest-differs:md5+sha256`. That makes the tag a function of the disagreement rather
-than of how two flags were ordered, which is what lets a parser switch on it. A failed
-copy's verify message names its algorithm in the same fixed order, and its shape is
-spelled out in [What a copy costs](#what-a-copy-costs). A parser splits on the first
+`sha256`), not the order the flags were typed, so
+`--hash-all-of sha256 --hash-all-of md5` reports `digest-differs:md5+sha256`. That
+makes the tag a function of the disagreement rather than of how two flags were
+ordered, which is what lets a parser switch on it. A failed copy's verify message
+names its algorithm in the same fixed order, and its shape is spelled out in
+[What a copy costs](#what-a-copy-costs). A parser splits on the first
 `:`; the JSON form is a flat string
 (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
 

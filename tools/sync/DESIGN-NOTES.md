@@ -936,9 +936,10 @@ one is a real loss:
 - The **request's order is a contract with the user.** `pick_one` breaks an
   `--hash-any-of` tie in the order the flags were typed, and
   `planner::any_of_breaks_a_tie_by_the_flag_order` pins it. Make the request a set
-  and the tie-break silently becomes alphabetical, so `--hash-any-of sha256 md5`
-  stops meaning what it says — with no test failing, because every fixture that
-  names two algorithms happens to name them in canonical order.
+  and the tie-break silently becomes alphabetical, so
+  `--hash-any-of sha256 --hash-any-of md5` stops meaning what it says — with no
+  test failing, because every fixture that names two algorithms happens to name
+  them in canonical order.
 - The **answers have to be a set** because there is one per path, for every path in
   the tree, and under `--hash-all-of` every one of them is the same value. A list
   there is a heap allocation per path holding a fresh clone of the request; a set
@@ -946,6 +947,15 @@ one is a real loss:
 
 Neither shape is derivable from the other, and the reason each is right is
 opposite to the other's.
+
+**The request is spelled one algorithm per occurrence.** `--hash-any-of` and
+`--hash-all-of` are repeatable, and each occurrence names one algorithm, so a
+request for two is written `--hash-any-of sha256 --hash-any-of md5`. A flag that
+named two values in one occurrence is refused by the parser before the run
+starts, so every place that spells these flags — the CLI's own help, the README,
+and the remedy a coverage error prints — repeats the flag. The remedy matters
+most: it is printed for the user to paste, and in the other shape it is a dead
+end rather than a way out.
 
 **The order is a contract where a choice is made, and the copy path makes none.**
 `copy_one` takes the run's algorithms as an `AlgoSet` and judges exactly that

@@ -22,12 +22,12 @@
 //! ## The rows that earn their place
 //!
 //! - `digest-differs:md5+sha256` is the one that pins **which** algorithms a tag
-//!   names. `--hash-all-of md5 sha256` asks for both, so a reason built from the
-//!   *request* would look identical to one built from the *disagreement* — and the
-//!   difference is the whole usefulness of the field.
+//!   names. `--hash-all-of md5 --hash-all-of sha256` asks for both, so a reason
+//!   built from the *request* would look identical to one built from the
+//!   *disagreement* — and the difference is the whole usefulness of the field.
 //! - The tag's **order** is pinned separately, and is the disagreement's rather
-//!   than the flag order's: `--hash-all-of sha256 md5` produces the same
-//!   `digest-differs:md5+sha256`, so a parser can compare tags without first
+//!   than the flag order's: `--hash-all-of sha256 --hash-all-of md5` produces the
+//!   same `digest-differs:md5+sha256`, so a parser can compare tags without first
 //!   normalising them.
 //! - The `any-of` row is the same claim against a different mechanism. There the run
 //!   asked for two algorithms and the planner picked one; naming the request would

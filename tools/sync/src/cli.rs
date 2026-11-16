@@ -75,6 +75,10 @@ pub struct Cli {
 pub struct CommonArgs {
     /// Hash algorithm; repeatable (md5, sha256). "none" disables hashing entirely.
     ///
+    /// **One algorithm per occurrence**: `--hash-all-of md5 --hash-all-of sha256`
+    /// names two. A flag that names two values at once is refused before the run
+    /// starts.
+    ///
     /// **Every** algorithm named here must be available on both sides of a pair that
     /// size+mtime cannot settle. A folder backfills one it lacks; a record has no
     /// filesystem to read from, so a record that lacks one is an error naming the
@@ -89,9 +93,12 @@ pub struct CommonArgs {
     pub hash_all_of: Vec<String>,
     /// As `--hash-all-of`, but only **one** of the named algorithms is required.
     ///
+    /// **One algorithm per occurrence**, as above, so two of them are written
+    /// `--hash-any-of sha256 --hash-any-of md5`.
+    ///
     /// The run picks which, per pair: cheapest first — one both sides already hold
     /// costs nothing, one costs a read, two cost two — and within a tier, the order
-    /// given here. So `--hash-any-of sha256 md5` prefers sha256.
+    /// given here, so the example above prefers sha256.
     ///
     /// Use it when a side holds only some of what you would otherwise demand, which
     /// is the common case for a record written by an older run: any-of then reads
