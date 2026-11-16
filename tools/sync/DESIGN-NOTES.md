@@ -130,9 +130,10 @@ from seeing a case difference Windows really has.
 **The on-disk spelling lookup is neither.** `on_disk_name` in
 `commands/sync/plan/link.rs` asks which directory entry the OS would open, so
 it compares Unicode-lowercased names. It is a question about the filesystem,
-not about how a run keys its map, and it follows neither rule above. The same
-file holds both — the on-disk lookup and the key, side by side, answering two
-different questions.
+not about how a run keys its map, and it follows neither rule above. The
+lookup and the path key live in different modules — the lookup in
+`commands/sync/plan/link.rs`, the key in `util` — and each answers its own
+question.
 
 **One mapping, one comparison, two questions.** The Unicode lowercase mapping
 the on-disk lookup compares with is the one the identity rule's fallback
@@ -182,7 +183,7 @@ for the planner's use of the key; and the `plan::tests` cases
 `a_case_differing_mirrored_target_is_refused`,
 `a_case_differing_terminal_is_spared_by_the_full_pass` and
 `a_case_differing_alias_is_spared_under_the_walk_key` for the on-disk lookup
-and the key side by side, with
+and the path key, with
 `plan::tests::the_identity_rule_and_the_on_disk_lookup_agree_on_a_non_ascii_spelling`
 for the two sites that share the mapping, compared with each other.
 
