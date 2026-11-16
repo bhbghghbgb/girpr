@@ -62,6 +62,29 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The crate's `/`-separated form of a relative path.
+///
+/// Every relative path the crate keeps — a walk's `rel`, a plan entry, a path
+/// key — is `/`-separated whatever the host. On Windows the filesystem's
+/// separator is `\`, so the host spelling has to be rewritten. On POSIX `/` is
+/// already the separator and a backslash is an ordinary filename character:
+/// rewriting it would turn `\lead.txt` into an absolute path, which replaces the
+/// root it is joined onto, and `a\b.txt` into `a/b.txt`, which does not exist on
+/// disk. There the input is returned unchanged.
+pub(crate) fn slash_rel(rel: &str) -> String {
+    slash_rel_for(rel, cfg!(windows))
+}
+
+/// The rewrite itself, with the host's separator taken as an argument so the
+/// rule can be checked for both hosts on either one.
+fn slash_rel_for(rel: &str, windows: bool) -> String {
+    if windows {
+        rel.replace('\\', "/")
+    } else {
+        rel.to_owned()
+    }
+}
+
 /// The ASCII-case comparison: ASCII case folded, every other byte exact.
 ///
 /// **The crate's one ASCII-case comparison.** It states the **path key's** rule
@@ -527,6 +550,28 @@ mod tests {
         assert!(path_within(Path::new("C:/A/b"), a));
         assert!(!path_within(Path::new("C:/AB"), a));
         assert!(!path_within(Path::new("C:/"), a));
+    }
+
+    /// Separator rewriting belongs to the host whose separator is a backslash.
+    /// On POSIX a backslash is part of a name — leading or in the middle — and
+    /// must survive unchanged, or a relative path becomes absolute or names a
+    /// file that is not on disk. Windows keeps the old rewrite.
+    #[test]
+    fn slash_rel_follows_the_host_separator() {
+        let expected = if cfg!(windows) { "a/b.txt" } else { "a\\b.txt" };
+        assert_eq!(slash_rel("a\\b.txt"), expected);
+    }
+
+    /// The POSIX answer, asked directly so it is pinned on every host: a
+    /// backslash is a literal character and the relative path stays relative.
+    /// A leading one must never become `/lead.txt`, which would replace the
+    /// root it is joined onto. Windows still rewrites its own separator.
+    #[test]
+    fn slash_rel_leaves_posix_relative_paths_untouched() {
+        for rel in ["a\\b.txt", "dir\\sub\\f.txt", "\\lead.txt"] {
+            assert_eq!(slash_rel_for(rel, false), rel);
+        }
+        assert_eq!(slash_rel_for("dir\\sub\\f.txt", true), "dir/sub/f.txt");
     }
 
     /// A cache belongs to the root it sits in, so the reservation is per

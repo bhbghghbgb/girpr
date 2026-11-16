@@ -313,6 +313,45 @@ fn a_copy_that_wipes_a_blocking_dir_is_not_also_planned_for_removal() {
     assert!(dst.join("clash").is_file(), "and the copy happened");
 }
 
+/// A backslash is a literal filename character on POSIX, not a separator. A
+/// walk that rewrote it would plan `\lead.txt` at an absolute path — which
+/// replaces the destination root when joined onto it — and `a\b.txt` under a
+/// directory that does not exist on disk. The plan must keep both names as the
+/// disk spells them, and the copies must land under dst with those names.
+#[cfg(not(windows))]
+#[test]
+fn a_backslash_in_a_posix_filename_stays_literal_and_the_copy_stays_under_dst() {
+    let t = temp_root("posix_backslash");
+    let src = t.subdir("src");
+    let dst = t.subdir("dst");
+    wfile(&src, "a\\b.txt", b"inside");
+    wfile(&src, "\\lead.txt", b"leading");
+
+    // Read the plan before the real run: an absolute `/lead.txt` would copy
+    // outside dst, so the dry run is where that must be caught, before a byte is
+    // written anywhere.
+    let dry = run_binary(&src, &dst, &["--dry-run"], &[]);
+    let copies = paths(&dry, "copy");
+    assert!(copies.contains(&"\\lead.txt"), "{dry:?}");
+    assert!(copies.contains(&"a\\b.txt"), "{dry:?}");
+    assert!(!copies.contains(&"/lead.txt"), "{dry:?}");
+    assert!(!copies.contains(&"a/b.txt"), "{dry:?}");
+    assert!(entry_names(&dst).is_empty(), "the dry run writes nothing");
+
+    assert_eq!(cmd_sync(sync_mem(src, dst.clone()), &log()).unwrap(), 0);
+
+    assert_eq!(rfile(&dst, "\\lead.txt"), b"leading");
+    assert_eq!(rfile(&dst, "a\\b.txt"), b"inside");
+    assert_eq!(
+        entry_names(&dst),
+        vec!["\\lead.txt".to_string(), "a\\b.txt".to_string()]
+    );
+    assert!(
+        !dst.join("a").exists(),
+        "the backslash did not invent a directory"
+    );
+}
+
 #[test]
 fn run_sync_rejects_bad_inputs() {
     let t = temp_root("reject");

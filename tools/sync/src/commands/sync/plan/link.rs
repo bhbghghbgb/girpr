@@ -28,9 +28,9 @@ use anyhow::{Context, Result};
 use super::super::rename::DiskSpelling;
 use crate::effective::EffRec;
 use crate::link::try_is_link;
-use crate::util::path_key;
 #[cfg(windows)]
 use crate::util::unicode_case_eq;
+use crate::util::{path_key, slash_rel};
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
@@ -295,7 +295,7 @@ pub(super) fn target_rel(target: &Path, canonical_dst: &Path) -> Result<Option<S
     };
     let name = on_disk_name(&parent, name)?.unwrap_or_else(|| name.to_owned());
     let rel = parent_rel.join(name);
-    let rel = rel.to_string_lossy().replace('\\', "/");
+    let rel = slash_rel(&rel.to_string_lossy());
     Ok((!rel.is_empty()).then_some(rel))
 }
 

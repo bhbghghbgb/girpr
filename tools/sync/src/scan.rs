@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 use tracing::{debug, info, trace};
 
-use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
+use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of, slash_rel};
 
 /// How many entries the walk pushes between two heartbeats.
 ///
@@ -35,6 +35,9 @@ pub const HEARTBEAT_ENTRIES: usize = 2000;
 #[derive(Clone, Debug)]
 pub struct LiveEnt {
     /// `/`-separated path relative to the walk root, original casing preserved.
+    ///
+    /// On POSIX a backslash is a literal filename character, not a separator,
+    /// and stays in the name exactly as the disk spells it.
     pub rel: String,
     pub is_dir: bool,
     /// 0 for dirs: dirs are compared by presence only.
@@ -96,8 +99,8 @@ pub fn walk_live(root: &Path, max_depth: usize) -> Result<Vec<LiveEnt>> {
                     .strip_prefix(root)
                     .ok()
                     .and_then(|p| p.to_str())
-                    .with_context(|| format!("non-UTF8 path {}", ent.path().display()))?
-                    .replace('\\', "/");
+                    .with_context(|| format!("non-UTF8 path {}", ent.path().display()))?;
+                let rel = slash_rel(rel);
                 if rel.is_empty() {
                     continue;
                 }
@@ -254,6 +257,29 @@ mod tests {
                 "nest/keep.txt"
             ]
         );
+    }
+
+    /// On POSIX a backslash is a filename character. A leading one must not turn
+    /// the relative path into an absolute one (which would replace the root when
+    /// joined onto it), and an interior one must not invent a directory that does
+    /// not exist on disk. The walk reports both names exactly as the disk spells
+    /// them.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_backslash_in_a_posix_name_stays_a_literal_character() {
+        let root = girpr_tempdir::TempDir::new("girsync_scan", "backslash");
+        for name in ["\\lead.txt", "a\\b.txt"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+        }
+
+        let mut rels: Vec<String> = walk_live(&root, 4)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.rel)
+            .collect();
+        rels.sort();
+
+        assert_eq!(rels, vec!["\\lead.txt", "a\\b.txt"]);
     }
 
     /// `max_depth` is the walk's own bound, and the cache prune must not consume
