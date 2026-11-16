@@ -917,20 +917,33 @@ impl Fetcher {
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            let remaining = self.error_bodies.remaining();
-            let drained = drain_error_body(resp, self.max_response_bytes, remaining, url).await;
+            // Charge the run budget *before* reading, so concurrent failures
+            // divide it instead of each buffering up to the whole remainder.
+            // The reservation bounds the retain buffer; an early return or a
+            // panic refunds the charge through its Drop.
+            let reservation = self.error_bodies.reserve(self.max_response_bytes);
+            let drained = drain_error_body(
+                resp,
+                self.max_response_bytes,
+                reservation.granted().min(self.max_response_bytes),
+                url,
+            )
+            .await;
             let bytes_in = drained.bytes_received;
-            self.error_bodies.push(ErrorBody {
-                seq,
-                url: url.to_string(),
-                final_url: final_url.clone(),
-                status,
-                attempts,
-                content_type,
-                bytes_received: bytes_in,
-                body: drained.body,
-                truncated: drained.truncated,
-            });
+            self.error_bodies.push_reserved(
+                ErrorBody {
+                    seq,
+                    url: url.to_string(),
+                    final_url: final_url.clone(),
+                    status,
+                    attempts,
+                    content_type,
+                    bytes_received: bytes_in,
+                    body: drained.body,
+                    truncated: drained.truncated,
+                },
+                reservation,
+            );
             let err = ApiError::Status {
                 url: url.to_string(),
                 status,
