@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M42
+active_batch: M43
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T02:59:08Z
 tasks:
@@ -2782,13 +2782,13 @@ followups:
   - id: F273
     source: F193
     description: The workspace nextest configuration points at a source path that no longer exists, because the module was split into a directory, so the pointer a reader would follow leads nowhere.
-    status: pending
+    status: in_progress
     batch: M43
     commits: []
   - id: F274
     source: F193
     description: The three rename failure hooks are three separate variables where one variable with a stage value would match the shape of the copy and flush hooks; the asymmetry is undocumented.
-    status: pending
+    status: in_progress
     batch: M43
     commits: []
   - id: F275
@@ -3680,6 +3680,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M43 started: F273 and F274 `pending` →
+  `in_progress`; `active_batch: M42` → `M43`.
 - 2026-11-16 — review M42 `done`: F269 kept (0ac9ccee), F270 fixed (8a81858d,
   8966a091), F271 kept (afe44b2e); follow-ups F413 and F414 appended with batch
   `M102`. F269–F271 `pending_review` → `completed`.
