@@ -945,6 +945,92 @@ mod tests {
         );
     }
 
+    /// A declared size above the chunk sum fails A11, and the message names
+    /// both numbers so a reader can see which figure disagreed.
+    #[test]
+    fn a_declared_size_above_the_chunk_sum_fails_a11_naming_both() {
+        let f = Fixture::build("size-above");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE + 1,
+        )
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("225"),
+            "names the chunk sum and the declared size: {e}"
+        );
+    }
+
+    /// A declared size below the chunk sum fails A11 too: the check is
+    /// symmetric, not a one-sided "at least this many bytes" guard.
+    #[test]
+    fn a_declared_size_below_the_chunk_sum_fails_a11() {
+        let f = Fixture::build("size-below");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE - 1,
+        )
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("223"),
+            "names the chunk sum and the declared size: {e}"
+        );
+    }
+
+    /// A side whose declared size matches its chunks still rebuilds cleanly,
+    /// with the declared size recorded on the layout rather than the sum we
+    /// could have derived ourselves.
+    #[test]
+    fn a_matching_declared_size_still_rebuilds_and_passes() {
+        let f = Fixture::build("size-match");
+        let r = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE,
+        )
+        .expect("rebuilds");
+        assert!(r.layout.is_clean());
+        assert_eq!(r.layout.declared_size, SIDE_SIZE);
+        assert_eq!(r.layout.total, SIDE_SIZE);
+        assert_eq!(r.bytes.len() as i64, SIDE_SIZE);
+    }
+
+    /// A hostile declared size is a typed error naming the side, never a
+    /// negative allocation or a panic in the layout check.
+    #[test]
+    fn a_negative_declared_size_is_a_typed_error_naming_the_side() {
+        let f = Fixture::build("size-negative");
+        let e = rebuild(
+            &f.by_file(),
+            &f.source(),
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            -1,
+        )
+        .unwrap_err();
+        assert!(e.contains("negative"), "{e}");
+        assert!(e.contains("-1"), "names the value: {e}");
+        assert!(e.contains("materialize_old"), "names the side: {e}");
+    }
+
     /// `added` and `removed` are one-sided and must rebuild the side they have,
     /// with the other reported as absent rather than as an error.
     #[test]
