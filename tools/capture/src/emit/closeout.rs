@@ -386,7 +386,19 @@ mod tests {
                 diff_tags: vec![],
             },
             selection: crate::select::Selection {
-                admitted: Vec::new(),
+                // `seed()` writes `game/data.bin` as the one captured file. A14
+                // now reads the tree, so that file has to be an admitted path
+                // or the seeded tree is genuinely dirty.
+                admitted: vec![crate::select::Admission {
+                    capture_id: "data".to_string(),
+                    primary_class: crate::select::Class::Identical,
+                    path: "data.bin".to_string(),
+                    matching_field: "game".to_string(),
+                    state: crate::manifest::diff::State::Identical,
+                    also_satisfies: Vec::new(),
+                    budget_cost: 0,
+                    patch_bytes: 0,
+                }],
                 rejected: Vec::new(),
                 forced_skipped: Vec::new(),
                 forced_unscored: Vec::new(),
@@ -692,11 +704,12 @@ mod tests {
     }
 
     /// Fixture shape: `scratch()` + `seed()` give a `game/` with config.ini and
-    /// one captured file plus a `scan/` file; `run()` declares only
-    /// `game/config.ini` as written. Another file is left under `game/` before
-    /// the close-out runs, so it is on disk but absent from `written`.
+    /// one admitted captured file plus a `scan/` file. Another file is left
+    /// under `game/` before the close-out runs, so the tree is dirty even
+    /// though nothing in the writer's plan mentions it. A14 reads the tree, so
+    /// it must fail and name the stray.
     #[test]
-    fn currently_a_stray_file_under_game_is_checksummed_but_a14_stays_green() {
+    fn a_stray_file_under_game_fails_a14_naming_it() {
         let root = scratch("stray-game");
         seed(&root);
         std::fs::write(
@@ -722,10 +735,10 @@ mod tests {
             .iter()
             .find(|a| a.id == "A14")
             .expect("an A14 row");
-        assert!(a14.ok, "A14 is built from `written`: {}", a14.actual);
+        assert!(!a14.ok, "the stray is on disk: {}", a14.actual);
         assert_eq!(
-            a14.actual,
-            "1 files, all of them config.ini, the scan file, or a captured path"
+            a14.actual, "1 stray path(s): stray.bin",
+            "the detail names the count and the stray path: {a14:?}"
         );
         assert!(
             closed
@@ -737,7 +750,37 @@ mod tests {
                 .ok,
             "the stray is hashed, so A16 agrees too"
         );
-        assert!(closed.fatal.is_none());
+        // A14 is fatal, so the dirty bundle ends the run.
+        let fatal = closed.fatal.as_ref().expect("a fatal A14 finding");
+        for want in ["A14", "stray.bin"] {
+            assert!(fatal.detail.contains(want), "{want} missing: {fatal:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The control for the stray case: the same tree with no stray passes A14.
+    /// The count is of files on disk under `game/`, so it includes the admitted
+    /// captured file as well as `config.ini`. The scan file sits outside
+    /// `game/` in this fixture, so it is not counted.
+    #[test]
+    fn a_clean_game_tree_passes_a14() {
+        let root = scratch("clean-game");
+        seed(&root);
+
+        let closed = run(&root);
+
+        let a14 = closed
+            .selfcheck
+            .assertions
+            .iter()
+            .find(|a| a.id == "A14")
+            .expect("an A14 row");
+        assert!(a14.ok, "a clean tree must pass: {}", a14.actual);
+        assert_eq!(
+            a14.actual,
+            "2 files, all of them config.ini, the scan file, or a captured path"
+        );
+        assert!(closed.fatal.is_none(), "a clean tree must not end the run");
         let _ = std::fs::remove_dir_all(&root);
     }
 

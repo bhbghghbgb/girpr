@@ -1273,6 +1273,36 @@ mod tests {
         }
     }
 
+    /// A missing `game/` is a failure row, not a panic: the walk's error is the
+    /// detail, so a reader sees why the assertion could not enumerate the tree.
+    #[test]
+    fn a_missing_game_directory_is_an_a14_failure_not_a_panic() {
+        let root = girpr_tempdir::TempDir::new("gircap-a14", "missing-game");
+        let selection = crate::select::Selection {
+            admitted: Vec::new(),
+            rejected: Vec::new(),
+            forced_skipped: Vec::new(),
+            forced_unscored: Vec::new(),
+            matrix: Vec::new(),
+            bytes_admitted: 0,
+            budget: crate::select::Budget::unlimited(),
+        };
+        let rows = closing(
+            &root,
+            "7.0.0",
+            "scan",
+            &selection,
+            &[],
+            &BTreeMap::new(),
+            false,
+        );
+        let a14 = rows.iter().find(|r| r.id == "A14").expect("an A14 row");
+        assert!(!a14.ok, "a missing game/ must fail: {a14:?}");
+        assert!(a14.actual.contains("cannot walk"), "{a14:?}");
+        assert!(a14.actual.contains("game"), "{a14:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_result_serialises_lowercase_the_schema_doc_writes() {
         assert_eq!(serde_json::to_string(&Result_::Pass).unwrap(), "\"pass\"");
