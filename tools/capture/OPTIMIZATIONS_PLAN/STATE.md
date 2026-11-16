@@ -31,7 +31,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-14 | Reserve error-body budget before reading (A13) | pending_review | 831c6601 a190e31d | |
 | P1-15 | Deterministic rejection cap (A14) | pending_review | 00fe91aa d4b97a04 | |
 | P1-16 | Blob diagnostic fixes (A15, A16) | pending_review | 6021ebc5 7fb61599 0b8b45e7 | |
-| P1-17 | Numeric and tag-length honesty (A17, D4) | todo | | |
+| P1-17 | Numeric and tag-length honesty (A17, D4) | in_progress | | |
 | P1-18 | Summary log and escaped keys (A18, A19) | todo | | |
 | P2-01 | Separate scoring rank from admission rank (B1) | todo | | |
 | P2-02 | Reconcile `budget_cost` semantics (B2) | todo | | |
