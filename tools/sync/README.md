@@ -1723,7 +1723,8 @@ them; `--dry-run` costs the same again.
   is a folder's own `girpr-cache`** — spelled out, so the command can be pasted as
   it stands. A record that is not a folder's own cache (a `girpr-cache-backup-*`
   copy, say) has nothing that would rebuild it, so the error says so and offers no
-  repopulation; the other two ways out are still named.
+  repopulation; the ways out that need no rebuild are still named — `--hash-all-of
+  none` always, and the other request the error offers where there is one.
 - **A stat-only row can get stuck.** A row whose stat changed arrives with its digests
   dropped (a stale row's are all suspect), and while a stat difference settles the pair
   for free — a size difference, or an mtime one — no comparison rehashes it, so the
