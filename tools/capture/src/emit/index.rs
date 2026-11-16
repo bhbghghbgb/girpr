@@ -809,73 +809,89 @@ mod tests {
     }
 
     #[test]
-    fn a_gzipped_file_is_recorded_as_gzip_so_a_reader_knows_which_digest() {
-        assert_eq!(encoding_of("a.bin"), crate::hash::Encoding::Identity);
-        assert_eq!(encoding_of("a.json.gz"), crate::hash::Encoding::Gzip);
-        assert_eq!(encoding_of("a.json"), crate::hash::Encoding::Identity);
-        let e = &c_of("x.json.gz");
+    fn only_manifest_documents_are_recorded_as_gzip() {
+        // The writer's exact output shape is gzip; every other name — including
+        // a captured asset that merely ends in `.gz` — is plain bytes on disk.
+        assert_eq!(
+            encoding_of("manifests/7.1.0/game.manifest.json.gz"),
+            crate::hash::Encoding::Gzip
+        );
+        assert_eq!(
+            encoding_of("game/assets/pack.gz"),
+            crate::hash::Encoding::Identity
+        );
+        assert_eq!(
+            encoding_of("manifests/7.1.0/game.manifest.json"),
+            crate::hash::Encoding::Identity
+        );
+        // A `.json.gz` name outside the manifest family is still not a document
+        // this tool compressed.
+        assert_eq!(
+            encoding_of("assets/report.json.gz"),
+            crate::hash::Encoding::Identity
+        );
+
+        let e = &c_of("manifests/7.1.0/game.manifest.json.gz");
         assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
         assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "gzip");
     }
 
     /// Fixture shape: a scratch root holding one plain-text file named `*.gz`.
-    /// `encoding_of` picks the encoding from the name, so the scan tries to
-    /// gunzip it and fails before any checksums document is produced.
+    /// It is a captured asset, not a document this tool compressed, so the scan
+    /// digests the bytes on disk and close-out's A16 sees a healthy tree.
     #[test]
-    fn currently_a_plain_file_named_gz_fails_the_gzip_header_check() {
+    fn a_plain_file_named_gz_is_digested_as_identity_bytes() {
         let root = scratch("notgzip");
         let body: &[u8] = b"plain bytes, not a gzip stream";
         std::fs::write(root.join("notgzip.gz"), body).unwrap();
 
-        let err = Checksums::scan(&root).unwrap_err();
-        assert_eq!(err.to_string(), "invalid gzip header");
+        let c = Checksums::scan(&root).unwrap();
+        assert_eq!(c.file_count, 1);
+        assert_eq!(c.total_bytes, body.len() as u64);
+        let e = &c.entries[0];
+        assert_eq!(e.path, "notgzip.gz");
+        assert_eq!(e.encoding, crate::hash::Encoding::Identity);
+        assert_eq!(e.bytes, body.len() as u64);
+        assert_eq!(e.md5, hash::md5_hex(body));
+        assert_eq!(e.sha256, hash::sha256_hex(body));
+        assert_eq!(serde_json::to_value(e).unwrap()["encoding"], "identity");
 
-        // A16 trusts the entry's recorded encoding rather than the name, so the
-        // same bytes become a finding row instead of an error there.
-        let c = Checksums {
-            schema_version: crate::SCHEMA_VERSION,
-            algorithm: "sha256".into(),
-            file_count: 1,
-            total_bytes: body.len() as u64,
-            entries: vec![FileEntry {
-                path: "notgzip.gz".into(),
-                bytes: body.len() as u64,
-                md5: hash::md5_hex(body),
-                sha256: hash::sha256_hex(body),
-                encoding: crate::hash::Encoding::Gzip,
-            }],
-        };
-        assert_eq!(
-            c.findings(&root),
-            vec!["notgzip.gz: invalid gzip header".to_string()]
-        );
+        // Close-out re-hashes with the stored encoding, so the digest that was
+        // written is exactly the digest A16 checks. A green A16 is the whole
+        // point: the capture no longer aborts on a `.gz` name.
+        assert!(c.findings(&root).is_empty(), "{:?}", c.findings(&root));
         let (ok, detail) = c.a16(&root);
-        assert!(!ok);
-        assert_eq!(detail, "notgzip.gz: invalid gzip header");
+        assert!(ok, "{detail}");
+        assert!(detail.contains("re-hashed"), "{detail}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Fixture shape: a real gzip stream at a captured-looking `assets/pack.gz`
-    /// path. Both ends of the extension rule are pinned here — the scan records
-    /// the decompressed digest, keyed by the name-derived encoding.
+    /// path. `digest_file` still honours an explicit `Gzip` (the manifest writer's
+    /// case), but the scan classifies this captured asset as `Identity` and
+    /// digests the bytes on disk, not the decompressed body.
     #[test]
-    fn a_real_gzip_stream_is_digested_as_its_decompressed_body() {
+    fn a_gzip_asset_is_digested_as_on_disk_bytes_unless_gzip_is_explicit() {
         let root = scratch("realgzip");
         let body: &[u8] = b"the decompressed document";
+        let stored = hash::gzip(body).unwrap();
         std::fs::create_dir_all(root.join("assets")).unwrap();
-        std::fs::write(root.join("assets/pack.gz"), hash::gzip(body).unwrap()).unwrap();
+        std::fs::write(root.join("assets/pack.gz"), &stored).unwrap();
 
+        // The explicit-encoding path is unchanged: told `Gzip`, `digest_file`
+        // streams through the decoder and digests the body.
         let e = digest_file(&root.join("assets/pack.gz"), crate::hash::Encoding::Gzip).unwrap();
         assert_eq!(e.bytes, body.len() as u64);
         assert_eq!(e.md5, hash::md5_hex(body));
         assert_eq!(e.sha256, hash::sha256_hex(body));
         assert_eq!(e.encoding, crate::hash::Encoding::Gzip);
 
+        // The scan decides for itself, and a captured `.gz` asset is plain bytes.
         let c = Checksums::scan(&root).unwrap();
         assert_eq!(c.entries[0].path, "assets/pack.gz");
-        assert_eq!(c.entries[0].encoding, crate::hash::Encoding::Gzip);
-        assert_eq!(c.entries[0].bytes, body.len() as u64);
-        assert_eq!(c.entries[0].md5, hash::md5_hex(body));
+        assert_eq!(c.entries[0].encoding, crate::hash::Encoding::Identity);
+        assert_eq!(c.entries[0].bytes, stored.len() as u64);
+        assert_eq!(c.entries[0].md5, hash::md5_hex(&stored));
         let _ = std::fs::remove_dir_all(&root);
     }
 
