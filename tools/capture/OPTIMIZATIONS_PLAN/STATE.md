@@ -12,9 +12,9 @@ See `ORCHESTRATION.md` for the transition rules.
 
 | ID | Title | Status | Commits | Notes |
 |---|---|---|---|---|
-| P0-01 | Capture/close-out characterization tests | pending_review | d1261aa6 310f28f9 | |
-| P0-02 | Data-edge and bridge characterization tests | pending_review | b28655dc 00300863 | |
-| P0-03 | Verify-surface characterization tests | pending_review | 811ddc9f 5a00c3fb | |
+| P0-01 | Capture/close-out characterization tests | completed | d1261aa6 310f28f9 | |
+| P0-02 | Data-edge and bridge characterization tests | completed | b28655dc 00300863 | |
+| P0-03 | Verify-surface characterization tests | completed | 811ddc9f 5a00c3fb | |
 | P1-01 | Refuse identical resolved tags (A1) | todo | | |
 | P1-02 | Carry encoding, not a `.gz` suffix (A2) | todo | | |
 | P1-03 | Keep chunk URL suffixes (A5) | todo | | |
@@ -54,7 +54,7 @@ See `ORCHESTRATION.md` for the transition rules.
 
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
-| RC-1 | P0-01..P0-03 | in_progress | | |
+| RC-1 | P0-01..P0-03 | done | | |
 | RC-2 | P1-01..P1-06 | pending | | |
 | RC-3 | P1-07..P1-12 | pending | | |
 | RC-4 | P1-13..P1-18 | pending | | |
@@ -79,7 +79,7 @@ until the main tasks and rework are done.
 
 | ID | Source | Area | Description | Status |
 |---|---|---|---|---|
-| | | | | |
+| F-01 | P0-02 | manifest diff counts (`diff/paths.diff.json`) | `Counts::folders` is serialized but never incremented; folder rows are tallied as added/common, so the published `folders` count is always 0 even when folders exist. Increment it in `diff_field` or remove the dead field. Group with folder-policy / dead-fields work. | todo |
 
 ## Follow-up batches
 
