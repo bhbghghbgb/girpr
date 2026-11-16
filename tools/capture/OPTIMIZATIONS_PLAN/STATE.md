@@ -27,7 +27,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-10 | Explicit folder policy (A3) | completed | 8a44db22 988d4b9c 36ae4d8f | |
 | P1-11 | Duplicate-path TSV truth (A4) | completed | 3bb0786b 0aeb530f | |
 | P1-12 | `decode_counts` empty-chunk non-folders (B3) | completed | 45a3f8e2 886a650b | |
-| P1-13 | Record repeated response headers (A12) | in_progress | | |
+| P1-13 | Record repeated response headers (A12) | pending_review | 424e385d 34cb81b4 | |
 | P1-14 | Reserve error-body budget before reading (A13) | todo | | |
 | P1-15 | Deterministic rejection cap (A14) | todo | | |
 | P1-16 | Blob diagnostic fixes (A15, A16) | todo | | |
