@@ -15,12 +15,12 @@ See `ORCHESTRATION.md` for the transition rules.
 | P0-01 | Capture/close-out characterization tests | completed | d1261aa6 310f28f9 | |
 | P0-02 | Data-edge and bridge characterization tests | completed | b28655dc 00300863 | |
 | P0-03 | Verify-surface characterization tests | completed | 811ddc9f 5a00c3fb | |
-| P1-01 | Refuse identical resolved tags (A1) | pending_review | 82ca495f 0af07de5 | |
-| P1-02 | Carry encoding, not a `.gz` suffix (A2) | pending_review | 0360ca2a 82d03428 | |
-| P1-03 | Keep chunk URL suffixes (A5) | pending_review | 4cbafd88 25f7da7b | |
-| P1-04 | A14 scans `game/` on disk (A6) | pending_review | c7dcbff9 35a94be2 | |
-| P1-05 | A11 checks the declared side size (A7) | pending_review | 12ad7888 d898d57e | |
-| P1-06 | Independently check published checksums (A8) | pending_review | 4dea01a6 bb9a7423 | |
+| P1-01 | Refuse identical resolved tags (A1) | completed | 82ca495f 0af07de5 | |
+| P1-02 | Carry encoding, not a `.gz` suffix (A2) | completed | 0360ca2a 82d03428 | |
+| P1-03 | Keep chunk URL suffixes (A5) | completed | 4cbafd88 25f7da7b | |
+| P1-04 | A14 scans `game/` on disk (A6) | completed | c7dcbff9 35a94be2 | |
+| P1-05 | A11 checks the declared side size (A7) | completed | 12ad7888 d898d57e | |
+| P1-06 | Independently check published checksums (A8) | completed | 4dea01a6 bb9a7423 | |
 | P1-07 | Schema and path validation (A9) | todo | | |
 | P1-08 | Cross-check patchmap plan and index (A10) | todo | | |
 | P1-09 | `list` descends past non-bundles (A11) | todo | | |
@@ -55,7 +55,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | Batch | Tasks | Status | Review commits | Notes |
 |---|---|---|---|---|
 | RC-1 | P0-01..P0-03 | done | | |
-| RC-2 | P1-01..P1-06 | in_progress | | |
+| RC-2 | P1-01..P1-06 | done | | |
 | RC-3 | P1-07..P1-12 | pending | | |
 | RC-4 | P1-13..P1-18 | pending | | |
 | RC-5 | P2-01..P2-04 | pending | | |
@@ -80,6 +80,8 @@ until the main tasks and rework are done.
 | ID | Source | Area | Description | Status |
 |---|---|---|---|---|
 | F-01 | P0-02 | manifest diff counts (`diff/paths.diff.json`) | `Counts::folders` is serialized but never incremented; folder rows are tallied as added/common, so the published `folders` count is always 0 even when folders exist. Increment it in `diff_field` or remove the dead field. Group with folder-policy / dead-fields work. | todo |
+| F-02 | P1-02 | test comparison helper (`tests/bundle_diff.rs`) | `normalize` (~L423) gunzips any path ending in `.gz` — the heuristic removed from production. Would fail comparing a non-gzip captured `.gz` asset; apply the same document-aware rule. | todo |
+| F-03 | P1-05 | diagnostics wording (`src/assemble/ranges.rs`) | `Layout::of` (~L226) error says "the manifest declares" even on the verify path where the figure comes from a patchmap side. Tighten the wording for that caller. | todo |
 
 ## Follow-up batches
 
