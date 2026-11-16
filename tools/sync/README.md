@@ -1638,6 +1638,17 @@ never absolute. The copy and flush hooks name the path the plan copies — with
 src's casing — and the rename hooks name the **dst** path as it is on disk
 before the rename, since that is the path the pass moves.
 
+**One switch per failure point, and the switch names what fails.** The copy
+path has two failure points, so it has two switches: `FAIL_COPY` (the copy
+itself) and `FAIL_FLUSH` (the flush after the write). The case-fixing rename
+has three, so it has three: `FAIL_RENAME` (before the temporary is claimed),
+`FAIL_RENAME_STEP1` (after the claim) and `FAIL_RENAME_STEP2` (after step 1).
+Each of the rename's three leaves a different thing behind — nothing, a file
+placeholder to remove, an entry to roll back — so the three are armed
+separately. Only the rename fails there, so its three switches share that name
+and carry the point in the suffix; the stage is in the **switch's name** and
+never in its value, so every failure hook's value stays a plain relative path.
+
 **The gate's value is split on the first colon**, and the two halves are
 relative paths inside the mirror — the `<rel>` shape above. A colon is the
 drive separator's character and is illegal in a name on Windows, so a relative

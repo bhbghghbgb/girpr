@@ -21,6 +21,12 @@ use crate::util::folded_keys;
 /// (so the entry is in the temporary). The three are separately named because
 /// they exercise three different cleanup paths: nothing to clean, placeholder
 /// removal, and rollback.
+///
+/// **The stage is the switch's name and not part of its value.** Every failure
+/// hook's value is then a plain relative path — the shape the copy and flush
+/// hooks use — so the family has one kind of value to parse. Each stage reads
+/// its own variable and holds its own path, so a test names a stage and a path
+/// per variable.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stage {
     BeforeClaim,

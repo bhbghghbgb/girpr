@@ -846,6 +846,22 @@ That is a **false clean**, the worst outcome this tool can produce, and the
 failure mode of a regression here is invisible: the counters look fine, the rows
 look fine, only the verdict is wrong.
 
+**Do not fold the three rename failure hooks into one.** `GIRSYNC_TEST_FAIL_RENAME`,
+`GIRSYNC_TEST_FAIL_RENAME_STEP1` and `GIRSYNC_TEST_FAIL_RENAME_STEP2` are three
+switches because the case-fixing rename has three failure points, and each leaves
+something different behind — nothing, a file placeholder, an entry to roll back.
+One switch with a stage value would put that stage in the *value*, and the value
+is a path everywhere else in the family, so the family would carry two kinds of
+value to parse and one rule to state twice. The stage in the switch's **name**
+keeps every failure hook's value a plain relative path.
+
+It also keeps the three separately armable. Each stage reads its own variable
+and holds its own path, so a test can name a stage and a path per variable; a
+single variable would hold one stage and one path at a time. The compound value
+the copy gate already uses (`<wait>:<on>`) shows what the alternative costs: a
+stage vocabulary of its own, a split, and a malformed value that asks for
+nothing, all of it beside the rule the paths already have.
+
 ---
 
 ## Known limits, deliberately not fixed
