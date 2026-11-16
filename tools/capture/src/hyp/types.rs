@@ -77,7 +77,10 @@ impl std::fmt::Display for IntOrStr {
 
 impl From<u64> for IntOrStr {
     fn from(v: u64) -> Self {
-        IntOrStr::Int(v as i64)
+        match i64::try_from(v) {
+            Ok(i) => IntOrStr::Int(i),
+            Err(_) => IntOrStr::Str(v.to_string()),
+        }
     }
 }
 
