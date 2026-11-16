@@ -25,7 +25,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-08 | Cross-check patchmap plan and index (A10) | pending_review | 7a310d1b 216f8959 | |
 | P1-09 | `list` descends past non-bundles (A11) | pending_review | 1536bd72 956f1422 | |
 | P1-10 | Explicit folder policy (A3) | pending_review | 8a44db22 988d4b9c 36ae4d8f | |
-| P1-11 | Duplicate-path TSV truth (A4) | todo | | |
+| P1-11 | Duplicate-path TSV truth (A4) | in_progress | | |
 | P1-12 | `decode_counts` empty-chunk non-folders (B3) | todo | | |
 | P1-13 | Record repeated response headers (A12) | todo | | |
 | P1-14 | Reserve error-body budget before reading (A13) | todo | | |
