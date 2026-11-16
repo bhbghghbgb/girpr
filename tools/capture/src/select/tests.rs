@@ -69,6 +69,12 @@ fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
     }
 }
 
+fn folder_row(path: &str, state: State, size: i64) -> PathRow {
+    let mut r = row(path, state, None, size);
+    r.is_folder = true;
+    r
+}
+
 fn field(field: &str, rows: Vec<PathRow>) -> FieldDiff {
     FieldDiff {
         field: field.into(),
@@ -756,6 +762,44 @@ fn candidate_lists_are_keyed_by_class_not_by_array_position() {
     };
     assert_eq!(by_class[&Class::Added], vec![idx_of("j/added")]);
     assert_eq!(by_class[&Class::Removed], vec![idx_of("k/removed")]);
+}
+
+/// A folder row is dropped from the pool, so no `SizedCandidate` can describe a
+/// folder — the diff still carries the row for its counts and sidecar.
+#[test]
+fn candidates_exclude_folder_rows() {
+    let diffs = [field(
+        "game",
+        vec![
+            folder_row("d/folder", State::Added, 0),
+            row(
+                "a/file",
+                State::Changed,
+                Some(scored("a/file", 20, (10, 10), (3, 1, 0), false)),
+                10,
+            ),
+        ],
+    )];
+    let pool = candidates(&diffs);
+    assert_eq!(pool.len(), 1, "only the real file is a candidate");
+    assert!(
+        pool.iter().all(|c| c.candidate.path != "d/folder"),
+        "a folder must never become a SizedCandidate"
+    );
+    assert_eq!(pool[0].candidate.path, "a/file");
+}
+
+/// A run whose only change is a folder admits nothing for it.
+#[test]
+fn a_folder_only_change_admits_no_capture() {
+    let diffs = [field("game", vec![folder_row("d/only", State::Added, 0)])];
+    let decided = super::decide::decide(&diffs, 1, None, &[]);
+    assert_eq!(decided.pool_len, 0, "the folder is not in the pool");
+    assert!(
+        decided.selection.admitted.is_empty(),
+        "a folder is not a file capture"
+    );
+    assert!(!decided.selection.paths().contains(&"d/only"));
 }
 
 #[test]

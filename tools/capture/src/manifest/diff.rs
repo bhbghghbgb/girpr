@@ -968,6 +968,69 @@ mod tests {
         );
     }
 
+    /// A folder keeps its row and its state in every position — common, added,
+    /// or removed — and is flagged as a folder, but never enters `scores`. The
+    /// sidecar still lists it, so the diff stays truthful about the manifest.
+    #[test]
+    fn folder_entries_stay_in_rows_and_never_enter_scores() {
+        let folder = |path: &str, md5: &str| SophonChunkFile {
+            file: path.into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: md5.into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![
+                file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/gone", "d2"),
+            ],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/fresh", "d3"),
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+        let by_path: BTreeMap<&str, &PathRow> =
+            d.rows.iter().map(|r| (r.path.as_str(), r)).collect();
+
+        assert_eq!(by_path["d/common"].state, State::Identical);
+        assert!(by_path["d/common"].is_folder);
+        assert!(by_path["d/common"].score.is_none());
+        assert_eq!(by_path["d/fresh"].state, State::Added);
+        assert!(by_path["d/fresh"].is_folder);
+        assert_eq!(by_path["d/gone"].state, State::Removed);
+        assert!(by_path["d/gone"].is_folder);
+
+        // Counts are unchanged: folders count as entries, like any other path.
+        assert_eq!(d.counts.common, 2, "data and the common folder");
+        assert_eq!(d.counts.identical, 1, "the common folder's md5 agrees");
+        assert_eq!(d.counts.added, 1, "the fresh folder");
+        assert_eq!(d.counts.removed, 1, "the gone folder");
+
+        // Only the real file is scored.
+        assert_eq!(
+            d.scores.iter().map(|s| s.path.as_str()).collect::<Vec<_>>(),
+            vec!["data"]
+        );
+
+        // And the sidecar still shows every folder row.
+        let tsv = paths_tsv(std::slice::from_ref(&d));
+        for path in ["d/common", "d/fresh", "d/gone"] {
+            assert!(
+                tsv.lines().any(|l| l.split('\t').nth(1) == Some(path)),
+                "{path} must stay in paths.tsv"
+            );
+        }
+    }
+
     /// spec §5's formulas, computed by hand on the fixture above.
     #[test]
     fn reuse_moved_and_the_two_byte_totals_follow_section_five() {
