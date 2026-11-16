@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M50
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T09:42:13Z
+last_updated: 2026-11-16T09:56:32Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1197,10 +1197,17 @@ reviews:
     result: null
     followups: []
   - batch: M50
-    status: in_progress
+    status: done
     tasks: [F289, F291]
     base: 0ee08518
     head: f49ee66c
+    result: F289 kept (e3ad0b31); F291 kept (f49ee66c); no fix or revert commits; 623 passed without the feature and 640 with it, 1 skipped; the reviewer confirmed the diff over the crate's source has no non-comment line, that the comparison helper has exactly two call sites, and that the enforcing case the notes list exists and runs
+    followups: [F466, F467]
+  - batch: M129
+    status: pending
+    tasks: [F466, F467]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M126
@@ -3097,9 +3104,10 @@ followups:
   - id: F289
     source: F203
     description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
-    status: pending_review
+    status: completed
     batch: M50
     commits: [e3ad0b31]
+    note: review M50 kept; the reviewer confirmed each doc's attributed question is the one the code answers, and that the old conflation with the path key is gone
   - id: F290
     source: F203
     description: The cache-prefix helper's doc names the ASCII-case comparison without marking it Windows-only, so a POSIX reader is pointed at a helper that is not compiled there.
@@ -3110,9 +3118,10 @@ followups:
   - id: F291
     source: F203
     description: The new fourth fold site names the cache-prefix helper but not its exact-name counterpart, which states the same ASCII-only comparison.
-    status: pending_review
+    status: completed
     batch: M50
     commits: [f49ee66c]
+    note: review M50 kept; the reviewer confirmed the comparison helper has exactly two call sites, that each names the other, and that the enforcing case exists and runs
   - id: F292
     source: F204
     description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
@@ -4180,6 +4189,18 @@ followups:
     status: pending
     batch: M126
     commits: []
+  - id: F466
+    source: F289
+    description: The on-disk spelling lookup is a path fold site outside the utility module, so the new wording that the crate's path folds live in the utility module is true of the three rules it names but not exhaustive.
+    status: pending
+    batch: M129
+    commits: []
+  - id: F467
+    source: F289
+    description: The JSON rendering escapes a path field, so the claim that a path is rendered exactly as it was recorded holds for the text form and the value but not for the JSON bytes.
+    status: pending
+    batch: M129
+    commits: []
 ```
 
 ## Human checklist
@@ -4211,6 +4232,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M50 `done`: F289 kept (e3ad0b31), F291 kept (f49ee66c); no
+  fix or revert commits; follow-ups F466 and F467 appended with batch `M129`.
+  F289 and F291 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M50 review checkpoint opened: F289 and F291
   `in_progress` → `pending_review`, commits `e3ad0b31`, `f49ee66c`; review M50
   `pending` → `in_progress`, base `0ee08518`, head `f49ee66c`.
