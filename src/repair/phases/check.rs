@@ -3,20 +3,26 @@
 //!
 //! This is the one place that answers "is my install intact?" without touching
 //! it: no `config.ini` bump, no purge, no `*_tmp` sweep, no audio scan write.
-//! Exit code is `0` when clean, `4` when any file fails size, MD5, or is
-//! unreadable.
+//! The exit status is [`RunExit::Success`](crate::RunExit::Success) when clean
+//! and [`RunExit::CheckFailed`](crate::RunExit::CheckFailed) when any file
+//! fails size, MD5, or is unreadable. A check task that panics is a run failure
+//! ([`RunExit::Write`](crate::RunExit::Write)), not a damage verdict: the file
+//! was not shown to be bad, the verifier itself broke.
 //!
 //! `files_skipped` counts verified-clean files and `files_failed` counts damaged
 //! ones, so the `SUMMARY`/`PROGRESS` counters read the same as a repair run.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use crate::report::{self, Summary};
-use crate::util::{self, Md5};
+use futures_util::StreamExt;
 
-use super::plan::{PlannedFile, RepairPlan};
+use crate::config::RunFailure;
+use crate::report::{self, Summary};
+use crate::util;
+
+use super::plan::{FileId, PlannedFile, RepairPlan};
 use crate::repair::scan::{ScanReport, Verdict};
 
 /// Verify the whole plan; returns the number of damaged files.
@@ -25,35 +31,133 @@ use crate::repair::scan::{ScanReport, Verdict};
 /// reading the files again: the scan already read them, and the answer it
 /// carries is the same one. That is what makes `--check-only --scan` a
 /// single read of the install.
-pub fn verify_plan(
+///
+/// The checks are blocking filesystem reads, so each file is checked on the
+/// blocking pool and `jobs` bounds how many run at once. The results are folded
+/// in plan order even when the tasks finish out of order, so the failure log
+/// and the counters stay deterministic.
+pub async fn verify_plan(
     game_dir: &Path,
     root: Option<&util::PathRoot>,
-    plan: &RepairPlan,
-    summary: &Summary,
+    plan: Arc<RepairPlan>,
+    summary: Arc<Summary>,
     output: report::OutputFormat,
-    scan: Option<&ScanReport>,
-) -> u64 {
+    scan: Option<Arc<ScanReport>>,
+    jobs: usize,
+) -> Result<u64, RunFailure> {
+    verify_plan_with(
+        game_dir, root, plan, summary, output, scan, jobs, None, check_one,
+    )
+    .await
+}
+
+/// The body of [`verify_plan`], with the per-file check injectable for tests.
+///
+/// `folded` receives the number of outcomes folded so far, once per completion.
+/// Production passes `None`; a test uses it to wait for a specific fold instead
+/// of polling the counters.
+#[allow(clippy::too_many_arguments)] // the phase's inputs are one run's shared context
+async fn verify_plan_with<F>(
+    game_dir: &Path,
+    root: Option<&util::PathRoot>,
+    plan: Arc<RepairPlan>,
+    summary: Arc<Summary>,
+    output: report::OutputFormat,
+    scan: Option<Arc<ScanReport>>,
+    jobs: usize,
+    folded: Option<std::sync::mpsc::Sender<usize>>,
+    check: F,
+) -> Result<u64, RunFailure>
+where
+    F: for<'a> Fn(&PlannedFile, &anyhow::Result<PathBuf>, DigestSource<'a>) -> CheckOutcome
+        + Send
+        + Sync
+        + 'static,
+{
+    let timer = crate::phase::PhaseTimer::start("check");
+    // One progress owner for the phase: the ticker reads the counters below as
+    // they are folded. Dropping the guard on return stops it, so the check-only
+    // path never leaves a ticker behind.
+    let _progress = report::ProgressGuard::start(Arc::clone(&summary), output);
+    // The install root is resolved once here, not once per file, and shared by
+    // the blocking tasks. `None` keeps the per-file `contained_join` fallback.
+    let root: Option<Arc<util::PathRoot>> = root.cloned().map(Arc::new);
+    let game_dir = game_dir.to_path_buf();
+    let check = Arc::new(check);
+    let mut outcomes: Vec<(usize, CheckOutcome)> = Vec::with_capacity(plan.len());
+    let mut checks = futures_util::stream::iter(0..plan.len())
+        .map(|idx| {
+            let plan = Arc::clone(&plan);
+            let game_dir = game_dir.clone();
+            let root = root.clone();
+            let scan = scan.clone();
+            let check = Arc::clone(&check);
+            async move {
+                // Raw `spawn_blocking` is enough here: the closure only reads
+                // and returns a `CheckOutcome`, and every `CHECK fail` line is
+                // emitted by the ordered fold below, on the caller's thread. A
+                // closure that logged per file would need
+                // `spawn_blocking_traced` to carry a scoped dispatcher.
+                let result = tokio::task::spawn_blocking(move || {
+                    let f = &plan.files()[idx];
+                    // Resolve once. A containment failure is a *diagnostic*:
+                    // `build_plan` already refused an escaping rel, so this is
+                    // defence in depth, and it must not be mislabelled as a
+                    // size mismatch (which is what `.ok()` did here). The run's
+                    // cached root saves the per-file base resolution when it has
+                    // one; `None` keeps the old `contained_join` fallback.
+                    let path = root.map_or_else(
+                        || util::contained_join(&game_dir, &f.rel),
+                        |root| root.join(&f.rel),
+                    );
+                    match scan.as_deref().and_then(|s| s.get(&plan, FileId::new(idx))) {
+                        Some(v) => check(f, &path, DigestSource::Scanned(v)),
+                        None => check(f, &path, DigestSource::Read),
+                    }
+                })
+                .await;
+                (idx, result)
+            }
+        })
+        .buffer_unordered(jobs.max(1));
+    // Fold each finished task into the live counters immediately. The ordered
+    // pass below still owns the failure log, so its order stays deterministic.
+    while let Some((idx, result)) = checks.next().await {
+        match result {
+            Ok(outcome) => {
+                record_check(&summary, &outcome);
+                outcomes.push((idx, outcome));
+                if let Some(tx) = &folded {
+                    // The count, not a bare ping: a waiter can tell which
+                    // completion it observed.
+                    let _ = tx.send(outcomes.len());
+                }
+            }
+            Err(e) => {
+                // A panicked or cancelled task is a bug, not a damage verdict:
+                // the file was never shown to be bad. Report the same run
+                // failure class the purge tasks use instead of folding it into
+                // `RunExit::CheckFailed`.
+                //
+                // Returning drops the stream, so no further file starts. A
+                // check already running on the blocking pool cannot be
+                // cancelled: it finishes its read before releasing the thread.
+                // That tail is bounded by `jobs` reads, and it affects only
+                // teardown — the output and exit class above are already
+                // decided. Cutting it short would need a cancellation check
+                // threaded through the read itself, which is a wider change
+                // than this failure path justifies.
+                return Err(RunFailure::write(anyhow::anyhow!("check task failed: {e}")));
+            }
+        }
+    }
+    outcomes.sort_by_key(|(idx, _)| *idx);
+
     let mut bad = 0u64;
-    let mut clean = 0u64;
     let mut damaged_chunks = 0u64;
-    let mut last_emit = std::time::Instant::now();
-    for f in &plan.files {
-        // Resolve once. A containment failure is a *diagnostic*: `build_plan`
-        // already refused an escaping rel, so this is defence in depth, and it
-        // must not be mislabelled as a size mismatch (which is what `.ok()`
-        // did here). The run's cached root saves the per-file base resolution
-        // when it has one; `None` keeps the old `contained_join` fallback.
-        let path = root.map_or_else(
-            || util::contained_join(game_dir, &f.rel),
-            |root| root.join(&f.rel),
-        );
-        let outcome = match scan.and_then(|s| s.files.get(&f.rel)) {
-            Some(v) => check_one(f, &path, DigestSource::Scanned(v)),
-            None => check_one(f, &path, DigestSource::Read),
-        };
-        if outcome.ok {
-            clean += 1;
-        } else {
+    for (idx, outcome) in outcomes {
+        let f = &plan.files()[idx];
+        if !outcome.ok {
             bad += 1;
             damaged_chunks += outcome.damaged_chunks.unwrap_or(0);
             // The one warn site: every failure shape is logged here, in the
@@ -98,24 +202,40 @@ pub fn verify_plan(
                     CheckFailure::Read(e) => {
                         tracing::warn!(file = %f.rel, "CHECK fail: unreadable: {e}");
                     }
+                    #[cfg(test)]
+                    CheckFailure::TestGateExpired(why) => {
+                        tracing::warn!(file = %f.rel, "CHECK fail: test double: {why}");
+                    }
                 }
             }
         }
-        // Keep the counters live so PROGRESS reflects work done so far.
-        summary.files_skipped.store(clean, Ordering::Relaxed);
-        summary.files_failed.store(bad, Ordering::Relaxed);
-        if last_emit.elapsed().as_secs() >= report::PROGRESS_INTERVAL_SECS {
-            report::emit_progress(summary, output);
-            last_emit = std::time::Instant::now();
-        }
     }
+    // Keep the check's own damaged-chunk tally on the summary for callers that
+    // need it, but leave the emitted `damaged_chunks` key alone: that key is
+    // the plan-phase scan's figure and its presence is part of the output
+    // contract. Publishing after the tally is what tells a clean check
+    // (measured, zero) apart from a check that never ran.
+    summary.publish_check_damaged_chunks(damaged_chunks);
     tracing::info!(
+        phase = % "check",
+        duration_ms = timer.elapsed_ms(),
         "check-only: total={} bad={} damaged_chunks={}",
-        plan.files.len(),
+        plan.len(),
         bad,
         damaged_chunks
     );
-    bad
+    timer.disarm();
+    Ok(bad)
+}
+
+/// Fold one finished check into the phase counters as soon as it completes, so
+/// the ticker's `done` tracks the pass instead of waiting for the ordered fold.
+fn record_check(summary: &Summary, outcome: &CheckOutcome) {
+    if outcome.ok {
+        summary.files_skipped.fetch_add(1, Ordering::Relaxed);
+    } else {
+        summary.files_failed.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Where the digest a check compares against the manifest came from.
@@ -149,6 +269,10 @@ enum CheckFailure {
     },
     /// Reading the file for its digest failed.
     Read(String),
+    /// Test double only: a deliberate gate wait expired, not a real read
+    /// failure. Compiled out of production so it cannot become a verdict.
+    #[cfg(test)]
+    TestGateExpired(&'static str),
 }
 
 /// What checking one planned file found.
@@ -185,6 +309,25 @@ impl CheckOutcome {
     }
 }
 
+/// The filesystem reads a check makes.
+///
+/// Production always uses [`CheckIo::REAL`]. Naming the two reads lets a test
+/// hand the real check a failing length read or digest, so the failure shapes
+/// a host will not produce on demand are reached through the check itself
+/// rather than by injecting its result.
+struct CheckIo {
+    file_len: fn(&Path) -> util::FileLen,
+    md5_file: fn(&Path) -> anyhow::Result<util::Md5>,
+}
+
+impl CheckIo {
+    /// The reads every production check uses.
+    const REAL: Self = Self {
+        file_len: util::file_len,
+        md5_file: util::md5::md5_file_digest,
+    };
+}
+
 /// Check one planned file against the manifest.
 ///
 /// Presence and length are checked for both digest sources: the scan is a
@@ -197,13 +340,24 @@ fn check_one(
     path: &anyhow::Result<PathBuf>,
     digest: DigestSource<'_>,
 ) -> CheckOutcome {
+    check_one_with(f, path, digest, CheckIo::REAL)
+}
+
+/// [`check_one`] with its filesystem reads named, for tests that need a read
+/// the host cannot be made to fail.
+fn check_one_with(
+    f: &PlannedFile,
+    path: &anyhow::Result<PathBuf>,
+    digest: DigestSource<'_>,
+    io: CheckIo,
+) -> CheckOutcome {
     let path = match path {
         Ok(path) => path,
         Err(e) => {
             return CheckOutcome::failed(CheckFailure::PathEscaped(format!("{e:#}")));
         }
     };
-    let actual_size = match util::file_len(path) {
+    let actual_size = match (io.file_len)(path) {
         util::FileLen::Present(n) => n,
         util::FileLen::Unreadable(e) => {
             return CheckOutcome::failed(CheckFailure::Unreadable(e.to_string()));
@@ -213,14 +367,14 @@ fn check_one(
     if actual_size != f.size as u64 {
         return CheckOutcome::failed(CheckFailure::Size(actual_size));
     }
-    let actual: Cow<'_, str> = match digest {
-        DigestSource::Scanned(v) => Cow::Borrowed(v.file_md5.as_str()),
-        DigestSource::Read => match util::md5_file(path) {
-            Ok(h) => Cow::Owned(h),
+    let actual = match digest {
+        DigestSource::Scanned(v) => v.file_md5,
+        DigestSource::Read => match (io.md5_file)(path) {
+            Ok(digest) => digest,
             Err(e) => return CheckOutcome::failed(CheckFailure::Read(format!("{e:#}"))),
         },
     };
-    if Md5::parse_hex(&actual).is_ok_and(|actual| actual.matches_hex(&f.md5)) {
+    if actual.matches_hex(&f.md5) {
         return CheckOutcome::clean();
     }
     let damaged_chunks = match digest {
@@ -228,7 +382,7 @@ fn check_one(
         DigestSource::Read => None,
     };
     CheckOutcome::failed(CheckFailure::Md5 {
-        actual: actual.into_owned(),
+        actual: actual.to_hex(),
         damaged_chunks,
     })
 }
@@ -236,22 +390,731 @@ fn check_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::Md5;
+    use std::time::{Duration, Instant};
+    use tracing::Level;
+
+    /// The live-progress test's whole budget for a stuck gate. The harness
+    /// waits and the injected slow check's release wait all measure against one
+    /// absolute deadline derived from this, so a gate that never opens fails at
+    /// a single known point instead of granting each wait its own fresh
+    /// allowance. This bounds how long the test tolerates a broken gate; it is
+    /// not a timing assertion, because every wait wakes on its notify.
+    const GATE_WAIT: Duration = Duration::from_secs(10);
+
+    /// Time left before `deadline`, or `None` once it has passed. The slow
+    /// check's release wait records an expired deadline (no positive time
+    /// left) as a failed outcome; the two harness waits collapse it to a zero
+    /// timeout because they only need to wake, and the assertion that follows
+    /// reports the shared deadline.
+    fn before(deadline: Instant) -> Option<Duration> {
+        deadline.checked_duration_since(Instant::now())
+    }
+
+    /// A passed deadline means the wait that uses this expires immediately.
+    fn remaining_or_zero(deadline: Instant) -> Duration {
+        before(deadline).unwrap_or_default()
+    }
 
     fn planned(rel: &str, size: i64, md5: &str) -> PlannedFile {
         PlannedFile {
             rel: rel.into(),
             size,
             md5: md5.into(),
+            url_prefix: Arc::from(""),
             chunks: Vec::new(),
         }
     }
 
+    fn plan_of(files: Vec<PlannedFile>) -> RepairPlan {
+        RepairPlan::from_files("9.9", files)
+    }
+
     fn verdict(file_md5: &str, dest_ok: Vec<bool>) -> Verdict {
         Verdict {
-            file_md5: file_md5.into(),
+            file_md5: Md5::parse_hex(file_md5).unwrap(),
             dest_ok,
             source_ok: Vec::new(),
+            file_len: 0,
+            modified: None,
         }
+    }
+
+    /// The level a captured line was logged at, read from its place in the
+    /// record prefix rather than by searching for the first token that parses.
+    ///
+    /// The subscriber writes `<timestamp> <LEVEL> <target>: <message>`, so the
+    /// level is the token immediately before the target. That matters because
+    /// `tracing::Level` also parses bare numbers (`"2"` is `WARN`): a numeric
+    /// token anywhere earlier in the record must not be taken for the level.
+    fn logged_level(line: &str) -> Result<Level, String> {
+        let (prefix, _) = line
+            .split_once(": ")
+            .ok_or_else(|| format!("the log line has no `<target>: ` prefix: {line:?}"))?;
+        let mut tokens = prefix.split_whitespace().rev();
+        let target = tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no target: {line:?}"))?;
+        let level = tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no level before {target:?}: {line:?}"))?;
+        tokens
+            .next()
+            .ok_or_else(|| format!("the log line has no timestamp before its level: {line:?}"))?;
+        level
+            .parse()
+            .map_err(|_| format!("the log line has no level before {target:?}: {line:?}"))
+    }
+
+    /// One captured record per line, as `(level, message)`.
+    ///
+    /// The subscriber writes every event as one line, with the fields inline
+    /// after the message. A message that itself contains a newline would be
+    /// printed as a second, level-less line; parsing every line means such a
+    /// continuation is an error instead of being silently dropped.
+    fn log_records(logs: &str) -> Result<Vec<(Level, &str)>, String> {
+        logs.lines()
+            .map(|line| Ok((logged_level(line)?, line)))
+            .collect()
+    }
+
+    /// The `CHECK fail` records from a captured log, each with the level it
+    /// was logged at, so two runs can be compared for the same warning set and
+    /// order and a failure line that stops being a warning is caught too.
+    ///
+    /// A line that is not a record — one whose prefix holds no level, or the
+    /// continuation of a multi-line message — fails instead of shrinking the
+    /// list.
+    fn check_warnings(logs: &str) -> Result<Vec<(Level, &str)>, String> {
+        Ok(log_records(logs)?
+            .into_iter()
+            .filter_map(|(level, line)| {
+                let at = line.find("CHECK fail")?;
+                Some((level, &line[at..]))
+            })
+            .collect())
+    }
+
+    /// The one `check-only: total=` record, with the level it was logged at.
+    fn check_summary(logs: &str) -> Result<(Level, &str), String> {
+        let mut found = log_records(logs)?
+            .into_iter()
+            .filter(|(_, line)| line.contains("check-only: total="));
+        match (found.next(), found.next()) {
+            (Some(record), None) => Ok(record),
+            (None, _) => Err("the check summary line was not logged".to_string()),
+            (Some(_), Some(_)) => Err("the check summary line was logged twice".to_string()),
+        }
+    }
+
+    /// Run one verify on a current-thread runtime and return its counters and
+    /// captured log. The check tasks use the blocking pool; only the ordered
+    /// fold logs, so the captured lines stay deterministic.
+    fn run_verify(
+        base: &Path,
+        plan: &Arc<RepairPlan>,
+        scan: &Option<Arc<ScanReport>>,
+        jobs: usize,
+    ) -> (u64, u64, u64, u64, String) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let summary = Arc::new(Summary::default());
+        let mut bad = 0u64;
+        let logs = crate::repair::test_support::logs_of(|| {
+            bad = runtime
+                .block_on(verify_plan(
+                    base,
+                    None,
+                    Arc::clone(plan),
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    scan.clone(),
+                    jobs,
+                ))
+                .expect("the check tasks finish");
+        });
+        (
+            bad,
+            summary.files_skipped.load(Ordering::Relaxed),
+            summary.files_failed.load(Ordering::Relaxed),
+            summary
+                .check_damaged_chunks()
+                .expect("the check measured it"),
+            logs,
+        )
+    }
+
+    /// The jobs flag bounds the checks without changing their answer: same
+    /// clean/failed counts, same damaged-chunk total, same warnings in the same
+    /// plan order, whether one file runs at a time or all of them do.
+    #[test]
+    fn parallel_checks_match_one_job_and_stay_in_plan_order() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "parallel_parity");
+        let base = &*dir;
+        std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
+        std::fs::write(base.join("b.dat"), b"bbbb").unwrap();
+        let clean_md5 = util::md5::md5_digest(b"aaaa").to_hex();
+        let plan = Arc::new(plan_of(vec![
+            planned("a.dat", 4, &clean_md5),
+            planned("b.dat", 4, "ffffffffffffffffffffffffffffffff"),
+            planned("c.dat", 7, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+        ]));
+        let scan = Some(Arc::new(ScanReport::for_test(
+            &plan,
+            vec![
+                None,
+                Some(verdict(
+                    "00000000000000000000000000000000",
+                    vec![true, false, false],
+                )),
+                None,
+            ],
+        )));
+
+        let one = run_verify(base, &plan, &scan, 1);
+        let many = run_verify(base, &plan, &scan, 4);
+
+        assert_eq!(
+            (one.0, one.1, one.2, one.3),
+            (many.0, many.1, many.2, many.3),
+            "jobs must not change the verdict or the counters"
+        );
+        assert_eq!((one.0, one.1, one.2, one.3), (2, 1, 2, 2));
+        let one_warnings =
+            check_warnings(&one.4).expect("every captured line is a record with a level");
+        assert_eq!(
+            one_warnings,
+            check_warnings(&many.4).expect("every captured line is a record with a level"),
+            "the warning set and its plan order are jobs-independent"
+        );
+        assert_eq!(one_warnings.len(), 2, "{:?}", one_warnings);
+        assert!(
+            one_warnings.iter().all(|(level, _)| *level == Level::WARN),
+            "every check failure is a warning: {:?}",
+            one_warnings
+        );
+        let messages: Vec<&str> = one_warnings.iter().map(|(_, message)| *message).collect();
+        assert!(
+            messages[0].contains("b.dat") && messages[0].contains("CHECK fail: md5"),
+            "{:?}",
+            one_warnings
+        );
+        assert!(
+            messages[1].contains("c.dat") && messages[1].contains("CHECK fail: size"),
+            "{:?}",
+            one_warnings
+        );
+        let (summary_level, summary_line) =
+            check_summary(&one.4).expect("the check summary line is logged once");
+        assert_eq!(
+            summary_level,
+            Level::INFO,
+            "the check summary is informational"
+        );
+        assert!(
+            summary_line.contains("damaged_chunks=2"),
+            "the scan's damaged-chunk total is folded once: {summary_line}"
+        );
+    }
+
+    /// A clean pass records a measured zero, not the same "never measured"
+    /// state a default `Summary` carries.
+    #[test]
+    fn a_clean_check_measures_zero() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "clean_zero");
+        let base = &*dir;
+        std::fs::write(base.join("a.dat"), b"aaaa").unwrap();
+        let md5 = util::md5::md5_digest(b"aaaa").to_hex();
+        let plan = Arc::new(plan_of(vec![planned("a.dat", 4, &md5)]));
+        let scan = None;
+
+        let (bad, skipped, failed, damaged_chunks, _) = run_verify(base, &plan, &scan, 2);
+
+        assert_eq!((bad, skipped, failed), (0, 1, 0));
+        assert_eq!(
+            damaged_chunks, 0,
+            "a clean check measured zero damaged chunks"
+        );
+    }
+
+    #[test]
+    fn a_panicked_check_task_fails_the_run_instead_of_reporting_damage() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "task_panic");
+        let base = &*dir;
+        let plan = Arc::new(plan_of(vec![planned(
+            "a.dat",
+            0,
+            "00000000000000000000000000000000",
+        )]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let err = runtime
+            .block_on(verify_plan_with(
+                base,
+                None,
+                plan,
+                Arc::clone(&summary),
+                report::OutputFormat::Text,
+                None,
+                1,
+                None,
+                |_: &PlannedFile,
+                 _: &anyhow::Result<PathBuf>,
+                 _: DigestSource<'_>|
+                 -> CheckOutcome { panic!("injected check-task panic") },
+            ))
+            .expect_err("a panicked check task is a run failure");
+
+        assert_eq!(
+            err.exit_code,
+            crate::RunExit::Write,
+            "a broken verifier is RunExit::Write, not RunExit::CheckFailed"
+        );
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            0,
+            "the file was never shown to be damaged"
+        );
+    }
+
+    /// The test-double failure shape is logged by the same warn site as a real
+    /// damage verdict. Injecting the outcome exercises that branch without
+    /// waiting for a gate to expire.
+    #[test]
+    fn an_expired_gate_outcome_is_logged_as_a_test_double() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "test_double_log");
+        let base = &*dir;
+        let rel = "a.dat";
+        let plan = Arc::new(plan_of(vec![planned(
+            rel,
+            0,
+            "00000000000000000000000000000000",
+        )]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let why = "injected gate expiry";
+
+        let logs = crate::repair::test_support::logs_of(|| {
+            let bad = runtime
+                .block_on(verify_plan_with(
+                    base,
+                    None,
+                    plan,
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    None,
+                    1,
+                    None,
+                    move |_: &PlannedFile,
+                          _: &anyhow::Result<PathBuf>,
+                          _: DigestSource<'_>|
+                          -> CheckOutcome {
+                        CheckOutcome::failed(CheckFailure::TestGateExpired(why))
+                    },
+                ))
+                .expect("the check task finishes");
+            assert_eq!(bad, 1, "the injected failure is counted as damage");
+        });
+
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 1);
+        let expected = format!("CHECK fail: test double: {why} file={rel}");
+        assert_eq!(
+            check_warnings(&logs).expect("every captured line is a record with a level"),
+            vec![(Level::WARN, expected.as_str())],
+            "the expired gate is logged once, through the one warn site"
+        );
+    }
+
+    /// The failure shape one planned file reports, keyed by its rel.
+    ///
+    /// Every arm of the one warn site prints its own line, so the shapes are
+    /// named here once and the expected lines are written out in full below:
+    /// a message, a field, or an arm that stops firing has to fail the test.
+    fn injected_failure(rel: &str) -> Option<CheckFailure> {
+        Some(match rel {
+            "escaped.dat" => CheckFailure::PathEscaped("the rel escapes the game dir".to_string()),
+            "unreadable.dat" => {
+                CheckFailure::Unreadable("the file could not be statted".to_string())
+            }
+            "absent.dat" => CheckFailure::Absent,
+            "sized.dat" => CheckFailure::Size(19),
+            "md5.dat" => CheckFailure::Md5 {
+                actual: "66666666666666666666666666666666".to_string(),
+                damaged_chunks: None,
+            },
+            "scanned_md5.dat" => CheckFailure::Md5 {
+                actual: "88888888888888888888888888888888".to_string(),
+                damaged_chunks: Some(2),
+            },
+            "read.dat" => CheckFailure::Read("the digest read failed".to_string()),
+            _ => return None,
+        })
+    }
+
+    /// Every failure shape reaches the operator as its own line.
+    ///
+    /// The shapes are injected through the same seam the real check uses, so
+    /// the lines come from the one production warn site and not from a copy of
+    /// it. The plan's rels name the arms, and an unknown rel is a bug in the
+    /// plan rather than a silent clean file.
+    #[test]
+    fn every_failure_shape_is_logged_with_its_own_line() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "warn_arms");
+        let base = &*dir;
+        let plan = Arc::new(plan_of(vec![
+            planned("escaped.dat", 7, "11111111111111111111111111111111"),
+            planned("unreadable.dat", 11, "22222222222222222222222222222222"),
+            planned("absent.dat", 13, "33333333333333333333333333333333"),
+            planned("sized.dat", 17, "44444444444444444444444444444444"),
+            planned("md5.dat", 23, "55555555555555555555555555555555"),
+            planned("scanned_md5.dat", 29, "77777777777777777777777777777777"),
+            planned("read.dat", 31, "99999999999999999999999999999999"),
+            planned("clean.dat", 37, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ]));
+        let summary = Arc::new(Summary::default());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let logs = crate::repair::test_support::logs_of(|| {
+            let bad = runtime
+                .block_on(verify_plan_with(
+                    base,
+                    None,
+                    plan,
+                    Arc::clone(&summary),
+                    report::OutputFormat::Text,
+                    None,
+                    1,
+                    None,
+                    |f: &PlannedFile,
+                     _: &anyhow::Result<PathBuf>,
+                     _: DigestSource<'_>|
+                     -> CheckOutcome {
+                        match injected_failure(&f.rel) {
+                            Some(failure) => CheckOutcome::failed(failure),
+                            None => {
+                                assert_eq!(
+                                    f.rel, "clean.dat",
+                                    "the plan holds the injected arms and one clean file"
+                                );
+                                CheckOutcome::clean()
+                            }
+                        }
+                    },
+                ))
+                .expect("the check tasks finish");
+            assert_eq!(bad, 7, "every injected failure counts as damage");
+        });
+
+        assert_eq!(
+            check_warnings(&logs).expect("every captured line is a record with a level"),
+            vec![
+                (
+                    Level::WARN,
+                    "CHECK fail: path escapes the game dir file=escaped.dat error=the rel escapes the game dir",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: unreadable file=unreadable.dat error=the file could not be statted",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: size file=absent.dat expect_size=13 actual_size=None",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: size file=sized.dat expect_size=17 actual_size=Some(19)",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: md5 file=md5.dat expect_md5=55555555555555555555555555555555 actual_md5=66666666666666666666666666666666",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: md5 file=scanned_md5.dat expect_md5=77777777777777777777777777777777 actual_md5=88888888888888888888888888888888 damaged_chunks=2",
+                ),
+                (
+                    Level::WARN,
+                    "CHECK fail: unreadable: the digest read failed file=read.dat",
+                ),
+            ],
+            "each failure shape has its own line, in plan order, at the warn level"
+        );
+        assert_eq!(summary.files_failed.load(Ordering::Relaxed), 7);
+        assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            summary.check_damaged_chunks(),
+            Some(2),
+            "only the scanned mismatch carries a chunk count"
+        );
+    }
+
+    /// A containment failure is a diagnostic the check itself makes: the
+    /// escaping path is the input, so no filesystem failure has to be faked.
+    #[test]
+    fn an_escaped_path_is_a_check_failure() {
+        let f = planned("..\\outside.dat", 4, "00000000000000000000000000000000");
+        let path: anyhow::Result<PathBuf> = Err(anyhow::anyhow!("the rel escapes the game dir"));
+
+        let outcome = check_one(&f, &path, DigestSource::Read);
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::PathEscaped(ref e)) if e == "the rel escapes the game dir"
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// A stat that fails for a reason other than absence is unreadable, not
+    /// absent and not a length mismatch. The injected probe stands in for the
+    /// denied stat a test host will not grant on demand.
+    #[test]
+    fn an_unreadable_length_probe_is_a_check_failure() {
+        let f = planned("f.dat", 4, "00000000000000000000000000000000");
+        let path: anyhow::Result<PathBuf> = Ok(PathBuf::from("f.dat"));
+
+        let outcome = check_one_with(
+            &f,
+            &path,
+            DigestSource::Read,
+            CheckIo {
+                file_len: |_| {
+                    util::FileLen::Unreadable(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "attribute read denied",
+                    ))
+                },
+                md5_file: |_| panic!("an unreadable file is never hashed"),
+            },
+        );
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::Unreadable(ref e)) if e.contains("attribute read denied")
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// A digest read that fails after the presence and length checks is its
+    /// own failure shape. The injected digest probe stands in for a read the
+    /// test cannot make fail after a successful stat.
+    #[test]
+    fn a_failed_digest_read_is_a_check_failure() {
+        let expected = util::md5::md5_digest(b"aaaa").to_hex();
+        let f = planned("f.dat", 4, &expected);
+        let path: anyhow::Result<PathBuf> = Ok(PathBuf::from("f.dat"));
+
+        let outcome = check_one_with(
+            &f,
+            &path,
+            DigestSource::Read,
+            CheckIo {
+                file_len: |_| util::FileLen::Present(4),
+                md5_file: |_| Err(anyhow::anyhow!("the digest read failed")),
+            },
+        );
+
+        assert!(!outcome.ok);
+        assert!(matches!(
+            outcome.failure,
+            Some(CheckFailure::Read(ref e)) if e == "the digest read failed"
+        ));
+        assert_eq!(outcome.damaged_chunks, None);
+    }
+
+    /// The extractor reads the level from its place in the record, not from
+    /// the first token that happens to parse as one: a bare numeric token
+    /// earlier in the prefix is not the level. A record with no level, and a
+    /// continuation line from a multi-line message, are errors rather than
+    /// silently dropped lines.
+    #[test]
+    fn the_log_extractor_reads_the_level_by_position() {
+        let numeric_before_level =
+            "2026-01-01T00:00:00.000000Z 2 INFO girpr::check: CHECK fail: md5 file=a";
+        assert_eq!(logged_level(numeric_before_level), Ok(Level::INFO));
+
+        let no_level = "2026-01-01T00:00:00.000000Z girpr::check: CHECK fail: md5 file=a";
+        assert!(
+            check_warnings(no_level).is_err(),
+            "a record without a level must not be dropped"
+        );
+
+        let continued =
+            "2026-01-01T00:00:00.000000Z WARN girpr::check: CHECK fail: md5 file=a\ncontinuation";
+        assert!(
+            check_warnings(continued).is_err(),
+            "a continuation line is not a record"
+        );
+    }
+
+    /// The ticker reads the counters while the pass is still running, so a
+    /// finished check is folded before the slowest one returns. The gate keeps
+    /// one task blocked without sleeping; the other task's counter must be
+    /// visible while it is held.
+    #[test]
+    fn finished_checks_move_the_counters_before_the_pass_ends() {
+        #[derive(Default)]
+        struct Gate {
+            slow_started: bool,
+            fast_done: bool,
+            release_slow: bool,
+            slow_wait_expired: bool,
+        }
+
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "live_progress");
+        let base = dir.to_path_buf();
+        let plan = Arc::new(plan_of(vec![
+            planned("slow.dat", 0, "00000000000000000000000000000000"),
+            planned("fast.dat", 0, "00000000000000000000000000000000"),
+        ]));
+        let summary = Arc::new(Summary::default());
+        let gate = Arc::new((
+            std::sync::Mutex::new(Gate::default()),
+            std::sync::Condvar::new(),
+        ));
+        // The fold reports each completion on this channel. The test waits for
+        // the signal instead of polling the counter, so it has no timing
+        // assumption to violate on a single-core or heavily loaded host.
+        let (folded_tx, folded_rx) = std::sync::mpsc::channel::<usize>();
+        // One absolute deadline for the whole test. The slow check's release
+        // wait and both harness waits measure against it, so on a stuck gate
+        // there is one expiry point to read in the failure, not three
+        // independent allowances that can race. Each wait's headroom is the
+        // time left at that point, not a fresh `GATE_WAIT`: a wait that starts
+        // late gets less of the shared budget.
+        let deadline = Instant::now() + GATE_WAIT;
+
+        let thread_summary = Arc::clone(&summary);
+        let thread_gate = Arc::clone(&gate);
+        let thread = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime
+                .block_on(verify_plan_with(
+                    &base,
+                    None,
+                    plan,
+                    thread_summary,
+                    report::OutputFormat::Text,
+                    None,
+                    2,
+                    Some(folded_tx),
+                    move |f: &PlannedFile,
+                          _: &anyhow::Result<PathBuf>,
+                          _: DigestSource<'_>|
+                          -> CheckOutcome {
+                        let (lock, cv) = &*thread_gate;
+                        let mut state = lock.lock().unwrap();
+                        if f.rel == "slow.dat" {
+                            state.slow_started = true;
+                            cv.notify_all();
+                            // The release wait shares the test's deadline: a
+                            // release that never comes expires here and is
+                            // reported as a failed outcome, so a stuck gate
+                            // cannot be folded as a clean pass. It is a hang
+                            // guard, not a timing assertion: the wait wakes on
+                            // the release notify.
+                            while !state.release_slow {
+                                match before(deadline) {
+                                    Some(left) if !left.is_zero() => {
+                                        state = cv.wait_timeout(state, left).unwrap().0;
+                                    }
+                                    _ => {
+                                        state.slow_wait_expired = true;
+                                        cv.notify_all();
+                                        break;
+                                    }
+                                }
+                            }
+                            if state.slow_wait_expired {
+                                // Deliberately not `clean()`: an expired
+                                // release must move the counters, so the
+                                // failure cannot read as a passing check.
+                                return CheckOutcome::failed(CheckFailure::TestGateExpired(
+                                    "the slow check's gate wait expired before release",
+                                ));
+                            }
+                        } else {
+                            state.fast_done = true;
+                            cv.notify_all();
+                        }
+                        CheckOutcome::clean()
+                    },
+                ))
+                .expect("the checks finish")
+        });
+
+        // Wait until both tasks have reached their gate: one is held, the
+        // other has returned and is ready to be folded. This measures against
+        // the shared deadline, which only guards against the suite hanging
+        // when a task never arrives; the wait still wakes on the notify, so it
+        // is not a timing bound.
+        let (lock, cv) = &*gate;
+        let state = lock.lock().unwrap();
+        let (state, _) = cv
+            .wait_timeout_while(state, remaining_or_zero(deadline), |state| {
+                !(state.slow_started && state.fast_done)
+            })
+            .unwrap();
+        assert!(
+            state.slow_started && state.fast_done,
+            "the checks did not reach the live-progress gate before the shared {GATE_WAIT:?} deadline"
+        );
+        drop(state);
+
+        // The first fold is the finished task. `recv_timeout` parks the test
+        // thread until the fold happens and turns a lost fold into a clear
+        // failure instead of hanging the suite.
+        assert_eq!(
+            folded_rx.recv_timeout(remaining_or_zero(deadline)),
+            Ok(1),
+            "the finished check was not folded before the shared {GATE_WAIT:?} deadline while the slow task was held"
+        );
+        assert_eq!(
+            summary.files_skipped.load(Ordering::Relaxed),
+            1,
+            "only the finished task is folded so far"
+        );
+        assert_eq!(
+            summary.files_failed.load(Ordering::Relaxed),
+            0,
+            "a failed fold here means the held check's wait expired instead of waiting"
+        );
+
+        let (lock, cv) = &*gate;
+        let mut state = lock.lock().unwrap();
+        state.release_slow = true;
+        cv.notify_all();
+        drop(state);
+
+        let joined = thread.join().expect("the check thread finishes");
+        let (lock, _) = &*gate;
+        let state = lock.lock().unwrap();
+        assert!(
+            !state.slow_wait_expired,
+            "the slow check's wait for release expired at the shared {GATE_WAIT:?} deadline"
+        );
+        drop(state);
+        assert_eq!(
+            joined, 0,
+            "the slow check reported damage instead of a clean result"
+        );
+        assert_eq!(summary.files_skipped.load(Ordering::Relaxed), 2);
     }
 
     #[test]
@@ -261,11 +1124,12 @@ mod tests {
         std::fs::write(base.join("f.dat"), b"on disk").unwrap();
         let f = planned("f.dat", 7, "expected");
         let path = util::contained_join(base, &f.rel);
+        let actual_hex = "00000000000000000000000000000002";
 
         let outcome = check_one(
             &f,
             &path,
-            DigestSource::Scanned(&verdict("actual", vec![true, false, false])),
+            DigestSource::Scanned(&verdict(actual_hex, vec![true, false, false])),
         );
         assert!(!outcome.ok);
         assert_eq!(
@@ -278,7 +1142,7 @@ mod tests {
             Some(CheckFailure::Md5 {
                 ref actual,
                 damaged_chunks: Some(2)
-            }) if actual == "actual"
+            }) if actual == actual_hex
         ));
     }
 
@@ -290,7 +1154,7 @@ mod tests {
 
         for digest in [
             DigestSource::Read,
-            DigestSource::Scanned(&verdict("actual", vec![true])),
+            DigestSource::Scanned(&verdict("00000000000000000000000000000000", vec![true])),
         ] {
             let outcome = check_one(&f, &path, digest);
             assert!(!outcome.ok);
@@ -300,5 +1164,36 @@ mod tests {
             );
             assert_eq!(outcome.damaged_chunks, None);
         }
+    }
+
+    /// A scanned check trusts the scan's digest — it must not read the file a
+    /// second time — but the presence and length checks still run against the
+    /// disk, so a file that changed after the scan is still caught where those
+    /// checks can see it.
+    #[test]
+    fn a_scanned_check_uses_the_scan_digest_but_still_checks_the_length() {
+        let dir = girpr_tempdir::TempDir::new("girpr_test_check", "scanned_trusts_digest");
+        let base = &*dir;
+        std::fs::write(base.join("f.dat"), b"on disk").unwrap();
+        let expected = "0123456789abcdef0123456789abcdef";
+        let scan = verdict(expected, vec![true]);
+
+        // The on-disk bytes do not hash to `expected`, but the scan says they
+        // did: using the scan's answer means no second read.
+        let same_size = planned("f.dat", 7, expected);
+        let path = util::contained_join(base, &same_size.rel);
+        assert!(
+            check_one(&same_size, &path, DigestSource::Scanned(&scan)).ok,
+            "the scan's digest is the digest"
+        );
+
+        // The length check is not delegated to the scan.
+        let changed_length = planned("f.dat", 8, expected);
+        let outcome = check_one(&changed_length, &path, DigestSource::Scanned(&scan));
+        assert!(!outcome.ok);
+        assert!(
+            matches!(outcome.failure, Some(CheckFailure::Size(7))),
+            "a length change after the scan is still damage"
+        );
     }
 }

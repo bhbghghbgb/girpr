@@ -1,5 +1,24 @@
+//! The one writer for the run's stdout data plane.
+//!
+//! The record order is fixed: `REPORT` once the metadata is known, `PLAN` when
+//! the run asked for it, zero or more `PROGRESS` ticks from the phase's single
+//! [`ProgressGuard`], and `SUMMARY` last, emitted once by the caller after
+//! [`crate::repair::run`] returns. No phase emits `SUMMARY`.
+//!
+//! Ownership rule: a phase that has long-running work starts **one**
+//! [`ProgressGuard`] for its shared [`Summary`] and drops it when the phase
+//! returns. The ticker is the only `PROGRESS` producer; per-file loops and
+//! blocking tasks update counters but never emit. That is what keeps two
+//! tickers from interleaving into the same stream.
+//!
+//! [`emit`] is the only writer. Its policy for every record: render once,
+//! mirror the rendered line to the log, write stdout through `write_line`,
+//! never panic, and never change the exit code.
+
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use super::record::{OutputFormat, PROGRESS_INTERVAL_SECS, Record};
 use super::summary::{Summary, conditional_extras};
@@ -17,8 +36,27 @@ use crate::hyp::{ChunkBuild, GameBranchPackage, GameConfig};
 /// see README).
 pub fn emit(record: &Record, format: OutputFormat) {
     let line = record.render(format);
-    println!("{line}");
+    // The log mirror is written first: a consumer that closed stdout must not
+    // also cost the run its record in the log.
     tracing::info!("{line}");
+    // A closed stdout is the end of the data plane, not a failed run: the
+    // repair already happened and the exit code is the one it earned.
+    match write_line(&mut std::io::stdout().lock(), &line) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            tracing::debug!("stdout closed: {e}");
+        }
+        Err(e) => tracing::warn!("stdout write failed ({:?}): {e}", e.kind()),
+    }
+}
+
+/// Write one rendered record plus its newline.
+///
+/// Private seam for the writer tests; the process stdout is the only real
+/// caller.
+pub(super) fn write_line(out: &mut impl std::io::Write, line: &str) -> std::io::Result<()> {
+    out.write_all(line.as_bytes())?;
+    out.write_all(b"\n")
 }
 
 /// The `PROGRESS` snapshot: where the run is, without touching the disk.
@@ -42,24 +80,77 @@ pub fn emit_progress(sum: &Summary, format: OutputFormat) {
     emit(&progress_record(sum), format);
 }
 
-/// Background `PROGRESS` ticker for the repair phase. The first tick fires
-/// immediately; it is skipped so we only report after a full interval.
+/// Owns a phase's `PROGRESS` ticker for as long as the phase runs.
 ///
-/// Under `--output json` this is one more NDJSON line: the same record, same
-/// shape, in the middle of the stream where the tick actually landed.
-pub fn spawn_progress_reporter(
-    sum: std::sync::Arc<Summary>,
-    format: OutputFormat,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(PROGRESS_INTERVAL_SECS));
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            emit_progress(&sum, format);
-        }
-    })
+/// A phase with long-running work starts exactly one guard for its shared
+/// counters and drops it on the way out (including an early return or a
+/// panic): dropping stops the ticker, so no later phase can inherit a running
+/// stream. It is an RAII handle rather than a global because two live guards
+/// would otherwise be two silent tickers.
+pub struct ProgressGuard {
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl ProgressGuard {
+    /// Start the ticker for a phase whose counters `sum` holds.
+    pub fn start(sum: Arc<Summary>, format: OutputFormat) -> Self {
+        Self::spawn(sum, format, Duration::from_secs(PROGRESS_INTERVAL_SECS))
+    }
+
+    /// The same ticker at a shorter interval, for the start/stop tests.
+    #[cfg(test)]
+    pub fn start_with_interval(
+        sum: Arc<Summary>,
+        format: OutputFormat,
+        interval: Duration,
+    ) -> Self {
+        Self::spawn(sum, format, interval)
+    }
+
+    fn spawn(sum: Arc<Summary>, format: OutputFormat, interval: Duration) -> Self {
+        let task = tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            // The first tick fires immediately; skip it so a phase only reports
+            // after a full interval has passed.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                emit_progress(&sum, format);
+            }
+        });
+        Self { task }
+    }
+}
+
+impl Drop for ProgressGuard {
+    fn drop(&mut self) {
+        // Abort, do not await: the ticker spends its life asleep between ticks,
+        // and joining it would block the runtime for up to a whole interval.
+        self.task.abort();
+    }
+}
+
+/// The provenance fields of the one-time begin report.
+///
+/// The field order is the report's field order: the caller names every value
+/// once, and the formatter turns the group into the `REPORT` record. The fields
+/// are crate-visible rather than public: the pipeline is the only constructor,
+/// and [`report_record`] is the only reader.
+pub struct ReportProvenance<'a> {
+    /// The on-disk `config.ini` version, or `None` when absent.
+    pub(crate) local_version: &'a Option<String>,
+    /// The version the run is moving to.
+    pub(crate) latest_version: &'a str,
+    /// The game/business channel.
+    pub(crate) biz: &'a str,
+    /// The launcher's game configuration.
+    pub(crate) cfg: &'a GameConfig,
+    /// The selected branch package.
+    pub(crate) pkg: &'a GameBranchPackage,
+    /// The target build.
+    pub(crate) build: &'a ChunkBuild,
+    /// The effective audio language set.
+    pub(crate) audio_langs: &'a HashSet<String>,
 }
 
 /// The one-time begin report, written right after the metadata calls. Parsers
@@ -70,34 +161,31 @@ pub fn spawn_progress_reporter(
 ///
 /// Provenance: Starward `GameInstallService.cs:788-849` (the same field set the
 /// launcher shows the user before installing).
-#[allow(clippy::too_many_arguments)] // stable report formatter; params-struct would churn CLI parsing
-pub fn report_record(
-    local_version: &Option<String>,
-    latest_version: &str,
-    biz: &str,
-    cfg: &GameConfig,
-    pkg: &GameBranchPackage,
-    build: &ChunkBuild,
-    audio_langs: &HashSet<String>,
-) -> Record {
-    let mut langs: Vec<&String> = audio_langs.iter().collect();
+pub fn report_record(provenance: &ReportProvenance<'_>) -> Record {
+    let mut langs: Vec<&String> = provenance.audio_langs.iter().collect();
     langs.sort();
     let audio_joined: Vec<&str> = langs.iter().map(|s| s.as_str()).collect();
-    let local = local_version.as_deref().unwrap_or("none");
+    let local = provenance.local_version.as_deref().unwrap_or("none");
     Record::keyed("REPORT")
         .put("local_version", local)
-        .put("latest_version", latest_version)
-        .put("biz", biz)
-        .put("exe", cfg.exe_file_name.as_str())
-        .put("download_mode", cfg.default_download_mode.as_str())
-        .put("branch", pkg.branch.as_str())
-        .put("package_id", pkg.package_id.as_str())
-        .put("build_id", build.build_id.as_str())
+        .put("latest_version", provenance.latest_version)
+        .put("biz", provenance.biz)
+        .put("exe", provenance.cfg.exe_file_name.as_str())
+        .put(
+            "download_mode",
+            provenance.cfg.default_download_mode.as_str(),
+        )
+        .put("branch", provenance.pkg.branch.as_str())
+        .put("package_id", provenance.pkg.package_id.as_str())
+        .put("build_id", provenance.build.build_id.as_str())
         .put("audio_langs", audio_joined.join(","))
-        .put("diff_tags", pkg.diff_tags.join(","))
+        .put("diff_tags", provenance.pkg.diff_tags.join(","))
 }
 
-/// The final `SUMMARY`, ending every run.
+/// The final `SUMMARY`, ending every non-fatal run.
+///
+/// A fatal failure is the exception: the caller prints `FATAL` instead and
+/// emits no `SUMMARY`, so this record is absent from that run's stream.
 ///
 /// Trailing conditional keys (`limited`, `scoped`, `config_bumped`,
 /// `plan_files`, …) are appended only when their flag is

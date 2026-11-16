@@ -353,19 +353,24 @@ impl<'a> HypClient<'a> {
         let err = |what: &str, e: String| ApiError::shape(what, e);
         let configs = got
             .next()
-            .expect("four bodies")
+            .ok_or_else(|| err("getGameConfigs", "the capture returned no body".into()))?
             .map_err(|e| err("getGameConfigs", e))?;
         let branches = got
             .next()
-            .expect("four bodies")
+            .ok_or_else(|| err("getGameBranches", "the capture returned no body".into()))?
             .map_err(|e| err("getGameBranches", e))?;
         let deprecated = got
             .next()
-            .expect("four bodies")
+            .ok_or_else(|| {
+                err(
+                    "getGameDeprecatedFileConfigs",
+                    "the capture returned no body".into(),
+                )
+            })?
             .map_err(|e| err("getGameDeprecatedFileConfigs", e))?;
         let packages = got
             .next()
-            .expect("four bodies")
+            .ok_or_else(|| err("getGamePackages", "the capture returned no body".into()))?
             .map_err(|e| err("getGamePackages", e))?;
 
         let params = BranchParams::from_branches(&branches.bytes)?;
@@ -400,8 +405,16 @@ impl<'a> HypClient<'a> {
             })
             .map_err(|e| ApiError::shape("getBuild", e))
         };
-        let build_new = body(&tags[0], got.next().expect("two builds"))?;
-        let build_old = body(&tags[1], got.next().expect("two builds"))?;
+        let build_new = body(
+            &tags[0],
+            got.next()
+                .ok_or_else(|| err("getBuild", "the new tag returned no body".into()))?,
+        )?;
+        let build_old = body(
+            &tags[1],
+            got.next()
+                .ok_or_else(|| err("getBuild", "the old tag returned no body".into()))?,
+        )?;
 
         versions.attach_build_ids(
             &build_new.data::<GetBuild>()?.build_id,

@@ -61,11 +61,14 @@ makes a bundle a **cache of the live world** rather than a build output.
 
 **Where they live.** `--out` defaults to `./artifacts`, laid out as
 `artifacts/<biz>/<old_tag>__<new_tag>/<capture_id>/`. The directory is gitignored:
-bundles are large (≈98 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
-`expected/` is ≈20 MiB, `game/` ≈20 MiB, `chunks/` ≈17 MiB and `manifests/`
-≈41 MiB) and regenerable, so they belong on disk, not in history. **This is the
-project location**: anything a test or another tool is expected to rely on lives
-here.
+bundles are large (≈97.7 MiB on disk for `hk4e_global` 7.0.0 → 7.1.0, of which
+`expected/` is ≈18.7 MiB, `game/` ≈19.9 MiB, `chunks/` ≈15.8 MiB and
+`manifests/` ≈41.4 MiB; MiB = 1 048 576 B, measured on the reference bundle) and
+regenerable, so they belong on disk, not in history. Of `manifests/`, only the
+four served `*.manifest.zst` archives are ever fetched — ≈19 MiB — while the
+rest is the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv`
+sidecars. **This is the project location**: anything a test or another tool is
+expected to rely on lives here.
 
 **When to re-capture.** A bundle is out of date when the world moved or when
 this tool moved:
@@ -129,9 +132,10 @@ builds, diffs them, and assembles a **complete artifact**:
 | commands | `capture`, `verify`, `materialize`, `list` |
 | extras | gzip above the threshold, and assertions A18/A19/A20 |
 
-The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` —
-`20261021T141336Z`, the one the tool writes today — **verifies 63/63, exit
-`0`**, and its own selfcheck is **93/93, `pass`**.
+The reference bundle under `artifacts/hk4e_global/7.0.0__7.1.0/` — the
+directory named `<UTC timestamp>Z`, the one the tool writes today — **verifies
+63/63, exit `0`**, and its own selfcheck is **93/93, `pass`**. Find the local
+bundle with `gircap list --root artifacts`.
 
 It holds **six** captures and answers **all six** patch shapes, one capture
 each: the class set is a partition on the content, so a file answers exactly
@@ -150,10 +154,26 @@ loopback and the real `girpr` binary is run against it, once per capture, by
 `#[ignore]`d for cost, so it is run by hand:
 
 ```powershell
-# in the girpr package. Needs one bundle and FAILS without one.
-$env:GIRPR_ARTIFACT_BUNDLE = "<path to one bundle>"
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture --test-threads=1
+# in the girpr package. Needs exactly one bundle and FAILS without one.
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+cargo build -p gircap   # so `gircap verify` runs instead of printing a skip
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
+
+The cases run in parallel — one scratch tree and one set of listeners per
+capture — so no `--test-threads=1` is needed; `girpr`'s
+`.config/nextest.toml` shows each case's output through a per-case
+`success-output` override, so no `--no-capture` is needed either. Narrow a run
+to one failure by putting the case in the filter of the same command:
+
+```powershell
+cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+```
+
+The `-E` expression narrows the set nextest has already selected; it does not
+add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
+runs none of them, and `cargo nextest list` needs `--run-ignored only` (or
+`all`) to list them at all.
 
 The harness lives on the `girpr` side and **must**: `gircap` does not depend on
 `girpr` and does not invoke it, so the check that `girpr` works does not couple

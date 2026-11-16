@@ -307,3 +307,81 @@ pub(crate) fn build_plan(
         shared_link_extras,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hash::DigestSet;
+
+    /// A file, as the effective map spells one.
+    fn file() -> EffRec {
+        EffRec {
+            kind: "file".into(),
+            size: 1,
+            mtime_ns: 0,
+            hashes: DigestSet::default(),
+            is_link: false,
+        }
+    }
+
+    /// A directory, as the effective map spells one.
+    fn dir() -> EffRec {
+        EffRec {
+            kind: "dir".into(),
+            size: 0,
+            mtime_ns: 0,
+            hashes: DigestSet::default(),
+            is_link: false,
+        }
+    }
+
+    /// **The plan's copies are listed in path order.**
+    ///
+    /// The copy phase reports the failure of the copy that comes first *in the
+    /// plan*, so the plan's order is the order a run's report speaks in. The
+    /// rule is that the copy list is in path order, whichever bucket each copy
+    /// came from, and this pins it on the plan itself.
+    ///
+    /// The fixture spreads the three copies over three buckets whose order is
+    /// **not** the path order — a missing file late in the alphabet, a changed
+    /// file in the middle and a type conflict early — so a builder that merely
+    /// concatenated the buckets would come out with another list. A fixture
+    /// whose buckets happened to be in path order would pass whether or not the
+    /// rule held.
+    #[test]
+    fn the_copy_list_is_in_path_order() {
+        let mut sm = HashMap::new();
+        for rel in ["aaa.bin", "mmm.bin", "zzz.bin"] {
+            sm.insert(rel.to_string(), file());
+        }
+        // dst holds `aaa.bin` as a directory, so the copy over it is a type
+        // conflict; `mmm.bin` is there with other content, so that copy is a
+        // change; `zzz.bin` is not there at all, so that copy is a missing
+        // file.
+        let mut dm = HashMap::new();
+        dm.insert("aaa.bin".to_string(), dir());
+        dm.insert("mmm.bin".to_string(), file());
+        let diff = Diff {
+            missing: vec!["zzz.bin".to_string()],
+            changed: vec!["mmm.bin".to_string()],
+            type_conflict: vec!["aaa.bin".to_string()],
+            ..Diff::default()
+        };
+
+        let plan = build_plan(&sm, &dm, &diff, false, false);
+        let copies: Vec<(&str, &str)> = plan
+            .copy
+            .iter()
+            .map(|item| (item.rel.as_str(), item.because.as_str()))
+            .collect();
+        assert_eq!(
+            copies,
+            [
+                ("aaa.bin", "type-conflict"),
+                ("mmm.bin", "changed"),
+                ("zzz.bin", "missing"),
+            ],
+            "the copies are in path order, and each keeps the bucket that put it there"
+        );
+    }
+}

@@ -28,17 +28,46 @@
 //!
 //! Not "it would be rude under `cargo nextest run`". These cases are
 //! **expensive**. One capture is a `--print-plan` pre-pass plus a real run, and
-//! each run fetches four manifests — ~20 MB of real bundle bytes — before it
-//! can plan a single file. The whole suite is a handful of cases and **minutes**
-//! of wall-clock, which is a price worth paying *when something has gone wrong*
-//! and not worth paying on every `cargo nextest run`.
+//! each run fetches four manifests — ~19 MiB of real bundle bytes — before it
+//! can plan a single file. The six cases take roughly a minute of wall-clock
+//! in a debug build (measured: 63 s wall for the whole six-test run — the
+//! cases run in parallel, so that is not the sum of their durations — and 67 s
+//! wall including the rebuild, on a 4-core Windows x86_64 host with
+//! `cargo nextest run -p girpr --test artifact_bridge --run-ignored only`
+//! against one 7.0.0 → 7.1.0 bundle); the figure depends on the profile and
+//! host, and a release build was not measured here. That is a price worth
+//! paying **before a release that changes the repair spec** and *after
+//! something has gone wrong*, and not worth paying on every `cargo nextest
+//! run`.
 //!
-//! So it is run **by hand, deliberately**, and only when the repair spec is
-//! suspected to have regressed:
+//! So it is run **by hand, deliberately** — before any release that changes
+//! the repair spec, and whenever that spec is suspected to have regressed. A
+//! pre-release run builds the verifier first, so the `gircap verify`
+//! precondition actually executes instead of skipping:
 //!
 //! ```text
-//! cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+//! # optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+//! cargo build -p gircap
+//! cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 //! ```
+//!
+//! No `--no-capture` or `--test-threads` flag is needed: each capture gets its
+//! own scratch tree (§6.3) and its own listeners (§6.2), so the cases are
+//! parallel-safe, and the `[[profile.default.overrides]]` in
+//! `.config/nextest.toml` whose `filter` names these six cases sets
+//! `success-output = "immediate"`, so the precondition and per-capture lines
+//! are printed even though the cases pass.
+//!
+//! To reproduce one failure, put the case in the filter of the same command:
+//!
+//! ```text
+//! cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+//! ```
+//!
+//! The `-E` expression narrows the set nextest has already selected; it does
+//! not add `#[ignore]`d cases to it. A command without `--run-ignored only`
+//! (or `all`) runs none of them, and `cargo nextest list` needs
+//! `--run-ignored only` (or `all`) to list them at all.
 //!
 //! Nothing else runs it. `cargo nextest run` still *compiles* this file, which
 //! is what keeps it from rotting against `RunCtx`, `PathScope` and the `SUMMARY`
@@ -60,8 +89,10 @@
 //! set GIRPR_ARTIFACT_BUNDLE=<dir>
 //! ```
 //!
-//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then
-//! `gircap list --root artifacts`, then a directory scan.
+//! Resolution order: `GIRPR_ARTIFACT_BUNDLE` always wins, then the search
+//! root (`GIRPR_ARTIFACT_ROOT` when set, else `artifacts/`), then
+//! `gircap list --root <root>`, and a directory scan only as the fallback when
+//! that listing is unavailable or fails.
 //!
 //! # What this file is allowed to touch
 //!
@@ -70,8 +101,15 @@
 //! is what turns a cleanup flag into a way to destroy the evidence, and the
 //! bundle has to still pass `gircap verify` afterwards.
 
+// Tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 #[path = "artifact_bridge/bundle.rs"]
 mod bundle;
+#[path = "common/digest.rs"]
+mod digest;
+#[path = "common/run_lock.rs"]
+mod run_lock;
 #[path = "artifact_bridge/server.rs"]
 mod server;
 
@@ -79,6 +117,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use bundle::{Capture, Patchmaps};
+use digest::md5hex;
 use girpr_tempdir::TempDir;
 use server::{Bridge, Bundle, Origins};
 
@@ -229,7 +268,8 @@ fn patchmaps(bundle: &Bundle) -> Patchmaps {
 async fn assert_bundle_verifies(bundle: &Bundle) {
     let Some(exe) = gircap_exe() else {
         println!(
-            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`",
+            "SKIP precondition: gircap is not built beside {}; skipping `gircap verify`.\n\
+             \x20 A pre-release run builds it first: cargo build -p gircap",
             girpr_exe_dir().display()
         );
         return;
@@ -408,6 +448,7 @@ async fn girpr(args: &[String]) -> Run {
         .output()
         .await
         .expect("spawn girpr");
+    run_lock::remove_run_lock_for_args(args);
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     let mut records = BTreeMap::new();
@@ -449,7 +490,7 @@ fn base_args(game: &Path, bundle: &Bundle, o: &Origins, log: &Path) -> Vec<Strin
         o.hyp_base.clone(),
         "--sophon-base".into(),
         o.sophon_base.clone(),
-        "--io-threads".into(),
+        "--jobs".into(),
         "1".into(),
         "--output".into(),
         "json".into(),
@@ -598,7 +639,7 @@ async fn drive_capture(bridge: &Bridge, capture: &Capture) {
         let bytes = std::fs::read(&target)
             .unwrap_or_else(|e| panic!("{}: read patched {}: {e}", capture.id, capture.path));
         assert_eq!(
-            format!("{:x}", md5::compute(&bytes)),
+            md5hex(&bytes),
             capture.result_md5,
             "{}: the patched file must equal expectations.result_md5",
             capture.id
@@ -715,7 +756,7 @@ macro_rules! capture_test {
     ($name:ident, $id:literal, $doc:literal) => {
         #[doc = $doc]
         #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        #[ignore = "expensive: real girpr runs over bundle bytes. Run by hand only when a repair-spec change is suspected - cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture"]
+        #[ignore = "expensive: real girpr runs over bundle bytes. Build the verifier with cargo build -p gircap first; then run by hand before any release that changes the repair spec, or when a regression is suspected, with cargo nextest run -p girpr --test artifact_bridge --run-ignored only (its output is visible without --no-capture; the per-case success-output override in .config/nextest.toml names it)"]
         async fn $name() {
             let bridge = bridge().await;
             drive_named(&bridge, $id).await;

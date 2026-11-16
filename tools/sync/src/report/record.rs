@@ -116,6 +116,12 @@ impl Record {
     }
 
     /// The JSON `event` name: the text label lowercased.
+    ///
+    /// **ASCII case only, and the label alone.** The fold answers what this
+    /// record's machine-readable name is — `MISSING` and `missing` are one
+    /// event — and a path the record carries is rendered exactly as it was
+    /// recorded. It is not a path fold: the crate's path folds live in
+    /// `crate::util` and answer questions about paths.
     pub fn event(&self) -> String {
         let mut out = String::with_capacity(self.label.len());
         self.push_event(&mut out);
@@ -123,6 +129,10 @@ impl Record {
     }
 
     /// Append the `event` name, lowercased but not JSON-quoted.
+    ///
+    /// The fold is the label's, and ASCII case only: it turns the text label
+    /// into the machine-readable name, and it touches nothing else in the
+    /// record — a path field is printed as it stands.
     fn push_event(&self, out: &mut String) {
         for c in self.label.chars() {
             out.push(c.to_ascii_lowercase());
@@ -130,6 +140,9 @@ impl Record {
     }
 
     /// Append the JSON `event` name as a quoted string.
+    ///
+    /// The same fold the text form uses — the label's, ASCII case only — with
+    /// the JSON quoting on top.
     fn push_json_event(&self, out: &mut String) {
         out.push('"');
         for c in self.label.chars() {

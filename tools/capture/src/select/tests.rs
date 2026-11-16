@@ -721,6 +721,42 @@ fn a_forced_path_outside_the_manifests_is_skipped_not_fatal() {
     assert_eq!(s.admitted.len(), 6, "the six real ones still went in");
 }
 
+/// The per-class candidate lists are **keyed by `Class`**, not by a position
+/// that happens to line up with `Class::ALL`.
+///
+/// `REQUIRED_ORDER` and `ALL` are the same list today, but the lookup must not
+/// rely on that: reordering either one would silently pair a class with another
+/// class's candidates. Every assertion here goes through the class itself.
+#[test]
+fn candidate_lists_are_keyed_by_class_not_by_array_position() {
+    let pool = all_six();
+    let by_class = candidates_by_class(&pool);
+
+    for class in Class::ALL {
+        let expected: Vec<usize> = pool
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.candidate.satisfies(class))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            by_class.get(&class),
+            Some(&expected),
+            "the list for `{class}` must be the pool indices that satisfy it"
+        );
+    }
+
+    // A concrete pairing, independent of where either class sits in the array:
+    // `added` points at the added path and `removed` at the removed one.
+    let idx_of = |path: &str| {
+        pool.iter()
+            .position(|c| c.candidate.path == path)
+            .expect("the fixture carries it")
+    };
+    assert_eq!(by_class[&Class::Added], vec![idx_of("j/added")]);
+    assert_eq!(by_class[&Class::Removed], vec![idx_of("k/removed")]);
+}
+
 #[test]
 fn candidates_document_carries_the_columns_and_a_one_based_rank() {
     let diffs = [field(

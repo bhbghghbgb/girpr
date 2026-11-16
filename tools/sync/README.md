@@ -16,7 +16,12 @@ parse -> init tracing -> `run` -> exit. Tests are integration tests in `tests/`
 and drive the public API. Modules that carry more than one idea are split into
 directories (`mod.rs` is the facade re-exporting the same items, so no public
 path moves; the leaf files each own one concern, and their inline `#[cfg(test)]`
-tests travel with the code they exercise).
+tests travel with the code they exercise). A path in the table is relative to
+`src/`; a row spells the whole path — `src/…` — in three cases: a path
+relative to `src/` that is a bare name another file in the tree shares
+(`link.rs`, which the plan directory's own `link.rs` shares), a file the module
+tree holds only in a test build (`#[cfg(test)]`), and a separate binary target
+(`src/bin/sled2redb.rs`).
 
 | File | Responsibility |
 | --- | --- |
@@ -29,20 +34,23 @@ tests travel with the code they exercise).
 | `commands/update.rs` | refresh one folder's cache |
 | `commands/compare.rs` | diff two sides, print, exit 4 on any difference |
 | `commands/compare_self.rs` | diff a folder against its own cache, folder side scanned with no cache |
-| `commands/sync/mod.rs` | the mirror run: validate, back up, load, then rename -> plan -> apply |
+| `commands/sync/mod.rs` | the mirror run; its phases are named in the module doc, which says what each one's order protects |
 | `commands/sync/rename.rs` | case-fixing rename pass, so the diff can be case-sensitive |
-| `commands/sync/plan.rs` | `Plan` + `build_plan` (pure) and the `--dry-run` printer; `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
-| `commands/sync/apply.rs` | `Applier`: the ordered apply phases, plus `copy_one` |
+| `commands/sync/plan/` | `mod.rs` (the facade), `build.rs` (`Plan` + `build_plan`, pure), `link.rs` (link storage and the on-disk spellings), `safety.rs` (the plan-time guards), `records.rs` (the summary and the dry-run records); `open_folder_cache` (in `effective/side.rs`) is what makes `--dry-run` mean the same thing in every command |
+| `src/commands/sync/plan/tests.rs` | the plan module's own cases: the plan-time guards, the link storage they spare, and the on-disk spellings they name |
+| `commands/sync/apply/` | `mod.rs` (`Applier`: the ordered apply phases), `phases.rs` (the phases themselves), `copy.rs` (`copy_one`: the stream copy, the digest and the verify) |
 | `cache/mod.rs` | redb schema (`Meta`, `FileRec`), open/rebuild, backup/snapshot helpers — the facade and the table definitions |
 | `cache/schema.rs` | `Meta` + `FileRec`: what a row *is*, with no encoding |
 | `cache/codec.rs` | the binary entry/meta codec and its roundtrip/rejection tests |
-| `cache/db.rs` | `CacheDb`: the read/write-or-read-only handle (`CacheOpen`) and its tests |
+| `cache/db/` | `mod.rs` (the facade), `cachedb.rs` (`CacheDb`: the read/write-or-read-only handle), `handle.rs` (`Handle`: the type that says whether a handle can write), `backend.rs` (the page-cache size, the redb builder and the in-memory registry) |
 | `cache/write.rs` | `CacheWrite`: batched mutations, `CommitLimits`, and the three auto-commit triggers |
 | `cache/open.rs` | `open_db`, backups/snapshots, and the version gate |
+| `convert.rs` | the one-shot `sled` → `redb` cache converter — the only module that still touches `sled`, behind the `convert` feature |
+| `src/bin/sled2redb.rs` | the converter's command line: the `sled2redb` binary — the two paths, `--force` and `--output`, and the same `report::Record` writer `girsync` uses; a separate binary target behind the `convert` feature, so a default build has no such binary |
 | `scan.rs` | `walk_live` (the on-disk walk) and `check_mixed_case` |
 | `effective/mod.rs` | the two-phase facade for one side of a comparison |
 | `effective/entry.rs` | the entries (`EffRec`, `SideEntry`, `SideScan`, `ScanStats`, `SideCapability`) and the cache write rule (`merge_row`) |
-| `effective/side.rs` | `Side`/`OpenSide`, `open_side`/`open_folder_cache`, `classify`, `ensure_distinct_sides`, `resolve_sides_concurrently` |
+| `effective/side.rs` | `Side`/`OpenSide`, `open_side`/`open_folder_cache`, `classify`, `ensure_distinct_sides`, `resolve_sides_concurrently`, and `Repopulate`/`side_folder`: where a side's cache lives, and so where a repopulation of it would run |
 | `effective/phase_a.rs` | phase A: `scan_stat_only` — walk + cache, never hashes |
 | `effective/phase_c.rs` | phase C: `resolve_folder`/`resolve_record`/`resolve_side` — hash what the plan asked for |
 | `effective/record.rs` | phase A for a record side: `load_record_side_from` |
@@ -51,13 +59,19 @@ tests travel with the code they exercise).
 | `planner/plan.rs` | `HashPlan` + `Required`: what a run must compute, and what settles each pair |
 | `planner/pairs.rs` | `plan_pairs`: the two-sided decision, pairing, and the coverage bookkeeping |
 | `planner/coverage.rs` | `Coverage`: the error (and its message) when a side cannot answer |
-| `planner/fixtures.rs` | `#[cfg(test)]` entry fixtures shared by the planner's own test modules |
+| `src/planner/fixtures.rs` | `#[cfg(test)]` entry fixtures shared by the planner's own test modules |
 | `diff/mod.rs` | `Diff` buckets, `diff_maps`, `pair_verdict` and `hashes_differ`: the set of per-pair classifications |
 | `diff/verdict.rs` | `Verdict`: the per-pair classification and its reason tag — the one place a `why=` tag is assembled |
 | `rw/mod.rs` | `RwRuntime`: the limits, the counters and the worker pool, as one run's resource |
 | `rw/limits.rs` | `RwLimits`/`RwSide`: the *shape* the `--rw-threads*` flags resolve to |
 | `rw/gate.rs` | `RwLimiter`/`RwPermit` and the counting gate: the counters, and the src-then-dst lock ordering |
-| `filter.rs`, `hash.rs`, `util.rs`, `logging.rs` | glob filters, digests, path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
+| `src/rw/fixtures.rs` | the limiters the `rw/` unit tests share: `shared(n)` and `split(s, d)`, so a case states the shape it is about rather than reaching for the limiter |
+| `filter.rs` | the include/exclude globs, compiled once per run and matched with the run's case mode |
+| `src/link.rs` | what counts as a link (`try_is_link`), how to remove one without touching its target, and which ancestor of a path is one |
+| `hardlink.rs` | the hard-link metadata the copy guard asks for: the link count and the file identity (`nlink`/`dev`/`ino` on Unix, `GetFileInformationByHandle` on Windows) |
+| `hash/` | `mod.rs` (the facade), `algo.rs` (`HashAlg`), `set.rs` (`AlgoSet` and the flag parsers), `digestset.rs` (`DigestSet`: the digests one row carries), `stream.rs` (`Digests`, `hash_file`) |
+| `src/hash/tests.rs` | the hash module's own cases: the algorithm names and the resolver that answers them, the flag parsers, and the three lookups into `DigestSet` |
+| `util.rs`, `logging.rs` | path/time/FS helpers, tracing setup over the shared log policy (`crates/log/`) |
 
 Adding a flag: declare it in `cli.rs` (or `CommonArgs` if shared), read it from
 `CommonArgs` in `config/common.rs`'s `TryFrom`, then use
@@ -70,8 +84,10 @@ rendered by `--output` (see "Output" below). **stderr** is the narration:
 a JSON log file. `logging.rs` owns stderr and `report/` owns stdout; neither
 writes to the other's, which is what lets `--output json` hand a caller a clean
 stream of JSON records with no log chatter mixed in. The only `println!` in the
-crate is `Report::emit`, and the only raw stderr writes are the two `FATAL`
-lines that happen *before* a subscriber exists.
+program is `Report::emit`; the benchmark under `benches/` is a separate binary
+and prints its own numbers. The raw stderr writes are the few that are not
+diagnostics at all — the `WARN` lines the log policy raises before a subscriber
+exists, and the log file's path when the caller named one.
 
 `build_plan` reads only the two effective maps, which is what makes `--dry-run`
 exact. The apply phases are ordered inside `Applier::apply` because the order is
@@ -82,16 +98,81 @@ trusting a half-written file.
 ## Commands
 
 ```
-girsync update    --dir <DIR>                        [--hash-all-of md5] [--hash-any-of md5] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
-girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
-girsync compare-self --dir <DIR>                    [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
-girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5] [--hash-any-of md5] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync update    --dir <DIR>                        [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--include G --exclude G] [--case-sensitive] [--max-depth 10] [--ignore-cache] [--dry-run]
+girsync compare   --src <DIR|RECORD> --dst <DIR|RECORD>  [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
+girsync compare-self --dir <DIR>                    [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--why] [--show-identical] [--no-trust-cached-hashes] [--dry-run] [...]   # --no-trust-cached-hashes and --dry-run are accepted and do nothing
+girsync sync      --src <DIR> --dst <DIR>           [--missing-only] [--keep-extra] [--rw-threads N | --rw-threads-src S --rw-threads-dst D | --rw-dual-drive] [--hash-all-of md5 --hash-all-of sha256] [--hash-any-of md5 --hash-any-of sha256] [--no-trust-size] [--no-trust-mtime] [--no-trust-cached-hashes src|dst] [--dry-run] [...]
 ```
+
+**Each occurrence of a hash flag names one algorithm**, and the flag is
+repeatable, so the synopsis above spells a request for two the way the parser
+takes it: `--hash-all-of md5 --hash-all-of sha256`. `--hash-all-of md5 sha256` —
+two values in one occurrence — is refused before the run starts. The default is
+`--hash-all-of md5` alone.
 
 Global flags: `--log-level trace|debug|info|warn|error`, `--log-file-level
 trace|debug|info|warn|error`, `--log-file <PATH>`, `--no-log-file`, `--output
 text|json`.
-`sled2redb` takes `--force` and the same `--output`.
+`sled2redb <SLED_DIR> <REDB_PATH>` takes `--force` and the same `--output`. The
+flags go on either side of the two paths — `sled2redb --force <SLED_DIR>
+<REDB_PATH>` and `sled2redb <SLED_DIR> <REDB_PATH> --force` are the same run —
+and `--output=json` is the same as `--output json`. It is not in a default
+build: the converter is behind the `convert` feature, so it is built with
+`cargo build -p girsync --features convert --bin sled2redb` — see
+[Build features](#build-features). A usage error in it exits `3`, not clap's `2`:
+the converter shares one failure code with a failed conversion, so every way it
+can fail is `3` — while `girsync` itself keeps `2` for a parse error.
+
+**It has no `--version`.** The converter declares no version, so the flag is an
+unknown one: the run fails with `3` like any other usage error, and no version
+line is printed.
+
+**A conversion is atomic for a file destination.** The new cache is written
+into a temporary beside the destination and moved onto it only once it is
+whole, so the destination is either the old cache or the new one — never a
+half-written mixture, and never a file that opens as a valid cache. A
+conversion that fails leaves the previous cache exactly as it was under
+`--force`, and leaves no destination at all without it; the temporary is
+removed either way, so nothing of the tool's own is left in the folder.
+
+The temporary is named inside the tool's own namespace —
+`girpr-cache-convert-<pid>-<ts>.redb`, or `girpr-cache-convert-<pid>-<ts>_2.redb`
+and its `_3`, `_4`, … spellings when a name of that shape is already taken —
+because it is written into the folder the destination cache lives in. Every
+spelling of it is inside that namespace, so a conversion that is killed before
+it could clean up after itself therefore leaves tool state there, not a file
+the next run would mirror out of a source folder or delete as an extra in a
+destination one. **That family of names is bounded** — the plain name and the
+`_2` … `_1000` spellings, a thousand candidates in all — so a conversion that
+finds every one of them taken fails with exit `3` rather than trying forever.
+
+**Nothing reclaims that temporary.** The retention bound
+([Backups and failures](#backups-and-failures)) ranges over a cache's
+published copies — the `girpr-cache-backup-*` copies and the `girpr-cache-old-*`
+snapshots — and not over the converter's temporary, so a leftover stays in the
+folder until you remove it by hand. That is deliberate: a temporary is the
+file a live conversion is writing, and a sweep that could not tell a live one
+from a dead one would take the copy a running conversion is making. The name
+carries the process id, so a leftover says which run left it.
+
+That process id is for **you**, not for the tool: it cannot answer "is a
+conversion still writing this?". A process id is **reused**, so the number in
+the name may belong to an unrelated process by now — the check would either
+keep a stale temporary forever or take a live one away. And the folder can be
+**shared between hosts** (a network folder, a container mount, a synced
+directory), where the number was minted in a process table this machine cannot
+ask about at all; a container has the same problem inside one host, because
+its process ids belong to its own namespace. So the id names the run for a
+reader, and a leftover is yours to remove.
+
+Replacing a **legacy sled directory** is the one step that is not atomic: the
+directory has to be removed before the new file can take its name, so a
+failure in that window leaves no cache at all. The error says so when it
+happens. The source directory is left alone either way — the conversion never
+writes to it, so deleting it is your call.
+
+`--no-backup` and `--backup-retain N` are on every subcommand too — see
+[Backups and failures](#backups-and-failures).
 
 ### Logging
 
@@ -126,6 +207,23 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   policy names log files after the *project*, and the converter is part of
   this one. It is a one-shot migration, and a migration that fails should
   leave a record of how far it got.
+- **The log events name what produced them.** The walk reports itself in
+  `scan start`, `scan progress: walk` and `scan done`. A **folder** side's
+  effective map is built in two phases — one that walks the tree and consults
+  the cache, one that hashes what the plan asked for — and each phase reports a
+  start, a progress and a done, all named for the map and for the phase they
+  came from: `effective start: phase a`, `effective progress: phase a` and
+  `effective done: phase a`, and the same three for phase C. Every event of a
+  phase names the phase by its letter, so a reader — or a parser — never has
+  to know which fields an event carries to say where it came from, and a grep
+  for `effective done` finds both phases' done events.
+- **A record side reports neither the walk nor the phases.** It has no
+  filesystem to walk and no bytes to hash, so it runs neither phase: it logs
+  `record side loaded` — carrying the number of rows it kept — and no `scan`
+  event and no `effective` event at all. (`compare` also names the load
+  itself, with `load record side`; `compare-self` opens the record read-only
+  instead, with `cache opened read-only`.) So a grep for `effective done`
+  finds a folder side's two done events and a record side's none.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).
@@ -197,8 +295,10 @@ by doing *less* would be wrong.
 
 ### `--hash-all-of` / `--hash-any-of`
 
-Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive. They
-answer one question — *how many of the named algorithms must a comparison be able
+Both are repeatable (`md5`, `sha256`; default `md5`) and mutually exclusive, and
+**each occurrence names one algorithm** — `--hash-all-of md5 --hash-all-of sha256`
+asks for two, and `--hash-all-of md5 sha256` is refused before the run starts.
+They answer one question — *how many of the named algorithms must a comparison be able
 to use?* — and the difference is what happens when a side cannot supply them:
 
 | | requirement on an undecided pair | a folder side short of one | a **record** side short of one |
@@ -212,8 +312,8 @@ stat or presence, so no algorithm is required and no coverage is checked.
 
 `--hash-any-of` picks cheapest-first — an algorithm both sides already hold costs
 no read, one costs a read, two cost two — and within a tier it takes the **order you
-wrote the flags in**, so `--hash-any-of sha256 md5` prefers sha256. The
-choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
+wrote the flags in**, so `--hash-any-of sha256 --hash-any-of md5` prefers sha256.
+The choice is **per pair**: one run can settle path X by md5 and path Y by sha256.
 
 That makes it strictly weaker than all-of, and never weaker than the pick: every
 algorithm it chooses is obtainable on *both* sides, so a pair settled this way is
@@ -221,11 +321,11 @@ settled by a digest both sides hold. That is what separates it from simply skipp
 whatever digest is missing and reporting the pair equal on size+mtime alone.
 
 Reach for it when a side holds only some of what you would otherwise demand — a
-record written by an older run, typically. An `--hash-all-of md5` history compared with
-`--hash-any-of md5 sha256` succeeds wherever the record has md5, reading one digest
-instead of refusing and without repopulating the tree. On two *folders* it is mostly
-free money: both can always backfill, so the saving is whatever the caches already
-cover.
+record written by an older run, typically. An `--hash-all-of md5` history compared
+with `--hash-any-of md5 --hash-any-of sha256` succeeds wherever the record has
+md5, reading one digest instead of refusing and without repopulating the tree. On
+two *folders* it is mostly free money: both can always backfill, so the saving is
+whatever the caches already cover.
 
 `--hash-all-of none` is the stat-only audit — no hashing at all, decisions by
 size+mtime only (verify-after-copy also size+mtime). `none` is **not** accepted by
@@ -297,9 +397,10 @@ called *rw* and not *io*:
 `stat` is excluded deliberately: it is orders of magnitude cheaper than a read, and
 including it would let the counter be spent entirely on `stat` calls over a tree of
 many small files. The cache is excluded because it is not tree I/O the limiter is
-about; the two `fs::copy` snapshots of the cache file (`girpr-cache-backup-*`,
-`girpr-cache-old-*`) *are* whole-file copies on the same physical disk, but they run
-once, serially, before any parallel phase exists, so gating them would be a no-op.
+about; the cache copies (`girpr-cache-backup-*` beside src's cache,
+`girpr-cache-old-*` beside dst's) *are* whole-file copies on the same physical
+disk, but they run once, serially, before any parallel phase exists, so gating
+them would be a no-op.
 
 ### What a copy costs
 
@@ -325,17 +426,33 @@ The re-read is not a belt-and-braces extra and must not be "optimised" away into
 a single pass. Hashing both sides from the same chunks going out would compare a
 value with itself: equal by construction, so a mismatch could never be reported
 and the verify would read as a guarantee while checking nothing. Two independent
-reads are what make `verify hash mismatch` mean anything, and because the second
-one happens after `sync_all()`, it hashes the bytes that actually reached the
-disk — the only way a copy catches silent corruption on the way down.
+reads are what make the log's `verify hash mismatch` event mean anything, and
+because the second one happens after `sync_all()`, it hashes the bytes that
+actually reached the disk — the only way a copy catches silent corruption on
+the way down.
 
 What the src-side digest does **not** cover: a src file rewritten *during* the
 copy. dst is then a faithful copy of a src that no longer exists, and the pair
 compares clean. That race is unwinnable by construction; phase A's stat sees the
 new mtime on the next run and re-copies.
 
-Under `--hash none` there is no digest to fold into the loop, so the copy is left
-to `std::io::copy` and whatever fast path that has between two files.
+**A failed verify names its algorithm, in a fixed order.** A copy whose two
+reads disagree fails the run (exit `3`) with the error text
+`verify hash(<algo>) <path>` — the algorithm whose digest differed, and the file
+it was read back from. **That is the error text, not the log's message:** the
+same disagreement is logged as an event whose message is
+`verify hash mismatch`, with the algorithm and the path as fields beside it.
+The two are different strings and answer different questions — a parser reads
+the event's fields, and the error text is what the run says as it fails. The
+algorithm named is the **first in canonical order** among those that disagreed
+(`md5` before `sha256`), never the order the flags were typed in: the copy
+computes and judges a *set* of algorithms, and a set carries no order, so
+`--hash-all-of sha256 --hash-all-of md5` still names `md5` first. It is the same
+fixed order the `digest-differs` tag uses, so a parser can switch on the algorithm
+named in either place.
+
+Under `--hash-all-of none` there is no digest to fold into the loop, so the copy
+is left to `std::io::copy` and whatever fast path that has between two files.
 
 ### What this never changes
 
@@ -386,7 +503,9 @@ does **not** mean every stored digest is replaced:
 
 So the cache is a superset of what you last asked for, pruned to the current
 stat. `girpr-cache-backup-*` (written before the run) is the manual way back
-from a bad prune; it is a recovery aid, not a correctness mechanism.
+from a bad prune; it is a recovery aid, not a correctness mechanism, and
+`--no-backup` skips writing it — see
+[Backups and failures](#backups-and-failures).
 
 The prune keeps rows for what the run *created* — new directories, copied files,
 directories that replaced a file — as well as what it found, and drops rows for
@@ -407,13 +526,23 @@ The `hashed` counter in the run's log line is the answer to "how much would this
 read?", which is the question `--dry-run` exists to ask.
 
 The scan asks the cache two different questions, and they are worth telling
-apart because only one of them needs the records. `alt_recs` loads the whole
-`entries` table *with* its values, to adopt a stale alternate-cased row — it has
-to see them. The prune that follows asks only "which rows exist?", and gets
-`load_keys`, which walks the table without decoding a single `FileRec`. In the
-default insensitive mode that is the second full pass over the table in one
-phase, so the distinction is the difference between rebuilding a hash map per
-file and not.
+apart because only one of them needs the records. The alternate-case index
+reads the whole `entries` table's *keys*, to find a stale alternate-cased row
+for a path — the names are all it needs, and the row itself is read only when
+one is actually adopted, which is normally never. The index is built when a
+path misses exactly, so a scan in which every path is found in the cache
+under the spelling the disk uses never reads the keys for it at all. **That
+price is the insensitive mode's alone**: with `--case-sensitive` there is no
+alternate spelling to look for, so no index is built at all and a path that
+misses exactly costs nothing. The prune that follows asks the same question
+of the keys — "which rows exist?" —
+and gets them one at a time, without decoding a single `FileRec` and without
+collecting them either: the only keys it keeps are the stale ones, and a scan
+that finds nothing stale keeps none. In the default insensitive mode that is a
+full pass over the table's keys in one phase, and the scan makes that pass
+**once**: the index keeps the keys it read, and the prune works from the same
+set. The distinction the two questions are worth telling apart for is the
+difference between rebuilding a hash map of rows per file and not.
 
 The set of paths the scan treats as live is built once, borrowed from the walk
 rather than copied out of it. It exists so the prune can ask "is this row still
@@ -499,10 +628,10 @@ few of them, the per-algorithm coverage, and the remedy. This is the commonest w
 to hit it and it is worth knowing:
 
 ```
-girsync update src      # cache warm
-# a file appears in src
-girsync sync src dst    # ...and leaves a stat-only row for it in src's cache
-girsync compare-self src   # exit 3: 1 of 3 undecided paths uncovered
+girsync update --dir D:\game-old      # cache warm
+# a file appears in D:\game-old
+girsync sync --src D:\game-old --dst D:\game-live    # ...and leaves a stat-only row for it in D:\game-old's cache
+girsync compare-self --dir D:\game-old   # exit 3: 1 of 3 undecided paths uncovered
 ```
 
 The `sync` is not at fault. It decided that pair by presence, so it needed no
@@ -512,16 +641,26 @@ stat-equal pair the record cannot digest, and without this rule it would have
 exited **0**: `hashes_differ` skips an algorithm either side lacks, so the pair
 quietly falls back to the size+mtime that had already agreed and the audit reports
 the newcomer as in step. Three ways out, all named in the error: one command
-(`girsync update --dir src`), a narrower request
+(`girsync update --dir D:\game-old` — with the **folder spelled out**, so the
+line is one you can paste as it stands), a narrower request
 (`--hash-all-of md5` if the record holds only md5), or
 `--hash-all-of none` for a stat-only audit.
+
+**A record that is not a folder's cache has no such command.** A
+`girpr-cache-backup-*` copy is a record as far as the tool is concerned — a
+comparison may be pointed at one — but no folder's `girpr-cache` is it, so
+nothing the tool can run would rebuild it, and the error does not offer a
+repopulation that would rebuild a *different* file. It says so in the message
+— the record is not a folder's own cache, so nothing would rebuild it — rather
+than leaving the remedy list quietly one line shorter. The other two ways out
+are still named.
 
 **`--hash-any-of` is the fourth, and the one that needs no new work on the tree.**
 Where the record holds *some* of what you asked for, it reads one algorithm instead
 of refusing:
 
 ```
-girsync compare-self --dir src --hash-any-of md5 sha256
+girsync compare-self --dir D:\game-old --hash-any-of md5 --hash-any-of sha256
 ```
 
 An audit of an `--hash-all-of md5` record then succeeds wherever the record has md5,
@@ -644,10 +783,13 @@ Three things worth knowing:
 `digest-differs` names the algorithms that **actually disagreed**, which under
 `--hash-any-of` is not the list you asked for — the planner settles a pair with one
 digest, and the tag says which. The list is always in a **fixed order** (`md5` before
-`sha256`), not the order the flags were typed, so `--hash-all-of sha256 md5` reports
-`digest-differs:md5+sha256`. That makes the tag a function of the disagreement rather
-than of how two flags were ordered, which is what lets a parser switch on it. A parser
-splits on the first `:`; the JSON form is a flat string
+`sha256`), not the order the flags were typed, so
+`--hash-all-of sha256 --hash-all-of md5` reports `digest-differs:md5+sha256`. That
+makes the tag a function of the disagreement rather than of how two flags were
+ordered, which is what lets a parser switch on it. A failed copy's verify message
+names its algorithm in the same fixed order, and its shape is spelled out in
+[What a copy costs](#what-a-copy-costs). A parser splits on the first
+`:`; the JSON form is a flat string
 (`{"event":"changed","path":"a.txt","why":"stat-size"}`), not an object.
 
 **Default off, and it changes nothing but the text** — not the exit code, not the
@@ -720,7 +862,13 @@ There is exactly one `SUMMARY`, and it is `sync`'s own — counting actions. The
 own summary is dropped: two differently-shaped summaries in one stream would make
 "the last line is the summary" true only by luck.
 
-Mirrors `src` → `dst`:
+Mirrors `src` → `dst`. The internal phases, in the order they run, are named in
+`commands/sync/mod.rs`, which also says what each one's order protects:
+**validate the roots, then back up and snapshot**; **open both caches, then
+phase A on each side**; **pair plan**; **resolve both sides**; **mkdir
+preflight**; **rename dst paths to src casing**; **diff, plan and the guards**;
+**the dry-run records, or the apply**. The steps below are what a run reports,
+not that internal order.
 
 1. Abort if `--src`/`--dst` resolve to the same cache, if either side is a record
    path, if one root contains the other (a mirror may not contain its own source;
@@ -731,8 +879,13 @@ Mirrors `src` → `dst`:
    contains it (each checked after its side's walk and before any mirror change; a
    link pointing anywhere else is ordinary content), or on any IO error (dangling
    symlink, walk loop, locked file — first error aborts the run).
-2. Backup `src` + `dst` DBs to `girpr-cache-backup-<ts>`, plus snapshot dst to
-   `girpr-cache-old-<ts>` — before any write. `current` is authoritative; `old-*`/`backup-*` are never auto-read.
+2. Backup `src`'s DB to `girpr-cache-backup-<ts>`, and snapshot dst's pre-sync
+   state to `girpr-cache-old-<ts>` — before any write. The live
+   `<root>/girpr-cache` is authoritative; `old-*`/`backup-*` are never
+   auto-read. dst gets the snapshot only: it is a copy of the same bytes taken
+   at the same moment, so a second name for it would be a third copy of one
+   file. `--no-backup` skips both copies and `--backup-retain N` bounds how
+   many are kept — see [Backups and failures](#backups-and-failures).
 3. Stat both trees, then plan **across the pair** (see "Cache is a cache, not
    truth"): a file is read only if it is on both sides with equal size+mtime.
    Insensitive mode: rename dst paths to src casing (`RENAME`, two-step for
@@ -774,7 +927,7 @@ Mirrors `src` → `dst`:
    converging). Neither ever resumes mid-file.
 
 **The plan in (3) runs before the rename in (3), and that ordering is load-bearing.**
-The planner pairs the two sides as they are *on disk* — by lowercase in
+The planner pairs the two sides as they are *on disk* — by the ASCII-case fold in
 insensitive mode — and the rename then collapses exactly those pairs onto exact
 keys, which is what the diff compares. Pairing by exact key instead would make a
 case-only pair look one-sided, skip the digest it needs, and leave the diff
@@ -815,6 +968,250 @@ nothing.
 nothing (no backups, no cache updates, no FS changes). Its records are the same
 ones a real run reports, with `dry_run=true` on the `SUMMARY`; see the
 `--dry-run` section below.
+
+### Backups and failures
+
+A backup is a **recovery aid, not a correctness mechanism**. The live
+`<root>/girpr-cache` is authoritative, and a `girpr-cache-backup-*` copy or a
+`girpr-cache-old-*` snapshot is never read back automatically: no run's answer
+depends on one, and no run restores from one for you.
+
+What a run leaves behind is therefore a **policy**, not a fixed step:
+
+| | a `sync` copies aside |
+| --- | --- |
+| default | src: `girpr-cache-backup-<ts>`; dst: `girpr-cache-old-<ts>` (dst's pre-sync state) |
+| `--no-backup` | nothing — no copy, no snapshot |
+| `--backup-retain N` | the same, but the folder is bounded to `N` copies of each prefix — the oldest are removed, and a copy a live run is still using is left alone |
+
+`update` and `compare` copy the cache they open — `girpr-cache-backup-<ts>`
+beside that folder's cache — and `sync` adds dst's `old-*` snapshot on top.
+`--no-backup` skips every one of them, and a record side is never copied at
+all: it is opened read-only.
+
+`--backup-retain N` counts **per prefix and per directory**: the
+`girpr-cache-backup-…` copies beside src's cache and the `girpr-cache-old-…`
+snapshots beside dst's cache are two separate lists, each bounded to its own
+N. The bound covers both lists in every folder the run touches, so a
+folder used as a source and as a destination is bounded on its copies and on
+its snapshots alike. `N` must be at least 1 — `--backup-retain 0` is refused
+with exit `3`, and `--no-backup` is how you ask for no copies at all. Without
+the flag the copies accumulate and are cleaned by hand.
+
+The bound holds a folder to `N` copies while no copy in it is spoken for by a
+live run. It removes the **oldest** copies it is allowed to remove, and a
+copy that is spoken for is left alone and does not spend the removal budget —
+the bound walks on to the next copy in age order instead. That next copy may
+be one of the newest ones, so the bound can take a copy that is among the
+newest `N` and leave an older copy in its place: the copies a folder keeps
+are not necessarily its newest. A folder holds more than `N` for as long as
+there are not enough copies the bound may remove to make the count up.
+
+The bound is about the **folder**, not about the run: it is applied whether or
+not this run copied anything aside. A folder whose cache is absent, and a
+`--no-backup` run, are bounded just the same — the copies already sitting
+beside a folder are the ones the bound is about, and a bound that only took
+effect when a new copy was made would leave them there forever. A dry run
+still writes nothing at all, so it bounds nothing.
+
+The bound is applied when a folder's cache is **opened for writing**, so it
+runs under that cache's own lock. While one run holds it, no other run is in
+its run phase for that folder's cache.
+
+A cache that does **not** open is bounded as well, because the bound is about
+the folder and not about the open: a corrupt cache, or a legacy sled
+directory the open refuses, would otherwise leave the copies beside it to
+accumulate until `--ignore-cache` rebuilt the cache. The bound runs under the
+cache's own lock there too, taken for the bound; a lock another run holds
+means that run is in its run phase for the folder and bounds it itself, so
+that run's copies are left alone. The lock is taken on the cache file
+whatever the file can be opened for, so a cache that is not writable is still
+locked; only a cache that cannot be opened at all — not even for reading —
+has no lock to take, and is bounded without one.
+
+**A copy appears whole, or not at all.** It is written under a working name
+(`girpr-cache-partial-<ts>`) and published under `girpr-cache-backup-<ts>` (or
+`girpr-cache-old-<ts>`) once it is complete, so a name in a copy list never
+holds half a backup. A file copy is published by linking it into place, so the
+name is created with the copy's bytes in it — there is no moment at which the
+name is there and empty — and the link fails if the name is taken, so two runs
+cannot publish onto one name. A filesystem that cannot link a file has no such
+publish: the copy is renamed onto a name it claims first, and the name is
+briefly empty until the rename lands. The rename has to be able to replace
+the claim for the copy to land at all; where it cannot, the publish fails
+loudly and the run reports the failure rather than a backup that is not
+there. A directory copy — a legacy sled cache is a directory — cannot be
+linked either, so its name is claimed with an exclusive create and the copy
+is renamed onto the claim: the name is briefly an *empty directory* until the
+rename lands.
+
+**A name of that shape that is taken is stepped over, not reused.** The copy
+is published under the next name of the family instead: `girpr-cache-backup-<ts>`
+and then its `girpr-cache-backup-<ts>_2`, `_3`, … spellings, and the same
+family of names for the `girpr-cache-old-…` snapshots and for the working
+`girpr-cache-partial-…` name. **That family of names is bounded** — the plain
+name and the `_2` … `_1000` suffixes, a thousand candidates in all — so a
+claim cannot spin forever over a pathological folder: a publish that finds
+every one of them taken fails loudly, and the run reports the failure rather
+than a backup that is not on disk.
+
+The claim is what keeps two runs off one name, and a bound that meets one
+cannot tell it from a published copy, so on a filesystem that cannot lock a
+file the claim can be taken away; a publish that finds its claim gone fails the
+run loudly rather than landing the copy on a name it no longer holds. The claim
+has to be **this run's** for that check to mean anything, so the publish asks
+whether the name still holds the object it created, and not merely whether
+something is at the name: if the claim was taken away and another run took the
+name and published there, the copy is not landed on it either, and that run's
+copy is left alone.
+
+Dropping a claim is **best-effort**: the error of the removal is ignored, so
+a removal that fails leaves the claim behind — an empty file under
+`girpr-cache-backup-<ts>`, or an empty directory for a legacy sled cache —
+and the name is one the bound reads as a published copy. It counts towards
+the bound, and it can be the one the bound keeps in place of a whole copy.
+
+That check and the rename that follows it are two calls, and there is no
+portable rename that is conditional on the name holding this run's claim, so
+a claim taken away between the two is still landed on: the gap is one
+syscall wide and it cannot be closed. It is only reachable on a filesystem
+that can neither link nor lock a file — with a link the publish is atomic,
+and with a lock the record below keeps a bound off the claim until the run
+opens the folder's cache.
+
+A directory copy is renamed onto its claim, and a rename cannot replace a
+directory on every platform, so the claim is dropped and the rename is tried
+again. Dropping it takes whatever is at the name with it, so the claim is
+asked about again first: a name another run has taken over holds that run's
+copy, and the publish fails loudly rather than dropping it. Only an empty
+directory goes, so the one published copy that was ever in reach is the copy
+of an empty legacy cache — an empty directory — and the check is what stops
+it.
+
+The drop and the rename are two calls: where the removal succeeded the name is
+free in between, and another run can take it in that window. The rename then
+fails: a platform that cannot replace a directory cannot replace the claim
+another run holds either, so the name is taken and the publish moves on to
+the next name. The gap is one syscall wide and cannot be closed.
+
+The ask and the removal are two calls as well, and no portable call removes a
+claim by what it is rather than by what it is called, so a claim taken away
+in between is still removed: that gap cannot be closed either. The same goes
+for the claim a file copy drops when its rename does not land — the name is
+asked about again first, so another run's published copy is left alone, and
+the gap between the ask and the removal is still there. All of these gaps are
+only reachable on a filesystem that cannot lock a file, because the record
+below keeps a bound — and another publisher — off the name until the run
+opens the folder's cache.
+
+A copy that is still being written is not one of the copies the bound ranges
+over: a run that merely opens a folder cannot remove the copy another run is
+making there, however often the bound is applied. The bound never removes the
+copy the run itself made either — the run that reports a backup is the run
+that has to keep it — and the count is made up from the next copy in age
+order instead, so the folder ends within its bound as long as there are
+enough copies the bound may remove to make the count up.
+
+**The copy a bound spares is the one the run applying it made.** A copy
+another run published is an ordinary copy again, so the bound takes it like
+any other and keeps the newer copies in its place. A run that published a copy
+and never opened the folder's cache is the exception: the copy waits for the
+next run that opens that folder, which adopts it and spares it too — an older
+copy kept in place of a newer one, for one bound cycle. The command line runs
+one command per process and the copies waiting live in the process, so this
+needs two runs in one process to happen.
+
+A run whose open **failed** is not that next run: the open is the boundary,
+and an open that failed did not cross it, so the copies keep waiting for the
+run that opens the folder. The bound that failed run makes — a cache that
+does not open is bounded as well — still spares them: it cannot tell which
+of the waiting copies are its own from the ones an earlier run in the same
+process published, so it spares them all, and the folder can hold more
+copies than its bound for a cycle.
+
+**A copy another run has published is spared while that run is still using
+it.** A copy is published before the run opens the folder's cache, so there is
+a short window in which the cache's own lock does not yet speak for it, and a
+bound running in that window could take the copy away from the run that is
+about to report it. So a published copy carries a **record** of its own —
+`girpr-cache-hold-backup-<ts>` beside `girpr-cache-backup-<ts>`, and
+`girpr-cache-hold-old-<ts>` beside `girpr-cache-old-<ts>` — and the run that
+published it holds a lock on that record until it opens the cache. A bound
+that finds the record locked leaves the copy alone; a bound that finds it
+unlocked takes the copy like any other, because the lock is released when the
+run ends and when the run is killed, and a record that nothing holds says
+nothing. A record that cannot be read, or whose lock the filesystem cannot
+test, says nothing either: nobody can be holding a lock on a file that cannot
+be locked, so it does not spare the copy for good. A spared copy does not
+spend the removal budget either, so a folder can hold more than `N` copies
+while one of them is spoken for. The name a copy is
+published under still says when that copy became whole, so a bound takes the
+oldest copies first — a copy that took a while to make is not treated as an
+old one the moment it lands.
+
+A record is tool state: it is never mirrored as content, it is not one of the
+copies the bound counts, and one left behind by a killed run is reclaimed by
+the next bound.
+
+A filesystem that cannot lock a file cannot say any of this: there is no
+record to take, so the copy is published as it was before records existed —
+spared by the run that published it, but not by another run's bound — and the
+run does not fail over a mark it cannot make.
+
+**What a failure leaves behind.** The copies are made *before* the caches are
+removed, so a run that fails while removing them never loses the copy:
+
+- src: `girpr-cache-backup-<ts>`, plus the live `girpr-cache` if src's own
+  removal is the one that failed;
+- dst: `girpr-cache-old-<ts>`, plus the live `girpr-cache` if dst's own
+  removal is the one that failed.
+
+The removals run src first, so a failure on dst's side leaves src with its
+copy and **no** live cache — that one is rebuilt from disk on the next run.
+
+That is not a bug — the copy is what the removal was for — but it is the state
+a failed `--ignore-cache` leaves, and it is worth knowing before you go
+looking for "the missing cache". The next run with `--ignore-cache` removes
+what is left again; the copies are there to look at, and the tool will not
+look at them for you.
+
+With `--no-backup` there is no copy at all, so `--no-backup --ignore-cache`
+removes the cache and keeps nothing: the cache is rebuilt from disk on the next
+run. That is the one combination where the removal has no safety net.
+
+A copy that fails is not left behind — the working file is removed rather than
+sitting there looking like a backup — and the run fails rather than report a
+backup it does not have. A sibling's name is *claimed* — the link that
+publishes a file copy, and `create_dir` for a legacy sled directory — so two
+runs against one root cannot end up writing the same file.
+
+A run that is killed mid-copy can leave the working file behind —
+`girpr-cache-partial-<ts>` — because the process died before the copy was
+published. A run that was *not* killed can leave it behind too: once the copy
+is published the working file is scratch and is removed, and that removal can
+fail, which the run warns about. The copy itself is published and whole
+either way, so the run does not fail over the leftover. It is tool state and
+is never mirrored as content, and **the bound never ranges over a working
+name**: the bound ranges over the published copies — the `girpr-cache-backup-*`
+copies and the `girpr-cache-old-*` snapshots — and a working name is a copy
+that is still being made, so a bound that could select it could take away the
+copy another run is making there. Nothing reclaims a working name, so remove
+it by hand. That is the same answer the converter's temporary gets, and for the
+same reason: a name a live run is writing is not the tool's to sweep away —
+see [Commands](#commands).
+
+A run killed between publishing a copy and opening the folder's cache can also
+leave that copy's record behind — `girpr-cache-hold-backup-<ts>` or
+`girpr-cache-hold-old-<ts>`. Unlike the working file, a record nothing holds
+says nothing: the next bound takes the copy like any other copy and reclaims
+the record with it.
+
+A publish that could not land its copy can leave the **claim** behind — an
+empty file under `girpr-cache-backup-<ts>`, or an empty directory for a
+legacy sled cache — because dropping a claim is best-effort and the removal
+can fail. It is tool state and is never mirrored as content. The bound reads
+the name as a published copy, so it counts towards the bound and the bound
+reclaims it like any other copy once the folder is over its bound.
 
 ### `--dry-run`
 
@@ -925,16 +1322,32 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   relative path (UTF-8; case preserved as stored). Value = binary
   `{kind, size, mtime_ns (ns since epoch), hashes{algo→raw bytes}}` in the
   `entries` table + `meta{version, case_sensitive}` in the `meta` table.
-  `girpr-cache*` (DB file, backups, olds) is always excluded from scans — at
-  **any depth**, since a nested root or a followed link can bring its own cache
-  into the walk, and it is tool state rather than content. The prefix match
+  `girpr-cache*` (DB file, backups, olds, and the records that say a copy is in
+  use) is always excluded from scans — at **any depth**, since a nested root or
+  a followed link can bring its own cache into the walk, and it is tool state
+  rather than content. The prefix match
   folds case on Windows only, where a case-only rename of the cache is the same
-  file; POSIX spellings stay exact.
-  Legacy sled directories are rejected (rebuild with `--ignore-cache` or
-  convert once with `sled2redb <old-dir> <new-file>`).
+  file; POSIX spellings stay exact. The converter's temporary is one of them
+  (`girpr-cache-convert-<pid>-<ts>.redb`, or the `_2`, `_3`, … spellings of the
+  same name when that one is taken), so a conversion that was killed
+  leaves the tool's own residue behind rather than a file that looks like
+  content. The family of those spellings is bounded, and stops at the
+  thousandth suffix.
+  Legacy sled directories are rejected (rebuild with `--ignore-cache`, or
+  convert once with `sled2redb <old-dir> <new-file>` — the converter is behind
+  the `convert` feature, see [Build features](#build-features)).
   Algorithm names are stored **inline, as text** — deliberately, so a cache written
   by a newer build with an algorithm this one has never heard of stays readable: the
   unknown digest is carried through scans and written back rather than dropped.
+- **Cache memory.** Every redb handle gets a **64 MiB** page cache — the budget
+  redb may spend on pages it has cached. The default is small on purpose:
+  `cargo nextest` runs one process per test, so parallel tests each get their
+  own. `GIRSYNC_CACHE_SIZE_MIB` raises or lowers it, in MiB, and applies to
+  **each handle** a run opens — so a `sync` that opens src's and dst's caches
+  gets that budget twice. It is read once per process, so every handle in a run
+  gets the same size. A value that is not a positive whole number of MiB is
+  ignored and the default is used, with a warning; a value too large for the
+  platform to address is capped at the largest count whose bytes still fit.
 - **Read-only vs read/write opens.** `open_db` takes a `CacheOpen`:
   `ReadWrite` may create the file, back it up, and reconcile `meta`;
   `ReadOnly` requires an existing, current-version cache and never opens it for
@@ -1029,15 +1442,33 @@ fixture underneath, so neither equality can pass vacuously by hashing nothing.
   corrupt cache errors (exit 3,
   `--ignore-cache` backs up + rebuilds).
 - **Case rules.** Stored names keep their casing. `--case-sensitive` (default
-  **false**): within one side, two live/record paths differing only by case is a
-  fatal conflict; across sides it is `CASE-MISMATCH` (compare) or rename-dst-first
-  (sync). If disk casing differs from the cached key, the key is fixed to the
-  disk name first with hashes reused. Mode mixing never errors by itself — the
-  meta flag is informational; the same record works in both modes.
+  **false**): within one side, two live/record paths differing only by ASCII
+  case is a fatal conflict; across sides it is `CASE-MISMATCH` (compare) or
+  rename-dst-first (sync). If disk casing differs from the cached key, the key
+  is fixed to the disk name first with hashes reused. Mode mixing never errors
+  by itself — the meta flag is informational; the same record works in both
+  modes.
+
+  **The fold is ASCII case only.** The path key folds ASCII case and nothing
+  else, so two spellings that differ only in ASCII case are one path **across**
+  the two sides — `Readme.TXT` and `readme.txt` are the same path in the
+  default mode — and a fatal conflict when they sit on **one** side, as the
+  rule above says. `Ärger` and `ärger` are **two**: a Unicode fold would merge
+  spellings that some filesystems keep apart, and there is no portable case
+  table to consult instead. So a case-only difference that is not ASCII is not
+  a `CASE-MISMATCH` at all, but two different paths: one `MISSING` and one
+  `EXTRA`.
+
+  **Neither fold is the filesystem's own case table.** Windows treats `Ärger`
+  and `ärger` as one file and the Kelvin sign and `k` as two, so the
+  ASCII-only key keeps apart a pair the disk has merged, while the containment
+  and link-overlap checks — which compare names the way Windows does, with a
+  Unicode fold — merge a pair the disk keeps apart; there is no portable exact
+  NTFS fold, so the approximation is kept rather than guessed at.
 
   **The fatal conflict is what makes the rename pass an index rather than a scan.**
-  Both sides are keyed by lowercase and every src key is a hash lookup, which is
-  only equivalent to the naive "scan all of dst" because a lowercase key maps to
+  Both sides are keyed by that fold and every src key is a hash lookup, which is
+  only equivalent to the naive "scan all of dst" because a folded key maps to
   exactly one path *per side* — `check_mixed_case` has already made the collision
   fatal, and the pass runs only in the mode that check guards. Without that
   invariant the two forms could disagree on which of two colliding keys they pick,
@@ -1113,6 +1544,26 @@ cargo build -p girsync
 .\target\debug\girsync compare --src D:\game-old --dst D:\game-live   # exit 0
 ```
 
+### Build features
+
+The default build has no `sled` in it. `sled` was used by exactly one thing —
+the one-shot converter that reads a legacy sled cache directory and writes a
+redb one — so it is behind the `convert` feature, along with the `sled2redb`
+binary and the converter's own cases:
+
+```powershell
+cargo build -p girsync                                     # the default: no sled, no converter
+cargo build -p girsync --features convert --bin sled2redb  # the converter
+cargo nextest run -p girsync --features convert --test convert  # the converter's end-to-end cases
+cargo nextest run -p girsync --features convert              # the whole suite, the converter's cases among them
+```
+
+The feature is additive and off by default: `girsync` itself behaves the same
+either way, and `girsync::convert::sled_to_redb` is present exactly when the
+feature is on. Without it the converter is not built and its cases do not run,
+so a default `cargo nextest run -p girsync` does not touch the legacy format at
+all.
+
 Same, machine-readable — `--output json` on stdout, logs still on stderr:
 
 ```powershell
@@ -1140,8 +1591,30 @@ the prebuilt release for the platform. The shared defaults are in
 [`../../.config/nextest.toml`](../../.config/nextest.toml).
 
 ```powershell
-cargo nextest run -p girsync   # 430 test functions, one of them #[ignore]d (429 run by default)
+cargo nextest run -p girsync
 ```
+
+The number of cases is not written down here, because it moves every time one
+is added. `cargo nextest list -p girsync` prints them all, one per line, and
+`cargo nextest list -p girsync --run-ignored only` prints the `#[ignore]`d ones
+on their own.
+
+The converter's cases are behind the `convert` feature, so they are not in that
+run: `cargo nextest run -p girsync --features convert --test convert` runs
+the end-to-end ones, and `cargo nextest run -p girsync --features convert` runs
+the whole suite with the converter's own cases in it — see
+[Build features](#build-features).
+
+**A green run is not full link coverage.** Some end-to-end cases need
+primitives a regular user cannot always create: Windows without developer mode
+refuses `symlink_file`/`symlink_dir`, while a directory junction (`mklink /J`)
+and a hard link are both created without elevation. `tests/symlink.rs` and
+`tests/sync.rs` self-skip the cases whose primitive the host refused, printing a
+`skip:` line that says why, so a locked-down host runs the junction- and
+unit-level halves while the file-symlink bodies do not. The gap is closed on a
+host that can create the links, not by weakening or removing the cases, and the
+skip reason sits beside each case — there is no separate document to keep in
+step with them.
 
 Nextest runs **each test in its own process**, which is what makes the suite's
 isolation real rather than incidental: nothing one test does — a global, a temp
@@ -1149,6 +1622,110 @@ directory, an environment variable — can reach the next one.
 
 **Doctests are not run**: nextest has no doctest support at all. This crate has
 none, so nothing is lost.
+
+The suite has a handful of test-only switches of its own, and **every one of
+them is default-off**: an unset variable means production behaviour, and a case
+opts in by naming it.
+
+| switch | what it does |
+| --- | --- |
+| `GIRSYNC_TEST_CACHE=memory` | a folder's cache opens against redb's shared in-memory backend instead of the `girpr-cache` file, so a case that asserts a verdict rather than the cache file pays no 1 MB create + fsync per command |
+| `GIRSYNC_TEST_FAIL_COPY=<rel>` | the copy of `<rel>` fails before it opens its destination, so nothing is written |
+| `GIRSYNC_TEST_FAIL_FLUSH=<rel>` | the flush after that copy's write fails, so the copy fails at the flush rather than at the write |
+| `GIRSYNC_TEST_NO_FSYNC=1` | the per-file `sync_all` after a copy is skipped — the runner sets it for the whole suite |
+| `GIRSYNC_TEST_FAIL_RENAME=<rel>` | the case-fixing rename of `<rel>` fails before the temporary is claimed |
+| `GIRSYNC_TEST_FAIL_RENAME_STEP1=<rel>` | the same rename fails after the claim, so the file placeholder exists |
+| `GIRSYNC_TEST_FAIL_RENAME_STEP2=<rel>` | the same rename fails after step 1, so the entry is in the temporary |
+| `GIRSYNC_TEST_GATE_COPY=<wait>:<on>` | the copy of `<wait>` does not begin until the copy of `<on>` has **failed** |
+| `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the default batch of 50 |
+| `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the default 256 MiB |
+| `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the default 5 s |
+| `GIRSYNC_TEST_DURABILITY=none` | a cache write commits without its per-commit fsync — the runner sets it for the whole suite |
+
+`<rel>` is the path **inside the mirror**: `/`-separated, relative to the root,
+never absolute. The copy and flush hooks name the path the plan copies — with
+src's casing — and the rename hooks name the **dst** path as it is on disk
+before the rename, since that is the path the pass moves.
+
+**One switch per failure point, and the switch names what fails.** The copy
+path has two failure points, so it has two switches: `FAIL_COPY` (the copy
+itself) and `FAIL_FLUSH` (the flush after the write). The case-fixing rename
+has three, so it has three: `FAIL_RENAME` (before the temporary is claimed),
+`FAIL_RENAME_STEP1` (after the claim) and `FAIL_RENAME_STEP2` (after step 1).
+Each of the rename's three leaves a different thing behind — nothing, a file
+placeholder to remove, an entry to roll back — so the three are armed
+separately. Only the rename fails there, so its three switches share that name
+and carry the point in the suffix; the stage is in the **switch's name** and
+never in its value, so every failure hook's value stays a plain relative path.
+
+**The gate's value is split on the first colon**, and the two halves are paths
+inside the mirror — the `<rel>` shape above, spelled the way the plan spells a
+path: relative to the mirror's root, `/`-separated, and made of ordinary
+names — each of them non-empty, neither a dot nor a parent component, and
+holding no separator but `/`. A colon is the drive separator's character and
+is illegal in a name on Windows, so a path inside the mirror holds none there;
+and the rule is checked where the value is read on every host, so a half that
+carries one anyway is not a path. A value that is not two such paths asks for
+no gate at all, and **the log says so**: the value and the fact that it names
+no copy are in a warning, so a typo in a gated test is visible rather than
+silent.
+
+Each switch is read where it belongs, and the answer cannot change under a
+run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the
+run's options carry the answer from there — so a subprocess suite sets it on
+the child process and the child uses it for every cache it opens, while a
+caller that builds the options itself gets exactly what it asked for. The
+failure and gate hooks are read once per process, and the **commit policy** —
+the commit limits and the durability together — is read **once, when a cache
+write starts**: a batched write handle resolves it when it is opened and
+keeps it, so every transaction it commits commits the same way, and the
+open's own one-off `meta` write resolves a policy of its own when it runs.
+
+A value that is not the one named means the production behaviour: the real
+cache file, a durable commit, the default commit thresholds, and no injected
+failure. The fsync switch is the one that takes any unambiguous truthy value
+— `1`, `true`, `yes` or `on` — and every other value is an exact match. Two
+values are the exceptions, and both are reported in the log and ignored: a
+commit limit that cannot be parsed, and a copy gate that names no copy — so a
+typo is visible rather than silent.
+
+The runner sets two of them for every test process — `GIRSYNC_TEST_DURABILITY=none`
+and `GIRSYNC_TEST_NO_FSYNC=1` — and it does it in `.config/nextest-test-env`,
+which the workspace's nextest setup copies into the environment of every test
+process. That is why a case that wants the **flush** hook has to turn the
+fsync switch back off (`GIRSYNC_TEST_NO_FSYNC=0`): the flush only happens when
+the switch is off.
+
+### Benchmarks
+
+A small harness walks three tree shapes — **many tiny files**, **few large
+files**, **deep nesting** — and prints the elapsed time and a throughput
+number for each:
+
+```text
+cargo bench -p girsync --bench tree_shapes
+GIRSYNC_BENCH_SCALE=4 cargo bench -p girsync --bench tree_shapes
+```
+
+On PowerShell the scale is an environment variable:
+
+```powershell
+$env:GIRSYNC_BENCH_SCALE = 4
+cargo bench -p girsync --bench tree_shapes
+```
+
+It is a **local measurement aid, not a gate**: it prints numbers and asserts
+nothing about them, so a slow disk is not a failure, nothing in CI runs it,
+and no timing threshold exists anywhere in it. `GIRSYNC_BENCH_SCALE`
+multiplies the fixture size (default `1`, and a value that is not a positive
+whole number is read as `1`); the tree is built in a scratch directory and
+removed when the run ends, so nothing is left behind.
+
+Each shape's line carries the walk's own counts beside the fixture's:
+`files` and `bytes` are what the walk saw — the files' sizes, not the
+directory's size on disk — while `fixture_files` and `fixture_bytes` are what
+the tree holds. The two differ for the deep shape, whose chain is deeper
+than the walk's 64-level cap.
 
 ## Cost model
 
@@ -1163,6 +1740,8 @@ by what the planner asked for.
 | a stat-differing, one-sided, or conflicting path | nothing — already decided |
 | a copied file | **2 reads + 1 write** — the stream, plus a re-read to verify (see "What a copy costs") |
 | a cold cache | the whole tree, once, on the first run that needs a digest |
+| a backup copy | one whole-file copy of the cache — src's `backup-*`, dst's `old-*`; `--no-backup` skips both |
+| a backup copy's record | one small file beside it, held until the run opens the folder's cache |
 
 Two places are index-shaped rather than nested-loop-shaped, which is the
 property worth preserving:
@@ -1170,7 +1749,7 @@ property worth preserving:
 - **The rename pass** is `O(src + dst)` hash lookups, not `|src| × |dst|`
   comparisons. It is on the default path — insensitive mode is the default — and
   the scan form quadrupled per doubling of the tree.
-- **`diff_maps`' insensitive branch** walks two lowercase indices once each, not
+- **`diff_maps`' insensitive branch** walks two case-folded indices once each, not
   three collections plus a lookup per key.
 
 A `compare` that writes both caches costs the same read count as one that reads
@@ -1180,22 +1759,31 @@ them; `--dry-run` costs the same again.
 
 - Deletes extras **by default**; in-place truncate means a killed run leaves
   truncated files (entries were pre-dropped, so rerun re-copies — verify with `compare`).
-- Backups/olds accumulate (`keep-all`, suffixed `_2…` on timestamp collision);
-  clean them manually. They are `girpr-cache*` (case-insensitively on Windows)
-  so never sync.
+- Backups/olds accumulate by default (`keep-all`, suffixed `_2…` on timestamp
+  collision); `--backup-retain N` bounds it, or clean them manually. They are
+  `girpr-cache*` (case-insensitively on Windows) so never sync.
 - `--max-depth 10` silently skips deeper files — set higher for real game trees.
 - **A record that cannot digest an undecided pair exits `3`.** The easiest way to
   hit this: a lazy `sync` (or any run that decided a pair by presence) leaves a
   stat-only row in a folder's cache, and the next `compare`/`compare-self` against
-  it cannot compare content for that path. `girsync update --dir <the folder>` is
+  it cannot compare content for that path. `girsync update --dir D:\game-old` is
   the fix, or `--hash-any-of` if the record holds *some* of what you asked for; the
-  error names the folder, the count, the paths and the mode that failed.
-- **A size-changed cache row can get stuck.** Editing a file's length drops its digests
-  (a stale row's are all suspect), and a size difference settles the pair for free — so
-  nothing ever rehashes it and the row stays stat-only permanently, describing content
-  it cannot verify. `--no-trust-size` is the repair: it puts those pairs back in the
-  undecided set. Worth knowing because the row looks healthy — it has the right size and
-  mtime.
+  error names the record (its path says which folder), the count, the paths and the
+  mode that failed. **It names the folder to run that fix on only when the record
+  is a folder's own `girpr-cache`** — spelled out, so the command can be pasted as
+  it stands. A record that is not a folder's own cache (a `girpr-cache-backup-*`
+  copy, say) has nothing that would rebuild it, so the error says so and offers no
+  repopulation; the ways out that need no rebuild are still named — `--hash-all-of
+  none` always, and the other request the error offers where there is one.
+- **A stat-only row can get stuck.** A row whose stat changed arrives with its digests
+  dropped (a stale row's are all suspect), and while a stat difference settles the pair
+  for free — a size difference, or an mtime one — no comparison rehashes it, so the
+  row stays stat-only, describing content it cannot verify. Two repairs: the flag
+  that distrusts the field doing the settling — `--no-trust-size` for a size
+  difference, `--no-trust-mtime` for an mtime one, and either acts only when the
+  distrusted field is the *only* difference — and `girsync update --dir D:\game-old`,
+  which rehashes every file and writes the digest back into the row. Worth knowing
+  because the row looks healthy — it has the right size and mtime.
 - **`hashes_differ` is silent, and silence is not the same claim as "equal".** An empty
   result means *"no difference detected"*, which is not the same claim as
   *"identical"* — it is safe only while every pair reaching it has a digest to compare,
@@ -1217,8 +1805,13 @@ them; `--dry-run` costs the same again.
   (primitives), `cli_dispatch.rs`, `update.rs`, `compare.rs`, `compare_self.rs`,
   `sync.rs`, `output.rs` (the stdout contract: `--output json` is the
   library's `verdict`, and stdout stays a clean NDJSON stream while the run
-  narrates on stderr), with shared fixtures in `tests/common/mod.rs`. They run
-  against the public API, so anything they touch must stay `pub`.
+  narrates on stderr), `public_surface.rs` (what a caller reaches without a
+  dependency of its own), `symlink.rs` (links in the walk, in the copy and in
+  the deletion plan), `migration_lock.rs` (a backend-agnostic behaviour lock for
+  the cache layer), `convert.rs` (the converter's cases — behind the `convert`
+  feature, so a default run does not build that target at all), with shared
+  fixtures in `tests/common/mod.rs`. They run against the public API, so
+  anything they touch must stay `pub`.
 
   The six largest are **directories**: each is a test target at
   `tests/<name>/main.rs`, with the shared harness, fixtures and table in `main.rs`

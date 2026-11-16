@@ -276,7 +276,7 @@ fn the_log_renders_as_ndjson_with_every_field_present() {
         stored_as: Some("api/getGameConfigs.json".into()),
         attempts: 2,
     });
-    let text = log.to_ndjson();
+    let text = log.to_ndjson().expect("the log renders");
     assert_eq!(text.lines().count(), 1);
     let v: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     for key in [
@@ -467,7 +467,7 @@ fn the_write_happens_with_the_log_lock_released() {
 fn an_empty_log_is_an_empty_file() {
     let log = RequestLog::new();
     assert!(log.is_empty());
-    assert_eq!(log.to_ndjson(), "");
+    assert_eq!(log.to_ndjson().expect("an empty log renders"), "");
     assert_eq!(log.bytes_in(), 0);
 }
 
@@ -578,7 +578,7 @@ fn the_buffered_file_write_equals_the_string() {
     assert_eq!(n, 300);
     assert_eq!(
         std::fs::read(&path).expect("read"),
-        log.to_ndjson().into_bytes(),
+        log.to_ndjson().expect("the log renders").into_bytes(),
         "the buffered file must be byte-identical to the string"
     );
     let _ = std::fs::remove_dir_all(&dir);

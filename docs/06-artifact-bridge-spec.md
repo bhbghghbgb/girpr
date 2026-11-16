@@ -148,16 +148,42 @@ depend on the reader — so the reader is not what they use.
 ### 3.1 Gate 1 — every bridge test is `#[ignore]`d, because the suite is expensive
 
 One capture is a `--print-plan` pre-pass plus a real run, and each run fetches
-four manifests — ~20 MB of real bundle bytes — before it can plan a single file.
-The suite is six cases and well under a minute in release. That is worth paying
-when something has gone wrong and not worth paying on every `cargo nextest run`.
+four manifests — ~19 MiB of real bundle bytes — before it can plan a single file.
+The six cases take roughly a minute of wall-clock in a debug build (measured:
+63 s wall for the whole six-test run — the cases run in parallel, so that is
+not the sum of their durations — and 67 s wall including the rebuild, on a
+4-core Windows x86_64 host with `cargo nextest run -p girpr --test artifact_bridge
+--run-ignored only` against one 7.0.0 → 7.1.0 bundle). The figure depends on the
+profile and host, and a release build was not measured here. That is a price
+worth paying **before a release that changes the repair spec** and *after
+something has gone wrong*, and not worth paying on every `cargo nextest run`.
 
-So it runs **by hand, deliberately, and only when the repair spec is suspected
-to have regressed**:
+So it runs **by hand, deliberately: before any release that changes the repair
+spec, and whenever that spec is suspected to have regressed**. A pre-release run
+builds the verifier first, so the `gircap verify` precondition below actually
+executes instead of skipping:
 
 ```
-cargo nextest run -p girpr --test artifact_bridge --run-ignored only --no-capture
+# optional: GIRPR_ARTIFACT_BUNDLE names one bundle explicitly
+cargo build -p gircap
+cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'
 ```
+
+The cases run in parallel: each capture has its own scratch tree (§6.3) and its
+own listeners (§6.2), so no `--test-threads` limit is needed, and the per-case
+`success-output` override in `.config/nextest.toml` prints each case's
+precondition and summary lines even though it passes, so `--no-capture` is not
+needed either. To reproduce one failure, put the case in the filter of the same
+command:
+
+```
+cargo nextest run -p girpr --run-ignored only -E 'test(the_reuse_in_place_capture_fetches_only_what_it_must)'
+```
+
+The `-E` expression narrows the set nextest has already selected; it does not
+add `#[ignore]`d cases to it. A command without `--run-ignored only` (or `all`)
+runs none of them, and `cargo nextest list` needs `--run-ignored only` (or
+`all`) to list them at all.
 
 Nothing else runs it. `cargo nextest run` still *compiles* the file, which is
 what keeps it from rotting against `RunCtx`, `PathScope`, and the `SUMMARY`
@@ -176,14 +202,28 @@ for*, and it says so loudly.
 Resolution order:
 
 1. `GIRPR_ARTIFACT_BUNDLE` — an explicit path wins, always;
-2. otherwise `gircap list --root artifacts`, which reports one `bundle` record
-   per bundle on stdout;
-3. otherwise a directory scan under `artifacts/`, which must agree with (2) —
-   `gircap`'s own `tests/bundle_consistency.rs` asserts the two name the same
-   bundles in the same order, so which one ran never depends on whether a
-   sibling workspace member happened to be compiled;
-4. otherwise **fail**, naming the reason and the exact command:
-   `cargo run -p gircap -- capture --out artifacts`.
+2. otherwise the root to search: `GIRPR_ARTIFACT_ROOT` when it is set, else
+   `artifacts/` beside the package manifest. The variable names the root, not a
+   bundle, and it outranks the default root only — (1) still wins over it;
+3. then, under that root, `gircap list --root <root>`, which reports one
+   bundle record per bundle on stdout — a `BUNDLE` line in the text form and a
+   `{"event":"bundle"}` object in the JSON form;
+4. otherwise — and **only** when (3) is unavailable or fails, that is when
+   `gircap` is not built next to `CARGO_BIN_EXE_girpr`, cannot be started, or
+   exits non-zero — a **directory scan** under `<root>` for
+   `<root>/<biz>/<old>__<new>/<capture-id>/MANIFEST.json`. The scan must agree
+   with (3): `gircap`'s own `tests/bundle_consistency.rs` asserts that
+   `gircap list` and a plain directory scan of the same root name the same
+   bundles in the same order, so the fallback is a faithful stand-in for (3)
+   rather than a second, looser notion of what a bundle is;
+5. otherwise **fail**, naming the reason, the root it searched, and which of
+   (3) or (4) ran. **No bundle under the root** is the failure the capture
+   command answers: the message names `cargo run -p gircap -- capture --out
+   <root>` (by default `cargo run -p gircap -- capture --out artifacts`) and
+   points at an existing bundle with `set GIRPR_ARTIFACT_BUNDLE=<dir>`. **More
+   than one bundle under the root** is a different failure with a different
+   answer: the message lists the candidates, says the suite needs exactly one,
+   and points at `set GIRPR_ARTIFACT_BUNDLE=<dir>` to name one.
 
 The same rule applies one level down: a capture the suite names must be in the
 bundle. **The capture is resolved through the matrix**, not by looking for a
@@ -197,11 +237,12 @@ capture the matrix does not mention at all is a missing prerequisite and fails.
 **Precondition.** Before any run, the bundle's own integrity is established —
 `gircap verify --artifact <dir>`, exit `0`. It makes a failing check rule the
 bundle out as the cause instead of leaving it as the first suspect. The binary is
-found next to `CARGO_BIN_EXE_girpr`, so there is no guessing and no
-`cargo build -p gircap` step to remember. When `gircap` is not built the
-precondition is **skipped with its reason printed**; the bridge does not
-re-implement `verify`. A bundle that *fails* verification is a hard failure, not
-a skip — a corrupt bundle is a real problem and must not hide behind a green run.
+found next to `CARGO_BIN_EXE_girpr`, so there is no guessing at a path. When
+`gircap` is not built the precondition is **skipped with its reason printed**;
+the bridge does not re-implement `verify`. That skip is for ordinary runs only:
+a **pre-release run builds `gircap` first** (`cargo build -p gircap`), so the
+precondition runs. A bundle that *fails* verification is a hard failure, not a
+skip — a corrupt bundle is a real problem and must not hide behind a green run.
 
 ---
 
@@ -353,9 +394,12 @@ audio fields the capture stored. Do not hardcode a language.
 `zh-cn`, `en-us`, `ja-jp`, `ko-kr`. `sophon::select_manifests` drops every field
 whose name is five or ten characters and contains a hyphen, then re-adds only the
 selected languages; the bundle's scan file selects `en-us`, and only the blobs
-the capture stored are present. So a run fetches **`game` + `en-us`** — four
-manifests per run, plus four more for the `--print-plan` pre-pass (§6.1) — and
-the other three are never requested.
+the capture stored are present. So a run fetches **`game` + `en-us`** — and it
+does so **twice**: once for the latest build and once for the local build (the
+one the installed game names, for the chunk-reuse map — the bridge's scratch
+tree always installs one), which is **four manifests per run**, plus four more
+for the `--print-plan` pre-pass (§6.1) — while the other three of the five are
+never requested.
 
 The rule generalises to whatever the bundle holds, so the run's selection and the
 bundle's contents decide the set between them. **Keep the `--audio` warning:**
@@ -365,13 +409,26 @@ visibly rather than after fifteen seconds of silence.
 
 ### 4.6 Cache served manifest bytes
 
-Each run fetches four manifests and the `manifests/` directory is ~41 MiB of the
-~98 MiB bundle; across the suite's runs that is over a hundred megabytes
-re-read for nothing. They are immutable per bundle, so cache them.
+Each run fetches four manifests (§4.5) — the `game` and `en-us` archives of the
+latest build and of the local build — and those four `.manifest.zst` files are
+~19 MiB of the ~97.7 MiB bundle. The `manifests/` **directory** is ~41 MiB, but
+the cache holds the archives and nothing else: the rest of that directory is
+the `.manifest.json.gz` copies and the `.meta.json` / `.paths.tsv` sidecars,
+which the server never serves. The suite makes twelve `girpr` runs — six cases,
+each a `--print-plan` pre-pass plus a real run — so it re-reads ≈228 MiB of
+served archives for nothing. They are immutable per bundle, so cache them.
 
-The cache is process-global, keyed by `(bundle, tag, field)`, and shared by every
-listener: it holds bytes that are a function of the bundle alone, so nothing
-about per-capture isolation is lost by sharing it.
+The cache is **outside the listeners and process-global within one test
+binary** — one static per binary, not per bridge and not per capture — keyed by
+the archive's own path — `<bundle>/manifests/<tag>/<field>.manifest.zst`, the
+`(bundle, tag, field)` triple spelled as a path, so only the `.manifest.zst`
+archives are ever in it — and shared by every listener in that process: it
+holds bytes that are a function of the bundle alone, so nothing about
+per-capture isolation is lost by sharing it. The server module is compiled into
+both `tests/artifact_bridge.rs` and `tests/artifact_server.rs`, so each binary
+has its own static and the two never share one. Under `cargo test` all six
+bridge cases run in one process and share the cache; under `cargo nextest` each
+case gets a process of its own, so there the cache is per case.
 
 ### 4.7 The request log is not optional, and it is the primary source
 
@@ -416,8 +473,8 @@ could not say which run downloaded what.
 **One run per capture.** That is what makes a byte total attributable: a single
 run over all of them sums to the same number but cannot be compared per capture.
 
-Per capture, against a **fresh scratch copy of that capture's file** and **its own
-listeners** (§6.3 for why):
+Per capture, against a **fresh scratch copy of that capture's file** (§6.3) and
+**its own listeners** (§6.2 for why):
 
 | flag | why | which runs |
 |---|---|---|
@@ -426,7 +483,7 @@ listeners** (§6.3 for why):
 | `--hyp-base`, `--sophon-base` | the listener's own origins | all |
 | `--include "<the `path` field of `patchmaps/<id>.json>`" | exactly one path | all |
 | `--purge-only` | the files-cleanup, without the repair loop | `removed` only |
-| `--io-threads 1` | one planned file; determinism over throughput | all |
+| `--jobs 1` | one planned file; determinism over throughput | all |
 | `--fail-fast` | a shim fault should stop the run, not spend the budget discovering the same 404 on every remaining file | all |
 | `--output json` | NDJSON, so the driver reads records by name — `report`, `plan`, `summary` — rather than scraping `key=value` | all |
 | `--repair-mode inplace` | the mode is **asked for**, so the run's path is the one the claim is about rather than the one the mode resolver happens to pick | all but `removed` |
@@ -504,8 +561,10 @@ So, **per capture:**
   origins), so the `build_id` invariant of §4.1 is per-capture too;
 - **its own request log** and **its own log file** for the pre-pass.
 
-**The served-bytes cache stays shared** (§4.6) because it holds nothing
-capture-specific.
+**The served-bytes cache stays shared within a process** (§4.6) because it holds
+nothing capture-specific. Under `cargo test` the six per-capture bridges share
+one process and so one cache; under `cargo nextest` each case is a process of
+its own and gets its own.
 
 ### 6.3 The bundle is the fixture; a copy is the working tree
 

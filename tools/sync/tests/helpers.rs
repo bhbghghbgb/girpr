@@ -2,17 +2,18 @@
 
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{md5arg, opts, rw, scan, serial_rw, temp_root, wfile};
 use girsync::cache::{CACHE_PREFIX, CacheDb, FileRec, load_all_records, open_db};
+use girsync::commands::side_label;
 use girsync::config::ScanMode;
-use girsync::effective::{SideScan, open_folder_cache, resolve_folder, scan_stat_only};
-use girsync::filter::{compile_patterns, is_excluded};
+use girsync::effective::{Side, SideScan, open_folder_cache, resolve_folder, scan_stat_only};
 use girsync::hash::{HashAlg, parse_hash_list};
 use girsync::planner::HashPlan;
 use girsync::rw::RwSide;
-use girsync::{CommonOpts, ScanStats};
+use girsync::{CommonOpts, Filter, ScanStats, compile_patterns};
+use md5::{Digest as _, Md5};
 
 /// A folder-side run's counters, kept **per phase** rather than merged.
 ///
@@ -80,11 +81,14 @@ fn hash_arg_none_exclusive() {
 
 #[test]
 fn exclude_wins_over_include() {
-    let inc = compile_patterns(&["*.dat".to_string()]).unwrap();
-    let exc = compile_patterns(&["secret*".to_string()]).unwrap();
-    assert!(is_excluded("other.txt", &inc, &exc, true));
-    assert!(!is_excluded("a.dat", &inc, &exc, true));
-    assert!(is_excluded("secret.dat", &inc, &exc, true));
+    let filter = Filter::new(
+        compile_patterns(&["*.dat".to_string()]).unwrap(),
+        compile_patterns(&["secret*".to_string()]).unwrap(),
+        true,
+    );
+    assert!(filter.is_excluded("other.txt"));
+    assert!(!filter.is_excluded("a.dat"));
+    assert!(filter.is_excluded("secret.dat"));
 }
 
 /// An excluded directory is a subtree, not one entry. Before this, `--exclude
@@ -92,15 +96,19 @@ fn exclude_wins_over_include() {
 /// under the excluded link and the runtime guard deleted the link itself.
 #[test]
 fn excluding_a_directory_excludes_its_subtree() {
-    let exc = compile_patterns(&["link".to_string()]).unwrap();
-    assert!(is_excluded("link", &[], &exc, true));
-    assert!(is_excluded("link/x.txt", &[], &exc, true));
-    assert!(is_excluded("link/sub/y.txt", &[], &exc, true));
+    let filter = Filter::new(
+        vec![],
+        compile_patterns(&["link".to_string()]).unwrap(),
+        true,
+    );
+    assert!(filter.is_excluded("link"));
+    assert!(filter.is_excluded("link/x.txt"));
+    assert!(filter.is_excluded("link/sub/y.txt"));
     assert!(
-        !is_excluded("linkage/x.txt", &[], &exc, true),
+        !filter.is_excluded("linkage/x.txt"),
         "a prefix is not a subtree: the separator is the boundary"
     );
-    assert!(!is_excluded("other/x.txt", &[], &exc, true));
+    assert!(!filter.is_excluded("other/x.txt"));
 }
 
 /// `--include '*.txt'` matches the file and not the directory above it. The
@@ -115,7 +123,11 @@ fn an_included_file_pulls_its_ancestor_directories_into_the_map() {
     wfile(&dir, "sub/skip.bin", b"skip");
 
     let common = CommonOpts {
-        includes: compile_patterns(&["*.txt".to_string()]).unwrap(),
+        filter: Filter::new(
+            compile_patterns(&["*.txt".to_string()]).unwrap(),
+            vec![],
+            true,
+        ),
         ..opts()
     };
     let db = CacheDb::open_temp(common.case_sensitive).unwrap();
@@ -145,10 +157,8 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db_path = dir.join(CACHE_PREFIX);
 
     let sensitive = opts();
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
 
     let db = open_db(&db_path, true, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &sensitive, ScanMode::new(true, false));
@@ -165,7 +175,7 @@ fn insensitive_mode_adopts_disk_casing_and_survives_mode_switch() {
     let db = open_db(&db_path, false, rw()).unwrap();
     let eff = resolved_map(&dir, &db, &insensitive, scan(false, false));
     assert!(eff.contains_key("A.txt"), "disk casing governs");
-    let want = md5::compute(b"hello").0.to_vec();
+    let want = Md5::digest(b"hello").to_vec();
     assert_eq!(eff["A.txt"].hashes.get_named("md5").unwrap(), &want);
     let keys: Vec<String> = load_all_records(&db).unwrap().keys().cloned().collect();
     assert!(
@@ -206,10 +216,8 @@ fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
     std::fs::rename(dir.join("a.txt"), &tmp).unwrap();
     std::fs::rename(&tmp, dir.join("A.txt")).unwrap();
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
     let (dry_map, dry_stats) = {
         let db = open_db(&db_path, false, rw()).unwrap();
         let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
@@ -253,7 +261,7 @@ fn insensitive_dry_run_counts_an_adopted_key_as_renamed_not_pruned() {
 ///
 /// The exclusion is a set of keys, so one adoption cannot stand in for another.
 /// The fixture adopts `a.txt` and `b.txt`, and next to them leaves `c.txt` with
-/// two stale alternates (`C.txt`, `c.TXT`) in its lowercase group: adoption only
+/// two stale alternates (`C.txt`, `c.TXT`) in its folded group: adoption only
 /// takes a group with exactly one leftover, so those two are pruned like any
 /// other stale row. Their count is what proves the exclusion is per key rather
 /// than "the adopted path's group is skipped".
@@ -267,7 +275,7 @@ fn insensitive_dry_run_counts_every_adopted_key_as_renamed_not_pruned() {
     {
         let db = open_db(&db_path, true, rw()).unwrap();
         let _ = phased(&dir, &db, &opts(), scan(false, false));
-        // Two stale spellings of a third path, so its lowercase group has no
+        // Two stale spellings of a third path, so its folded group has no
         // single candidate to adopt. Both rows must still be pruned.
         let stale = FileRec {
             kind: "file".into(),
@@ -289,10 +297,8 @@ fn insensitive_dry_run_counts_every_adopted_key_as_renamed_not_pruned() {
         std::fs::rename(&tmp, dir.join(to)).unwrap();
     }
 
-    let insensitive = CommonOpts {
-        case_sensitive: false,
-        ..opts()
-    };
+    let mut insensitive = opts();
+    insensitive.set_case_sensitive(false);
     let (dry_map, dry_stats) = {
         let db = open_db(&db_path, false, rw()).unwrap();
         let pa = scan_stat_only(&dir, &db, &insensitive, scan(false, true)).unwrap();
@@ -442,7 +448,7 @@ fn every_file_lands_in_exactly_one_bucket() {
     }
 }
 
-/// `--hash none` is a case where a naive counter would lie. `hash_file` with no
+/// `--hash-all-of none` is a case where a naive counter would lie. `hash_file` with no
 /// algorithms returns empty *without opening the file*, so a counter incremented on
 /// the rehash branch would report a cold tree as 3 files hashed having read none.
 ///
@@ -460,12 +466,12 @@ fn hash_none_reads_nothing_and_says_so() {
     assert_eq!(
         (cold.a.hashed, cold.c.hashed),
         (0, 0),
-        "and the cold run read nothing either: a --hash none run answers from stat alone"
+        "and the cold run read nothing either: a --hash-all-of none run answers from stat alone"
     );
     assert_eq!(
         (warm.c.hashed, warm.c.cache_hit, warm.c.stat_only),
         (0, 0, 3),
-        "a row from a --hash none run is stat-only, not a cache hit"
+        "a row from a --hash-all-of none run is stat-only, not a cache hit"
     );
 }
 
@@ -639,4 +645,29 @@ fn phase_a_does_not_carry_a_stat_changed_rows_digests() {
         Some(real.as_slice())
     );
     drop(db);
+}
+
+/// **The one spelling of a side's label.**
+///
+/// Every harness builds its side labels through [`side_label`], so the wording
+/// is a contract with them: a change to it moves every one of them at once,
+/// and a harness that kept a label of its own would no longer say what the
+/// commands say.
+///
+/// The case holds the *text* — the word for what the side is, a space, and the
+/// side's own path — so a rewording fails here rather than quietly changing
+/// what every harness produces. The paths are spelled with a forward slash
+/// because a path prints as it is written, on either platform.
+#[test]
+fn a_side_is_named_by_its_kind_and_its_own_path() {
+    assert_eq!(
+        side_label(&Side::Folder(PathBuf::from("game"))),
+        "folder game",
+        "a folder side is named by the root the user pointed at"
+    );
+    assert_eq!(
+        side_label(&Side::Record(PathBuf::from("game/girpr-cache"))),
+        "record game/girpr-cache",
+        "a record side is named by the record's own path"
+    );
 }

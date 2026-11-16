@@ -5,10 +5,11 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{
-    age, log, recs_of, strip_algo, sync_mem, sync_mtime, temp_root, update, update_mem, wfile,
+    age, compare, log, recs_of, strip_algo, sync_mem, sync_mtime, temp_root, update, update_mem,
+    wfile,
 };
 use girsync::cache::CACHE_PREFIX;
-use girsync::{CommonOpts, CompareSelfOpts, cmd_compare_self, cmd_sync, cmd_update};
+use girsync::{CommonOpts, CompareSelfOpts, cmd_compare, cmd_compare_self, cmd_sync, cmd_update};
 
 fn self_compare(dir: PathBuf) -> CompareSelfOpts {
     CompareSelfOpts {
@@ -192,7 +193,7 @@ fn paths(recs: &[serde_json::Value], event: &str) -> Vec<String> {
 
 /// Case-only pairing, insensitive mode. The disk side does not adopt the record's
 /// alternate-cased row, so `Case.txt` on disk and `case.txt` in the record are two
-/// independent sides of a pair the planner matches by lowercase.
+/// independent sides of a pair the planner matches by the folded key.
 ///
 /// The content differs at the same length and the mtime is restored, so size and
 /// mtime agree and only a digest can decide: the pair is both a `CASE-MISMATCH`
@@ -390,9 +391,23 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
         msg.contains("girsync update --dir"),
         "and the remedy is one command:\n{msg}"
     );
+    // The folder to run that remedy on is the parent of the record's path, so
+    // the message has to name the record *by* that path. A check that the
+    // folder's own path appears would be weaker than it looks: the record's
+    // path starts with the folder's, so it would hold for any message naming
+    // the record at all — including one that named no folder the user could
+    // run the command on.
+    let want = format!("\n  src: record {}\n", src.join(CACHE_PREFIX).display());
     assert!(
-        msg.contains(&src.display().to_string()),
-        "and the label resolves to the folder to run it on:\n{msg}"
+        msg.contains(&want),
+        "and the label names the record whose parent is the folder to run it on:\n{msg}"
+    );
+    // And the remedy names that folder itself, so the line is a command that
+    // can be pasted as it stands rather than one with a placeholder in it.
+    let remedy = format!("girsync update --dir {}", src.display());
+    assert!(
+        msg.contains(&remedy),
+        "and the remedy names the folder to run it on:\n{msg}"
     );
     // And the covered paths are counted, so the user can see this is 1 of N
     // rather than a whole broken record.
@@ -405,6 +420,61 @@ fn a_lazy_sync_can_leave_a_record_that_cannot_answer_and_that_is_now_an_error() 
         cmd_compare_self(self_compare(src), &log()).unwrap(),
         0,
         "after update the record covers every undecided pair"
+    );
+}
+
+/// **The same side is named the same way by both commands.** A record side is
+/// `record <path>`, and the path says which folder it belongs to: it is
+/// `<folder>/girpr-cache`, so the folder is its parent, and the remedy the
+/// message ends with is where that folder belongs.
+///
+/// One spelling, not two, because a user reading two messages about one record
+/// has to recognise it as the same record — and a second spelling is a drift
+/// they have to notice rather than one they can ignore.
+#[test]
+fn a_record_side_is_named_the_same_way_by_both_commands() {
+    let t = temp_root("cs_label");
+    let dir = t.subdir("w");
+    wfile(&dir, "a.txt", b"hello");
+    cmd_update(update_mem(dir.clone()), &log()).unwrap();
+    // The row loses the digest the run asks for, so the record is short of it
+    // and the coverage error has a side to name.
+    strip_algo(&dir, "a.txt", "md5");
+
+    let err = cmd_compare_self(self_compare(dir.clone()), &log()).unwrap_err();
+    let msg = format!("{err:#}");
+    let want = format!("\n  src: record {}\n", dir.join(CACHE_PREFIX).display());
+    assert!(
+        msg.contains(&want),
+        "compare-self names the record by its path and nothing else:\n{msg}"
+    );
+
+    // The same spelling from `compare`, whose record side is another folder's
+    // cache read as an input.
+    let rec_home = t.subdir("rec");
+    let live = t.subdir("live");
+    wfile(&rec_home, "a.txt", b"hello");
+    wfile(&live, "a.txt", b"hello");
+    sync_mtime(&rec_home.join("a.txt"), &live.join("a.txt"));
+    cmd_update(update(rec_home.clone()), &log()).unwrap();
+    strip_algo(&rec_home, "a.txt", "md5");
+
+    let err = cmd_compare(compare(rec_home.join(CACHE_PREFIX), live.clone()), &log()).unwrap_err();
+    let msg = format!("{err:#}");
+    let want = format!(
+        "\n  src: record {}\n",
+        rec_home.join(CACHE_PREFIX).display()
+    );
+    assert!(
+        msg.contains(&want),
+        "compare names the record the same way:\n{msg}"
+    );
+    // And the remedy names the folder to run it on, from `compare` as well:
+    // the folder is the record's parent, whichever command reported it.
+    let remedy = format!("girsync update --dir {}", rec_home.display());
+    assert!(
+        msg.contains(&remedy),
+        "and the remedy names the same folder:\n{msg}"
     );
 }
 

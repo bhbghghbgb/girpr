@@ -218,13 +218,15 @@ impl<'i> ChunkSource<'i> {
                 match cell {
                     // `set` either stores the value or finds the cell already
                     // full, and both leave it populated, so handing back a
-                    // borrow is sound either way — and saves copying the decode
+                    // borrow is sound either way - and saves copying the decode
                     // a second time into the caller's buffer.
                     Some(cell) => {
                         let _ = cell.set(out);
-                        Ok(Cow::Borrowed(
-                            cell.get().expect("a set cell is full").as_slice(),
-                        ))
+                        cell.get()
+                            .map(|held| Cow::Borrowed(held.as_slice()))
+                            .ok_or_else(|| {
+                                format!("chunk {chunk_id}: the memo cell was not filled")
+                            })
                     }
                     None => Ok(Cow::Owned(out)),
                 }

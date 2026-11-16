@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::ascii_case_eq;
 
 fn write(dir: &girpr_tempdir::TempDir, name: &str, bytes: &[u8]) -> std::path::PathBuf {
     let p = dir.join(name);
@@ -31,7 +32,7 @@ fn every_algorithm_name_round_trips() {
     }
 }
 
-/// Case-insensitive **on its own**. `--hash MD5` works today because
+/// Case-insensitive **on its own**. `--hash-all-of MD5` works today because
 /// `parse_hash_list` lowercases before validating, which is a private detail
 /// of one caller; a parser that only works when someone else has normalised
 /// the input is a parser every new caller gets wrong.
@@ -41,6 +42,176 @@ fn from_str_is_case_insensitive_without_help() {
     assert_eq!("Md5".parse::<HashAlg>().unwrap(), HashAlg::Md5);
     assert_eq!("SHA256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
     assert_eq!("Sha256".parse::<HashAlg>().unwrap(), HashAlg::Sha256);
+}
+
+/// **The resolver and the parser must not drift.** The resolver answers "which
+/// algorithm does this name mean?" and the parser adds the refusal on top of
+/// it, so the two have to agree about every name — including the ones neither
+/// knows. A resolver that folded more than the parser would let a stored name
+/// into an algorithm the command line would refuse.
+///
+/// **The whole vocabulary, not the names somebody thought of.** Every
+/// algorithm `HashAlg::ALL` holds is asked here, so an algorithm added to the
+/// list is covered without anything being written out again — which is the
+/// property the const case in `algo.rs` holds too, and holds the same way.
+#[test]
+fn the_name_resolver_agrees_with_the_parser() {
+    for a in HashAlg::ALL {
+        assert_eq!(
+            HashAlg::from_name(a.as_str()),
+            Some(a),
+            "the canonical name"
+        );
+        assert_eq!(
+            HashAlg::from_name(&a.as_str().to_ascii_uppercase()),
+            Some(a),
+            "ASCII case does not matter"
+        );
+        assert_eq!(
+            a.as_str().parse::<HashAlg>().ok(),
+            HashAlg::from_name(a.as_str()),
+            "the parser and the resolver answer one question"
+        );
+    }
+    assert_eq!(HashAlg::from_name("blake3"), None, "a name nobody knows");
+    assert_eq!(HashAlg::from_name(""), None, "and an empty one");
+    assert_eq!(
+        HashAlg::from_name("bla\u{212A}e3"),
+        None,
+        "the Kelvin sign is not a `k`: the fold is ASCII case only"
+    );
+}
+
+/// **A name answers for its own algorithm and for no other.** The resolver
+/// answers "which algorithm does this name mean?", so the answer is a
+/// property of the name and not of the order the vocabulary happens to be
+/// written in: a name that meant two algorithms would be answered by
+/// whichever came first, and the other one would be unreachable.
+///
+/// The same rule the const case in `algo.rs` holds, asked here at runtime.
+#[test]
+fn a_name_answers_for_its_own_algorithm_and_for_no_other() {
+    for a in HashAlg::ALL {
+        for b in HashAlg::ALL {
+            if a == b {
+                continue;
+            }
+            assert_ne!(
+                HashAlg::from_name(b.as_str()),
+                Some(a),
+                "the name of one algorithm does not answer for another: {a:?} / {b:?}"
+            );
+        }
+    }
+}
+
+// The resolver's `const` context is pinned outside this module, in `algo.rs`:
+// a const context cannot allocate, and a resolver that stopped being `const`
+// would not compile there. The pin is in the crate rather than in its tests
+// so that it holds for every build, not only for the ones that build the
+// tests.
+//
+// **Its answers are derived from the whole vocabulary** — every algorithm
+// `HashAlg::ALL` holds — so an algorithm added to the list is covered there
+// without anything being written out again. What a const context cannot hold
+// is what this module's cases hold: the parser's refusal, and the ASCII-case
+// spelling of a name, which takes a string built at runtime.
+
+// **The oracle is the crate's own comparison, written out rather than
+// borrowed from `std`.**
+//
+// The oracle for a case about the resolver's fold has to be **independent** of
+// the comparison the resolver itself reaches for: an oracle built from
+// `eq_ignore_ascii_case` would agree with the resolver by construction, so a
+// change in `std`'s rule would change the oracle along with it and the case
+// would follow `std` instead of catching it.
+//
+// The crate's ASCII-case comparison is that oracle, and it is written out
+// rather than borrowed: `crate::util::ascii_case_eq` folds the bytes itself
+// and classifies them itself, so a `std` that changed which bytes fold shows
+// up here instead of being followed by both sides at once.
+
+/// **The resolver folds exactly as the ASCII-case comparison does.**
+///
+/// The resolver reaches its comparison through the *slice* form of
+/// `eq_ignore_ascii_case`, because that is the one a `const fn` may call.
+/// This case is the check that the resolver's fold is the rule it is meant
+/// to be, and the oracle is that rule written out — so a `std` that grew a
+/// Unicode case mapping shows up here instead of being followed by both
+/// sides at once.
+///
+/// **The oracle is the crate's own in both halves**: the comparison it makes
+/// and the classification of a byte it folds are written out rather than
+/// borrowed, so a `std` that changed *either* of them shows up here too.
+/// The names are the awkward ones — every ASCII case of a supported name,
+/// names nobody supports, the empty name, a name with a space in it, and
+/// the Kelvin-sign lookalike.
+#[test]
+fn the_resolver_folds_exactly_as_the_ascii_case_comparison_does() {
+    for name in [
+        "md5",
+        "MD5",
+        "Md5",
+        "mD5",
+        "sha256",
+        "SHA256",
+        "Sha256",
+        "sHA256",
+        "blake3",
+        "BLAKE3",
+        "Blake3",
+        "blake",
+        "",
+        "md5 ",
+        " md5",
+        "md-5",
+        "bla\u{212A}e3",
+        "MD5\u{212A}",
+        "\u{212A}md5",
+    ] {
+        let want = HashAlg::ALL
+            .into_iter()
+            .find(|a| ascii_case_eq(a.as_str(), name));
+        assert_eq!(HashAlg::from_name(name), want, "the name {name:?}");
+    }
+}
+
+/// Folding is ASCII-only, the same rule the path key and `HashAlg`'s parser
+/// follow. Accepted spellings keep working, but a name containing a non-ASCII
+/// character is refused as typed: `\u{212A}` is the Kelvin sign, which
+/// `to_lowercase` maps onto `k`, so a Unicode fold would rewrite
+/// `bla\u{212A}e3` to `blake3` before the error was built.
+///
+/// No supported name contains `k` today, so the lookalike cannot reach an
+/// accepted spelling. The witness is `blake3` spelled with the Kelvin sign, which
+/// is the likely first supported name containing `k`: if it is added, the same
+/// case becomes an accepted-name lookalike and this test still pins the refusal.
+#[test]
+fn hash_names_fold_ascii_case_only() {
+    assert_eq!(parse(&["MD5"]), vec![HashAlg::Md5]);
+    assert_eq!(parse(&["Sha256"]), vec![HashAlg::Sha256]);
+    assert_eq!(parse(&["NONE"]), Vec::<HashAlg>::new());
+
+    let err = parse_hash_list(&["bla\u{212A}e3".to_string()]).unwrap_err();
+    let err = err.to_string();
+    assert!(
+        err.contains("bla\u{212A}e3"),
+        "the refusal keeps the typed spelling: {err}"
+    );
+    assert!(
+        !err.contains("blake3"),
+        "a Unicode fold must not rewrite the name first: {err}"
+    );
+    assert!(
+        parse_any_of(&["bla\u{212A}e3".to_string()]).is_err(),
+        "and any-of inherits the same refusal"
+    );
+    // The parser itself keeps the typed spelling too, without `parse_hash_list`
+    // having lowercased the input first.
+    assert_eq!(
+        "bla\u{212A}e3".parse::<HashAlg>().unwrap_err().to_string(),
+        "unsupported hash 'bla\u{212A}e3'"
+    );
 }
 
 /// An unknown name is refused, and the refusal names the offender rather
@@ -151,18 +322,102 @@ fn display_pads_to_the_width_in_the_format_spec() {
 }
 
 /// **The memory claim, as an assertion.** This pins the replacement's size so a
-/// later edit that adds a `HashMap` or a `Vec` field fails here rather than
-/// quietly costing 25–50 MB on a 200k-file tree.
+/// later edit that adds a `HashMap` field — or grows the foreign arm into one
+/// — fails here rather than quietly costing 25–50 MB on a 200k-file tree.
 ///
-/// Derived, not guessed: a `Box<[T]>` fat pointer (16), plus `Option<[u8; 16]>` at
-/// 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche to
-/// spare, so it costs a discriminant byte. Alignment rounds the total up to 72.
+/// Derived, not guessed: the foreign arm is a `Vec` (24), plus `Option<[u8; 16]>`
+/// at 17 and `Option<[u8; 32]>` at 33 — an `Option` over an array has no niche
+/// to spare, so it costs a discriminant byte. The vector's own alignment rounds
+/// the total up to 80.
 #[test]
-fn a_digest_set_is_seventy_two_bytes_and_allocates_nothing() {
-    assert_eq!(std::mem::size_of::<DigestSet>(), 72);
+fn a_digest_set_is_eighty_bytes_and_allocates_nothing() {
+    assert_eq!(std::mem::size_of::<DigestSet>(), 80);
     assert!(
         DigestSet::default().foreign.is_empty(),
-        "the foreign slice is empty and points nowhere"
+        "the foreign arm is empty and holds nothing"
+    );
+}
+
+/// **The arm holds no room beyond its entries.**
+///
+/// A vector grows in steps, so a row that carries one unknown name would hold
+/// room for four. A clone is sized for its length instead, and that is the
+/// clone the crate's callers keep: the effective map holds one row per path
+/// for the whole phase.
+///
+/// The property is the crate's, not `std`'s: a `Vec::clone` that grew to
+/// preserve a vector's spare capacity would pass every other case here, and
+/// the rows would quietly cost four times what they say.
+#[test]
+fn a_cloned_row_holds_no_spare_capacity() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+
+    let cloned = d.clone();
+    assert_eq!(
+        cloned.foreign_capacity(),
+        cloned.foreign_iter().count(),
+        "a clone is sized for its length"
+    );
+    assert_eq!(cloned, d, "and it is the same row");
+}
+
+/// **A merged row holds no spare capacity either.** The merge is where a row
+/// is finished, so the arm gives the room it grew into back there — and the
+/// merge is the one place that grows the arm, since a name the other side
+/// holds and this one does not is added to it.
+#[test]
+fn a_merged_row_holds_no_spare_capacity() {
+    let mut prior = DigestSet::default();
+    prior.insert_named("blake3", &[7u8; 32]);
+
+    let mut other = DigestSet::default();
+    other.insert_named("sha3", &[9u8; 32]);
+
+    let mut row = prior.clone();
+    row.merge(other);
+    assert_eq!(
+        row.foreign_capacity(),
+        row.foreign_iter().count(),
+        "the merged row holds no room beyond its entries"
+    );
+    assert_eq!(row.foreign_iter().count(), 2, "and both entries are there");
+}
+
+/// **An entry the merge adds is taken over, not copied.**
+///
+/// The arm owns its entries: a name is a boxed string and a digest a byte
+/// vector, and both are heap buffers the row holds. A name the other row
+/// holds and the arm does not is *added* to the arm, and the merge takes the
+/// other row over — so the added entry is the other side's entry, buffers and
+/// all, and it costs no allocation.
+///
+/// The witness is the buffers themselves. A copy would have allocated fresh
+/// ones while the other side's were still alive, so the two could not be at
+/// the same address.
+#[test]
+fn an_added_entry_is_the_other_rows_entry_and_not_a_copy() {
+    let mut other = DigestSet::default();
+    other.insert_named("blake3", &[7u8; 32]);
+
+    let (name_at, digest_at) = {
+        let (name, digest) = &other.foreign[0];
+        (name.as_ptr(), digest.as_ptr())
+    };
+
+    let mut row = DigestSet::default();
+    row.merge(other);
+
+    let (name, digest) = &row.foreign[0];
+    assert_eq!(
+        name.as_ptr(),
+        name_at,
+        "the name buffer is the one the other row held"
+    );
+    assert_eq!(
+        digest.as_ptr(),
+        digest_at,
+        "and so is the digest's: the entry was taken over, not copied"
     );
 }
 
@@ -257,6 +512,295 @@ fn a_known_name_with_the_wrong_length_routes_to_foreign() {
     );
 }
 
+/// **A known name is found whatever its ASCII case.** A row may spell the
+/// algorithm `MD5` rather than `md5` — a hand-written row, a converted cache, a
+/// newer build — and it is the same algorithm: the name *parses* to
+/// [`HashAlg::Md5`], so both the typed lookup and the named one find it.
+///
+/// Without this, the two lookups disagree about one row: the typed lookup
+/// matches the canonical spelling only, and the named lookup matches the
+/// spelling it was given. A row found by one and not the other is a row some
+/// caller will misread — the planner sees a row it believes holds nothing.
+#[test]
+fn a_known_name_in_the_foreign_arm_is_found_under_any_ascii_case() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", b"\x01\x02\x03\x04\x05\x06\x07\x08");
+
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: this is not this algorithm's digest"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "the typed lookup finds it by name"
+    );
+    assert_eq!(
+        d.get_named("md5"),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "and the named lookup agrees with it"
+    );
+    assert_eq!(
+        d.get_named("MD5"),
+        Some(&b"\x01\x02\x03\x04\x05\x06\x07\x08"[..]),
+        "the spelling it was stored under, too"
+    );
+}
+
+/// **A foreign entry is replaced only under the spelling it was stored with.**
+///
+/// `insert_named` matches the name it is given against the stored names
+/// *exactly*, so the same algorithm under two spellings is two entries: the
+/// cache's vocabulary is open, and a hand-written row may spell a name any
+/// way it likes.
+///
+/// The rule is pinned on the row's own terms, because it is a rule about the
+/// write and not about the answer: the arm holds one entry per spelling, a
+/// repeat of a spelling replaces that entry where it stands, and a spelling
+/// that is not there yet adds to the arm rather than taking the place of the
+/// one before it.
+#[test]
+fn a_foreign_entry_is_replaced_only_under_its_own_spelling() {
+    let mut d = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "two spellings of one algorithm are two entries, in the order they were written"
+    );
+
+    // A repeat of one spelling replaces that entry, where it stands.
+    d.insert_named("md5", b"\x03\x03\x03\x03");
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "and it is not a third entry"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(1).map(|(_, digest)| digest),
+        Some(&b"\x03\x03\x03\x03"[..]),
+        "the entry that was replaced holds the new digest"
+    );
+    assert_eq!(
+        d.foreign_iter().next().map(|(_, digest)| digest),
+        Some(&b"\x01\x01\x01\x01"[..]),
+        "and the other entry is untouched"
+    );
+}
+
+/// **The merge path replaces an entry under its own spelling too.**
+///
+/// `merge` is the other writer of the foreign arm, and it writes under the
+/// same rule `insert_named` does: an entry whose spelling the arm already
+/// holds is replaced where it stands, and a spelling the arm does not hold
+/// is added beside it.
+///
+/// The insert path is pinned on its own, and this is the other half. A rule
+/// that held on one writer and not the other would leave a row that answers
+/// one way after a merge and another way after an insert — and a merge is
+/// what every run that recomputed a digest does to the row it read.
+#[test]
+fn a_merge_replaces_a_foreign_entry_only_under_its_own_spelling() {
+    let mut d = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+
+    let mut other = DigestSet::default();
+    other.insert_named("md5", b"\x03\x03\x03\x03");
+    other.insert_named("MD5", b"\x04\x04\x04\x04");
+    other.insert_named("blake3", b"\x05\x05\x05\x05");
+
+    d.merge(other);
+
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5", "blake3"],
+        "one entry per spelling: the two that were there are replaced where they stand, and the spelling that was not is added beside them"
+    );
+    assert_eq!(
+        d.foreign_iter().next().map(|(_, digest)| digest),
+        Some(&b"\x04\x04\x04\x04"[..]),
+        "the entry under `MD5` holds the digest that was merged into it"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(1).map(|(_, digest)| digest),
+        Some(&b"\x03\x03\x03\x03"[..]),
+        "and so does the one under `md5`"
+    );
+    assert_eq!(
+        d.foreign_iter().nth(2).map(|(_, digest)| digest),
+        Some(&b"\x05\x05\x05\x05"[..]),
+        "the added spelling carries the digest it came with"
+    );
+}
+
+/// **Two spellings of one algorithm survive a merge.**
+///
+/// The arm holds one entry per spelling, and a merge writes the other
+/// side's entries in under the same rule `insert_named` does — so a merge
+/// can leave a row holding two spellings of one algorithm. Nothing about
+/// the merge collapses them: the two spellings are two entries, and the
+/// first of them answers, exactly as it does on the insert path.
+#[test]
+fn two_spellings_of_one_algorithm_survive_a_merge() {
+    let mut d = DigestSet::default();
+
+    let mut other = DigestSet::default();
+    // Both digests are the wrong length for md5, so both entries are foreign.
+    other.insert_named("MD5", b"\x01\x01\x01\x01");
+    other.insert_named("md5", b"\x02\x02\x02\x02");
+
+    d.merge(other);
+
+    assert_eq!(
+        d.foreign_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        vec!["MD5", "md5"],
+        "the merge carries both spellings across, in the order they were written"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(&b"\x01\x01\x01\x01"[..]),
+        "and the first of them answers"
+    );
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: neither entry is this algorithm's digest"
+    );
+}
+
+/// **First match wins, and the answer is a property of the row.**
+///
+/// Two entries can name the same algorithm — `MD5` and `md5`, both with a
+/// length their algorithm does not have — and the arm is an ordered list, so
+/// the answer is the first of them. It is not an iteration order: the arm has
+/// one, and the entry that comes first in it is the one that answers.
+///
+/// Both lookups go through the same helper, so they cannot disagree about
+/// which entry that is: the typed lookup and the named one answer the same
+/// digest, whichever spelling the caller asks by.
+#[test]
+fn the_first_of_two_entries_that_name_one_algorithm_answers() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", b"\x01\x01\x01\x01");
+    d.insert_named("md5", b"\x02\x02\x02\x02");
+
+    let first = &b"\x01\x01\x01\x01"[..];
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        Some(first),
+        "the typed lookup takes the first entry that names the algorithm"
+    );
+    assert_eq!(
+        d.get_named("md5"),
+        Some(first),
+        "the named lookup agrees with it, though it was asked by the other spelling"
+    );
+    assert_eq!(
+        d.get_named("MD5"),
+        Some(first),
+        "and so does the lookup by the spelling the entry was stored under"
+    );
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        None,
+        "the slot is untouched: neither entry is this algorithm's digest"
+    );
+}
+
+/// **An unknown name stays exact.** A name this build has never heard of is not
+/// an algorithm, so no known-algorithm lookup may match it, and the name is
+/// matched by the spelling it was given and no other.
+#[test]
+fn an_unknown_name_is_matched_exactly_and_by_no_algorithm() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+
+    assert_eq!(
+        d.get_named("blake3"),
+        Some(&[7u8; 32][..]),
+        "the exact spelling finds it"
+    );
+    assert_eq!(
+        d.get_named("BLAKE3"),
+        None,
+        "and no other spelling does: an unknown name is not folded"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        None,
+        "a known algorithm's lookup does not match it either"
+    );
+    assert_eq!(d.get_algo(HashAlg::Sha256), None);
+}
+
+/// **The routing rule is unchanged by the widening.** A known name with the
+/// length its algorithm expects goes to its slot, whatever its case — `MD5`
+/// with sixteen bytes is the md5 slot, not a second copy of it somewhere else.
+#[test]
+fn a_known_name_with_the_right_length_still_goes_to_its_slot() {
+    let mut d = DigestSet::default();
+    d.insert_named("MD5", &[1u8; 16]);
+
+    assert_eq!(
+        d.get(HashAlg::Md5),
+        Some(&[1u8; 16][..]),
+        "the slot holds it"
+    );
+    assert_eq!(d.foreign_iter().count(), 0, "and the foreign arm is empty");
+    assert_eq!(d.get_algo(HashAlg::Md5), Some(&[1u8; 16][..]));
+    assert_eq!(d.get_named("md5"), Some(&[1u8; 16][..]));
+}
+
+/// **The fold is ASCII case only**, the same rule the parser and the path key
+/// follow. A Unicode fold would map the Kelvin sign `\u{212A}` onto `k`, so
+/// `blake3` and `bla\u{212A}e3` would be one name — two spellings the
+/// filesystem keeps apart.
+///
+/// The witness is `blake3`, spelled with the Kelvin sign: it is the likely first
+/// supported name containing a `k`, and if it is added this same case becomes an
+/// accepted-name lookalike, which this test still pins. No supported name
+/// contains a `k` today, so this cannot reach an accepted spelling yet — which
+/// is why both directions are stated.
+#[test]
+fn a_non_ascii_lookalike_name_is_never_matched() {
+    let mut d = DigestSet::default();
+    d.insert_named("blake3", &[7u8; 32]);
+    assert_eq!(
+        "bla\u{212A}e3".to_lowercase(),
+        "blake3",
+        "the witness: a Unicode fold would merge these two spellings"
+    );
+    assert_eq!(
+        d.get_named("bla\u{212A}e3"),
+        None,
+        "and the lookup keeps them apart"
+    );
+
+    let mut d = DigestSet::default();
+    d.insert_named("bla\u{212A}e3", &[7u8; 32]);
+    assert_eq!(
+        d.get_named("blake3"),
+        None,
+        "in either direction: the stored spelling is not the one it resembles"
+    );
+    assert_eq!(
+        d.get_named("bla\u{212A}e3"),
+        Some(&[7u8; 32][..]),
+        "and it is still found under the spelling it was stored with"
+    );
+    assert_eq!(
+        d.get_algo(HashAlg::Md5),
+        None,
+        "no known algorithm's lookup reaches it"
+    );
+    assert_eq!(d.get_algo(HashAlg::Sha256), None);
+}
+
 /// The typed lookup keeps the by-name fallback: a known algorithm whose digest
 /// was carried in `foreign` because its length was unexpected is still the digest
 /// the row holds under that name, and still compares byte-wise.
@@ -295,7 +839,7 @@ fn merging_keeps_what_was_not_recomputed_and_prefers_what_was() {
     computed.insert_named("blake3", &[8u8; 32]);
 
     let mut row = prior.clone();
-    row.merge(&computed);
+    row.merge(computed);
 
     assert_eq!(
         row.get(HashAlg::Md5),
@@ -315,9 +859,9 @@ fn merging_keeps_what_was_not_recomputed_and_prefers_what_was() {
     assert_eq!(row.foreign_iter().count(), 1, "not appended beside itself");
 
     // The other direction is the real invariant: merging something empty changes
-    // nothing, which is what a `--hash none` scan writes.
+    // nothing, which is what a `--hash-all-of none` scan writes.
     let mut untouched = prior.clone();
-    untouched.merge(&DigestSet::default());
+    untouched.merge(DigestSet::default());
     assert_eq!(untouched, prior);
 }
 
@@ -426,6 +970,48 @@ fn an_unsupported_name_is_refused_with_the_supported_list() {
     );
 }
 
+/// **The refusal names a flag this crate has.** `--hash` is not one of them:
+/// the two are `--hash-all-of` and `--hash-any-of`, and a refusal naming a
+/// third sends the user after a flag that does not exist. The stat-only
+/// spelling is `--hash-all-of none`, so that is what the refusal has to say.
+///
+/// This is user-visible text, so it is pinned here: the spelling is the point,
+/// and a drift back to a flag that is not there would not fail anything else.
+#[test]
+fn the_none_refusal_names_the_flag_that_takes_none() {
+    let err = parse_hash_list(&["md5".to_string(), "none".to_string()]).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "--hash-all-of none cannot be combined with other algorithms"
+    );
+    assert!(
+        !err.to_string().contains("--hash none"),
+        "and never the flag that does not exist: {err}"
+    );
+}
+
+/// **`none` is not a value under `--hash-any-of`**, and the refusal says so
+/// rather than inheriting the all-of rule: a user who typed `--hash-any-of`
+/// must not be told that `none` cannot be *combined*, because under this flag
+/// it is not accepted at all.
+#[test]
+fn the_any_of_refusal_names_the_any_of_flag() {
+    let err = parse_any_of(&["none".to_string()]).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("--hash-any-of"), "names the flag used: {msg}");
+    assert!(
+        msg.contains("--hash-all-of none"),
+        "and points at the spelling that does it: {msg}"
+    );
+    // Beside another algorithm it is refused the same way: the rule is about
+    // the value, not about how many values there are.
+    let err = parse_any_of(&["none".to_string(), "md5".to_string()]).unwrap_err();
+    assert!(
+        err.to_string().contains("--hash-any-of"),
+        "still the flag used: {err}"
+    );
+}
+
 /// **The property the whole split rests on.** `copy_and_digest` folds the
 /// digest into the copy loop and `hash_file` keeps its own; if those two
 /// ever disagreed, every copy in a real sync would fail its verify — or,
@@ -484,7 +1070,7 @@ fn an_empty_file_hashes_to_the_digest_of_nothing() {
     assert_eq!(never_fed.finish(), hash_file(&path, &set).unwrap());
 }
 
-/// `Digests::new(&[])` must be the inert object, because `--hash none` is
+/// `Digests::new(&[])` must be the inert object, because `--hash-all-of none` is
 /// the mode where a copy never builds one. A context built and thrown away is
 /// the per-file allocation [`hash_file`] is written to avoid.
 #[test]

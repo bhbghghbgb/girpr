@@ -22,7 +22,9 @@
 //! Production commits are durable (`Durability::Immediate`). Tests may lower
 //! that to `Durability::None` through `GIRSYNC_TEST_DURABILITY=none`, which
 //! removes the per-commit fsync but still flushes on a clean `Database` drop;
-//! see `write_durability`.
+//! see `write_durability`. The durability is one half of a write's **commit
+//! policy** — the other half is the batch thresholds — and the two are read
+//! together, once, when the write starts (see `write::CommitPolicy`).
 //!
 //! ## The submodules
 //!
@@ -49,14 +51,14 @@ const ENTRIES: TableDefinition<&str, &[u8]> = TableDefinition::new("entries");
 const META_TBL: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const META_KEY: &str = "meta";
 
-/// The durability every cache write transaction is given.
+/// The durability every cache write commits with.
 ///
 /// Production always commits with [`redb::Durability::Immediate`]: once
 /// `commit()` returns, the rows survive a crash. Tests may set
 /// `GIRSYNC_TEST_DURABILITY=none` on the process (the test runner does it in
-/// `.config/nextest.toml`; a developer does not) to skip the per-commit fsync.
-/// It is the sibling of the `GIRSYNC_TEST_CACHE` switch in
-/// [`effective::side`](crate::effective::side), and like it the default is off:
+/// `.config/nextest-test-env`; a developer does not) to skip the per-commit
+/// fsync. It is the sibling of the `GIRSYNC_TEST_CACHE` switch in
+/// [`crate::config`], and like it the default is off:
 /// an unset variable — or any value other than exactly `none` — keeps durable
 /// commits, so a real run is unaffected unless someone deliberately opts in.
 ///
@@ -67,10 +69,15 @@ const META_KEY: &str = "meta";
 /// check — therefore sees every row. Only a process killed *between* a commit
 /// and the drop loses rows, and no test does that.
 ///
-/// The value is read once per transaction creation rather than cached, so a
-/// test that sets the variable in-process before opening a cache gets what it
-/// asked for. Any value other than exactly `none` (including a typo) means
-/// `Immediate`.
+/// **The value is read when a write starts, and not again while that write
+/// runs.** The durability is one half of a write's commit policy — the other
+/// half is the batch thresholds — and the two are read together, by one
+/// function, at one moment (see [`write::CommitPolicy`]). A batched write
+/// handle therefore keeps the durability it opened with: every transaction it
+/// commits, including the ones it opens after a threshold trips, commits the
+/// same way. A test that sets the variable in-process before it opens a cache
+/// gets what it asked for. Any value other than exactly `none` (including a
+/// typo) means `Immediate`.
 ///
 /// redb refuses `Durability::None` in its multiprocess modes. This crate opens
 /// every database in the default single-writer mode, so the gate is valid here;
@@ -78,11 +85,28 @@ const META_KEY: &str = "meta";
 /// `NonDurableCommitUnsupported` under the test switch rather than silently
 /// weakening the commit.
 pub(crate) fn write_durability() -> redb::Durability {
+    #[cfg(test)]
+    DURABILITY_READS.with(|c| c.set(c.get() + 1));
     if std::env::var("GIRSYNC_TEST_DURABILITY").as_deref() == Ok("none") {
         redb::Durability::None
     } else {
         redb::Durability::Immediate
     }
+}
+
+// How many times the durability switch has been read on this thread.
+//
+// A test seam: the switch is read when a write starts, and the only way a
+// test can see that a write reads it *once* is to count the readings.
+#[cfg(test)]
+std::thread_local! {
+    static DURABILITY_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times the durability switch has been read on this thread.
+#[cfg(test)]
+pub(crate) fn durability_reads() -> u64 {
+    DURABILITY_READS.with(|c| c.get())
 }
 
 pub use db::{CacheDb, TestCacheBackend};

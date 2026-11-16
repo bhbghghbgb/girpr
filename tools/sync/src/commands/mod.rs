@@ -20,8 +20,61 @@ use tracing::info;
 use crate::cli::{Cli, Cmd};
 use crate::config::{CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, SyncOpts, UpdateOpts};
 use crate::diff::Diff;
+use crate::effective::Side;
 use crate::report::{Report, visit_verdict};
 use crate::util::elapsed_s;
+
+/// What a side is called, in a message and in a log field.
+///
+/// "record" or "folder" — the word a label is built from and the word a
+/// structured log field carries.
+pub(super) fn side_kind(side: &Side) -> &'static str {
+    match side {
+        Side::Record(_) => "record",
+        Side::Folder(_) => "folder",
+    }
+}
+
+/// How a side is named in a coverage error.
+///
+/// **One spelling for every command**, so the same side is never named two
+/// ways: a side is named by what it *is* — a record or a folder — and by its
+/// path.
+///
+/// The planner knows what a side *can do* but not what it *is*, so this is the
+/// caller's one chance to put that into the message, and "the dst side cannot
+/// supply…" is not something a user can act on where "the record
+/// `D:\game\old\girpr-cache` cannot supply…" is.
+///
+/// The path says the rest. A record's path is `<folder>/girpr-cache`, so the
+/// folder it describes is its parent, and that folder is what the remedy the
+/// message ends with repopulates. A side is therefore named by its path and
+/// nothing else, and two commands reading the same record name it the same
+/// way.
+///
+/// **The side's own path, not the file its rows live in.** A folder side is
+/// named by the root the user pointed at, and its cache file is one file
+/// inside that root — so the two answers are different places on disk, and a
+/// label that named the file would send a reader to the wrong one. The path
+/// that goes into a label is [`Side::path`]; the file is [`Side::cache_file`].
+///
+/// Every command names its sides through here, including `sync`: its two sides
+/// are always folders, and the word beside a folder's path is `folder` there
+/// too.
+///
+/// **Public, so that a caller outside the crate names a side the same way.**
+/// A test harness that builds the label itself keeps a second spelling of a
+/// rule the commands share, and the two drift the moment the wording changes.
+///
+/// **The wording is pinned, because the harnesses depend on it.** A label is
+/// `record <path>` or `folder <path>` — the word for what the side is, a space,
+/// and the side's own path — and `a_side_is_named_by_its_kind_and_its_own_path`
+/// in `tests/helpers.rs` holds that text. A rewording is therefore a deliberate
+/// change rather than a quiet one: the harnesses that build their labels
+/// through here cannot drift apart without the pin saying so.
+pub fn side_label(side: &Side) -> String {
+    format!("{} {}", side_kind(side), side.path().display())
+}
 
 /// Emit every record a diff reports — one per difference plus the `SUMMARY` — and
 /// return the exit code: `0` when nothing differs, `4` when something does.

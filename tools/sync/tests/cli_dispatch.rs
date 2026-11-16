@@ -9,6 +9,7 @@ use girsync::report::OutputFormat;
 use girsync::run;
 
 #[test]
+#[allow(unsafe_code)] // `set_var` is unsafe in edition 2024; this test owns the process's env
 fn run_cli_dispatch_update_compare_sync() {
     // The whole dispatch is in-process, so one shared memory registry stands in
     // for the files a sequence of commands would leave behind. Each test is its
@@ -36,6 +37,8 @@ fn run_cli_dispatch_update_compare_sync() {
         max_depth: 10,
         ignore_cache: false,
         dry_run: false,
+        no_backup: false,
+        backup_retain: None,
         rw: RwArgs::default(),
     };
     let mkcli = |cmd| Cli {

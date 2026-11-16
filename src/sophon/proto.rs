@@ -48,6 +48,8 @@ pub struct SophonChunk {
 
 #[derive(Debug, Clone)]
 pub struct WantedManifest {
+    // Carried with the fetched files; no consumer reads it back.
+    #[allow(dead_code)]
     pub meta: ChunkManifestMeta,
     pub files: Vec<SophonChunkFile>,
 }

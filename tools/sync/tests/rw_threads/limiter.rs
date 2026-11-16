@@ -5,6 +5,8 @@
 //! cannot diverge between settings without this noticing.
 
 use super::*;
+use girsync::commands::side_label;
+use girsync::effective::side_folder;
 
 /// Remove both caches so the next resolution is a cold run over the *same* bytes.
 ///
@@ -32,10 +34,9 @@ fn plan_both<'a>(
     s: &girsync::effective::Side,
     d: &girsync::effective::Side,
 ) -> girsync::planner::PairPlan {
-    let (s_label, d_label) = (
-        format!("src {}", s.cache_path().display()),
-        format!("dst {}", d.cache_path().display()),
-    );
+    // Built by the same helper the commands use, so a test cannot keep a second
+    // spelling of how a side is named.
+    let (s_label, d_label) = (side_label(s), side_label(d));
     plan_pairs(
         SideRequest {
             entries: &so.phase_a.map,
@@ -43,6 +44,7 @@ fn plan_both<'a>(
             no_trust: false,
             cap: so.cap,
             label: &s_label,
+            repopulate: side_folder(s),
         },
         SideRequest {
             entries: &do_.phase_a.map,
@@ -50,6 +52,7 @@ fn plan_both<'a>(
             no_trust: false,
             cap: do_.cap,
             label: &d_label,
+            repopulate: side_folder(d),
         },
         CasePairing::from(common.case_sensitive),
         common.hash_mode,

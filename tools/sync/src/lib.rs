@@ -2,13 +2,23 @@
 //!
 //! Layout: `<folder>/girpr-cache` is a redb file.
 //! Backups: `<folder>/girpr-cache-backup-<ts>` and `<folder>/girpr-cache-old-<ts>`
-//! (file copies, keep-all). Record-only inputs: any path whose final component
+//! (file copies; kept all by default, bounded by `--backup-retain N`). A copy
+//! is written under `<folder>/girpr-cache-partial-<ts>` and published under its
+//! own name once it is complete, so a name in a copy list never holds half a
+//! copy. A published copy carries a record of its own beside it —
+//! `<folder>/girpr-cache-hold-backup-<ts>` or
+//! `<folder>/girpr-cache-hold-old-<ts>` — which says the copy is in use by
+//! the run that published it.
+//! Record-only inputs: any path whose final component
 //! starts with `girpr-cache`.
 //!
 //! Module map:
 //! - [`cli`] / [`config`] — argument surface and validated per-run options
 //! - [`cache`] — redb schema, open/rebuild, backup snapshots
-//! - [`convert`] — one-shot sled -> redb converter
+#![cfg_attr(
+    feature = "convert",
+    doc = "- [`convert`] — one-shot sled -> redb converter (the `convert` feature)"
+)]
 //! - [`scan`] — live filesystem walk
 //! - [`effective`] — phase A (stat + cache) and phase C (hash) for one side
 //! - [`planner`] — [`HashPlan`]: the only place that decides what must be hashed
@@ -39,6 +49,7 @@ pub mod cache;
 pub mod cli;
 pub mod commands;
 pub mod config;
+#[cfg(feature = "convert")]
 pub mod convert;
 pub mod diff;
 pub mod effective;
@@ -59,12 +70,28 @@ pub mod util;
 // crate's public surface.
 pub use girpr_log;
 
+// The glob crate, re-exported for the same reason: [`Filter::includes`] and
+// [`Filter::excludes`] hand back `glob::Pattern`, so the type is part of this
+// crate's public surface, and a caller that wants to hold a compiled pattern
+// needs no dependency of its own. A caller that wants to build one rather than
+// read it reaches [`glob::Pattern::new`] here too.
+pub use glob;
+
 pub use cli::{Cli, Cmd, CommonArgs, RwArgs, TrustArgs, TrustSide};
 pub use commands::{cmd_compare, cmd_compare_self, cmd_sync, cmd_update, run};
 pub use config::{
-    CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts, UpdateOpts,
+    BackupPolicy, CommonOpts, CompareOpts, CompareSelfOpts, LogCtx, ScanMode, SyncOpts, TrustOpts,
+    UpdateOpts,
 };
 pub use effective::{EffRec, ScanStats, SideCapability, SideEntry, SideScan};
+// The filter's type and the crate's own way to build its patterns, re-exported
+// so a caller that builds a [`CommonOpts`] by hand names one module path: the
+// options are at the crate root, so the type of one of their fields has to be
+// reachable there too.
+//
+// The crate's own way is not the only way - [`glob::Pattern::new`] builds a
+// pattern too - but it is the one that names the offending glob.
+pub use filter::{Filter, compile_patterns};
 pub use girpr_log::Level;
 pub use logging::{LogGuard, init_tracing, plan};
 pub use planner::HashPlan;

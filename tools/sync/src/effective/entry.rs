@@ -49,7 +49,7 @@ pub struct ScanStats {
     /// needed and nothing was read.
     pub cache_hit: usize,
     /// Files that needed no digest at all: either the request set was empty
-    /// (`--hash none`), or the pair was settled by stat before a digest was ever
+    /// (`--hash-all-of none`), or the pair was settled by stat before a digest was ever
     /// asked for.
     ///
     /// Distinct from `cache_hit` because a run that read nothing and served nothing
@@ -58,6 +58,19 @@ pub struct ScanStats {
     pub stat_only: usize,
     /// Cache rows dropped for paths no longer live (or now filtered out).
     pub pruned: usize,
+    /// Alternate-case lookups the scan made: the paths that missed exactly and
+    /// asked for a stale spelling.
+    ///
+    /// **Zero in sensitive mode**, where there is no alternate spelling to
+    /// look for and no index is built at all. In insensitive mode the count
+    /// says whether the index was built: it is built on the first lookup, so
+    /// a scan that made none never paid for it.
+    ///
+    /// The index's own count rather than the cache's read count, because the
+    /// cache counts every read of the entries table and a prune reads that
+    /// table too — so the read count would say something about the prune as
+    /// well as about the index.
+    pub alt_lookups: usize,
 }
 
 /// A side's map at one phase, plus the counters describing how it was built.
@@ -153,7 +166,7 @@ pub(super) fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) ->
 
 /// The row a scan stores for one file: the merge-write rule, as a pure function.
 ///
-/// `computed` is what this run hashed (empty for `--hash none` and for a
+/// `computed` is what this run hashed (empty for `--hash-all-of none` and for a
 /// stat-only pass); `prior` is whatever the cache held, or `None`.
 ///
 /// **The write shape.** See [`crate::effective::scan_stat_only`] for the table; the property worth
@@ -163,7 +176,7 @@ pub(super) fn stat_matches(prior: Option<&FileRec>, size: u64, mtime_ns: i64) ->
 /// discard digests it never recomputed.
 ///
 /// The unchanged branch is what keeps a digest-free scan from destroying good
-/// digests: `--hash none` and stat-only recording both land here with an empty
+/// digests: `--hash-all-of none` and stat-only recording both land here with an empty
 /// `computed`, so they record the new stat and leave the rest of the row alone.
 ///
 /// A named function rather than an expression inside the scan loop because it is a
@@ -180,8 +193,12 @@ pub(super) fn merge_row(
             // `merge` folds `other` into `self` with `other` winning. That is the shape
             // wanted here: the prior row is `self` and this run's computed digests are
             // `other` — computed replaces, everything else rides along.
+            //
+            // The computed row is handed over rather than borrowed: the merge
+            // takes the other row's foreign entries into the merged row, and
+            // this row is read once and dropped.
             let mut merged = c.hashes.clone();
-            merged.merge(&computed);
+            merged.merge(computed);
             merged
         }
         None => computed,
@@ -470,9 +487,9 @@ mod tests {
         );
     }
 
-    /// `--hash none` with an unchanged stat: stat is recorded, digests survive.
+    /// `--hash-all-of none` with an unchanged stat: stat is recorded, digests survive.
     /// This is the case that a digest-free scan must get right, since it is the
-    /// only thing standing between `girsync update --hash none` and destroying
+    /// only thing standing between `girsync update --hash-all-of none` and destroying
     /// every digest in the cache.
     #[test]
     fn merge_row_with_nothing_computed_preserves_digests_when_the_stat_holds() {
@@ -482,7 +499,7 @@ mod tests {
         assert_eq!(out.hashes.get_named("md5"), Some(&[1u8; 16][..]));
     }
 
-    /// `--hash none` with a *changed* stat: the row becomes stat-only. A row with
+    /// `--hash-all-of none` with a *changed* stat: the row becomes stat-only. A row with
     /// a stat and no digest is a normal, valid state, and it is the expected one for
     /// every file a lazy scan decided by stat.
     #[test]

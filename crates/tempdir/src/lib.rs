@@ -62,6 +62,9 @@
 //! example uses checked by nothing. See `the_documented_usage_writes_into_the
 //! _scratch_directory` below.
 
+// Unit tests assert with `unwrap`/`expect`; the lint is for code a user runs.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -104,6 +107,7 @@ static SEQ: AtomicU64 = AtomicU64::new(0);
 ///
 /// The directory is **not** created: a test whose subject is what the code does
 /// when a path is absent needs it that way.
+#[allow(clippy::expect_used)] // a clock before 1970 is a broken host, not a recoverable case
 fn unique_path(prefix: &str, tag: &str) -> PathBuf {
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -140,6 +144,7 @@ impl TempDir {
     ///
     /// The shared root is created along with it, so a caller never has to make
     /// `<temp>/girpr-test` itself.
+    #[allow(clippy::expect_used)] // a scratch dir that cannot be made is a test-setup failure
     pub fn new(prefix: &str, tag: &str) -> Self {
         let path = unique_path(prefix, tag);
         std::fs::create_dir_all(&path).expect("create the temp dir");
@@ -180,6 +185,7 @@ impl TempDir {
     }
 
     /// `rel` under this root, with its parents created.
+    #[allow(clippy::expect_used)] // a scratch dir that cannot be made is a test-setup failure
     pub fn subdir(&self, rel: &str) -> PathBuf {
         let p = self.path.join(rel);
         std::fs::create_dir_all(&p).expect("create the temp subdir");

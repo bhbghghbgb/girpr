@@ -1,19 +1,18 @@
 //! `girsync compare` — report how dst differs from src, changing nothing itself.
 
-use std::path::Path;
-
 use anyhow::Result;
 use tracing::info;
 
 use crate::config::{CompareOpts, LogCtx, ScanMode};
 use crate::diff::diff_maps;
 use crate::effective::{
-    Side, classify, ensure_distinct_sides, open_side, resolve_side, resolve_sides_concurrently,
+    classify, ensure_distinct_sides, open_side, resolve_side, resolve_sides_concurrently,
+    side_folder,
 };
 use crate::planner::{CasePairing, SideRequest, plan_pairs};
 use crate::rw::{RwRuntime, RwSide};
 
-use super::report_and_finish;
+use super::{report_and_finish, side_kind, side_label};
 
 /// Diff two sides and print one line per difference plus a `SUMMARY`.
 ///
@@ -35,8 +34,8 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
         algos = ?common.algos,
         no_trust_src = trust.no_trust_src,
         no_trust_dst = trust.no_trust_dst,
-        include = ?common.includes,
-        exclude = ?common.excludes,
+        include = ?common.filter.includes(),
+        exclude = ?common.filter.excludes(),
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
@@ -52,9 +51,10 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     info!("start");
     // One runtime for the whole run.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         "rw limits"
     );
     if common.dry_run {
@@ -68,6 +68,16 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // A folder side writes its cache while scanning, so naming one cache twice
     // would diff a record against the view the run itself is mutating.
     ensure_distinct_sides(&s, &d)?;
+    // The two side labels, built before the plan rather than inside it: the
+    // planner borrows them, and a label built inline in the argument list reads
+    // as though it were borrowed from a temporary that has already gone.
+    let s_label = side_label(&s);
+    let d_label = side_label(&d);
+    // Where each side's cache lives, for the same reason: the planner cannot work
+    // it out, and a coverage failure has to end with a command the user can
+    // paste.
+    let s_repopulate = side_folder(&s);
+    let d_repopulate = side_folder(&d);
     info!(src = %src.display(), src_kind = side_kind(&s), "load src side");
     // Both handles stay live across the plan and the resolve, which is sound only
     // because `ensure_distinct_sides` already ran: redb allows one writable
@@ -102,17 +112,15 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     // sides with equal size and mtime; every other pair state is already
     // decided, and `diff_maps` short-circuits the digest comparison anyway.
     //
-    // The `?` is load-bearing: a side that cannot supply a requested digest —
-    // which only a record can be — has to stop the run here, before either side
-    // reads anything. Carrying on would report a confident verdict over content
-    // the diff silently skipped.
-    let s_label = describe(&src);
-    let d_label = describe(&dst);
     // One pairing for both calls. `compare` never renames, so the plan and the
     // diff pair the same paths — unlike `sync`, which plans as on disk and diffs
     // post-rename. Naming it once is what makes the difference between the two
     // commands a difference in the *value* rather than in two bare booleans.
     let pairing = CasePairing::from(common.case_sensitive);
+    // The `?` is load-bearing: a side that cannot supply a requested digest —
+    // which only a record can be — has to stop the run here, before either side
+    // reads anything. Carrying on would report a confident verdict over content
+    // the diff silently skipped.
     let plans = plan_pairs(
         SideRequest {
             entries: &s.phase_a.map,
@@ -120,6 +128,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_src,
             cap: s.cap,
             label: &s_label,
+            repopulate: s_repopulate,
         },
         SideRequest {
             entries: &d.phase_a.map,
@@ -127,6 +136,7 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
             no_trust: trust.no_trust_dst,
             cap: d.cap,
             label: &d_label,
+            repopulate: d_repopulate,
         },
         pairing,
         common.hash_mode,
@@ -164,21 +174,4 @@ pub fn cmd_compare(opts: CompareOpts, log: &LogCtx) -> Result<i32> {
     );
     let code = report_and_finish(&diff, &log.report(), common.why, common.show_identical, t0);
     Ok(code)
-}
-
-fn side_kind(s: &Side) -> &'static str {
-    match s {
-        Side::Record(_) => "record",
-        Side::Folder(_) => "folder",
-    }
-}
-
-/// How a coverage error should name this side.
-///
-/// The planner knows what a side *can do* but not what it *is*, and "the dst side
-/// cannot supply…" is not something a user can act on where "the record
-/// D:\game\old\girpr-cache cannot supply…" is.
-fn describe(p: &Path) -> String {
-    let kind = side_kind(&classify(p));
-    format!("{kind} {}", p.display())
 }

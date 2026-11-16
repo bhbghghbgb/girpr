@@ -97,6 +97,106 @@ fn any_of_breaks_a_tie_by_the_flag_order() {
     );
 }
 
+/// **The order the user wrote survives the command line.**
+///
+/// The tie-break above is stated over a list of algorithms, so it says nothing
+/// about how that list is spelled. The flag is what carries the order, and it
+/// takes **one algorithm per occurrence** — so a request for two is written
+/// `--hash-any-of sha256 --hash-any-of md5`, and that is the spelling whose
+/// order has to arrive at the planner intact.
+///
+/// Asserted from the command line to the algorithm that settles the pair, so
+/// every step in between is in the claim: the parse, the request, and the pick.
+#[test]
+fn the_repeated_flag_form_keeps_the_order_the_user_wrote() {
+    use clap::Parser;
+
+    use girsync::cli::{Cli, Cmd};
+    use girsync::config::CommonOpts;
+
+    let cli = Cli::try_parse_from([
+        "girsync",
+        "compare",
+        "--src",
+        "s",
+        "--dst",
+        "d",
+        "--hash-any-of",
+        "sha256",
+        "--hash-any-of",
+        "md5",
+    ])
+    .expect("one algorithm per occurrence is the form that parses");
+    let common = match cli.cmd {
+        Cmd::Compare { common, .. } => common,
+        _ => unreachable!("the argv names compare"),
+    };
+    let opts = CommonOpts::try_from(common).expect("the request is valid");
+    assert_eq!(
+        opts.hash_mode,
+        HashMode::AnyOf,
+        "the flag asks for the weaker mode"
+    );
+    let asked: Vec<&str> = opts.algos.iter().map(|a| a.as_str()).collect();
+    assert_eq!(
+        asked,
+        vec!["sha256", "md5"],
+        "the request keeps the order the flags were written in"
+    );
+
+    // And the order is what the planner breaks the tie by: neither side holds
+    // anything, so both algorithms cost a read and only the position can decide.
+    let s = map(vec![("a.txt", file(10, 100, &[]))]);
+    let d = map(vec![("a.txt", file(10, 100, &[]))]);
+    let p = plan(
+        &s,
+        &d,
+        folder(),
+        folder(),
+        &asked,
+        HashMode::AnyOf,
+        StatTrust::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        p.required.of("a.txt"),
+        AlgoSet::one(HashAlg::Sha256),
+        "and the tie goes to the algorithm the user named first"
+    );
+}
+
+/// **The other spelling is refused rather than accepted as a synonym.**
+///
+/// Two algorithms in one occurrence is not a second way of saying the same
+/// thing: the parser takes one value per occurrence, so the spelling is
+/// refused before the run starts. Letting it through would give the request
+/// two spellings, and two spellings of a request are a request that can drift
+/// — this is the flag whose order is a contract, so its spelling is too.
+#[test]
+fn two_algorithms_in_one_occurrence_are_refused() {
+    use clap::Parser;
+
+    use girsync::cli::Cli;
+
+    let err = Cli::try_parse_from([
+        "girsync",
+        "compare",
+        "--src",
+        "s",
+        "--dst",
+        "d",
+        "--hash-any-of",
+        "md5",
+        "sha256",
+    ])
+    .expect_err("one value per occurrence is the rule");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("sha256"),
+        "and clap says which value it did not take: {msg}"
+    );
+}
+
 /// **The headline property: the choice is per pair.**
 ///
 /// One run, two paths, two different algorithms — md5 for the first because both
@@ -255,7 +355,7 @@ fn a_stat_differing_pair_needs_no_coverage_in_either_mode() {
     }
 }
 
-/// `--hash none` is still a mode and not a failure, in both. Nothing requested
+/// `--hash-all-of none` is still a mode and not a failure, in both. Nothing requested
 /// means nothing to be short of.
 #[test]
 fn an_empty_request_is_not_a_coverage_failure_in_either_mode() {

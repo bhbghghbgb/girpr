@@ -1,4 +1,4 @@
-//! [`AlgoSet`] and the `--hash` / `--hash-any-of` parsers.
+//! [`AlgoSet`] and the `--hash-all-of` / `--hash-any-of` parsers.
 
 use anyhow::{Result, anyhow, bail};
 
@@ -95,21 +95,27 @@ impl std::fmt::Debug for AlgoSet {
     }
 }
 
-/// Validate repeated `--hash` values.
+/// Validate repeated `--hash-all-of` values.
 ///
 /// Returns the requested algorithms — each one once, in the order it was first
-/// typed — or an empty list for `--hash none` (which is exclusive: decisions fall
-/// back to size+mtime).
+/// typed — or an empty list for `--hash-all-of none` (which is exclusive: decisions
+/// fall back to size+mtime).
 ///
 /// Strings stop here. Below this point an algorithm is a [`HashAlg`], so "which
 /// algorithms can a row hold" and "which algorithms did the user ask for" are
 /// asked with the same vocabulary rather than two spellings of it.
 pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
-    let mut v: Vec<String> = input.iter().map(|s| s.to_lowercase()).collect();
+    // ASCII-only, like [`HashAlg`]'s own parser and the path key. An algorithm
+    // name is ASCII, so a non-ASCII character must not fold into one:
+    // `to_lowercase` maps the Kelvin sign `\u{212A}` onto `k`, which rewrites an
+    // unknown name like `bla\u{212A}e3` to `blake3` before refusing it. Only
+    // `A-Z` fold here; every other character is left exactly as typed, so the
+    // refusal names the spelling the user actually wrote.
+    let mut v: Vec<String> = input.iter().map(|s| s.to_ascii_lowercase()).collect();
     v.retain(|s| !s.is_empty());
     if v.iter().any(|s| s == "none") {
         if v.len() != 1 {
-            bail!("--hash none cannot be combined with other algorithms");
+            bail!("--hash-all-of none cannot be combined with other algorithms");
         }
         return Ok(vec![]);
     }
@@ -149,7 +155,20 @@ pub fn parse_hash_list(input: &[String]) -> Result<Vec<HashAlg>> {
 /// request — it is no request — and `--hash-all-of none` is the flag that says so.
 /// Accepting it would give a stat-only audit a name claiming a digest was optional
 /// but not required, which is the ambiguity all-of exists to remove.
+///
+/// The refusal is made **here** rather than left to the delegate: the delegate's
+/// own `none` rule belongs to `--hash-all-of`, and a refusal naming that flag
+/// would point a user who typed `--hash-any-of` at a flag they did not.
 pub fn parse_any_of(input: &[String]) -> Result<Vec<HashAlg>> {
+    // ASCII case only, as everywhere else a name is read: `NONE` is the same
+    // value as `none`, and it is refused the same way.
+    if input.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+        bail!(
+            "--hash-any-of does not accept none: it asks for one of the algorithms \
+             named, and none is not an algorithm; for a stat-only audit use \
+             --hash-all-of none"
+        );
+    }
     let algos = parse_hash_list(input)?;
     if algos.is_empty() {
         bail!(

@@ -1,18 +1,23 @@
 use super::super::rename::DiskSpelling;
-#[cfg(windows)]
-use super::link::without_verbatim;
 use super::link::{
     LinkStorage, alias_target, folded_keys, keep_ancestors, plan_rel, spare_alias_chain,
     spare_link_components, target_rel,
 };
-use super::safety::ensure_shared_storage_safe;
+#[cfg(windows)]
+use super::link::{on_disk_name, without_verbatim};
+use super::safety::{PrefixStats, Probes, SystemProbes, ensure_shared_storage_safe};
 use super::*;
 use crate::diff::Diff;
 use crate::effective::EffRec;
+use crate::hardlink::{LinkInfo, info};
 use crate::hash::DigestSet;
 use girpr_tempdir::TempDir;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
+#[cfg(windows)]
+use std::ffi::{OsStr, OsString};
+use std::io;
+use std::path::{Path, PathBuf};
 
 fn file() -> EffRec {
     EffRec {
@@ -63,6 +68,65 @@ fn plan(mkdir: &[&str], copy: &[&str], fix_dirs: &[&str]) -> Plan {
     }
 }
 
+/// The disk the guards ask, under the test's control.
+///
+/// It answers like the real disk, records the paths it was asked about, and
+/// can be told to fail one of them. A probe that fails and a probe that is
+/// asked twice are the two things a real filesystem cannot be asked for on
+/// demand, and a plan-time refusal turns on both.
+struct TestProbes {
+    asked: RefCell<Vec<PathBuf>>,
+    fail: Option<PathBuf>,
+}
+
+impl TestProbes {
+    /// A probe that answers like the real disk.
+    fn new() -> Self {
+        Self {
+            asked: RefCell::new(Vec::new()),
+            fail: None,
+        }
+    }
+
+    /// A probe that fails for `path`, and answers like the real disk otherwise.
+    fn failing(path: &Path) -> Self {
+        Self {
+            asked: RefCell::new(Vec::new()),
+            fail: Some(path.to_path_buf()),
+        }
+    }
+
+    /// The paths the guard asked about, in the order it asked.
+    fn asked(&self) -> Vec<PathBuf> {
+        self.asked.borrow().clone()
+    }
+
+    fn record(&self, path: &Path) -> io::Result<()> {
+        self.asked.borrow_mut().push(path.to_path_buf());
+        match &self.fail {
+            Some(fail) if fail == path => Err(io::Error::other("the disk refused the probe")),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Probes for TestProbes {
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.record(path)?;
+        std::fs::canonicalize(path)
+    }
+
+    fn link_info(&self, path: &Path) -> io::Result<LinkInfo> {
+        self.record(path)?;
+        info(path)
+    }
+
+    fn is_dir(&self, path: &Path) -> io::Result<Option<bool>> {
+        self.record(path)?;
+        SystemProbes.is_dir(path)
+    }
+}
+
 /// The check exists for a planner regression, so it has to be able to fail:
 /// a file ancestor that no `fix_dirs` entry replaces makes every action
 /// below it unexecutable in apply order.
@@ -103,7 +167,7 @@ fn a_filtered_file_at_a_mkdir_path_is_refused_from_disk() {
     sm.insert("foo/bar.txt".to_string(), file());
     let dm = HashMap::new();
 
-    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect_err("a filtered dst file blocks the mkdir and the copy under it");
     let msg = err.to_string();
     assert!(msg.contains("`foo`"), "names the blocker: {msg}");
@@ -124,7 +188,7 @@ fn an_existing_filtered_directory_is_not_a_blocker() {
     sm.insert("foo".to_string(), dir());
     sm.insert("foo/bar.txt".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false)
+    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false, &SystemProbes)
         .expect("create_dir_all is a no-op on an existing directory");
 }
 
@@ -141,7 +205,7 @@ fn a_case_paired_file_is_a_planned_fix_not_a_mkdir() {
     let mut dm = HashMap::new();
     dm.insert("foo".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect("rename then fix-dirs resolves the pair");
 }
 
@@ -159,7 +223,7 @@ fn a_file_at_a_strict_prefix_is_refused_from_disk() {
     let mut dm = HashMap::new();
     dm.insert("a".to_string(), dir());
 
-    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect_err("the prefix is a file on disk and is not a planned fix");
     let msg = err.to_string();
     assert!(msg.contains("`a`"), "names the blocking prefix: {msg}");
@@ -179,8 +243,91 @@ fn a_planned_fix_at_a_strict_prefix_is_applicable() {
     let mut dm = HashMap::new();
     dm.insert("a".to_string(), file());
 
-    ensure_mkdir_targets_free(&sm, &dm, &dst, false)
+    ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
         .expect("fix-dirs replaces `a` before the nested mkdir");
+}
+
+/// A deep candidate asks the disk about every strict prefix, and the prefixes
+/// are shared between the candidates below them. The refusal must still name
+/// the entry that blocks the path — the shortest prefix — and not a deeper
+/// action.
+#[test]
+fn a_deep_mkdir_path_names_the_blocking_prefix() {
+    let t = TempDir::new("girsync_plan", "deep_blocker");
+    let dst = t.subdir("dst");
+    std::fs::write(dst.join("a"), b"blocker").unwrap();
+    let mut sm = HashMap::new();
+    for rel in ["a", "a/b", "a/b/c", "a/b/c/d"] {
+        sm.insert(rel.to_string(), dir());
+    }
+    let mut dm = HashMap::new();
+    for rel in ["a", "a/b", "a/b/c"] {
+        dm.insert(rel.to_string(), dir());
+    }
+
+    let err = ensure_mkdir_targets_free(&sm, &dm, &dst, false, &SystemProbes)
+        .expect_err("the blocked prefix refuses the nested mkdir");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("dst holds `a` as a file"),
+        "names the blocker: {msg}"
+    );
+    assert!(
+        !msg.contains("dst holds `a/b"),
+        "the blocker is the shortest prefix, not a deeper one: {msg}"
+    );
+    assert!(msg.contains("`a/b/c/d`"), "names the mkdir: {msg}");
+}
+
+/// The memo itself: one answer per prefix, so the disk is asked once.
+#[test]
+fn the_prefix_memo_answers_a_prefix_once() {
+    let mut stats = PrefixStats::default();
+    let mut probes = 0;
+    for _ in 0..3 {
+        let answer = stats
+            .get("a/b", || {
+                probes += 1;
+                Ok(Some(true))
+            })
+            .expect("the probe answers");
+        assert_eq!(answer, Some(true));
+    }
+    assert_eq!(probes, 1, "the disk is asked once per prefix");
+}
+
+/// The preflight asks the disk about every strict prefix of every candidate,
+/// and the prefixes are shared between the candidates below them: without the
+/// memo the same ancestor is stat'd once per descendant. The guard asks
+/// through a probe, so this counts the questions the **guard** made rather
+/// than the memo's own bookkeeping.
+#[test]
+fn a_prefix_is_asked_about_once_per_call() {
+    let t = TempDir::new("girsync_plan", "prefix_probe");
+    let dst = t.subdir("dst");
+    let mut sm = HashMap::new();
+    for rel in ["p", "p/q", "p/q/r", "p/q/s"] {
+        sm.insert(rel.to_string(), dir());
+    }
+    let probes = TestProbes::new();
+
+    ensure_mkdir_targets_free(&sm, &HashMap::new(), &dst, false, &probes)
+        .expect("every prefix of every candidate is free");
+
+    let asked = probes.asked();
+    assert_eq!(
+        asked.len(),
+        4,
+        "one question per distinct prefix, not one per descendant: {asked:?}"
+    );
+    for rel in ["p", "p/q", "p/q/r", "p/q/s"] {
+        let path = dst.join(rel);
+        assert_eq!(
+            asked.iter().filter(|asked| *asked == &path).count(),
+            1,
+            "`{rel}` is asked about once: {asked:?}"
+        );
+    }
 }
 
 /// A directory at a copy destination is a planned type conflict: the copy
@@ -196,7 +343,7 @@ fn a_directory_copy_destination_is_not_a_hard_link_hazard() {
     dm.insert("node".to_string(), dir());
     let p = plan(&[], &["node"], &[]);
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("a directory at the copy destination is removed, not truncated");
 }
 
@@ -214,7 +361,7 @@ fn a_hard_linked_copy_target_with_no_planned_removal_is_refused() {
     dm.insert("shared.txt".to_string(), file());
     let p = plan(&[], &["a.txt"], &[]);
 
-    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("a name the run keeps makes the truncation unsafe");
     let msg = err.to_string();
     assert!(msg.contains("hard links"), "names the hazard: {msg}");
@@ -236,7 +383,7 @@ fn deleting_the_other_name_makes_the_hard_linked_copy_safe() {
     let mut p = plan(&[], &["a.txt"], &[]);
     p.delete_files.push("shared.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("the delete phase runs before the copy and removes the other name");
 }
 
@@ -256,7 +403,7 @@ fn deleting_an_unrelated_file_does_not_make_the_copy_safe() {
     let mut p = plan(&[], &["a.txt"], &[]);
     p.delete_files.push("other.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("deleting a different file leaves both names of this inode");
 }
 
@@ -273,7 +420,7 @@ fn a_file_replaced_by_fix_dirs_makes_the_hard_linked_copy_safe() {
     dm.insert("repl".to_string(), file());
     let p = plan(&[], &["a.txt"], &["repl"]);
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("fix-dirs removes the second name before the copy");
 }
 
@@ -294,12 +441,58 @@ fn removing_both_other_names_makes_a_three_way_share_safe() {
     p.delete_files.push("b.txt".to_string());
     p.delete_files.push("c.txt".to_string());
 
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect("both other names are removed before the copy");
 
     p.delete_files.pop();
-    ensure_hard_linked_targets_safe(&p, &dm, &dst, None)
+    ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &SystemProbes)
         .expect_err("one surviving name still shares the inode");
+}
+
+/// A run with no copy cannot truncate an inode, so the preflight has nothing
+/// to protect and answers without reading a link count. The same tree with a
+/// copy planned is the case the guard exists for, so the answer must still
+/// depend on the copy and not on the tree.
+#[test]
+fn a_copy_free_plan_with_hard_linked_extras_is_accepted() {
+    let t = TempDir::new("girsync_plan", "hardlink_copy_free");
+    let dst = t.subdir("dst");
+    std::fs::write(dst.join("a.txt"), b"shared").unwrap();
+    std::fs::hard_link(dst.join("a.txt"), dst.join("shared.txt")).unwrap();
+    let mut dm = HashMap::new();
+    dm.insert("a.txt".to_string(), file());
+    dm.insert("shared.txt".to_string(), file());
+
+    let copying = plan(&[], &["a.txt"], &[]);
+    ensure_hard_linked_targets_safe(&copying, &dm, &dst, None, &SystemProbes)
+        .expect_err("a copy would truncate the inode the second name shares");
+
+    let mut copy_free = plan(&[], &[], &[]);
+    copy_free.delete_files.push("shared.txt".to_string());
+    ensure_hard_linked_targets_safe(&copy_free, &dm, &dst, None, &SystemProbes)
+        .expect("a copy-free run cannot truncate an inode");
+}
+
+/// A copy-free run cannot truncate an inode, but it still removes names, and
+/// a removal the disk cannot answer is a failure the run used to surface at
+/// plan time. The delete phase would only find it later — after the rename
+/// had already changed dst, and after other removals had already landed.
+#[test]
+fn an_unreadable_planned_removal_is_refused_at_plan_time() {
+    let t = TempDir::new("girsync_plan", "unreadable_removal");
+    let dst = t.subdir("dst");
+    std::fs::write(dst.join("gone.txt"), b"x").unwrap();
+    let mut dm = HashMap::new();
+    dm.insert("gone.txt".to_string(), file());
+    let mut p = plan(&[], &[], &[]);
+    p.delete_files.push("gone.txt".to_string());
+    let probes = TestProbes::failing(&dst.join("gone.txt"));
+
+    let err = ensure_hard_linked_targets_safe(&p, &dm, &dst, None, &probes)
+        .expect_err("a removal the disk cannot answer is refused at plan time");
+    let msg = err.to_string();
+    assert!(msg.contains("hard-link count"), "names the probe: {msg}");
+    assert!(msg.contains("gone.txt"), "names the removal: {msg}");
 }
 
 /// A strict link ancestor that is itself a planned `fix_dirs`
@@ -601,7 +794,7 @@ fn the_spare_pass_walks_through_a_directory_link_component() {
     p.delete_files = vec!["link".to_string(), "real/x".to_string()];
     p.rmdir = vec!["real".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(
         p.delete_files.is_empty(),
@@ -645,7 +838,7 @@ fn the_spare_pass_keeps_an_intermediate_links_ancestors() {
     p.delete_files = vec!["extra/b".to_string()];
     p.rmdir = vec!["extra".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(p.delete_files.is_empty(), "{:?}", p.delete_files);
     assert!(
@@ -683,7 +876,7 @@ fn the_spare_pass_refuses_two_links_on_one_storage() {
 
     let mut p = plan(&[], &["a", "b"], &[]);
     let mut diff = Diff::default();
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("two kept links on one inode cannot both be copied");
     let msg = err.to_string();
     assert!(
@@ -708,7 +901,7 @@ fn the_spare_pass_refuses_two_links_on_one_storage() {
     dm.insert("b".to_string(), link_file());
     dm.insert("c".to_string(), dir());
     let mut p = plan(&[], &["a", "b"], &[]);
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("the chained pair shares the same terminal storage");
     let msg = err.to_string();
     assert!(
@@ -743,6 +936,59 @@ fn a_case_differing_final_component_names_the_walk_entry() {
         target_rel(&dst.join("real/x.bin"), &root).unwrap(),
         Some("real/x.bin".to_string()),
         "the walk's own spelling is unchanged"
+    );
+}
+
+/// **The identity rule and the on-disk lookup agree on a non-ASCII
+/// spelling.**
+///
+/// The two sites ask different questions — one asks whether two spellings name
+/// the same place on disk, the other asks which directory entry the operating
+/// system would open — but they compare with one Unicode lowercase mapping, so
+/// they must not answer differently about the same pair of spellings.
+///
+/// The pair is the one the crate's other rule keeps apart: the ASCII-only path
+/// key folds `Ärger` and `ärger` into two keys, while these two sites say the
+/// two spellings are one place. That is where a second copy of the mapping
+/// would show up as a disagreement, so it is where the two sites are compared
+/// with each other.
+#[cfg(windows)]
+#[test]
+fn the_identity_rule_and_the_on_disk_lookup_agree_on_a_non_ascii_spelling() {
+    let t = TempDir::new("girsync_plan", "non_ascii_case");
+    let dir = t.subdir("dst");
+    std::fs::write(dir.join("Ärger.txt"), b"x").unwrap();
+
+    // The identity rule: two spellings, one place.
+    assert!(
+        crate::util::same_path(&dir.join("Ärger.txt"), &dir.join("ärger.txt")),
+        "Windows opens either spelling as the same file"
+    );
+
+    // The on-disk lookup: the entry the OS would open, asked for under the
+    // other spelling.
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("ärger.txt")).unwrap(),
+        Some(OsString::from("Ärger.txt")),
+        "the lookup names the entry the identity rule calls the same place"
+    );
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("Ärger.txt")).unwrap(),
+        Some(OsString::from("Ärger.txt")),
+        "and the walk's own spelling is unchanged"
+    );
+    assert_eq!(
+        on_disk_name(&dir, OsStr::new("other.txt")).unwrap(),
+        None,
+        "and a name the directory does not hold is still not found"
+    );
+
+    // The key keeps the two spellings apart: the disagreement these two
+    // sites are not part of.
+    assert_ne!(
+        crate::util::path_key("Ärger.txt"),
+        crate::util::path_key("ärger.txt"),
+        "the key folds ASCII case only, so a non-ASCII variant is a distinct key"
     );
 }
 
@@ -844,10 +1090,97 @@ fn a_case_differing_mirrored_target_is_refused() {
 
     let mut diff = Diff::default();
     let mut p = plan(&[], &["a"], &[]);
-    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None)
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
         .expect_err("a mirrored target cannot also be given a new content");
     let msg = err.to_string();
     assert!(msg.contains("`real`"), "names the target's walk key: {msg}");
+}
+
+/// The same rule without the case difference: a kept link whose target src
+/// also has is one inode carrying two mirrored paths, so the pass must refuse
+/// it. A pass that skipped a tree it took to be link-free would let the copy
+/// through.
+#[cfg(any(unix, windows))]
+#[test]
+fn a_kept_link_with_a_mirrored_target_is_still_refused() {
+    let t = TempDir::new("girsync_plan", "kept_mirrored");
+    let dst = t.subdir("dst");
+    std::fs::create_dir_all(dst.join("real")).unwrap();
+    if let Err(e) = make_dir_link(&dst.join("real"), &dst.join("a")) {
+        eprintln!("skip: this platform refused a directory link: {e}");
+        return;
+    }
+    let mut sm = HashMap::new();
+    sm.insert("a".to_string(), file());
+    sm.insert("real".to_string(), file());
+    let mut dm = HashMap::new();
+    dm.insert("a".to_string(), link_file());
+    dm.insert("real".to_string(), file());
+
+    let mut diff = Diff::default();
+    let mut p = plan(&[], &["a"], &[]);
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
+        .expect_err("one file cannot hold two contents");
+    let msg = err.to_string();
+    assert!(msg.contains("`a`"), "names the kept link: {msg}");
+    assert!(msg.contains("`real`"), "names the mirrored target: {msg}");
+}
+
+/// A tree without a kept link has nothing to spare, so the pass walks no
+/// chain. The plan and the record it would have adjusted must come out the
+/// same.
+#[test]
+fn a_link_free_tree_leaves_the_plan_unchanged() {
+    let t = TempDir::new("girsync_plan", "link_free");
+    let dst = t.subdir("dst");
+    std::fs::write(dst.join("extra.bin"), b"x").unwrap();
+    let mut sm = HashMap::new();
+    sm.insert("a.txt".to_string(), file());
+    let mut dm = HashMap::new();
+    dm.insert("extra.bin".to_string(), file());
+    let mut diff = Diff {
+        extra: vec!["extra.bin".to_string()],
+        ..Diff::default()
+    };
+    let mut p = plan(&[], &[], &[]);
+    p.delete_files = vec!["extra.bin".to_string()];
+
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes)
+        .expect("a tree without a kept link has nothing to spare");
+
+    assert_eq!(p.delete_files, ["extra.bin"], "the plan is unchanged");
+    assert_eq!(diff.extra, ["extra.bin"], "and so is the record");
+}
+
+/// The dst root has to resolve before a plan exists: every path under it is
+/// compared with the canonical root, and a root that cannot be resolved leaves
+/// the whole plan unanswerable. The failure belongs at plan time — a run that
+/// found it later would act on a plan it could not check, and the rename has
+/// already changed dst by then.
+#[test]
+fn an_unresolvable_dst_root_is_refused_at_plan_time() {
+    let t = TempDir::new("girsync_plan", "unresolvable_root");
+    let dst = t.subdir("dst");
+    let sm = HashMap::new();
+    let dm = HashMap::new();
+    let mut diff = Diff::default();
+    let mut p = plan(&[], &[], &[]);
+    let probes = TestProbes::failing(&dst);
+
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &probes)
+        .expect_err("the dst root must resolve before the plan exists");
+    let msg = err.to_string();
+    assert!(msg.contains("resolve dst root"), "names the root: {msg}");
+
+    // The same refusal without the probe: a root that is not there cannot be
+    // resolved either.
+    let missing = t.join("not-there");
+    let err = spare_link_storage(&sm, &dm, &mut p, &mut diff, &missing, None, &SystemProbes)
+        .expect_err("a root that is not there cannot be resolved");
+    assert!(
+        err.to_string().contains("resolve dst root"),
+        "names the root: {err}"
+    );
 }
 
 /// The alias half: a link text can spell a chain component with
@@ -909,7 +1242,7 @@ fn a_case_differing_terminal_is_spared_by_the_full_pass() {
     let mut p = plan(&[], &[], &[]);
     p.rmdir = vec!["real".to_string()];
 
-    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None).unwrap();
+    spare_link_storage(&sm, &dm, &mut p, &mut diff, &dst, None, &SystemProbes).unwrap();
 
     assert!(
         p.rmdir.is_empty(),

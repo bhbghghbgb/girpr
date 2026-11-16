@@ -31,6 +31,12 @@
 //! the diff report and the sync report: a run emits exactly one, so a consumer
 //! reads "the last line is the summary" without knowing which command it ran.
 //!
+//! The fold is over the **label** and over nothing else: it answers *what is
+//! this record's machine-readable name?*, and a path the record carries is
+//! rendered exactly as it was recorded. It is not one of the crate's path
+//! folds — those live in `crate::util` and answer questions about paths — and
+//! it is the only case fold in this module.
+//!
 //! JSON is newline-delimited — one object per line, no enclosing array — so a
 //! caller can stream it and still recover the exact ordering the plan applies in.
 //! Within one object the keys are *names*: read them by name, never by position.

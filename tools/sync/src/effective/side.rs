@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::cache::{CACHE_PREFIX, CacheDb, CacheOpen, TestCacheBackend, open_db};
 use crate::config::{CommonOpts, ScanMode};
-use crate::util::{canonical_or_raw, is_record_path, same_path};
+use crate::util::{canonical_or_raw, is_cache_name, is_record_path, same_path};
 
 use super::entry::{SideCapability, SideEntry, SideScan};
 use super::phase_a::scan_stat_only;
@@ -27,14 +27,100 @@ pub enum Side {
 }
 
 impl Side {
-    /// The cache file this side reads from or writes to: a record side *is* its
-    /// cache, a folder side is backed by the `<root>/girpr-cache` inside it.
-    pub fn cache_path(&self) -> PathBuf {
+    /// The side's own path: the root a folder side is, the file a record side
+    /// is.
+    ///
+    /// **This is the side, not the file its rows live in.** A record side *is*
+    /// its cache file, so the two answers are the same there; a folder side is
+    /// a tree, and its cache file is one file inside it — see
+    /// [`Side::cache_file`].
+    pub fn path(&self) -> &Path {
+        match self {
+            Side::Record(p) => p.as_path(),
+            Side::Folder(root) => root.as_path(),
+        }
+    }
+
+    /// The cache **file** this side reads from or writes to: a record side *is*
+    /// its cache, a folder side is backed by the `<root>/girpr-cache` inside it.
+    ///
+    /// **This is the file, not the side.** A folder side is a tree and this is
+    /// one file inside it, so the two answers are different places on disk: a
+    /// caller that wants to *name* the side and reaches for this names the
+    /// file where the side was meant. Naming a side is
+    /// [`crate::commands::side_label`]'s job, and [`Side::path`] is the path
+    /// that goes into it.
+    pub fn cache_file(&self) -> PathBuf {
         match self {
             Side::Record(p) => p.clone(),
             Side::Folder(root) => root.join(CACHE_PREFIX),
         }
     }
+}
+
+/// Where a repopulation of a side would run.
+///
+/// **Two cases, named rather than left to an `Option`.** "This side has nothing
+/// to repopulate" is a fact about the side, and a caller that has not said
+/// which it is has not said enough: the remedy bullet is the one line in the
+/// message a user pastes, so a caller that forgot it would lose the remedy
+/// without saying so — which is the one thing this type is here to stop.
+///
+/// **The two cases are the two answers, and the message says which.** A side
+/// whose cache *is* a folder's own `girpr-cache` is rebuilt by
+/// `girsync update --dir` on that folder. A side that is a record of any other
+/// kind — a `girpr-cache-backup-*` copy, say — is rebuilt by nothing at all,
+/// and saying *that* is the difference between a user who knows why the remedy
+/// list is one line shorter and one who does not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Repopulate {
+    /// The folder `girsync update --dir` rebuilds.
+    Folder(PathBuf),
+    /// Nothing to repopulate: the side is a record that is not a folder's own
+    /// `girpr-cache`, so a repopulation of the folder it happens to sit in
+    /// would rebuild that folder's *own* cache — a different file.
+    NotAFolderCache,
+}
+
+/// The folder a side's cache lives in, when it has one to repopulate.
+///
+/// **One rule, stated once.** A repopulation of a side runs on the folder that
+/// holds the side's cache — and there is such a folder only when that cache
+/// *is* a folder's own `girpr-cache`, which is what `girsync update --dir`
+/// rebuilds. The answer is therefore the parent of [`Side::cache_file`], and
+/// the question is whether that file is a folder's own cache at all.
+///
+/// **A record that *is* a folder's `girpr-cache` lives in that folder**, so the
+/// answer is its parent, and a coverage failure can end with a command the
+/// user can paste instead of a placeholder.
+///
+/// **A record that is not a folder's cache has none.** A `girpr-cache-backup-*`
+/// copy is a record as far as the tool is concerned — a comparison may be
+/// pointed at one — but it is not any folder's `girpr-cache`, so no
+/// repopulation would rebuild it, and naming the folder it happens to sit in
+/// would send the user to rebuild a *different* file. The message says so
+/// rather than leaving the remedy list quietly shorter.
+///
+/// **A folder side names its own root.** A folder's cache is the `girpr-cache`
+/// inside it, and `girsync update --dir <root>` rebuilds that one — so the
+/// answer is the root. The remedy is never needed for a folder, because a
+/// folder reads its own files and is never short of a digest, but the answer is
+/// still the truth, and "nothing to repopulate" would be a wrong thing to say
+/// about one.
+///
+/// **Public, for the same reason [`crate::commands::side_label`] is**: a caller
+/// outside the crate names a side the way the commands do, or it keeps a
+/// second spelling.
+pub fn side_folder(side: &Side) -> Repopulate {
+    let cache = side.cache_file();
+    if !is_cache_name(&cache) {
+        return Repopulate::NotAFolderCache;
+    }
+    Repopulate::Folder(match cache.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => dir.to_path_buf(),
+        // A cache named on its own lives in the working directory.
+        _ => PathBuf::from("."),
+    })
 }
 
 /// A side opened and statted, ready for a plan and then a resolve.
@@ -153,14 +239,12 @@ pub fn open_folder_cache(
     // asserting girpr-cache* on disk) keep TestCacheBackend::File and the real
     // file.
     //
-    // The backend is decided per-call from `common.test_cache` (lib-driven
-    // tests) or, for subprocess tests that spawn `girsync.exe`, from the
-    // `GIRSYNC_TEST_CACHE=memory` environment variable the test sets on the
-    // `Command`. Reading it here keeps lib-driven and subprocess tests under one
-    // switch.
-    let want_memory = common.test_cache == TestCacheBackend::Memory
-        || std::env::var("GIRSYNC_TEST_CACHE").as_deref() == Ok("memory");
-    if want_memory {
+    // The backend was decided once, at command start, and travels on
+    // `common`: `CommonOpts::try_from` reads `GIRSYNC_TEST_CACHE` there, so
+    // the subprocess suites - which set it on the child process - still get
+    // the memory backend, and a caller that builds its options by hand gets
+    // exactly what it asked for.
+    if common.test_cache == TestCacheBackend::Memory {
         info!(path = %db_path.display(), "test: using an in-memory cache");
         // Path-keyed and shared: a suite that runs two commands against one
         // folder must see the rows the first one wrote, exactly as it would with
@@ -174,7 +258,13 @@ pub fn open_folder_cache(
             common.case_sensitive,
             CacheOpen::ReadWrite {
                 ignore_cache: common.ignore_cache,
-                backup_first,
+                // The run's backup policy has the last word: a run that was
+                // told not to copy anything aside does not, whatever the
+                // caller asked for. The caller says *when* a backup is due
+                // (dst's pre-sync snapshot has to be taken before the mirror
+                // moves); the policy says whether one is taken at all.
+                backup_first: backup_first && common.backup.wants_backup(),
+                retain: common.backup.retain,
             },
         );
     }
@@ -289,4 +379,105 @@ where
             .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
         (src, dst)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{Repopulate, Side, side_folder};
+    use crate::cache::CACHE_PREFIX;
+
+    /// **A record side *is* its cache file; a folder side is a tree that holds
+    /// one.**
+    ///
+    /// The two answers a caller can get — the side's own path, and the file its
+    /// rows live in — are the same for a record and differ for a folder, and
+    /// that difference is the whole reason they are two functions rather than
+    /// one. A folder's cache file is *inside* the side, so a caller that means
+    /// the side and takes the file names a different place on disk.
+    #[test]
+    fn a_side_s_own_path_and_its_cache_file_differ_for_a_folder() {
+        let record = Side::Record(PathBuf::from("game/girpr-cache"));
+        assert_eq!(
+            record.path(),
+            record.cache_file().as_path(),
+            "a record side is its own cache file"
+        );
+
+        let folder = Side::Folder(PathBuf::from("game"));
+        assert_eq!(
+            folder.path(),
+            Path::new("game"),
+            "a folder side is the root the user pointed at"
+        );
+        assert_eq!(
+            folder.cache_file(),
+            Path::new("game").join(CACHE_PREFIX),
+            "and its cache file is one file inside that root"
+        );
+        assert_ne!(
+            folder.path(),
+            folder.cache_file().as_path(),
+            "so the file is not the side"
+        );
+    }
+
+    /// A record's folder is the one its cache lives in: the parent of
+    /// `<folder>/girpr-cache`.
+    #[test]
+    fn a_record_names_the_folder_its_cache_lives_in() {
+        let side = Side::Record(Path::new("game").join("old").join("girpr-cache"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Folder(Path::new("game").join("old"))
+        );
+    }
+
+    /// **A record named on its own lives in the working directory.**
+    ///
+    /// The edge case: a record path with no parent at all, so there is no
+    /// folder to name — and the working directory is where it lives.
+    #[test]
+    fn a_record_named_on_its_own_lives_in_the_working_directory() {
+        let side = Side::Record(PathBuf::from("girpr-cache"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Folder(PathBuf::from(".")),
+            "a record with no parent sits in the working directory"
+        );
+    }
+
+    /// **A copy of a cache is not a cache.** A `girpr-cache-backup-*` file is a
+    /// record as far as the tool is concerned — a comparison may be pointed at
+    /// one — but it is not any folder's `girpr-cache`, so no repopulation would
+    /// rebuild it. Naming the folder it happens to sit in would send the user
+    /// to rebuild a *different* file, so no folder is named at all.
+    #[test]
+    fn a_record_that_is_not_a_folder_cache_has_no_folder() {
+        let side = Side::Record(Path::new("game").join("old").join("girpr-cache-backup-1"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::NotAFolderCache,
+            "no folder's cache is this file, so there is nothing to repopulate"
+        );
+    }
+
+    /// **A folder side names its own root.** A folder's cache is the
+    /// `girpr-cache` inside it, and `girsync update --dir <root>` rebuilds that
+    /// one — so the folder a repopulation would run on is the root.
+    ///
+    /// The remedy is never needed for a folder, because a folder reads its own
+    /// files and is never short of a digest. The answer is still the truth
+    /// though, and a message that said "nothing to repopulate" about a folder
+    /// would be wrong.
+    #[test]
+    fn a_folder_side_names_its_own_root() {
+        let side = Side::Folder(PathBuf::from("game"));
+        assert_eq!(
+            side_folder(&side),
+            Repopulate::Folder(PathBuf::from("game")),
+            "the folder's own cache is the one inside it, and that is what a repopulation rebuilds"
+        );
+    }
 }

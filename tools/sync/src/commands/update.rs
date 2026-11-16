@@ -17,7 +17,7 @@ use crate::util::elapsed_s;
 /// "From scratch" describes the row set, not the digests. `update` never trusts
 /// a cached digest, so every requested algo is recomputed on every run — but a
 /// file whose size+mtime are unchanged keeps any *other* algorithm already on
-/// its row, and `--hash none` therefore records stat data without touching
+/// its row, and `--hash-all-of none` therefore records stat data without touching
 /// stored digests at all. A file whose stat *did* change has all of its digests
 /// dropped, including algorithms this run did not request, because the content
 /// is assumed to have changed with it. Ask for every algorithm you want
@@ -30,8 +30,8 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
         pid = std::process::id(),
         dir = %dir.display(),
         algos = ?common.algos,
-        include = ?common.includes,
-        exclude = ?common.excludes,
+        include = ?common.filter.includes(),
+        exclude = ?common.filter.excludes(),
         case_sensitive = common.case_sensitive,
         max_depth = common.max_depth,
         ignore_cache = common.ignore_cache,
@@ -93,9 +93,10 @@ pub fn cmd_update(opts: UpdateOpts, log: &LogCtx) -> Result<i32> {
     // through the limiter, so `update`'s hashing is bounded by the run's budget
     // like every other phase.
     let rw = RwRuntime::new(common.rw)?;
+    let threads = rw.pool()?.current_num_threads();
     info!(
         rw = %rw.describe(),
-        threads = rw.pool().current_num_threads(),
+        threads,
         "rw limits"
     );
     let db = open_folder_cache(&dir, &common, mode, true)?;
