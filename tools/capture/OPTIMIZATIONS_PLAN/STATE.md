@@ -33,10 +33,10 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-16 | Blob diagnostic fixes (A15, A16) | completed | 6021ebc5 7fb61599 0b8b45e7 | |
 | P1-17 | Numeric and tag-length honesty (A17, D4) | completed | 38ff3525 9bbccabc cabe7dfc | |
 | P1-18 | Summary log and escaped keys (A18, A19) | completed | 4686a977 24d6b608 d58b1c73 | |
-| P2-01 | Separate scoring rank from admission rank (B1) | pending_review | d09de8ed b3dc98f8 2ef26ef5 | |
-| P2-02 | Reconcile `budget_cost` semantics (B2) | pending_review | 77c98275 578d5301 cf4e1c78 | |
-| P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | pending_review | 0debdd91 3e7c981f | |
-| P2-04 | Capture-id uniqueness invariant (B5) | pending_review | 2588220d 7ceaeb32 | |
+| P2-01 | Separate scoring rank from admission rank (B1) | completed | d09de8ed b3dc98f8 2ef26ef5 | |
+| P2-02 | Reconcile `budget_cost` semantics (B2) | completed | 77c98275 578d5301 cf4e1c78 | |
+| P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | completed | 0debdd91 3e7c981f | |
+| P2-04 | Capture-id uniqueness invariant (B5) | completed | 2588220d 7ceaeb32 | |
 | P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | todo | | |
 | P3-02 | Bridge server correctness and locking (C8, E4-E6) | todo | | |
 | P3-04 | Reuse retention per pair (C2) | todo | | |
@@ -58,7 +58,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-2 | P1-01..P1-06 | done | | |
 | RC-3 | P1-07..P1-12 | done | | |
 | RC-4 | P1-13..P1-18 | done | | |
-| RC-5 | P2-01..P2-04 | in_progress | | |
+| RC-5 | P2-01..P2-04 | done | | |
 | RC-6 | P3-01..P3-02 | pending | | |
 | RC-7 | P3-04..P3-09 | pending | | |
 | RC-8 | P4-01..P4-04 | pending | | |
@@ -82,6 +82,8 @@ until the main tasks and rework are done.
 | F-01 | P0-02 | manifest diff counts (`diff/paths.diff.json`) | `Counts::folders` is serialized but never incremented; folder rows are tallied as added/common, so the published `folders` count is always 0 even when folders exist. Increment it in `diff_field` or remove the dead field. Group with folder-policy / dead-fields work. | todo |
 | F-02 | P1-02 | test comparison helper (`tests/bundle_diff.rs`) | `normalize` (~L423) gunzips any path ending in `.gz` — the heuristic removed from production. Would fail comparing a non-gzip captured `.gz` asset; apply the same document-aware rule. | todo |
 | F-03 | P1-05 | diagnostics wording (`src/assemble/ranges.rs`) | `Layout::of` (~L226) error says "the manifest declares" even on the verify path where the figure comes from a patchmap side. Tighten the wording for that caller. | todo |
+| F-04 | P2-04 | select ordinals (`src/select/mod.rs`) | A forced path rejected in phase 0 can share its `<class>` capture id with a different, cheaper phase-2 pick of the same class; the debug guard only detects this, release still emits a misleading rejection record. Fix ordinal assignment so ids are unique. | todo |
+| F-05 | P2-02 | candidates doc comment (`src/select/mod.rs`) | The `candidates` doc comment (~L405-409) still describes `by_cost`'s `total_cost`+moved/reused order and says one-sided paths are placed "by their own size"; the comparator is now `budget_cost`/field/path and `added` charges `download_bytes`. Update the comment. | todo |
 
 ## Follow-up batches
 
