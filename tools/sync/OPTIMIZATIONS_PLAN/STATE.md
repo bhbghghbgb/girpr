@@ -12,9 +12,9 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M41
+active_batch: M42
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T02:20:21Z
+last_updated: 2026-11-16T02:31:18Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -2733,19 +2733,19 @@ followups:
   - id: F269
     source: F192
     description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
-    status: pending
+    status: in_progress
     batch: M42
     commits: []
   - id: F270
     source: F192
     description: The inline case pins the second suffix exactly but not the third, so a rule change that kept the second and altered the later suffixes would pass it.
-    status: pending
+    status: in_progress
     batch: M42
     commits: []
   - id: F271
     source: F192
     description: The README bullet reads the retry list in the singular while the other two places read it in the plural.
-    status: pending
+    status: in_progress
     batch: M42
     commits: []
   - id: F272
@@ -3620,6 +3620,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M42 started: F269, F270 and F271 `pending` →
+  `in_progress`; `active_batch: M41` → `M42`.
 - 2026-11-16 — review M41 `done`: F267 kept (a6850a91), F268 kept (1f950a9a); no fix
   or revert commits; follow-up F408 appended with batch `M88`. F267 and F268
   `pending_review` → `completed`.
