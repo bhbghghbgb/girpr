@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M45
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T05:55:10Z
+last_updated: 2026-11-16T06:20:30Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -994,10 +994,31 @@ reviews:
     result: null
     followups: []
   - batch: M45
-    status: in_progress
+    status: done
     tasks: [F276, F277]
     base: 7f6a1649
-    head: 38e2a220
+    head: 8333e9ef
+    result: F276 kept (14e67a4a); F277 fixed (de7cf1df, 38e2a220, 8333e9ef states the shape once, in the check itself, and names the colon as the one rule about the specification rather than the path); 619 passed without the feature and 636 with it, 1 skipped; the reviewer saw the warning live, once, with a malformed value and not at all with a well-formed one, and re-ran the implementer's mutation
+    followups: [F428, F429, F430]
+  - batch: M111
+    status: pending
+    tasks: [F428]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M112
+    status: pending
+    tasks: [F429]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M109
+    status: pending
+    tasks: [F425, F430]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M109
@@ -2852,15 +2873,17 @@ followups:
   - id: F276
     source: F194
     description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
-    status: pending_review
+    status: completed
     batch: M45
     commits: [14e67a4a]
+    note: review M45 kept; the reviewer saw the warning live, once per process, and re-ran the implementer's mutation and saw the case fail
   - id: F277
     source: F194
     description: The relative-path check accepts shapes that were never spelled out, a Windows rooted path, a parent component and a trailing separator, and those name no copy and are therefore inert, so the check could name the shape it wants rather than only the ones it excludes.
-    status: pending_review
+    status: completed
     batch: M45
-    commits: [de7cf1df, 38e2a220]
+    commits: [de7cf1df, 38e2a220, 8333e9ef]
+    note: review M45 fixed (8333e9ef states the shape once, in the check itself, and names the colon as a rule about the specification rather than the path)
   - id: F278
     source: F197
     description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
@@ -3780,6 +3803,24 @@ followups:
     status: pending
     batch: M110
     commits: []
+  - id: F428
+    source: F276
+    description: The crate now has two log-capture helpers, one that pins the rendered line and one that pins the event's fields, the channel a log parser reads, so the new case could assert the fields instead of substrings.
+    status: pending
+    batch: M111
+    commits: []
+  - id: F429
+    source: F277
+    description: On a POSIX host the gate cannot name a copy whose path holds a colon, since the split is on a colon, even though the plan can spell such a path; the README scopes the colon rule to Windows but does not state the limitation.
+    status: pending
+    batch: M112
+    commits: []
+  - id: F430
+    source: F277
+    description: The walk replaces a backslash with a slash on every host, so a POSIX file whose name holds a backslash is planned under a path that does not exist on disk.
+    status: pending
+    batch: M109
+    commits: []
 ```
 
 ## Human checklist
@@ -3811,6 +3852,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M45 `done`: F276 kept (14e67a4a), F277 fixed (de7cf1df,
+  38e2a220, 8333e9ef); follow-ups F428, F429 and F430 appended with batches
+  `M111`, `M112` and `M109`. F276 and F277 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M45 review checkpoint opened: F276 and F277
   `in_progress` → `pending_review`, commits `14e67a4a`, `de7cf1df`, `38e2a220`;
   review M45 `pending` → `in_progress`, base `7f6a1649`, head `38e2a220`.
