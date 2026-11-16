@@ -1,6 +1,7 @@
 use super::*;
 use crate::biz::{Biz, BranchParams};
 use crate::cli::Biz as BizId;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[test]
@@ -56,6 +57,52 @@ fn a_range_is_recorded_and_is_not_part_of_the_shared_set() {
     );
     let with = RequestRecord::default_req_headers("ua", Some("bytes=0-1023"));
     assert_eq!(with["range"], "bytes=0-1023");
+}
+
+#[test]
+fn a_repeated_header_is_one_key_with_values_joined_by_newline() {
+    let name: HeaderName = "set-cookie".parse().expect("header name");
+    let mut h = HeaderMap::new();
+    h.append(name.clone(), HeaderValue::from_static("a=1; Path=/"));
+    h.append(name.clone(), HeaderValue::from_static("b=2; HttpOnly"));
+    h.append(name, HeaderValue::from_static("c=3; SameSite=Lax"));
+
+    let map = header_map(&h);
+    assert_eq!(map.len(), 1, "one key for the repeated name");
+    assert_eq!(
+        map.get("set-cookie").map(String::as_str),
+        Some("a=1; Path=/\nb=2; HttpOnly\nc=3; SameSite=Lax"),
+        "every value is kept, in insertion order"
+    );
+}
+
+#[test]
+fn a_single_header_value_is_unchanged() {
+    let mut h = HeaderMap::new();
+    h.insert(
+        HeaderName::from_static("etag"),
+        HeaderValue::from_static("\"313EA8\""),
+    );
+    let map = header_map(&h);
+    assert_eq!(map.get("etag").map(String::as_str), Some("\"313EA8\""));
+    assert!(!map["etag"].contains('\n'), "no delimiter for one value");
+}
+
+#[test]
+fn a_non_utf8_header_value_is_still_recorded_as_hex() {
+    let name = HeaderName::from_static("x-binary");
+    let mut h = HeaderMap::new();
+    h.append(
+        name.clone(),
+        HeaderValue::from_bytes(&[0xff, 0x80, 0xfe]).expect("binary value"),
+    );
+    h.append(name, HeaderValue::from_static("tail"));
+    let map = header_map(&h);
+    assert_eq!(
+        map.get("x-binary").map(String::as_str),
+        Some("ff80fe\ntail"),
+        "hex fallback is per value and the values are still joined"
+    );
 }
 
 // ---------------------------------------------------------------- URLs --
@@ -303,6 +350,37 @@ fn the_log_renders_as_ndjson_with_every_field_present() {
     assert_eq!(v["attempts"], 2);
     assert_eq!(v["resp_headers"]["etag"], "\"313EA8\"");
     assert!(text.ends_with('\n'), "ndjson must be newline-terminated");
+}
+
+#[test]
+fn a_repeated_header_round_trips_as_one_string_with_the_newline_delimiter() {
+    let log = RequestLog::new();
+    let seq = log.reserve();
+    log.push(RequestRecord {
+        seq,
+        ts: "2026-10-17T12:33:35.971Z".into(),
+        kind: Kind::Api,
+        method: "GET",
+        url: "https://x/set-cookie".into(),
+        range: None,
+        status: 200,
+        final_url: "https://x/set-cookie".into(),
+        redirected: false,
+        elapsed_ms: 1,
+        req_headers: BTreeMap::new(),
+        resp_headers: BTreeMap::from([("set-cookie".to_string(), "a=1\nb=2".to_string())]),
+        bytes_in: 0,
+        stored_as: None,
+        attempts: 1,
+    });
+    let text = log.to_ndjson().expect("the log renders");
+    let v: serde_json::Value =
+        serde_json::from_str(text.lines().next().expect("one row")).expect("valid json");
+    let value = v["resp_headers"]["set-cookie"]
+        .as_str()
+        .expect("one JSON string, not an array");
+    assert_eq!(value, "a=1\nb=2", "the delimiter survives the round trip");
+    assert_eq!(value.split('\n').collect::<Vec<_>>(), vec!["a=1", "b=2"]);
 }
 
 /// A writer that announces it has entered `write`, then blocks there until
@@ -1855,6 +1933,22 @@ async fn response_headers_are_lowercased_and_kept_verbatim() {
     );
     assert_eq!(got.resp_headers["server"], "MockOSS");
     assert_eq!(got.resp_headers["etag"], "\"abc\"", "quotes are kept");
+}
+
+#[tokio::test]
+async fn repeated_response_headers_are_joined_in_the_recorded_evidence() {
+    let mock = spawn(
+        vec![(200, b"x")],
+        "Set-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; HttpOnly\r\n",
+    );
+    let f = fetcher(1, Arc::new(RecordingSleep::default()));
+    f.get(&url(&mock, "/x"), Kind::Api, None).await.unwrap();
+    let got = recorded(&f);
+    assert_eq!(
+        got.resp_headers["set-cookie"].as_str(),
+        "a=1; Path=/\nb=2; HttpOnly",
+        "every Set-Cookie value reaches api/requests.ndjson"
+    );
 }
 
 #[tokio::test]
