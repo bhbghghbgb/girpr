@@ -21,12 +21,12 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-04 | A14 scans `game/` on disk (A6) | completed | c7dcbff9 35a94be2 | |
 | P1-05 | A11 checks the declared side size (A7) | completed | 12ad7888 d898d57e | |
 | P1-06 | Independently check published checksums (A8) | completed | 4dea01a6 bb9a7423 | |
-| P1-07 | Schema and path validation (A9) | pending_review | 6bed8f7d 646cd70b bf4b3592 | |
-| P1-08 | Cross-check patchmap plan and index (A10) | pending_review | 7a310d1b 216f8959 | |
-| P1-09 | `list` descends past non-bundles (A11) | pending_review | 1536bd72 956f1422 | |
-| P1-10 | Explicit folder policy (A3) | pending_review | 8a44db22 988d4b9c 36ae4d8f | |
-| P1-11 | Duplicate-path TSV truth (A4) | pending_review | 3bb0786b 0aeb530f | |
-| P1-12 | `decode_counts` empty-chunk non-folders (B3) | pending_review | 45a3f8e2 886a650b | |
+| P1-07 | Schema and path validation (A9) | completed | 6bed8f7d 646cd70b bf4b3592 | |
+| P1-08 | Cross-check patchmap plan and index (A10) | completed | 7a310d1b 216f8959 | |
+| P1-09 | `list` descends past non-bundles (A11) | completed | 1536bd72 956f1422 | |
+| P1-10 | Explicit folder policy (A3) | completed | 8a44db22 988d4b9c 36ae4d8f | |
+| P1-11 | Duplicate-path TSV truth (A4) | completed | 3bb0786b 0aeb530f | |
+| P1-12 | `decode_counts` empty-chunk non-folders (B3) | completed | 45a3f8e2 886a650b | |
 | P1-13 | Record repeated response headers (A12) | todo | | |
 | P1-14 | Reserve error-body budget before reading (A13) | todo | | |
 | P1-15 | Deterministic rejection cap (A14) | todo | | |
@@ -56,7 +56,7 @@ See `ORCHESTRATION.md` for the transition rules.
 |---|---|---|---|---|
 | RC-1 | P0-01..P0-03 | done | | |
 | RC-2 | P1-01..P1-06 | done | | |
-| RC-3 | P1-07..P1-12 | in_progress | | |
+| RC-3 | P1-07..P1-12 | done | | |
 | RC-4 | P1-13..P1-18 | pending | | |
 | RC-5 | P2-01..P2-04 | pending | | |
 | RC-6 | P3-01..P3-02 | pending | | |
