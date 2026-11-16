@@ -17,6 +17,9 @@ mod common;
 
 use common::{TempDir, parse_ndjson, strip_ansi, summary_of, sync_mtime, temp_root, wfile};
 use girsync::hash::AlgoSet;
+// The walk's heartbeat period, read from the crate rather than written here:
+// the case below builds its tree from the same number the walk divides by, so
+// the two cannot drift apart. The constant is public for that reason alone.
 use girsync::scan::HEARTBEAT_ENTRIES;
 use serde_json::Value;
 use std::path::Path;
@@ -833,7 +836,7 @@ fn the_scan_counts_the_entries_the_walk_saw() {
 /// The map's counters are in the "effective" events, and there are **two** of
 /// them: one per phase, and each names the phase it came from. The first
 /// phase reads no bytes at all, so it hashes nothing; the second one hashes
-/// what the map held and says how many were cache hits.
+/// what the **plan** asked for and says how many were cache hits.
 #[test]
 fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     let t = temp_root("out_walk_progress");
@@ -913,8 +916,11 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     // The phases report their progress, and they count the work they have
     // done rather than the tree. The first phase's total is every entry the
     // walk saw — the filter has not been applied yet — and the second's is
-    // only what the map kept: the second phase never touches a path the
-    // filter hid. Each event names its phase, so the case says which phase
+    // the **plan's pending count**: the paths the plan asked this side to
+    // hash. The two are not the same kind of number — a comparison plans a
+    // digest only for the pairs stat cannot settle — and they agree here
+    // because this run is an `update`, whose plan asks for a digest for every
+    // file it holds. Each event names its phase, so the case says which phase
     // reports which count, rather than stating the two numbers as a set.
     let phase_a_progress = events_with(&logged, "effective progress: phase a");
     let phase_c_progress = events_with(&logged, "effective progress: phase c");
@@ -934,7 +940,8 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
         phase_c_progress
             .iter()
             .all(|e| e["fields"]["total"] == HEARTBEAT_ENTRIES - 1),
-        "the phase that hashes counts only what the map kept: {}",
+        "the phase that hashes counts the paths the plan asked it to hash, \
+         which here is every file the map kept: {}",
         serde_json::to_string(&phase_c_progress).unwrap()
     );
 
@@ -953,7 +960,7 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     );
 
     // The second phase's start names its phase the same way, and it says how
-    // much work that phase has: the paths the map kept and the digests they
+    // much work that phase has: the paths the plan named and the digests they
     // still owe.
     let phase_c_start = events_with(&logged, "effective start: phase c");
     assert_eq!(
@@ -965,7 +972,8 @@ fn the_walk_counts_what_it_saw_and_the_map_counts_what_it_kept() {
     assert_eq!(
         phase_c_start[0]["fields"]["pending"],
         HEARTBEAT_ENTRIES - 1,
-        "the phase that hashes owes a digest for every path the map kept"
+        "the phase that hashes owes a digest for every path the plan named, \
+         which here is every file the map kept"
     );
 
     // The map's own counts, one event per phase, and each event names the
