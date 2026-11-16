@@ -54,11 +54,11 @@ pub struct CloseoutInput<'a> {
     pub diffs: &'a [crate::manifest::diff::FieldDiff],
     /// Per-capture `(old, new)` whole-file digests, for A19.
     pub side_digests: &'a BTreeMap<String, (String, String)>,
-    /// The run's A6-A12 and A19 rows.
+    /// Every artifact-relative path the run wrote, in write order.
     ///
-    /// Appended to as each document lands, because A14 asserts that every file
-    /// under `game/` was one the run planned — and a document the close-out
-    /// itself wrote would fail that check if it were not declared first.
+    /// Appended to as each document lands so the close-out can report what it
+    /// wrote. A14 reads the tree itself now, so this list no longer feeds that
+    /// assertion — only the count of documents written.
     pub written: Vec<String>,
     /// The patch shape of each capture, for A21-A23.
     pub shapes: &'a [crate::assemble::PatchShape],
@@ -135,7 +135,6 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
         i.selection,
         i.diffs,
         i.side_digests,
-        &written,
         i.no_chunk_blobs,
     ));
     // A21-A23: the bundle's coverage. They are about the patchmaps, and the
