@@ -33,11 +33,11 @@ experimental = ["setup-scripts"]
 #   a clean `Database` drop, so a test that reopens the cache file sees every
 #   row.
 # * `GIRSYNC_TEST_NO_FSYNC=1` — `copy_one` skips its per-file `sync_all` after
-#   writing (see `tools/sync/src/commands/sync/apply.rs::test_no_fsync`). The
-#   bytes, size/mtime checks and cache records are unchanged.
+#   writing (see `tools/sync/src/commands/sync/apply/copy.rs::test_no_fsync`).
+#   The bytes, size/mtime checks and cache records are unchanged.
 # * `GIRPR_TEST_NO_FSYNC=1` — `write_config_ini` skips its `sync_all` before the
-#   rename (see `src/util.rs::test_no_fsync`). The temp-file write and rename
-#   are unchanged.
+#   rename (see `src/util/ini.rs::test_no_fsync`). The temp-file write and
+#   rename are unchanged.
 #
 # Production defaults to durable: an unset variable (or a non-truthy value)
 # leaves every flush in place. These are deliberately not `cfg(test)`: the
