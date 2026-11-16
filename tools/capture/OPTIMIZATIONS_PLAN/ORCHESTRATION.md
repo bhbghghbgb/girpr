@@ -10,6 +10,13 @@ root and live under `tools/capture/`. Spell out that prefix in session prompts:
 a bare `OPTIMIZATIONS_PLAN/...` or `OPTIMIZATIONS_REPORT.md` makes an implementer
 search from the root before finding the crate.
 
+Sessions must not end their turn while a long command is still pending. Ending
+with a "waiting" status leaves the session idle and forces a confusing resume.
+Instead, tell every implementer and reviewer to actively wait in the same turn:
+if a long-running shell task is started in the background, block with
+`Start-Sleep` in a foreground shell call until it finishes, then collect its
+output and return the final answer.
+
 ## Roles
 
 - **Orchestrator** (this session): owns `STATE.md`, picks tasks, spawns one
@@ -175,6 +182,10 @@ Do not reference OPTIMIZATIONS_REPORT.md, OPTIMIZATIONS_PLAN, task ids, or
 review ids in code, comments, tests, or docs; these files are temporary.
 
 Run: <task test commands>. Commit each planned commit with the task's message.
+Do not end your turn while a command is still pending. If you start a
+long-running shell task in the background, block in this same turn with
+`Start-Sleep` in a foreground shell call until it finishes, then collect its
+output and report the result.
 Return: task id, commit SHAs, tests and results, deviations, blockers, and
 non-blocking follow-up observations (do not implement them).
 ```
@@ -201,6 +212,11 @@ follow-up suggested by an implementer is worth recording: record only the ones
 that are real and actionable, with a short reason for any you decline. Do not
 edit tools/capture/OPTIMIZATIONS_PLAN/STATE.md. Do not add references to the report
 or plan in the code.
+
+Do not end your turn while a command is still pending. If you start a
+long-running shell task in the background, block in this same turn with
+`Start-Sleep` in a foreground shell call until it finishes, then collect its
+output and report the result.
 
 Return per task: verdict (completed / completed-with-fixes / reverted), commits
 you added or reverted, a one-line reason for any revert, and non-blocking
