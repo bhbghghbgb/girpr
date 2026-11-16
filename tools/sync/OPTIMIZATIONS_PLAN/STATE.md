@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M42
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T02:31:18Z
+last_updated: 2026-11-16T02:43:16Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -903,8 +903,22 @@ reviews:
     result: null
     followups: []
   - batch: M42
-    status: pending
+    status: in_progress
     tasks: [F269, F270, F271]
+    base: 0ab89862
+    head: 0ac9ccee
+    result: null
+    followups: []
+  - batch: M100
+    status: pending
+    tasks: [F409, F410]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M101
+    status: pending
+    tasks: [F411, F412]
     base: null
     head: null
     result: null
@@ -2733,21 +2747,21 @@ followups:
   - id: F269
     source: F192
     description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
-    status: in_progress
+    status: pending_review
     batch: M42
-    commits: []
+    commits: [0ac9ccee]
   - id: F270
     source: F192
     description: The inline case pins the second suffix exactly but not the third, so a rule change that kept the second and altered the later suffixes would pass it.
-    status: in_progress
+    status: pending_review
     batch: M42
-    commits: []
+    commits: [8a81858d]
   - id: F271
     source: F192
     description: The README bullet reads the retry list in the singular while the other two places read it in the plural.
-    status: in_progress
+    status: pending_review
     batch: M42
-    commits: []
+    commits: [afe44b2e]
   - id: F272
     source: F189
     description: The commit message of the example-command fix claims every other README example command parses, which is false because of the two-value hash flag; the message is part of the history and cannot be corrected without rewriting it.
@@ -3589,6 +3603,30 @@ followups:
     status: pending
     batch: M88
     commits: []
+  - id: F409
+    source: F270
+    description: The directory-claim case checks its second name with a suffix check and never asks for a third, so a rule change to the later directory-claim spellings would pass it.
+    status: pending
+    batch: M100
+    commits: []
+  - id: F410
+    source: F270
+    description: The converter's inline case pins the first and second retry spellings but not the third, the same gap the cache's claim case had.
+    status: pending
+    batch: M100
+    commits: []
+  - id: F411
+    source: F269
+    description: Nothing pins the claim-attempt limit itself, so no test asserts that the family of names stops at the thousandth suffix or that a claim over an exhausted family fails.
+    status: pending
+    batch: M101
+    commits: []
+  - id: F412
+    source: F269
+    description: The claim-attempt limit is declared twice, in the cache and in the converter, with the same value and no shared constant, so the two families could drift apart.
+    status: pending
+    batch: M101
+    commits: []
 ```
 
 ## Human checklist
@@ -3620,6 +3658,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M42 review checkpoint opened: F269, F270 and F271
+  `in_progress` → `pending_review`, commits `0ac9ccee`, `8a81858d`, `afe44b2e`;
+  review M42 `pending` → `in_progress`, base `0ab89862`, head `0ac9ccee`.
 - 2026-11-16 — follow-up batch M42 started: F269, F270 and F271 `pending` →
   `in_progress`; `active_batch: M41` → `M42`.
 - 2026-11-16 — review M41 `done`: F267 kept (a6850a91), F268 kept (1f950a9a); no fix
