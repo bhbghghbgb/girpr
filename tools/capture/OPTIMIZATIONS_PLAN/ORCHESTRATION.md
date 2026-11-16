@@ -5,6 +5,11 @@ sessions are spawned; this plan does not assume a tool, command, or API. When
 it says "spawn", use whatever mechanism the user supplied. If none was
 supplied, ask before starting.
 
+All plan and report files named in this document are relative to the repository
+root and live under `tools/capture/`. Spell out that prefix in session prompts:
+a bare `OPTIMIZATIONS_PLAN/...` or `OPTIMIZATIONS_REPORT.md` makes an implementer
+search from the root before finding the crate.
+
 ## Roles
 
 - **Orchestrator** (this session): owns `STATE.md`, picks tasks, spawns one
@@ -21,8 +26,8 @@ supplied, ask before starting.
 
 Normally only:
 
-- `OPTIMIZATIONS_PLAN/STATE.md` (the state machine);
-- `OPTIMIZATIONS_PLAN/INDEX.md` (task map and checkpoints).
+- `tools/capture/OPTIMIZATIONS_PLAN/STATE.md` (the state machine);
+- `tools/capture/OPTIMIZATIONS_PLAN/INDEX.md` (task map and checkpoints).
 
 It reads a task file only when it needs to verify a return or resolve a
 blocker. It **never** pastes the whole report or whole plan into a session
@@ -151,16 +156,18 @@ When nothing is `todo`, `in_progress`, `pending_review`, `blocked`, or
 Replace `<...>`. Keep everything outside the task slice out of the prompt.
 
 ```text
-You are implementing one task in the gircap crate.
+You are implementing one task in the gircap crate (project: tools/capture).
 
 Repository: <absolute working tree>
-Task file: OPTIMIZATIONS_PLAN/tasks/<task-file>.md
-Report excerpts: OPTIMIZATIONS_REPORT.md lines <ranges>. Read only those lines.
+Plan and report paths below are relative to the repository root and live under
+tools/capture/; read them from there rather than searching from the root.
+Task file: tools/capture/OPTIMIZATIONS_PLAN/tasks/<task-file>.md
+Report excerpts: tools/capture/OPTIMIZATIONS_REPORT.md lines <ranges>. Read only those lines.
 Read the task file in full, then the code and tests it names. Do not read other
 task files, STATE.md, or the rest of the report.
 
 Implement only this task, following its commit plan. Use the repository's
-existing style and test patterns. Do not edit OPTIMIZATIONS_PLAN/STATE.md. If
+existing style and test patterns. Do not edit tools/capture/OPTIMIZATIONS_PLAN/STATE.md. If
 the task is stale or its premise no longer holds (for example, the code already
 meets the goal), you may return without changes, with a clear justification;
 do not invent work just to produce a commit.
@@ -175,14 +182,16 @@ non-blocking follow-up observations (do not implement them).
 ## Reviewer prompt template
 
 ```text
-You are reviewing a completed batch of gircap tasks.
+You are reviewing a completed batch of gircap tasks (project: tools/capture).
 
 Repository: <absolute working tree>
+Plan and report paths below are relative to the repository root and live under
+tools/capture/; read them from there rather than searching from the root.
 Batch: <RC-id>
 Tasks and commits:
   <task-id> — <title> — commits <sha...>
   ...
-Report excerpts for these tasks: OPTIMIZATIONS_REPORT.md lines <ranges>.
+Report excerpts for these tasks: tools/capture/OPTIMIZATIONS_REPORT.md lines <ranges>.
 Task files: <paths>. Read those task files and only those report lines.
 
 For each task, verify the acceptance criteria and that the change does not
@@ -190,8 +199,8 @@ break existing contracts. Run the relevant tests. You may fix a task or revert
 its commits. Do not implement non-blocking improvements. You decide whether a
 follow-up suggested by an implementer is worth recording: record only the ones
 that are real and actionable, with a short reason for any you decline. Do not
-edit OPTIMIZATIONS_PLAN/STATE.md. Do not add references to the report or plan in
-the code.
+edit tools/capture/OPTIMIZATIONS_PLAN/STATE.md. Do not add references to the report
+or plan in the code.
 
 Return per task: verdict (completed / completed-with-fixes / reverted), commits
 you added or reverted, a one-line reason for any revert, and non-blocking
