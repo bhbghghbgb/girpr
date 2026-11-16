@@ -883,6 +883,45 @@ mod tests {
         );
     }
 
+    /// Fixture shape: `Fixture::build` is a four-blob bundle whose old side's
+    /// chunks sum to 224 B. The patchmap declares 999 B with the right chunk
+    /// count, so the rebuild succeeds and only the size comparison in
+    /// `check_pair` disagrees.
+    #[test]
+    fn currently_a_wrong_patchmap_side_size_only_fails_the_a7_size_row() {
+        let f = Fixture::build("wrong-size");
+        let mut map = side_map(Some(("7.0.0", 999, 3)), Some(("7.1.0", 224, 3)));
+        let mut maps = BTreeMap::new();
+        maps.insert("c".to_string(), map.clone());
+        let pairs = rebuild_all(
+            &f.root,
+            &f.index,
+            &maps,
+            crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+        )
+        .expect("the chunk count agrees, so nothing refuses the rebuild");
+        assert_eq!(pairs[0].old.as_ref().unwrap().bytes.len(), 224);
+
+        // Keep the declared md5 in step with the rebuilt bytes so the size row
+        // is the only disagreement on this side.
+        map.old.as_mut().unwrap().md5 = pairs[0].old.as_ref().unwrap().md5.clone();
+        let rows = crate::verify::checks::check_pair(&f.root, &pairs[0], &map);
+        let size_row = rows
+            .iter()
+            .find(|r| r.subject.ends_with(" (size)"))
+            .expect("a size row");
+        assert_eq!(size_row.id, "A7");
+        assert_eq!(
+            size_row.assertion,
+            "assemble(materialize_old) has md5 == old entry.md5"
+        );
+        assert_eq!(size_row.subject, format!("game/{DLL} (size)"));
+        assert_eq!(size_row.expected, "999 B");
+        assert_eq!(size_row.actual, "224 B");
+        assert!(!size_row.ok);
+        let _ = std::fs::remove_dir_all(&f.root);
+    }
+
     /// `added` and `removed` are one-sided and must rebuild the side they have,
     /// with the other reported as absent rather than as an error.
     #[test]

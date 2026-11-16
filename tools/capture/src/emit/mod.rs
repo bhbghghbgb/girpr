@@ -610,6 +610,43 @@ mod tests {
         girpr_tempdir::TempDir::absent("gircap-emit", name)
     }
 
+    /// Fixture shape: one file seeded, a first (no-reuse) checksum pass, then
+    /// that file rewritten without being named in the close-out's second-pass
+    /// `rewritten` list (only selfcheck.json and README.md are). The published
+    /// document is the reuse result, so it carries the stale digest.
+    #[test]
+    fn currently_the_published_checksums_reuses_a_stale_digest_for_an_unnamed_change() {
+        let root = tmp("published-reuse-stale");
+        std::fs::create_dir_all(&root).expect("root");
+        std::fs::write(root.join("a.bin"), b"aaaa").expect("seed");
+
+        let (_, first) = super::write_checksums(&root).expect("first pass");
+        let seeded = first
+            .entries
+            .iter()
+            .find(|e| e.path == "a.bin")
+            .expect("seeded entry")
+            .clone();
+
+        std::fs::write(root.join("a.bin"), b"aaaaaa").expect("rewrite");
+        let (_, published) = super::write_checksums_reusing(
+            &root,
+            &first.entries,
+            &["verify/selfcheck.json", "README.md"],
+        )
+        .expect("second pass");
+
+        let reused = published
+            .entries
+            .iter()
+            .find(|e| e.path == "a.bin")
+            .expect("entry");
+        assert_eq!(reused, &seeded, "the stale digest is published verbatim");
+        assert_ne!(reused.md5, crate::hash::md5_hex(&b"aaaaaa"[..]));
+        assert_ne!(published, index::Checksums::scan(&root).unwrap());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn error_bodies_are_written_byte_exact_and_indexed() {
         // F5: the body of a refused request is evidence, and a re-serialised one

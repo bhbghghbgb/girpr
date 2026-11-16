@@ -595,6 +595,26 @@ mod tests {
         assert_eq!(paths_tsv(&[]), "path\tsize\tmd5\tnchunks\tis_folder\n");
     }
 
+    /// Two entries share one `file` path. The sorted path list still holds both
+    /// rows, but the `by_path` map keeps only the last entry, so both rows carry
+    /// the last entry's data and the first entry disappears from the sidecar.
+    #[test]
+    fn currently_duplicate_manifest_paths_emit_two_rows_for_the_last_entry() {
+        let dupes = vec![
+            entry("GenshinImpact_Data/x.txt", 10, 1, false),
+            entry("GenshinImpact_Data/x.txt", 99, 3, true),
+        ];
+        let rows = paths_tsv(&dupes);
+        let lines: Vec<&str> = rows.lines().skip(1).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "GenshinImpact_Data/x.txt\t99\tmd5-GenshinImpact_Data/x.txt\t3\ttrue",
+                "GenshinImpact_Data/x.txt\t99\tmd5-GenshinImpact_Data/x.txt\t3\ttrue",
+            ]
+        );
+    }
+
     /// `--manifest-detail paths-only`: the archive, the sidecar and the meta
     /// document all still land — a sidecar with no archive beside it describes
     /// nothing checkable — and only the multi-megabyte decode is dropped, with
