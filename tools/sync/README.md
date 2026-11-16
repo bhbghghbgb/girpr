@@ -1655,7 +1655,9 @@ drive separator's character and is illegal in a name on Windows, so a relative
 path holds none there; and the rule is checked where the value is read on
 every host, so a half that carries one anyway is not a path. A value that is
 not two relative paths — an empty half, an absolute one, or a second colon —
-asks for no gate at all.
+asks for no gate at all, and **the log says so**: the value and the fact that
+it names no copy are in a warning, so a typo in a gated test is visible
+rather than silent.
 
 Each switch is read where it belongs, and the answer cannot change under a
 run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the
@@ -1671,9 +1673,10 @@ open's own one-off `meta` write resolves a policy of its own when it runs.
 A value that is not the one named means the production behaviour: the real
 cache file, a durable commit, the default commit thresholds, and no injected
 failure. The fsync switch is the one that takes any unambiguous truthy value
-— `1`, `true`, `yes` or `on` — and every other value is an exact match. A
-commit limit that cannot be parsed is the one exception: it is reported in the
-log and ignored, so a typo is visible rather than silent.
+— `1`, `true`, `yes` or `on` — and every other value is an exact match. Two
+values are the exceptions, and both are reported in the log and ignored: a
+commit limit that cannot be parsed, and a copy gate that names no copy — so a
+typo is visible rather than silent.
 
 The runner sets two of them for every test process — `GIRSYNC_TEST_DURABILITY=none`
 and `GIRSYNC_TEST_NO_FSYNC=1` — and it does it in `.config/nextest-test-env`,

@@ -459,7 +459,8 @@ const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 /// **Both names are relative paths inside the mirror**, and that is what makes
 /// the colon split unambiguous: the rule is checked where the value is read,
 /// so a half that holds a colon of its own is not a path. A value that is not
-/// two such paths asks for no gate — see [`CopyGate::from_env`].
+/// two such paths asks for no gate — and says so — see
+/// [`CopyGate::from_env`].
 ///
 /// The release happens when the failure has been **recorded**, so a copy
 /// waiting on it is released only once the failure it waits for is already
@@ -486,31 +487,13 @@ impl CopyGate {
     /// The gate the environment asks for, or `None` when it asks for none.
     ///
     /// Read once per process, like the other test-only switches: the answer
-    /// cannot change under a run. A malformed specification asks for no gate,
-    /// which is the same as not asking for one.
-    ///
-    /// **The value is two relative paths, split on the first colon.** Both
-    /// halves name a path inside the mirror — relative to the root,
-    /// `/`-separated, never absolute — and the split is unambiguous because
-    /// the rule is checked here: a half that is empty, that is absolute, or
-    /// that holds a colon of its own is not a path this run can copy, and the
-    /// whole specification asks for no gate.
-    ///
-    /// That is worth being strict about, because a specification that names a
-    /// copy no run can produce is not inert: the waiting copy would sit on
-    /// the guard until it timed out, and then fail for a reason the
-    /// specification never stated.
+    /// cannot change under a run. A malformed specification asks for no gate
+    /// **and is reported** — see [`gate_from_spec`].
     fn from_env() -> Option<Arc<Self>> {
         static GATE: std::sync::OnceLock<Option<Arc<CopyGate>>> = std::sync::OnceLock::new();
         GATE.get_or_init(|| {
             let spec = std::env::var("GIRSYNC_TEST_GATE_COPY").ok()?;
-            let (wait, on) = gate_paths(&spec)?;
-            Some(Arc::new(CopyGate {
-                wait: wait.to_string(),
-                on: on.to_string(),
-                released: Mutex::new(false),
-                signal: Condvar::new(),
-            }))
+            gate_from_spec(&spec)
         })
         .clone()
     }
@@ -547,6 +530,47 @@ impl CopyGate {
         *released = true;
         self.signal.notify_all();
     }
+}
+
+/// The gate a specification names, or `None` when it names none.
+///
+/// **The value is two relative paths, split on the first colon.** Both halves
+/// name a path inside the mirror — relative to the root, `/`-separated, never
+/// absolute — and the split is unambiguous because the rule is checked here:
+/// a half that is empty, that is absolute, or that holds a colon of its own
+/// is not a path this run can copy, and the whole specification asks for no
+/// gate.
+///
+/// That is worth being strict about, because a specification that names a
+/// copy no run can produce is not inert: the waiting copy would sit on the
+/// guard until it timed out, and then fail for a reason the specification
+/// never stated.
+///
+/// **A specification that names no gate is reported.** The value is in the
+/// log beside the fact that it names no copy, so a typo in a test-only switch
+/// is visible rather than silent — the way the commit-limit overrides report
+/// a limit they cannot read.
+///
+/// The report is what makes the refusal safe to rely on: a test that asked
+/// for a barrier and did not get one has lost the ordering it was written
+/// for, and a test without its ordering is a race rather than a failure. A
+/// silent "no gate" would leave the case passing or failing according to how
+/// fast the host happened to be.
+fn gate_from_spec(spec: &str) -> Option<Arc<CopyGate>> {
+    let Some((wait, on)) = gate_paths(spec) else {
+        tracing::warn!(
+            var = "GIRSYNC_TEST_GATE_COPY",
+            value = %spec,
+            "ignoring copy-gate specification: it does not name two relative paths"
+        );
+        return None;
+    };
+    Some(Arc::new(CopyGate {
+        wait: wait.to_string(),
+        on: on.to_string(),
+        released: Mutex::new(false),
+        signal: Condvar::new(),
+    }))
 }
 
 /// The two paths a gate specification names, or `None` when it names none.
@@ -867,5 +891,83 @@ mod tests {
             None,
             "an absolute path names no copy"
         );
+    }
+
+    /// **A gate specification that names no gate is reported.**
+    ///
+    /// A test-only switch that asks for a barrier and does not get one leaves
+    /// the test without the ordering it was written for, and a test without
+    /// its ordering is a race rather than a failure. So a malformed value is
+    /// not silently "no gate": it is in the log, beside the fact that it
+    /// names no copy — the way the commit-limit overrides report a limit they
+    /// cannot read.
+    ///
+    /// The case pins the log line a reader sees: the switch the value came
+    /// from, and the value itself.
+    #[test]
+    fn a_malformed_gate_specification_is_reported() {
+        let (gate, log) = capture_log(|| gate_from_spec("aaa.bin"));
+        assert!(
+            gate.is_none(),
+            "a value that names no copy asks for no gate"
+        );
+        assert!(
+            log.contains("ignoring copy-gate specification"),
+            "the log says the specification was ignored: {log}"
+        );
+        assert!(
+            log.contains("GIRSYNC_TEST_GATE_COPY"),
+            "the log names the switch the value came from: {log}"
+        );
+        assert!(log.contains("aaa.bin"), "the log names the value: {log}");
+    }
+
+    /// A writer that appends to a shared buffer, so a case can read what the
+    /// run logged.
+    #[derive(Clone, Default)]
+    struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuffer {
+        type Writer = SharedBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Run `f` with a subscriber that writes the events it emits into a
+    /// buffer, and return what it wrote.
+    ///
+    /// The interest cache is rebuilt first: a callsite that another test in
+    /// this process already triggered was registered against the subscriber
+    /// that was installed then, and a cached "never" would swallow the event
+    /// here.
+    fn capture_log<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let buffer = SharedBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buffer.clone())
+            .with_ansi(false)
+            .finish();
+        let out = tracing::subscriber::with_default(subscriber, || {
+            tracing::callsite::rebuild_interest_cache();
+            f()
+        });
+        let text = String::from_utf8_lossy(&buffer.0.lock().unwrap_or_else(|e| e.into_inner()))
+            .into_owned();
+        (out, text)
     }
 }
