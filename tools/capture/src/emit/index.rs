@@ -481,17 +481,37 @@ impl Checksums {
     }
 }
 
-/// The encoding a stored document is in, decided by its extension.
+/// The encoding a stored document is in, decided by what it is rather than by
+/// its filename.
+///
+/// Only [`crate::manifest::dump::write`] compresses documents, and it writes
+/// exactly one shape: `manifests/<tag>/<field>.manifest.json.gz`. So that is the
+/// only name [`is_gzipped_manifest_document`] recognizes. A captured game asset
+/// that happens to be named `*.gz` is `Identity` — the bytes on disk are the
+/// bytes the bundle promises, whatever the name suggests. A future writer that
+/// compresses another document family must extend that rule deliberately; a
+/// `.gz` suffix alone is never a reason to gunzip a file.
 ///
 /// `hash::should_gzip` decides what gets gzipped; this decides how to *read*
 /// what was written, and the two must agree or a reader would digest the wrong
 /// bytes.
 fn encoding_of(rel_path: &str) -> crate::hash::Encoding {
-    if rel_path.ends_with(".gz") {
+    if is_gzipped_manifest_document(rel_path) {
         crate::hash::Encoding::Gzip
     } else {
         crate::hash::Encoding::Identity
     }
+}
+
+/// Whether `rel_path` is the gzipped full-decode document the manifest writer
+/// produces: `manifests/<tag>/<field>.manifest.json.gz`.
+///
+/// Prefix plus suffix, without pinning the tag and field components: the writer
+/// escapes its tag and validates its field, but both remain single components,
+/// so `manifests/` … `.manifest.json.gz` is the whole shape. Kept private to
+/// `emit::index` so no other module can widen the gzip family by accident.
+fn is_gzipped_manifest_document(rel_path: &str) -> bool {
+    rel_path.starts_with("manifests/") && rel_path.ends_with(".manifest.json.gz")
 }
 
 /// The artifact schema's per-file entry, reused for `MANIFEST.json → files[]`.
