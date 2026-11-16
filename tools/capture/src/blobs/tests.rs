@@ -1496,3 +1496,58 @@ async fn a_panicking_measurement_keeps_the_published_blob_and_the_cause() {
         "the reason distinguishes this from a fetch that never arrived"
     );
 }
+
+/// A row whose four A6 checks are green but whose blob was never published is
+/// unusable for the dullest possible reason: there is no blob. The diagnosis
+/// has to name that rather than render "all four A6 checks hold", which reads
+/// as if the row were fine.
+#[test]
+fn a_green_row_with_no_stored_path_names_the_missing_blob() {
+    let payload = b"a chunk that was measured but never written".repeat(16);
+    let c = chunk(&payload, 0, 0xb100);
+    let raw = zstd::encode_all(payload.as_slice(), 1).expect("encode");
+    let p = BlobProps::measure(&raw, &c).expect("a zstd frame");
+
+    assert!(p.verified.expect("measured").all_green());
+    assert!(p.stored_path.is_none(), "the fixture attaches no path");
+    assert!(
+        !p.is_usable(),
+        "green checks are not enough without a stored blob"
+    );
+    let why = p.why_unusable().expect("an unusable row has a reason");
+    assert!(why.contains("no stored blob"), "{why}");
+    assert!(
+        !why.contains("all four"),
+        "must not read as verified: {why}"
+    );
+}
+
+/// A body shorter than the four magic bytes is a malformed answer, and the
+/// reason has to say how many bytes actually arrived. A one-byte reply is a
+/// different finding from an empty one, and neither is a valid frame.
+#[test]
+fn a_file_shorter_than_the_magic_is_undecodable_with_the_byte_count() {
+    let dir = scratch("short-magic");
+    let c = chunk(b"a chunk served as a one-byte body", 0, 0xb101);
+    let short = b"\x28"; // the first magic byte, and then EOF
+    let path = dir.join(BlobProps::stored_path_for(&c.id));
+    std::fs::create_dir_all(path.parent().expect("a parent dir")).expect("blob dir");
+    std::fs::write(&path, short).expect("write the short body");
+
+    let p = BlobProps::measure_file(
+        &path,
+        &c,
+        hash::md5_sha256(short),
+        hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
+    )
+    .expect("a short body is recorded, not raised");
+
+    let why = p.decode_error.as_deref().expect("the row says why");
+    assert!(why.contains("not a zstd frame"), "{why}");
+    assert!(
+        why.contains("1 byte"),
+        "the diagnostic names the byte count: {why}"
+    );
+    let v = p.verified.expect("measured");
+    assert!(!v.md5_decompressed_matches && !v.decoded_size_matches);
+}
