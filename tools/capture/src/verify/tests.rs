@@ -1,5 +1,17 @@
 use super::*;
 
+/// Create a directory link. A host that denies it (Windows without the
+/// privilege) makes the link tests skip with a clear message rather than fail
+/// the suite.
+#[cfg(unix)]
+fn link_dir(target: &Path, link: &Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+#[cfg(windows)]
+fn link_dir(target: &Path, link: &Path) -> bool {
+    std::os::windows::fs::symlink_dir(target, link).is_ok()
+}
+
 #[test]
 fn opening_a_path_that_is_not_a_directory_says_what_the_flag_takes() {
     let e = Bundle::open(Path::new("E:/definitely/not/here")).unwrap_err();
@@ -209,6 +221,65 @@ fn a_walk_that_cannot_stat_one_entry_names_it() {
         child_dirs(&d, move |_| Ok(vec![Ok(vanished)])).expect_err("a missing entry is not a file");
     assert!(e.contains("cannot read"), "{e}");
     assert!(e.contains("vanished"), "the path is named: {e}");
+}
+
+/// A link back up the tree closes a cycle. `outer` has no manifest so the walk
+/// descends into it; without a visited set `outer/back` would send the walk
+/// back to the root forever. The one real bundle is still listed, once.
+#[test]
+fn a_directory_cycle_terminates_and_lists_each_real_bundle_once() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-cycle", "cycle");
+    let outer = d.join("outer");
+    let nested = outer.join("nested");
+    std::fs::create_dir_all(&nested).expect("makes the directories");
+    write_minimal_bundle(&nested, "nested_capture");
+    if !link_dir(&d, &outer.join("back")) {
+        eprintln!("skipping list cycle test: directory symlinks unavailable on this host");
+        return;
+    }
+    let index = list(&d).expect("lists");
+    assert_eq!(index.bundles.len(), 1, "{index:?}");
+    assert_eq!(index.bundles[0].path, "outer/nested", "{index:?}");
+    assert_eq!(index.bundles[0].capture_id, "nested_capture");
+    assert!(index.unreadable.is_empty(), "{index:?}");
+}
+
+/// A bundle reachable only through a link whose target is outside the root is
+/// not part of the inventory: its bytes belong to another tree.
+#[test]
+fn a_link_to_a_bundle_outside_the_root_is_not_listed() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-outside-link", "outside_link");
+    let outside = girpr_tempdir::TempDir::new("gircap-list-outside-target", "outside_target");
+    write_minimal_bundle(&outside, "outside_capture");
+    if !link_dir(&outside, &d.join("escape")) {
+        eprintln!("skipping list outside-link test: directory symlinks unavailable on this host");
+        return;
+    }
+    let index = list(&d).expect("lists");
+    assert!(
+        index.bundles.is_empty(),
+        "a bundle behind a link out of the root is not listed: {index:?}"
+    );
+    assert!(index.unreadable.is_empty(), "{index:?}");
+}
+
+/// A symlinked root is legitimate: the canonical root is its target, and rows
+/// stay relative to the link that was passed to `list`.
+#[test]
+fn a_symlinked_root_is_listed_as_its_target() {
+    let real = girpr_tempdir::TempDir::new("gircap-list-linked-target", "linked_target");
+    let bundle = real.join("cap");
+    write_minimal_bundle(&bundle, "linked_capture");
+    let alias = girpr_tempdir::TempDir::new("gircap-list-linked-alias", "linked_alias");
+    let link = alias.join("root_link");
+    if !link_dir(&real, &link) {
+        eprintln!("skipping symlinked-root test: directory symlinks unavailable on this host");
+        return;
+    }
+    let index = list(&link).expect("lists the symlinked root");
+    assert_eq!(index.bundles.len(), 1, "{index:?}");
+    assert_eq!(index.bundles[0].path, "cap", "{index:?}");
+    assert_eq!(index.bundles[0].capture_id, "linked_capture");
 }
 
 /// The smallest directory `Bundle::open` accepts, written with the crate's own

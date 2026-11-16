@@ -676,6 +676,27 @@ mod tests {
         girpr_tempdir::TempDir::new("gircap-m8", name)
     }
 
+    /// Create a directory link. A host that denies it (Windows without the
+    /// privilege) makes the link tests skip with a clear message rather than
+    /// fail the suite; the containment helper is covered without links too.
+    #[cfg(unix)]
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    fn link_dir(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_dir(target, link).is_ok()
+    }
+
+    #[cfg(unix)]
+    fn link_file(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+    #[cfg(windows)]
+    fn link_file(target: &Path, link: &Path) -> bool {
+        std::os::windows::fs::symlink_file(target, link).is_ok()
+    }
+
     #[test]
     fn digesting_a_file_matches_hashing_its_bytes() {
         let root = scratch("digest");
@@ -757,6 +778,94 @@ mod tests {
             "sorted, and a directory comes before its contents' siblings deterministically"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Containment is decided on canonical paths, so it can be checked without
+    /// any symlink privilege: a real child is inside, a separate tree is not,
+    /// and a path that does not resolve is not either.
+    #[test]
+    fn canonical_under_root_accepts_inside_and_rejects_outside() {
+        let root = scratch("contain-root");
+        let outside = scratch("contain-outside");
+        let inside = root.join("a");
+        std::fs::create_dir_all(&inside).unwrap();
+        let canonical_root = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(
+            canonical_under_root(&canonical_root, &inside),
+            Some(std::fs::canonicalize(&inside).unwrap())
+        );
+        assert_eq!(canonical_under_root(&canonical_root, &outside), None);
+        assert_eq!(
+            canonical_under_root(&canonical_root, &root.join("gone")),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A link from a real directory back to the root closes a cycle. Without a
+    /// visited set the walk would descend `real/back` → root → `real` forever;
+    /// with one it returns each real file exactly once.
+    #[test]
+    fn a_directory_cycle_terminates_and_lists_each_real_file_once() {
+        let root = scratch("cycle");
+        std::fs::create_dir_all(root.join("real/sub")).unwrap();
+        std::fs::write(root.join("real/here.txt"), b"h").unwrap();
+        std::fs::write(root.join("real/sub/data.txt"), b"d").unwrap();
+        if !link_dir(&root, &root.join("real/back")) {
+            eprintln!("skipping cycle test: directory symlinks unavailable on this host");
+            return;
+        }
+        let paths: Vec<String> = walk(&root).unwrap().iter().map(|p| rel(&root, p)).collect();
+        assert_eq!(paths, vec!["real/here.txt", "real/sub/data.txt"]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A link under the root that points outside it contributes no bytes: neither
+    /// the linked directory's files nor a linked single file are part of the
+    /// artifact. Only the real file under the root is walked.
+    #[test]
+    fn links_outside_the_root_are_not_walked() {
+        let root = scratch("outside-link");
+        let outside = scratch("outside-target");
+        std::fs::create_dir_all(outside.join("sub")).unwrap();
+        std::fs::write(outside.join("sub/secret.txt"), b"s").unwrap();
+        std::fs::write(outside.join("loose.txt"), b"l").unwrap();
+        std::fs::write(root.join("keep.txt"), b"k").unwrap();
+        if !link_dir(&outside, &root.join("escape_dir")) {
+            eprintln!("skipping outside-link test: directory symlinks unavailable on this host");
+            return;
+        }
+        // A file link is gated by the same privilege; if it is unavailable the
+        // directory-link case above still exercises containment.
+        let _file_link = link_file(&outside.join("loose.txt"), &root.join("escape_file"));
+        let paths: Vec<String> = walk(&root).unwrap().iter().map(|p| rel(&root, p)).collect();
+        assert_eq!(
+            paths,
+            vec!["keep.txt"],
+            "no file reached through a link outside the root is included"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A symlinked root is legitimate: its canonical form is the target, and the
+    /// result stays relative to the link that was passed in.
+    #[test]
+    fn a_symlinked_root_is_walked_as_its_target() {
+        let real = scratch("linked-root-target");
+        std::fs::create_dir_all(real.join("sub")).unwrap();
+        std::fs::write(real.join("sub/file.txt"), b"f").unwrap();
+        let alias = scratch("linked-root-alias");
+        let link = alias.join("root_link");
+        if !link_dir(&real, &link) {
+            eprintln!("skipping symlinked-root test: directory symlinks unavailable on this host");
+            return;
+        }
+        let paths: Vec<String> = walk(&link).unwrap().iter().map(|p| rel(&link, p)).collect();
+        assert_eq!(paths, vec!["sub/file.txt"]);
+        let _ = std::fs::remove_dir_all(&alias);
+        let _ = std::fs::remove_dir_all(&real);
     }
 
     #[test]
