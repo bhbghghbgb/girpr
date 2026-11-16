@@ -173,8 +173,8 @@ impl ErrorBodies {
     ///
     /// Advisory only: two concurrent readers can both observe the same remainder
     /// and each buffer that much. A caller about to read a body should use
-    /// [`Self::reserve`] instead, which charges the budget atomically. [`Self::push`]
-    /// and [`Self::push_reserved`] keep the final total exact by truncating
+    /// `Self::reserve` instead, which charges the budget atomically. [`Self::push`]
+    /// and `Self::push_reserved` keep the final total exact by truncating
     /// whichever row arrives later.
     pub fn remaining(&self) -> u64 {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -232,7 +232,7 @@ impl ErrorBodies {
     /// observation because the evidence did not fit would be the same mistake as
     /// throwing the body away in the first place. This is a convenience for
     /// callers that already hold the whole body; readers that stream one should
-    /// [`Self::reserve`] first and use [`Self::push_reserved`].
+    /// `Self::reserve` first and use `Self::push_reserved`.
     pub fn push(&self, row: ErrorBody) {
         let granted = row.body.len() as u64;
         let reservation = self.reserve(granted);

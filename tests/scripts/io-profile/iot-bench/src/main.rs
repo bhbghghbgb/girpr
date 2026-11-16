@@ -2,7 +2,7 @@
 //! suite performs: fsync of a copied file, redb commits and opens, and the
 //! cost of creating a fresh cache.
 //!
-//! Usage: iot-bench <scratch-dir>
+//! Usage: `iot-bench <scratch-dir>`
 //!
 //! Run it once with the scratch directory on the disk under test and once on
 //! a RAM disk, and compare the `per_op` figures.

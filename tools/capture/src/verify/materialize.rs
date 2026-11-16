@@ -317,7 +317,7 @@ pub fn rebuild_all_with(
     for name in names {
         let map = &patchmaps[name];
         let old = rebuild_side(
-            &by_file,
+            by_file,
             &src,
             name,
             map.path.as_str(),
@@ -325,7 +325,7 @@ pub fn rebuild_all_with(
             Set::MaterializeOld,
         )?;
         let new = rebuild_side(
-            &by_file,
+            by_file,
             &src,
             name,
             map.path.as_str(),

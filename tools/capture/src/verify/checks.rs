@@ -655,29 +655,28 @@ pub fn check_plan_against_index(
                 "no indexed blob with that id",
             )),
             Some(blob) => {
-                if let Ok(indexed) = i64::try_from(blob.props.uncompressed_size) {
-                    if indexed != e.uncompressed_size {
-                        rows.push(Assertion::fail(
-                            A20_ID,
-                            A20,
-                            &format!("{where_} (uncompressed_size)"),
-                            &format!("{indexed} (index)"),
-                            &e.uncompressed_size.to_string(),
-                        ));
-                    }
+                if let Ok(indexed) = i64::try_from(blob.props.uncompressed_size)
+                    && indexed != e.uncompressed_size
+                {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (uncompressed_size)"),
+                        &format!("{indexed} (index)"),
+                        &e.uncompressed_size.to_string(),
+                    ));
                 }
-                if blob.props.verified.is_some() {
-                    if let Ok(indexed) = i64::try_from(blob.props.bytes) {
-                        if indexed != e.compressed_size {
-                            rows.push(Assertion::fail(
-                                A20_ID,
-                                A20,
-                                &format!("{where_} (compressed_size)"),
-                                &format!("{indexed} (index)"),
-                                &e.compressed_size.to_string(),
-                            ));
-                        }
-                    }
+                if blob.props.verified.is_some()
+                    && let Ok(indexed) = i64::try_from(blob.props.bytes)
+                    && indexed != e.compressed_size
+                {
+                    rows.push(Assertion::fail(
+                        A20_ID,
+                        A20,
+                        &format!("{where_} (compressed_size)"),
+                        &format!("{indexed} (index)"),
+                        &e.compressed_size.to_string(),
+                    ));
                 }
             }
         }
