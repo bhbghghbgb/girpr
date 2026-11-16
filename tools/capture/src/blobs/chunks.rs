@@ -352,9 +352,29 @@ pub fn retention(pair: &FilePair) -> Retention {
 /// Returned in a deterministic order so that a capture which stored the same
 /// blobs in a different order depending on scheduling would not produce two
 /// artifacts for one world.
+///
+/// Computes each pair's [`Retention`] and delegates to [`wants_with`]. Callers
+/// that already computed retentions (because they checked A12 first) should use
+/// [`wants_with`] directly so a pair is retained only once.
 pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
+    let retentions: Vec<Retention> = pairs.iter().map(retention).collect();
+    wants_with(pairs, &retentions)
+}
+
+/// [`wants`] with retentions already computed, one per pair in the same order.
+///
+/// `retentions` must be index-aligned with `pairs`; a mismatch is a programming
+/// error and is caught by a debug assertion. Only [`Retention::reuse`] is read —
+/// the planner computes the full retention once for its A12 check and hands it
+/// here, rather than rebuilding it for every pair.
+pub fn wants_with(pairs: &[FilePair], retentions: &[Retention]) -> Vec<Want> {
+    debug_assert_eq!(
+        retentions.len(),
+        pairs.len(),
+        "one precomputed retention per pair, index-aligned"
+    );
     let mut by_id: BTreeMap<String, Want> = BTreeMap::new();
-    for pair in pairs {
+    for (pair, r) in pairs.iter().zip(retentions) {
         // One chunk, one role. Taking the whole entry here and looping outside
         // meant the first non-reusable new chunk pushed `patch_fetch` onto
         // *every* new chunk, reusable ones included — which silently broke A12
@@ -418,7 +438,6 @@ pub fn wants(pairs: &[FilePair]) -> Vec<Want> {
             }
         }
         if let Some(n) = &pair.new {
-            let r = retention(pair);
             // A set, not `r.reuse.contains(&c.id)` per chunk: that was a linear
             // scan with a 49-byte string compare, once per new chunk — quadratic
             // per file. `reuse` stays a `Vec` because its order is recorded.

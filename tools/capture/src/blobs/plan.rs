@@ -18,7 +18,7 @@ use crate::failure::{Failure, assertion};
 use crate::http::ApiError;
 use crate::manifest::CapturedManifest;
 
-use super::chunks::{FilePair, Want, retention};
+use super::chunks::{FilePair, Retention, Want, retention};
 use super::{file_pairs, projected_download};
 
 /// Refuse a store larger than `--max-download-bytes`.
@@ -90,6 +90,11 @@ pub fn plan(
 ) -> Result<ChunkPlan, Failure> {
     let pairs = file_pairs(selection, fields, manifests, old_tag, new_tag);
 
+    // Retain each pair once and keep the result: the A12 check and the want
+    // builder both need it, and computing it in both places rebuilt a HashSet
+    // and cloned every old/new chunk id a second time. One pair per admitted
+    // capture, in order, so the vector stays index-aligned with `pairs`.
+    let mut retentions: Vec<Retention> = Vec::with_capacity(pairs.len());
     for (a, p) in selection.admitted.iter().zip(&pairs) {
         let r = retention(p);
         if !r.a12_holds() {
@@ -107,9 +112,10 @@ pub fn plan(
             reuse = r.reuse.len(),
             "retention planned"
         );
+        retentions.push(r);
     }
 
-    let wants = super::chunks::wants(&pairs);
+    let wants = super::chunks::wants_with(&pairs, &retentions);
     let projected = projected_download(&wants);
     tracing::info!(
         chunks = wants.len(),
