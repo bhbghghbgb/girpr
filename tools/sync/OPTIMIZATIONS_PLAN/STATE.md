@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M48
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T07:59:24Z
+last_updated: 2026-11-16T08:13:22Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1113,8 +1113,22 @@ reviews:
     result: null
     followups: []
   - batch: M48
-    status: pending
+    status: in_progress
     tasks: [F283, F284, F285]
+    base: 33819876
+    head: 3fb7ae34
+    result: null
+    followups: []
+  - batch: M119
+    status: pending
+    tasks: [F446, F447]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M120
+    status: pending
+    tasks: [F448]
     base: null
     head: null
     result: null
@@ -2978,21 +2992,21 @@ followups:
   - id: F283
     source: F197
     description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
-    status: in_progress
+    status: pending_review
     batch: M48
-    commits: []
+    commits: [5a0a8400]
   - id: F284
     source: F199
     description: The hashing phase's total is the planner's pending count rather than the map's size, so the case's wording that it counts only what the map kept holds only because the fixture's cache is cold.
-    status: in_progress
+    status: pending_review
     batch: M48
-    commits: []
+    commits: [fc00a27b]
   - id: F285
     source: F195
     description: The heartbeat constant is now public API purely so the integration test can read the same constant, and nothing else in the crate needs it public.
-    status: in_progress
+    status: pending_review
     batch: M48
-    commits: []
+    commits: [3fb7ae34]
   - id: F286
     source: F197
     description: The walk's heartbeat keeps the bare progress name while the phases now name their phase, so a grep for that name still matches three events and only the fields separate them.
@@ -3976,6 +3990,24 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F441, whose description now carries the duplicated helpers"
+  - id: F446
+    source: F284
+    description: The output test's cache-hit assertion is explained with the cache having been cold, but the count is zero because the update hashes every file, so nothing is left over with a cached digest, which is true with a warm cache too.
+    status: pending
+    batch: M119
+    commits: []
+  - id: F447
+    source: F284
+    description: The hashing phase's progress event reports the plan's pending count while its done event reports the map's size, so a reader comparing the two has to know they are different quantities.
+    status: pending
+    batch: M119
+    commits: []
+  - id: F448
+    source: F285
+    description: The README's source-layout row for the walk's module does not mention that the heartbeat period is public for the test.
+    status: pending
+    batch: M120
+    commits: []
 ```
 
 ## Human checklist
@@ -4007,6 +4039,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M48 review checkpoint opened: F283, F284 and F285
+  `in_progress` → `pending_review`, commits `5a0a8400`, `fc00a27b`, `3fb7ae34`;
+  review M48 `pending` → `in_progress`, base `33819876`, head `3fb7ae34`.
 - 2026-11-16 — follow-up batch M48 started: F283, F284 and F285 `pending` →
   `in_progress`; `active_batch: M47` → `M48`.
 - 2026-11-16 — review M47 `done`: F280, F281 and F282 all kept, no fix or revert
