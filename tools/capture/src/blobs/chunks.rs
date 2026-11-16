@@ -273,26 +273,43 @@ impl Retention {
 
     /// Which half of A12 failed, if either.
     ///
-    /// One set over `materialize_new`, built once: both conditions are
-    /// membership tests against it, and the naive form is O(new²) per file.
+    /// The subset half builds one set over `materialize_new` and tests
+    /// membership; the overlap half delegates to
+    /// [`fetch_is_disjoint_from_reuse`]. Both are linear rather than a scan of
+    /// one side per fetched id.
     pub fn a12_failure(&self) -> Option<&'static str> {
         let new: std::collections::HashSet<&str> = self
             .ids(Set::MaterializeNew)
             .iter()
             .map(String::as_str)
             .collect();
-        let reuse: std::collections::HashSet<&str> =
-            self.reuse.iter().map(String::as_str).collect();
         for id in self.ids(Set::PatchFetch) {
             if !new.contains(id.as_str()) {
                 return Some("patch_fetch is not a subset of materialize_new");
             }
-            if reuse.contains(id.as_str()) {
-                return Some("patch_fetch overlaps the reuse set");
-            }
+        }
+        if !fetch_is_disjoint_from_reuse(
+            self.ids(Set::PatchFetch).iter().map(String::as_str),
+            self.reuse.iter().map(String::as_str),
+        ) {
+            return Some("patch_fetch overlaps the reuse set");
         }
         None
     }
+}
+
+/// Whether no id fetched by a patch is also in the reuse set — one half of A12.
+///
+/// One definition shared by the capture plan and the written patchmap, so the
+/// two cannot disagree about what "disjoint" means. A `HashSet` over the reuse
+/// side makes this linear in the two inputs rather than a scan of reuse per
+/// fetched id.
+pub fn fetch_is_disjoint_from_reuse<'a>(
+    mut fetch: impl Iterator<Item = &'a str>,
+    reuse: impl Iterator<Item = &'a str>,
+) -> bool {
+    let reuse: std::collections::HashSet<&str> = reuse.collect();
+    fetch.all(|id| !reuse.contains(id))
 }
 
 /// What retaining one file costs: which chunks, in which roles.
