@@ -39,12 +39,12 @@ See `ORCHESTRATION.md` for the transition rules.
 | P2-04 | Capture-id uniqueness invariant (B5) | completed | 2588220d 7ceaeb32 | |
 | P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | completed | c4224d3e a2cfdfb6 | |
 | P3-02 | Bridge server correctness and locking (C8, E4-E6) | completed | 791f0b24 f6184c5a f8520b74 | |
-| P3-04 | Reuse retention per pair (C2) | pending_review | e46b6657 22939ee2 | |
-| P3-05 | Avoid assembly copy-through (C6) | pending_review | a3b81a8e 9ca856c0 efc3c694 | |
-| P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | pending_review | 77ab4a58 3bfa3d46 602ef311 | |
-| P3-07 | Early A16 exit and larger digest buffer (C3, C4) | pending_review | 2db0cd0e 3b5a1e4f 02aff616 | |
-| P3-08 | Symlink containment and termination (C9) | pending_review | 635422a0 723ba9c9 1d8dab54 | |
-| P3-09 | One definition of A12 (C7) | pending_review | 6f288b25 d2fc7add b78e4c67 | |
+| P3-04 | Reuse retention per pair (C2) | completed | e46b6657 22939ee2 | |
+| P3-05 | Avoid assembly copy-through (C6) | completed | a3b81a8e 9ca856c0 efc3c694 | |
+| P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | completed | 77ab4a58 3bfa3d46 602ef311 | |
+| P3-07 | Early A16 exit and larger digest buffer (C3, C4) | completed | 2db0cd0e 3b5a1e4f 02aff616 | |
+| P3-08 | Symlink containment and termination (C9) | completed | 635422a0 723ba9c9 1d8dab54 | |
+| P3-09 | One definition of A12 (C7) | completed | 6f288b25 d2fc7add b78e4c67 | |
 | P4-01 | One acceptable-state table (D1) | todo | | |
 | P4-02 | Remove remaining dead fields (D2) | todo | | |
 | P4-03 | Parse `getBuild` once (D3) | todo | | |
@@ -60,7 +60,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-4 | P1-13..P1-18 | done | | |
 | RC-5 | P2-01..P2-04 | done | | |
 | RC-6 | P3-01..P3-02 | done | | |
-| RC-7 | P3-04..P3-09 | in_progress | | |
+| RC-7 | P3-04..P3-09 | done | | |
 | RC-8 | P4-01..P4-04 | pending | | |
 
 ## Rework
@@ -86,6 +86,11 @@ until the main tasks and rework are done.
 | F-05 | P2-02 | candidates doc comment (`src/select/mod.rs`) | The `candidates` doc comment (~L405-409) still describes `by_cost`'s `total_cost`+moved/reused order and says one-sided paths are placed "by their own size"; the comparator is now `budget_cost`/field/path and `added` charges `download_bytes`. Update the comment. | todo |
 | F-06 | P3-02 | bridge HTTP layer (`tests/artifact_bridge/server.rs`) | Keep-alive: accept multiple requests per connection with `Content-Length`/framing and send `Connection: keep-alive` unless the client closes. Currently `Connection: close` per response; deliberately skipped under the task's optional allowance. | todo |
 | F-07 | P3-02 | bridge `ManifestEntry` (`tests/artifact_bridge/server.rs`) | Remove the now-dead `id` field (set at insert, never read; the map key already carries it). Trivial pre-existing cleanup. | todo |
+| F-08 | P3-05 | assemble hardening (`src/assemble/...`, `patch_flow`) | `patch_flow` is now `pub(crate)` and a direct call with a gapped layout zero-fills (old code errored on the length check). Unreachable via `assemble`, but a future in-crate caller could get a silently zero-filled file. Re-validate A11 inside `patch_flow` or keep it private behind a validated wrapper. | todo |
+| F-09 | P3-06 | docs/index cleanup (`src/blobs/mod.rs`) | `ChunkIndex` docs claim blobs are "ordered by id" (justifying binary search), but `build` does not sort; correctness relies on the fallback scan. Fix the doc or sort. Pre-existing, outside P3-06. | todo |
+| F-10 | P3-08 | test/CI hardening (`emit::index::walk`, `verify::list`) | Six filesystem symlink tests self-skip on Windows; only unit-level containment coverage here. Run them in a Unix CI job or add an injectable canonicalize seam. | todo |
+| F-11 | P3-08 | verify/list hardening (`src/verify/list.rs`, `child_dirs`) | `child_dirs` is still `pub` and uses `std::fs::metadata`; enforcement lives only in `list_with`, so a future non-test caller could bypass containment. Make it private or pass the canonical root into it. | todo |
+| F-12 | P3-08 | future containment task (`src/verify/bundle.rs`) | `MANIFEST.json` is stat'ed with `metadata` (follows links) and read one-shot, so `list` can surface bytes from a symlinked manifest outside the root. Canonicalize/check the manifest path against the root before reading. Pre-existing, out of scope. | todo |
 
 ## Follow-up batches
 
