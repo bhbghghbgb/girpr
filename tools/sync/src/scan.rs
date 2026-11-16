@@ -14,6 +14,15 @@ use crate::util::{check_mixed_case_keys, elapsed_s, is_cache_rel, mtime_ns_of};
 /// rather than a rule, and it is named here so that the walk and the case
 /// that pins it agree in one place: a tree of exactly this many entries
 /// produces exactly one heartbeat, and a tree of fewer produces none.
+///
+/// **Public because the suite needs the same number, and for nothing else.**
+/// The integration test that pins the heartbeat builds its tree from this
+/// constant, so the walk and the case cannot drift apart — it was a bare
+/// literal in both places before, and the two could only agree by hand. No
+/// other caller wants it: the period says nothing about the tool's
+/// behaviour, only about how often the walk narrates itself, so the public
+/// surface exists solely so that one test can read the number the walk
+/// divides by.
 pub const HEARTBEAT_ENTRIES: usize = 2000;
 
 /// One entry as found on disk, before any cache consultation.
