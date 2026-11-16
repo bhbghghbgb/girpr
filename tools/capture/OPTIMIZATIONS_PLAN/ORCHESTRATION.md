@@ -13,7 +13,9 @@ supplied, ask before starting.
 - **Implementer**: one task per fresh session. Writes code/tests, commits, and
   reports SHAs. Never edits `STATE.md`.
 - **Reviewer**: one batch per fresh session. Reviews, fixes, or reverts; never
-  adds scope beyond fixing the batch. Returns verdicts and follow-ups.
+  adds scope beyond fixing the batch. Returns verdicts and follow-ups. Decides
+  which implementer-suggested follow-ups are worth recording; may decline to
+  pass one on, with a short reason.
 
 ## Files the orchestrator reads
 
@@ -61,9 +63,13 @@ lines.
      (`chore(plan): start <task-id>`). This keeps the checklist truthful if the
      session dies.
    - Spawn an implementer with the template below.
-   - On return: inspect `git log`/`git status` yourself. If there are no
-     commits or the tree is dirty, do not accept the task; mark `blocked` with
-     the reason and either retry once or ask the user.
+   - On return: inspect `git log`/`git status` yourself. If the tree is dirty,
+     do not accept the task; mark `blocked` with the reason and either retry
+     once or ask the user. Accept a no-commit return only when the implementer
+     justifies that the task is stale or its premise no longer holds (the goal
+     is already met); record that justification in the task's Notes and treat
+     it as a valid outcome. Otherwise a no-commit return is `blocked`: retry
+     once or ask the user.
    - Record the commit SHAs and set the task to `pending_review`. Commit this
      state change separately (`chore(plan): <task-id> pending review`).
    - Go to step 2. Do not spawn the next implementer until the previous return
@@ -114,6 +120,17 @@ When all main tasks and rework are done:
 4. Repeat until every follow-up is `completed`, `reverted`, or explicitly
    `dropped` with a reason.
 
+### Guarding against follow-up run-away
+
+Follow-ups can snowball: a follow-up implementer suggests more follow-ups, and
+those suggest still more. Do not treat every reported observation as an
+obligation. Once in a while, spawn an additional review/evaluation session to
+look at the open follow-ups and drop the ones that are only general
+improvements, recording each drop with a short reason. Reviewers, too, decide
+which implementer-suggested follow-ups are worth recording: they may decline to
+pass one on and note why in their verdict, rather than forwarding it to
+`## Follow-ups`.
+
 ## Completion and cleanup
 
 When nothing is `todo`, `in_progress`, `pending_review`, `blocked`, or
@@ -143,7 +160,10 @@ Read the task file in full, then the code and tests it names. Do not read other
 task files, STATE.md, or the rest of the report.
 
 Implement only this task, following its commit plan. Use the repository's
-existing style and test patterns. Do not edit OPTIMIZATIONS_PLAN/STATE.md.
+existing style and test patterns. Do not edit OPTIMIZATIONS_PLAN/STATE.md. If
+the task is stale or its premise no longer holds (for example, the code already
+meets the goal), you may return without changes, with a clear justification;
+do not invent work just to produce a commit.
 Do not reference OPTIMIZATIONS_REPORT.md, OPTIMIZATIONS_PLAN, task ids, or
 review ids in code, comments, tests, or docs; these files are temporary.
 
@@ -167,9 +187,11 @@ Task files: <paths>. Read those task files and only those report lines.
 
 For each task, verify the acceptance criteria and that the change does not
 break existing contracts. Run the relevant tests. You may fix a task or revert
-its commits. Do not implement non-blocking improvements; record them as
-follow-ups. Do not edit OPTIMIZATIONS_PLAN/STATE.md. Do not add references to
-the report or plan in the code.
+its commits. Do not implement non-blocking improvements. You decide whether a
+follow-up suggested by an implementer is worth recording: record only the ones
+that are real and actionable, with a short reason for any you decline. Do not
+edit OPTIMIZATIONS_PLAN/STATE.md. Do not add references to the report or plan in
+the code.
 
 Return per task: verdict (completed / completed-with-fixes / reverted), commits
 you added or reverted, a one-line reason for any revert, and non-blocking
