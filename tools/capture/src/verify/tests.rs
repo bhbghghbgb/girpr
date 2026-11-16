@@ -333,6 +333,17 @@ fn write_minimal_bundle(root: &Path, capture_id: &str) {
     );
 }
 
+/// Add one patchmap to a minimal bundle, under the file name its id gives.
+fn write_patchmap(root: &Path, map: &crate::assemble::PatchMap) {
+    let dir = root.join("patchmaps");
+    std::fs::create_dir_all(&dir).expect("patchmaps dir");
+    std::fs::write(
+        dir.join(format!("{}.json", map.capture_id)),
+        serde_json::to_vec(map).expect("serializes"),
+    )
+    .expect("writes the patchmap");
+}
+
 /// The walk treats a directory with a manifest it cannot read as a bundle and
 /// stops there, so a bundle nested below it is invisible from above. The child
 /// is a real, openable bundle to make the hiding unambiguous.
@@ -387,30 +398,137 @@ fn currently_a_malformed_secondary_document_is_refused_at_open() {
     );
 }
 
-/// Nothing on the open path inspects `expectations.result_path`, so a patchmap
-/// that points the result outside the bundle is accepted as-is today.
+/// A patchmap's `expectations.result_path` is a bundle-relative path, so a
+/// result that points outside the bundle is refused at the door: `verify` is
+/// where an operator learns a bundle has been edited, not after a rebuild has
+/// written bytes through the field.
 #[test]
-fn currently_an_escaping_result_path_is_accepted_at_open() {
+fn an_escaping_result_path_is_refused_at_open() {
     let d = girpr_tempdir::TempDir::new("gircap-result-path", "escape");
     write_minimal_bundle(&d, "c");
     let mut map = arithmetic_map(&[0]);
     map.expectations.result_path = Some("../escaped/result".into());
-    let p = d.join("patchmaps");
-    std::fs::create_dir_all(&p).expect("patchmaps dir");
-    std::fs::write(
-        p.join(format!("{}.json", map.capture_id)),
-        serde_json::to_vec(&map).expect("serializes"),
-    )
-    .expect("writes the patchmap");
+    write_patchmap(&d, &map);
 
-    let bundle = Bundle::open(&d).expect("opens with the escaping path");
+    let e = Bundle::open(&d).unwrap_err();
+    assert!(e.contains("a20.json"), "the patchmap is named: {e}");
+    assert!(e.contains("result_path"), "the field is named: {e}");
+    assert!(e.contains("escapes the bundle root"), "{e}");
+}
+
+/// Every document this reader requires carries a schema version; a bundle
+/// written with all of them current still opens.
+#[test]
+fn a_bundle_with_all_current_document_versions_opens() {
+    let d = girpr_tempdir::TempDir::new("gircap-current-docs", "current");
+    write_minimal_bundle(&d, "c");
+    let bundle = Bundle::open(&d).expect("opens with every document at the current version");
+    assert_eq!(bundle.manifest.schema_version, crate::SCHEMA_VERSION);
+}
+
+/// Schema drift is diagnosed at the document that caused it: the file, the
+/// version found and the version expected are all in the refusal. Only the
+/// version is edited here — no field the current type wants is missing — so
+/// the check has to read it before the full document.
+#[test]
+fn a_wrong_version_in_any_secondary_document_is_named_at_open() {
+    for doc in [
+        "chunks/index.json",
+        "verify/checksums.json",
+        "verify/selfcheck.json",
+        "api/error_shapes.json",
+        "api/error_responses.json",
+        "diagnostics/rejections.json",
+        "diagnostics/path_map.json",
+    ] {
+        let d = girpr_tempdir::TempDir::new("gircap-doc-version", "version_drift");
+        write_minimal_bundle(&d, "c");
+        let path = d.join(doc);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).expect("reads the document"))
+                .expect("parses as JSON");
+        value["schema_version"] = serde_json::json!(1);
+        std::fs::write(&path, serde_json::to_vec(&value).expect("serializes"))
+            .expect("writes the version-only edit");
+
+        let e = Bundle::open(&d).unwrap_err();
+        assert!(e.contains(doc), "{doc}: {e}");
+        assert!(e.contains("schema version 1"), "{doc}: {e}");
+        assert!(
+            e.contains(&format!("current {}", crate::SCHEMA_VERSION)),
+            "{doc}: {e}"
+        );
+    }
+}
+
+/// A wrong version in one patchmap fails at that file, not at the directory.
+/// `Bundle::open` is the door every offline command passes through, so the
+/// refusal comes before any command rebuilds a result from the bad map.
+#[test]
+fn a_wrong_version_in_one_patchmap_names_that_file_before_any_rebuild() {
+    let d = girpr_tempdir::TempDir::new("gircap-patchmap-version", "bad_patchmap");
+    write_minimal_bundle(&d, "c");
+    let mut map = arithmetic_map(&[0]);
+    map.schema_version = 1;
+    write_patchmap(&d, &map);
+
+    let e = Bundle::open(&d).unwrap_err();
+    assert!(e.contains("a20.json"), "the patchmap file is named: {e}");
+    assert!(e.contains("schema version 1"), "{e}");
+    assert!(
+        e.contains(&format!("current {}", crate::SCHEMA_VERSION)),
+        "{e}"
+    );
+}
+
+/// `result_path` carries the `expected/` tree over the game's own path, so it
+/// is checked with the logical rule: escapes, a drive prefix and a backslash
+/// are refused, while a normal file under `expected/` is accepted.
+#[test]
+fn result_path_variants_are_checked_at_the_door() {
+    for (bad, want) in [
+        ("../escape", "escapes the bundle root"),
+        ("C:evil", "drive-qualified"),
+        ("expected/..", "escapes the bundle root"),
+        ("expected\\a.bin", "backslashes"),
+    ] {
+        let d = girpr_tempdir::TempDir::new("gircap-result-path", "bad_variant");
+        write_minimal_bundle(&d, "c");
+        let mut map = arithmetic_map(&[0]);
+        map.expectations.result_path = Some(bad.into());
+        write_patchmap(&d, &map);
+
+        let e = Bundle::open(&d).unwrap_err();
+        assert!(e.contains("result_path"), "{bad:?}: {e}");
+        assert!(e.contains(want), "{bad:?}: {e}");
+    }
+
+    let d = girpr_tempdir::TempDir::new("gircap-result-path", "good_variant");
+    write_minimal_bundle(&d, "c");
+    let mut map = arithmetic_map(&[0]);
+    map.expectations.result_path = Some("expected/a.bin".into());
+    write_patchmap(&d, &map);
+    let bundle = Bundle::open(&d).expect("a bundle-relative result path opens");
     assert_eq!(
         bundle.patchmaps[&map.capture_id]
             .expectations
             .result_path
             .as_deref(),
-        Some("../escaped/result")
+        Some("expected/a.bin")
     );
+}
+
+/// The tail of `result_path` is the game's own path, so a device component is
+/// legitimate there — it is escaped on disk — and must not be refused just
+/// because it names a device.
+#[test]
+fn a_device_component_in_a_result_path_is_accepted() {
+    let d = girpr_tempdir::TempDir::new("gircap-result-path", "device");
+    write_minimal_bundle(&d, "c");
+    let mut map = arithmetic_map(&[0]);
+    map.expectations.result_path = Some("expected/Resources/CON".into());
+    write_patchmap(&d, &map);
+    Bundle::open(&d).expect("a logical device component in the result path opens");
 }
 
 /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"
