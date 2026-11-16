@@ -1,5 +1,6 @@
 //! Assembling a file side from chunks, and the patch flow (REUSE / FETCH).
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use crate::blobs::Sources;
@@ -275,7 +276,24 @@ fn patch_flow(
     let mut moved = 0_usize;
     let mut reuse_failures = Vec::new();
     let mut rewrites = Vec::new();
-    let mut out = Vec::with_capacity(new_entry.size.max(0) as usize);
+
+    // Direct writes need `out` sized to the final file before the loop. The
+    // declared size is untrusted, so refuse a negative or past-the-limit value
+    // rather than let it become a huge allocation, and convert with a checked
+    // cast so a size that cannot fit `usize` is a typed error, not a wrap.
+    if !(0..=MAX_ASSEMBLY_BYTES as i64).contains(&new_entry.size) {
+        return Err(format!(
+            "{}: declares {} B, past the {MAX_ASSEMBLY_BYTES} B this tool will assemble",
+            new_entry.file, new_entry.size
+        ));
+    }
+    let out_len = usize::try_from(new_entry.size.max(0)).map_err(|_| {
+        format!(
+            "{}: declared size {} does not fit a buffer",
+            new_entry.file, new_entry.size
+        )
+    })?;
+    let mut out = vec![0_u8; out_len];
 
     // Where this old file holds each identity, so a REUSE candidate is one
     // lookup rather than a scan per chunk. `or_insert` keeps the *first* one:
@@ -293,16 +311,17 @@ fn patch_flow(
         let target = Range::at(c.offset, c.uncompressed_size);
         let key = (c.uncompressed_md5.clone(), c.uncompressed_size);
 
-        // Each arm yields (decision, source_range, note, body). The REUSE arm is
-        // tried whenever the old file holds the same content; whether it is
-        // *kept* depends on the MD5 of the local slice, which is A10 and the
-        // reason a REUSE is safe at all.
+        // Each arm yields (decision, source_range, note, body): the bytes to
+        // place at `target`. A REUSE body borrows the old file's verified
+        // slice; a FETCH body owns the decoded bytes. The write below copies
+        // either one straight into `out`, rather than filling a temporary and
+        // then appending it.
         let (decision, source_range, note, body) = match old_by_identity.get(&key).copied() {
             None => (
                 Decision::Fetch,
                 None,
                 None,
-                input.chunks.decoded(&c.id)?.into_owned(),
+                Cow::Owned(input.chunks.decoded(&c.id)?.into_owned()),
             ),
             Some(oc) => {
                 let src_range = Range::at(oc.offset, c.uncompressed_size);
@@ -312,7 +331,7 @@ fn patch_flow(
                     .and_then(|slice| {
                         let got = hash::md5_hex(slice);
                         if got == c.uncompressed_md5 {
-                            Ok(slice.to_vec())
+                            Ok(slice)
                         } else {
                             Err(format!(
                                 "the old file's bytes at {src_range} are md5 {got}, but the new \
@@ -322,7 +341,7 @@ fn patch_flow(
                         }
                     });
                 match verified {
-                    Ok(bytes) => {
+                    Ok(slice) => {
                         let note = if src_range.start != target.start {
                             Some(format!(
                                 "moved: {} in the old file, {} in the new one",
@@ -339,7 +358,7 @@ fn patch_flow(
                                 file_tag: old_tag.to_string(),
                             }),
                             note,
-                            bytes,
+                            Cow::Borrowed(slice),
                         )
                     }
                     // The spec's flow is "verify, else FETCH", so the decision
@@ -353,7 +372,7 @@ fn patch_flow(
                             Decision::Fetch,
                             None,
                             Some(format!("REUSE attempted and rejected: {why}")),
-                            input.chunks.decoded(&c.id)?.into_owned(),
+                            Cow::Owned(input.chunks.decoded(&c.id)?.into_owned()),
                         )
                     }
                 }
@@ -371,7 +390,28 @@ fn patch_flow(
         {
             moved += 1;
         }
-        out.extend_from_slice(&body);
+
+        // Write straight into the chunk's slot. A body that is not the length
+        // its range declares is a manifest error, not a panic in
+        // `copy_from_slice`; a target outside `out` is named rather than
+        // silently zero-filling or wrapping an index.
+        if body.len() as i64 != target.len() {
+            return Err(format!(
+                "{}: chunk {i} ({}) decoded to {} B but its range is {target}",
+                new_entry.file,
+                c.id,
+                body.len()
+            ));
+        }
+        let dst = out
+            .get_mut(target.start as usize..target.end as usize)
+            .ok_or_else(|| {
+                format!(
+                    "{}: chunk {i} ({}) target range {target} is outside the {out_len} B output",
+                    new_entry.file, c.id
+                )
+            })?;
+        dst.copy_from_slice(&body);
 
         plan.push(PlanEntry {
             i,
