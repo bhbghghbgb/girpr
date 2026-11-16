@@ -597,6 +597,14 @@ pub fn aggregate(old_tag: &str, new_tag: &str, fields: &[FieldDiff]) -> PathDiff
 
     for f in fields {
         for row in &f.rows {
+            // Folders are already tallied by state below (an added folder is an
+            // `added` row, a common one part of `common`), but the published
+            // `folders` count must say how many folder entries the diff carries.
+            // Count the row here rather than adding a field to `FieldCounts`,
+            // which would change the shape of `by_field` in the document.
+            if row.is_folder {
+                counts.folders += 1;
+            }
             match row.state {
                 State::Added => {
                     counts.added += 1;
@@ -1102,6 +1110,56 @@ mod tests {
                 "{path} must stay in paths.tsv"
             );
         }
+    }
+
+    /// The published `folders` count is folded from the folder rows, so
+    /// `paths.diff.json` reports it truthfully even though every folder is also
+    /// tallied as added/common/removed. Counting rows here — rather than adding
+    /// a field to `FieldCounts` — keeps the shape of `by_field` unchanged.
+    #[test]
+    fn aggregation_counts_folder_rows_separately_from_files() {
+        let folder = |path: &str, md5: &str| SophonChunkFile {
+            file: path.into(),
+            chunks: vec![],
+            is_folder: true,
+            size: 0,
+            md5: md5.into(),
+        };
+        let old = manifest(
+            "7.0.0",
+            vec![
+                file("data", "md5-old", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/gone", "d2"),
+            ],
+        );
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file("data", "md5-new", vec![chunk("a", "aa", 0, 10, 5)]),
+                folder("d/common", "d1"),
+                folder("d/fresh", "d3"),
+            ],
+        );
+
+        let d = diff_field(&old, &new).expect("same field");
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert_eq!(
+            agg.counts.folders, 3,
+            "the common, added and removed folder rows are all counted"
+        );
+        // Folders remain tallied by state too, so the two counts are independent.
+        assert_eq!(agg.counts.common, 2, "data and the common folder");
+        assert_eq!(agg.counts.added, 1, "the fresh folder");
+        assert_eq!(agg.counts.removed, 1, "the gone folder");
+    }
+
+    /// A diff with no folder rows publishes a zero `folders` count.
+    #[test]
+    fn aggregation_reports_zero_folders_when_there_are_none() {
+        let d = three_state_pair();
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert_eq!(agg.counts.folders, 0);
     }
 
     /// spec §5's formulas, computed by hand on the fixture above.
