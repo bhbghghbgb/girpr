@@ -358,6 +358,15 @@ impl CapturedManifest {
         &self.meta.declared.chunk_download.url_prefix
     }
 
+    /// The declared chunk download, whose prefix and suffix together decide
+    /// every chunk URL.
+    ///
+    /// Exposed so other URL builders can reuse the declaration rather than
+    /// keeping a prefix of their own and silently dropping the suffix.
+    pub fn chunk_download(&self) -> &crate::hyp::types::Download {
+        &self.meta.declared.chunk_download
+    }
+
     /// The URL of one of its chunks.
     ///
     /// Uses the same join as [`crate::hyp::BuildManifest::archive_url`]: every

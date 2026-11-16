@@ -39,6 +39,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::http::{ApiError, Fetcher, Kind};
+use crate::hyp::types::{Download, join};
 use crate::manifest::CapturedManifest;
 use chunks::{FilePair, Reference, Set, Want};
 use props::{BlobProps, FetchError};
@@ -203,9 +204,13 @@ impl ChunkIndex {
 }
 
 /// Where a tag's chunks are served from.
+///
+/// One declared [`Download`] per tag, kept whole so the `url_suffix` reaches
+/// the chunk URL just as it does the archive URL. Storing only the prefix here
+/// would drop a non-empty suffix and turn every chunk URL into a CDN 404.
 #[derive(Debug, Clone)]
 pub struct Sources {
-    bases: BTreeMap<String, String>,
+    bases: BTreeMap<String, Download>,
 }
 
 impl Sources {
@@ -218,27 +223,44 @@ impl Sources {
     ) -> Sources {
         let mut bases = BTreeMap::new();
         for m in manifests {
-            bases.insert(m.tag.clone(), m.chunk_url_prefix().to_string());
+            bases.insert(m.tag.clone(), m.chunk_download().clone());
         }
         Sources { bases }
     }
 
-    /// Build from explicit `tag -> base` pairs, for a test with no manifests.
+    /// Build from explicit `tag -> prefix` pairs, for a test with no manifests.
+    ///
+    /// Such a pair has no suffix to append; the stored download's `url_suffix`
+    /// is empty.
     pub fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Sources {
         Sources {
-            bases: pairs.into_iter().collect(),
+            bases: pairs
+                .into_iter()
+                .map(|(tag, prefix)| {
+                    (
+                        tag,
+                        Download {
+                            url_prefix: prefix,
+                            ..Download::default()
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 
     /// The URL one chunk of one build is served from.
+    ///
+    /// Joined through the same helper as every other URL, so the stored
+    /// `url_suffix` is appended when it is non-empty.
     pub fn url(&self, tag: &str, chunk_id: &str) -> Result<String, ApiError> {
-        let base = self.bases.get(tag).ok_or_else(|| {
+        let download = self.bases.get(tag).ok_or_else(|| {
             ApiError::shape(
                 "chunk",
                 format!("no chunk source registered for tag {tag:?}"),
             )
         })?;
-        Ok(format!("{base}/{chunk_id}"))
+        Ok(join(download, chunk_id))
     }
 
     /// The tags that can serve chunks.
