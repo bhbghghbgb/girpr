@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M54
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:36:42Z
+last_updated: 2026-11-16T11:42:30Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1316,8 +1316,15 @@ reviews:
     result: null
     followups: []
   - batch: M54
-    status: pending
+    status: done
     tasks: [F299, F300]
+    base: bb4e11e5
+    head: 4060cffb
+    result: F299 kept (c5ef8081); F300 kept (4060cffb); no fix or revert commits; 625 passed, 1 skipped; both commits touch only the design notes, and the reviewer also reworded the same stale claim in the section's enforcing list
+    followups: [F489]
+  - batch: M137
+    status: pending
+    tasks: [F489]
     base: null
     head: null
     result: null
@@ -3230,15 +3237,17 @@ followups:
   - id: F299
     source: F208
     description: The design notes' fold section still says the on-disk lookup and the key sit side by side in one file, though the path key itself lives in the utility module.
-    status: in_progress
+    status: completed
     batch: M54
-    commits: []
+    commits: [c5ef8081]
+    note: review M54 kept; the notes now name where each rule lives, and the same stale claim in the section's enforcing list was reworded
   - id: F300
     source: F208
     description: The new notes paragraph says the value is written once rather than twice in two modules, a comparison with the old state that the notes own rule against recording changes discourages.
-    status: in_progress
+    status: completed
     batch: M54
-    commits: []
+    commits: [4060cffb]
+    note: review M54 kept; the paragraph now says what is true now, without comparing it to a state the crate is not in
   - id: F301
     source: F208
     description: The on-disk lookup's doc points at the shared mapping as plain code where the two neighbouring references use intra-doc links.
@@ -4392,6 +4401,19 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F484, whose description now carries the reason a link cannot be used"
+  - id: F489
+    source: F300
+    description: Two code doc comments in the utility module carry the same historical contrast the notes paragraph had, saying the mapping and the rule are written once rather than twice in two modules.
+    status: pending
+    batch: M137
+    commits: []
+  - id: F490
+    source: F299
+    description: The on-disk lookup's doc says one implementation for two questions, not one rule, which is present-tense and accurate; it is noted only because the notes now use the same pairing of words.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: accurate as it stands, and noted only for consistency if either wording is reworded"
 ```
 
 ## Human checklist
@@ -4423,6 +4445,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M54 review checkpoint opened: F299 and F300
+  `in_progress` → `pending_review`, commits `c5ef8081`, `4060cffb`; review M54
+  `pending` → `in_progress`, base `bb4e11e5`, head `4060cffb`.
 - 2026-11-16 — follow-up batch M54 started: F299 and F300 `pending` →
   `in_progress`; `active_batch: M53` → `M54`.
 - 2026-11-16 — review M53 `done`: F298 kept (d821f722), F301 kept (3dc6d002); no
