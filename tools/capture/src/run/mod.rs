@@ -227,7 +227,6 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &probe::ErrorProbes {
             manifest_prefix: &new_game.meta.declared.manifest_download.url_prefix,
             chunk_prefix: new_game.chunk_url_prefix(),
-            other_manifest_prefix: &old_game.meta.declared.manifest_download.url_prefix,
             other_chunk_prefix: old_game.chunk_url_prefix(),
             new_only_chunk_id: &new_only_chunk_id,
         },
