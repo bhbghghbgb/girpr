@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M43
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T02:59:08Z
+last_updated: 2026-11-16T04:40:26Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -945,8 +945,22 @@ reviews:
     result: F117 kept (e30e6c6f); F118 kept (13304c2f); F120 kept (1409bbf6); F140 kept (4c285d30); F145 kept (0f3609a7); F146 kept (b08451c7); no fix or revert commits; 578 passed without the feature and 592 with it, 1 skipped; the remedy was checked end to end by running it, and the renamed fixture was mutation-checked
     followups: [F189, F190, F191, F192]
   - batch: M43
-    status: pending
+    status: in_progress
     tasks: [F273, F274]
+    base: db97d9f0
+    head: df01aaf7
+    result: null
+    followups: []
+  - batch: M103
+    status: pending
+    tasks: [F415, F416]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M104
+    status: pending
+    tasks: [F417]
     base: null
     head: null
     result: null
@@ -2782,15 +2796,15 @@ followups:
   - id: F273
     source: F193
     description: The workspace nextest configuration points at a source path that no longer exists, because the module was split into a directory, so the pointer a reader would follow leads nowhere.
-    status: in_progress
+    status: pending_review
     batch: M43
-    commits: []
+    commits: [c582a5b5]
   - id: F274
     source: F193
     description: The three rename failure hooks are three separate variables where one variable with a stage value would match the shape of the copy and flush hooks; the asymmetry is undocumented.
-    status: in_progress
+    status: pending_review
     batch: M43
-    commits: []
+    commits: [df01aaf7]
   - id: F275
     source: F193
     description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
@@ -3649,6 +3663,31 @@ followups:
     status: pending
     batch: M102
     commits: []
+  - id: F415
+    source: F273
+    description: The workspace nextest config's hook list covers only the hooks the runner sets, so a reader of that file has no pointer to the crate's other test-only switches, which are named only in the crate's README.
+    status: pending
+    batch: M103
+    commits: []
+  - id: F416
+    source: F273
+    description: The workspace nextest config's override for the hand-run bridge cases is inert under a plain test run, since its cases are ignored by design, so the filter reads as if it were live.
+    status: pending
+    batch: M103
+    commits: []
+  - id: F417
+    source: F274
+    description: The rename failure hook's base name is the odd one out, being the only failure hook whose name carries no suffix, so it reads as a peer of the copy and flush hooks while being the rename's before-claim stage.
+    status: pending
+    batch: M104
+    commits: []
+  - id: F418
+    source: F273
+    description: The workspace nextest config has no override entry for the other package's Unix-only skips under a Windows host.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: not a defect, the cases exist under their platform gate, and it was noted only as adjacent to the override check"
 ```
 
 ## Human checklist
@@ -3680,6 +3719,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M43 review checkpoint opened: F273 and F274
+  `in_progress` → `pending_review`, commits `c582a5b5`, `df01aaf7`; review M43
+  `pending` → `in_progress`, base `db97d9f0`, head `df01aaf7`.
 - 2026-11-16 — follow-up batch M43 started: F273 and F274 `pending` →
   `in_progress`; `active_batch: M42` → `M43`.
 - 2026-11-16 — review M42 `done`: F269 kept (0ac9ccee), F270 fixed (8a81858d,
