@@ -45,10 +45,10 @@ See `ORCHESTRATION.md` for the transition rules.
 | P3-07 | Early A16 exit and larger digest buffer (C3, C4) | completed | 2db0cd0e 3b5a1e4f 02aff616 | |
 | P3-08 | Symlink containment and termination (C9) | completed | 635422a0 723ba9c9 1d8dab54 | |
 | P3-09 | One definition of A12 (C7) | completed | 6f288b25 d2fc7add b78e4c67 | |
-| P4-01 | One acceptable-state table (D1) | pending_review | edbf8013 2ef89ac9 bd674692 | |
-| P4-02 | Remove remaining dead fields (D2) | pending_review | 6641a00a | |
-| P4-03 | Parse `getBuild` once (D3) | pending_review | 825d9581 074b2aa8 302188df | |
-| P4-04 | Allocation cleanups (C10, C11, C12) | pending_review | 434b9532 0baf65ab 07e69de1 0a3fba49 | |
+| P4-01 | One acceptable-state table (D1) | completed | edbf8013 2ef89ac9 bd674692 | |
+| P4-02 | Remove remaining dead fields (D2) | completed | 6641a00a | |
+| P4-03 | Parse `getBuild` once (D3) | completed | 825d9581 074b2aa8 302188df | |
+| P4-04 | Allocation cleanups (C10, C11, C12) | completed | 434b9532 0baf65ab 07e69de1 0a3fba49 | |
 
 ## Review batches
 
@@ -61,7 +61,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-5 | P2-01..P2-04 | done | | |
 | RC-6 | P3-01..P3-02 | done | | |
 | RC-7 | P3-04..P3-09 | done | | |
-| RC-8 | P4-01..P4-04 | in_progress | | |
+| RC-8 | P4-01..P4-04 | done | | |
 
 ## Rework
 
