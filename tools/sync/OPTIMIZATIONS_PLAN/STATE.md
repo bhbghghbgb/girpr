@@ -11,10 +11,10 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: followups-implement
+phase: followups-evaluate
 active_batch: M54
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:46:56Z
+last_updated: 2026-11-16T12:39:03Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -4477,6 +4477,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — rollout closing: phase `followups-implement` → `followups-evaluate`
+  to prune/merge the 167 pending follow-ups before finalization.
 - 2026-11-16 — review M54 `done`: F299 kept (c5ef8081), F300 kept (4060cffb); no
   fix or revert commits; follow-ups F491, F492 and F493 appended with batch
   `M138`, and F494 recorded as `skipped` as the same item as F489. F299 and F300
