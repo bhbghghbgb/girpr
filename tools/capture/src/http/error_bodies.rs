@@ -338,13 +338,80 @@ mod tests {
 
     #[test]
     fn a_body_larger_than_the_ceiling_is_cut_at_the_ceiling() {
-        // The fetcher passes `remaining().min(max_response_bytes)` as the
-        // retention cap, so this is the store's share of that promise.
+        // The fetcher passes `reservation.granted().min(max_response_bytes)` as
+        // the retention cap, so this is the store's share of that promise.
         let store = ErrorBodies::new(2);
         let mut r = row(1, b"abcdef");
         r.body.truncate(2);
         r.truncated = true;
         store.push(r);
         assert_eq!(store.snapshot()[0].body, b"ab");
+    }
+
+    #[test]
+    fn concurrent_reservations_divide_the_budget() {
+        // Two readers that each ask for 6 of a 10-byte budget must be granted 6
+        // and 4, not both 10. Pushing 5 and 5 then keeps 5 and a truncated 4 —
+        // a total of 9, bounded by the budget rather than doubling it.
+        let store = ErrorBodies::new(10);
+        let a = store.reserve(6);
+        let b = store.reserve(6);
+        assert_eq!(a.granted(), 6);
+        assert_eq!(b.granted(), 4);
+        assert_eq!(store.remaining(), 0, "both grants are charged up front");
+
+        store.push_reserved(row(1, b"12345"), a);
+        store.push_reserved(row(2, b"12345"), b);
+
+        let rows = store.snapshot();
+        assert_eq!(rows[0].body, b"12345");
+        assert!(!rows[0].truncated);
+        assert_eq!(rows[1].body, b"1234");
+        assert!(rows[1].truncated, "the second body exceeded its grant");
+        assert_eq!(store.remaining(), 1, "only 9 of 10 bytes are retained");
+    }
+
+    #[test]
+    fn an_unused_reservation_refunds_its_grant_on_drop() {
+        let store = ErrorBodies::new(10);
+        {
+            let r = store.reserve(6);
+            assert_eq!(r.granted(), 6);
+            assert_eq!(store.remaining(), 4);
+        }
+        assert_eq!(
+            store.remaining(),
+            10,
+            "dropping without pushing returns the whole grant"
+        );
+    }
+
+    #[test]
+    fn a_body_smaller_than_its_grant_refunds_the_difference() {
+        let store = ErrorBodies::new(10);
+        let r = store.reserve(8);
+        store.push_reserved(row(1, b"abc"), r);
+        assert_eq!(store.snapshot()[0].body, b"abc");
+        assert_eq!(
+            store.remaining(),
+            7,
+            "only the 3 retained bytes stay charged; consuming the grant here \
+             also prevents its Drop from refunding a second time"
+        );
+    }
+
+    #[test]
+    fn push_still_truncates_to_what_the_budget_allows() {
+        // `push` is a convenience that reserves and then pushes; its behaviour
+        // must be identical to the old direct implementation.
+        let store = ErrorBodies::new(4);
+        store.push(row(1, b"123456"));
+        store.push(row(2, b"789"));
+        let rows = store.snapshot();
+        assert_eq!(rows[0].body, b"1234");
+        assert!(rows[0].truncated);
+        assert_eq!(rows[1].body, b"");
+        assert!(rows[1].truncated);
+        assert_eq!(store.remaining(), 0);
     }
 }
