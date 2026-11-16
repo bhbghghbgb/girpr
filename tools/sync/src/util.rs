@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(windows)]
@@ -289,6 +290,42 @@ pub(crate) fn path_key(rel: &str) -> String {
     rel.to_ascii_lowercase()
 }
 
+/// A path's folded key, borrowed.
+///
+/// **The path key's rule, stated as a key that borrows the path it folds.**
+/// Two paths are one key here exactly when their [`path_key`] forms are equal —
+/// ASCII case folded, every other byte exact — so an index built from these
+/// keys is the index the folded forms would build, and a lookup in it costs no
+/// allocation.
+///
+/// [`path_key`] hands back a `String`, so an index of folded keys holds one
+/// allocation per path it covers, and every lookup folds the path it looks up
+/// into another one. This is that index's key, borrowed from the map it
+/// indexes, so the index holds no copy of the tree's paths at all.
+///
+/// The fold is **not** the identity rule's: that one keeps a Unicode fallback
+/// because it asks whether two spellings open the same place on disk, which
+/// is a different question from the one a map key answers.
+pub(crate) struct FoldedKey<'a>(pub(crate) &'a str);
+
+impl Hash for FoldedKey<'_> {
+    /// The fold, hashed the way the comparison states it: two paths that are
+    /// one key hash the same way.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for &b in self.0.as_bytes() {
+            state.write_u8(b.to_ascii_lowercase());
+        }
+    }
+}
+
+impl PartialEq for FoldedKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.eq_ignore_ascii_case(other.0)
+    }
+}
+
+impl Eq for FoldedKey<'_> {}
+
 /// The folded-key index over one side's map: `path_key(key) → (key, value)`.
 ///
 /// One shape for the sites that look a path up by its case-folded spelling, so
@@ -510,6 +547,49 @@ mod tests {
         assert_eq!(path_key("Game/Readme.TXT"), "game/readme.txt");
         assert_eq!(path_key("Ärger"), "Ärger");
         assert_ne!(path_key("\u{212A}"), path_key("k"));
+    }
+
+    /// The borrowed folded key is the path key's rule, so two paths are one key
+    /// under one exactly when they are under the other: the ASCII pair is one,
+    /// the non-ASCII pair is two, and the Kelvin sign stays apart from `k`.
+    #[test]
+    fn the_borrowed_folded_key_is_the_path_key_s_rule() {
+        let spellings = [
+            "a.txt",
+            "A.txt",
+            "Ärger.txt",
+            "ärger.txt",
+            "\u{212A}.txt",
+            "k.txt",
+        ];
+        for a in spellings {
+            for b in spellings {
+                assert_eq!(
+                    FoldedKey(a) == FoldedKey(b),
+                    path_key(a) == path_key(b),
+                    "`{a}` and `{b}` are one key under one rule or the other"
+                );
+            }
+        }
+    }
+
+    /// A borrowed key is only usable as a key if it hashes the way it compares,
+    /// so an index built from one finds the spelling it holds under any
+    /// spelling of the same path.
+    #[test]
+    fn a_borrowed_folded_key_is_found_under_another_spelling() {
+        let mut index: HashMap<FoldedKey<'_>, &str> = HashMap::new();
+        index.insert(FoldedKey("Readme.TXT"), "Readme.TXT");
+        assert_eq!(
+            index.get(&FoldedKey("readme.txt")),
+            Some(&"Readme.TXT"),
+            "the case variant is the same key"
+        );
+        assert_eq!(
+            index.get(&FoldedKey("other.txt")),
+            None,
+            "another path is another key"
+        );
     }
 
     /// The folded-key index holds every key under its folded spelling, and each

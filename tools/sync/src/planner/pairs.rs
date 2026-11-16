@@ -12,7 +12,7 @@ use anyhow::Result;
 
 use crate::effective::{Repopulate, SideCapability, SideEntry};
 use crate::hash::{AlgoSet, HashAlg};
-use crate::util::{folded_keys, path_key};
+use crate::util::FoldedKey;
 
 use super::HashMode;
 use super::coverage::Coverage;
@@ -141,11 +141,15 @@ fn shared_pairs<'a>(
             }
         }
         CasePairing::Lowercase => {
-            // The src side is the index and dst is what is looked up, so dst's
-            // own folded key is computed per path rather than indexed.
-            let src_folded_keys = folded_keys(src);
-            for (folded_key, drel) in dst.keys().map(|k| (path_key(k), k)) {
-                if let Some(&(srel, _)) = src_folded_keys.get(&folded_key) {
+            // The src side is the index and dst is what is looked up. The
+            // index's keys are the src paths themselves, borrowed and folded
+            // in place, so neither side's path is copied into a `String` to
+            // be found: a lookup folds the dst path it asks about rather
+            // than materialising the fold.
+            let src_folded_keys: HashMap<FoldedKey<'_>, (&String, &SideEntry)> =
+                src.iter().map(|(k, v)| (FoldedKey(k), (k, v))).collect();
+            for drel in dst.keys() {
+                if let Some(&(srel, _)) = src_folded_keys.get(&FoldedKey(drel)) {
                     out.push((srel, drel));
                 }
             }
