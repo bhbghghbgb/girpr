@@ -831,6 +831,13 @@ mod tests {
     /// join, so a plan whose order is not the order a reader would guess
     /// cannot make the report name a copy that did not fail.
     ///
+    /// **The plan's order is deliberately not the alphabetical one.** The
+    /// copies are listed `mmm.bin`, `aaa.bin`, `zzz.bin`, so the plan's first
+    /// copy is not the copy whose name sorts first. A join that sorted the
+    /// list before indexing it would name `aaa.bin` at index 0 and fail this
+    /// case, which is what makes the case able to tell the plan's order from
+    /// the sorted one.
+    ///
     /// The plan is built by hand rather than by a run, so the case says what
     /// the join is rather than what a fixture happened to produce.
     #[test]
@@ -838,12 +845,12 @@ mod tests {
         let plan = Plan {
             copy: vec![
                 CopyItem {
-                    rel: "aaa.bin".into(),
-                    because: CopyBecause::Missing,
-                },
-                CopyItem {
                     rel: "mmm.bin".into(),
                     because: CopyBecause::Changed,
+                },
+                CopyItem {
+                    rel: "aaa.bin".into(),
+                    because: CopyBecause::Missing,
                 },
                 CopyItem {
                     rel: "zzz.bin".into(),
@@ -853,14 +860,15 @@ mod tests {
             ..Default::default()
         };
 
-        // Every index names its own copy, and nothing else.
+        // Every index names its own copy, and nothing else. The plan's order
+        // is the order the list is written in, not the alphabetical one.
         assert_eq!(
             copy_at(&plan, 0).expect("the first copy is named"),
-            "aaa.bin"
+            "mmm.bin"
         );
         assert_eq!(
             copy_at(&plan, 1).expect("the second copy is named"),
-            "mmm.bin"
+            "aaa.bin"
         );
         assert_eq!(
             copy_at(&plan, 2).expect("the third copy is named"),
@@ -872,14 +880,15 @@ mod tests {
         // arrive.
         let mut failure: Option<(usize, anyhow::Error)> = None;
         keep_lowest_index(&mut failure, 2, anyhow!("the third copy"));
-        keep_lowest_index(&mut failure, 1, anyhow!("the second copy"));
+        keep_lowest_index(&mut failure, 0, anyhow!("the first copy"));
         let (index, error) = failure.expect("a failure was recorded");
+        assert_eq!(index, 0);
         assert_eq!(
             copy_at(&plan, index).expect("the index names a copy"),
             "mmm.bin",
             "the report names the copy the plan lists first"
         );
-        assert_eq!(error.to_string(), "the second copy", "and why it failed");
+        assert_eq!(error.to_string(), "the first copy", "and why it failed");
     }
 
     /// **An index that names no copy is an error, not a panic.**
