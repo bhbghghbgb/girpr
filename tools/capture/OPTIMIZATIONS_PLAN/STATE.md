@@ -37,8 +37,8 @@ See `ORCHESTRATION.md` for the transition rules.
 | P2-02 | Reconcile `budget_cost` semantics (B2) | completed | 77c98275 578d5301 cf4e1c78 | |
 | P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | completed | 0debdd91 3e7c981f | |
 | P2-04 | Capture-id uniqueness invariant (B5) | completed | 2588220d 7ceaeb32 | |
-| P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | pending_review | c4224d3e a2cfdfb6 | |
-| P3-02 | Bridge server correctness and locking (C8, E4-E6) | pending_review | 791f0b24 f6184c5a f8520b74 | |
+| P3-01 | Verify once, share the bridge fixture (C1, C8, E1-E3) | completed | c4224d3e a2cfdfb6 | |
+| P3-02 | Bridge server correctness and locking (C8, E4-E6) | completed | 791f0b24 f6184c5a f8520b74 | |
 | P3-04 | Reuse retention per pair (C2) | todo | | |
 | P3-05 | Avoid assembly copy-through (C6) | todo | | |
 | P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | todo | | |
@@ -59,7 +59,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-3 | P1-07..P1-12 | done | | |
 | RC-4 | P1-13..P1-18 | done | | |
 | RC-5 | P2-01..P2-04 | done | | |
-| RC-6 | P3-01..P3-02 | in_progress | | |
+| RC-6 | P3-01..P3-02 | done | | |
 | RC-7 | P3-04..P3-09 | pending | | |
 | RC-8 | P4-01..P4-04 | pending | | |
 
@@ -84,6 +84,8 @@ until the main tasks and rework are done.
 | F-03 | P1-05 | diagnostics wording (`src/assemble/ranges.rs`) | `Layout::of` (~L226) error says "the manifest declares" even on the verify path where the figure comes from a patchmap side. Tighten the wording for that caller. | todo |
 | F-04 | P2-04 | select ordinals (`src/select/mod.rs`) | A forced path rejected in phase 0 can share its `<class>` capture id with a different, cheaper phase-2 pick of the same class; the debug guard only detects this, release still emits a misleading rejection record. Fix ordinal assignment so ids are unique. | todo |
 | F-05 | P2-02 | candidates doc comment (`src/select/mod.rs`) | The `candidates` doc comment (~L405-409) still describes `by_cost`'s `total_cost`+moved/reused order and says one-sided paths are placed "by their own size"; the comparator is now `budget_cost`/field/path and `added` charges `download_bytes`. Update the comment. | todo |
+| F-06 | P3-02 | bridge HTTP layer (`tests/artifact_bridge/server.rs`) | Keep-alive: accept multiple requests per connection with `Content-Length`/framing and send `Connection: keep-alive` unless the client closes. Currently `Connection: close` per response; deliberately skipped under the task's optional allowance. | todo |
+| F-07 | P3-02 | bridge `ManifestEntry` (`tests/artifact_bridge/server.rs`) | Remove the now-dead `id` field (set at insert, never read; the map key already carries it). Trivial pre-existing cleanup. | todo |
 
 ## Follow-up batches
 
