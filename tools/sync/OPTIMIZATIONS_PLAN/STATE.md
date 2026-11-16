@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M49
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T08:39:11Z
+last_updated: 2026-11-16T09:05:14Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1162,8 +1162,22 @@ reviews:
     result: F121 kept (50e81f06); F122 kept (2115d14e, 5a5cb7a2); F125 kept (c4f93a7f); F126 kept (6c16cf00); F127 kept (20b42517); F129 kept (a5b3b2c1, 9c327065); no fix or revert commits; 584 passed, 1 skipped, and the whole workspace at 2069 passed, 13 skipped; four mutation probes confirmed the new cases discriminate, and a mis-set gate was probed and failed that one copy loudly
     followups: [F198, F199]
   - batch: M49
-    status: pending
+    status: in_progress
     tasks: [F287, F288, F292]
+    base: abe75c0d
+    head: 81a5ab95
+    result: null
+    followups: []
+  - batch: M122
+    status: pending
+    tasks: [F453, F454, F455, F456]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M123
+    status: pending
+    tasks: [F457, F458]
     base: null
     head: null
     result: null
@@ -3034,15 +3048,15 @@ followups:
   - id: F287
     source: F204
     description: The planner's lowercase pairing branch still computes the path key for every destination path, one allocation per path, where a borrowed comparison or a destination index would remove it.
-    status: in_progress
+    status: pending_review
     batch: M49
-    commits: []
+    commits: [2580c671]
   - id: F288
     source: F204
     description: The remaining per-entry allocation in the disk listing is the fold of the candidate name, and a non-allocating comparison with an ASCII fast path would remove it.
-    status: in_progress
+    status: pending_review
     batch: M49
-    commits: []
+    commits: [5326a675]
   - id: F289
     source: F203
     description: The digest-set and report modules fold algorithm and event names with an ASCII lowercase, which is unrelated to the path folds, so a reader scanning the crate for folds meets it without knowing it is a different question.
@@ -3065,9 +3079,9 @@ followups:
   - id: F292
     source: F204
     description: The hoist folds the wanted name eagerly, before the listing and before the exact-match early return, so the common exact-match hit now pays one allocation where it previously paid none, and folding at the first non-exact candidate would keep that path allocation-free.
-    status: in_progress
+    status: pending_review
     batch: M49
-    commits: []
+    commits: [5326a675]
   - id: F293
     source: F204
     description: The remaining per-entry allocation in the disk listing is the candidate own fold, which a non-allocating comparison with an ASCII fast path would remove.
@@ -4050,6 +4064,42 @@ followups:
     batch: null
     commits: []
     note: "skipped: the mismatch is in a commit message and history must not be rewritten"
+  - id: F453
+    source: F287
+    description: The utility module's folded-keys helper, used by the diff and the rename pass, still allocates one folded string per path per side, where the borrowed key would remove them.
+    status: pending
+    batch: M122
+    commits: []
+  - id: F454
+    source: F287
+    description: The plan link module's folded-keys helper clones every destination key into its index, one clone and one fold per path.
+    status: pending
+    batch: M122
+    commits: []
+  - id: F455
+    source: F287
+    description: The effective phase A and the plan safety module build folded indexes with the allocating path key, one fold per path.
+    status: pending
+    batch: M122
+    commits: []
+  - id: F456
+    source: F287
+    description: The mixed-case key check allocates a folded string per key for its grouping.
+    status: pending
+    batch: M122
+    commits: []
+  - id: F457
+    source: F288
+    description: In the on-disk lookup's slow path, a name outside ASCII, the wanted name is now folded per entry rather than once, so a prepared comparator that folds it once would restore the old cost; the path is rare.
+    status: pending
+    batch: M123
+    commits: []
+  - id: F458
+    source: F288
+    description: The shared Unicode lowercase helper is now used only inside the utility module and could be private.
+    status: pending
+    batch: M123
+    commits: []
 ```
 
 ## Human checklist
@@ -4081,6 +4131,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M49 review checkpoint opened: F287, F288 and F292
+  `in_progress` → `pending_review`, commits `2580c671`, `5326a675`, `81a5ab95`;
+  review M49 `pending` → `in_progress`, base `abe75c0d`, head `81a5ab95`.
 - 2026-11-16 — follow-up batch M49 started: F287, F288 and F292 `pending` →
   `in_progress`; `active_batch: M48` → `M49`.
 - 2026-11-16 — review M48 `done`: F283 fixed (5a0a8400, 3c1b50bb), F284 fixed
