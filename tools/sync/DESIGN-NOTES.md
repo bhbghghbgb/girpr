@@ -155,6 +155,13 @@ which is not the question here. On POSIX neither fold applies at all: the two
 spellings are distinct entries, so the reservation is an exact prefix match
 and `GIRPR-CACHE` is ordinary content.
 
+**The reservation has two rules, and both state that comparison.** The prefix
+helper `util::has_cache_prefix` reserves the whole `girpr-cache*` prefix, and
+its exact-name counterpart `util::is_cache_name` asks whether the component is
+the cache's own name, `girpr-cache`, rather than one of its copies. Both ask
+it with `util::ascii_case_eq` on Windows and with an exact match elsewhere, so
+a reader who follows one finds the other.
+
 **Enforced by:** `util::tests::path_key_folds_ascii_case_only` and
 `util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key, and
 `util::tests::the_borrowed_folded_key_is_the_path_key_s_rule` and
@@ -165,7 +172,8 @@ borrowed form of it;
 `util::tests::the_path_key_and_the_identity_rule_disagree_deliberately` for
 the boundary between them;
 `util::tests::the_cache_prefix_folds_case_on_windows_only` for the
-reservation;
+reservation, and `util::tests::the_cache_name_is_the_exact_name_not_the_prefix`
+for its exact-name counterpart;
 `planner::pairs::tests::insensitive_mode_does_not_fold_non_ascii_case` and
 `planner::pairs::tests::insensitive_mode_keeps_a_non_ascii_lookalike_distinct`
 for the planner's use of the key; and the `plan::tests` cases

@@ -56,6 +56,12 @@ pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
 /// component one of the tool's own names — and the prefix it matches is ASCII,
 /// so the ASCII-only rule says it without borrowing a rule that answers
 /// something else.
+///
+/// **Its two users are the cache reservation's two rules**: the prefix helper
+/// [`has_cache_prefix`] and its exact-name counterpart [`is_cache_name`]. One
+/// asks whether a component starts with the cache's prefix, the other whether
+/// it is the cache's own name, and both state this comparison — so a reader who
+/// follows one finds the other, and neither can drift from the other.
 #[cfg(windows)]
 fn ascii_case_eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
@@ -79,6 +85,13 @@ fn ascii_case_eq(a: &str, b: &str) -> bool {
 /// disk. The reservation asks about the tool's own names, and the prefix it
 /// matches is ASCII, so the ASCII-only rule is the one that states it. The
 /// identity rule's fold would answer a question nobody is asking here.
+///
+/// **Stated with its exact-name counterpart** [`is_cache_name`]. The two
+/// reserve one vocabulary under one spelling rule: this one reserves the whole
+/// `girpr-cache*` prefix, and that one asks whether the component is the
+/// cache's own name, `girpr-cache`, rather than one of its copies. Both state
+/// the ASCII-only comparison, on Windows only, so a reader who follows one
+/// finds the other.
 fn has_cache_prefix(component: &str) -> bool {
     #[cfg(windows)]
     {
@@ -114,7 +127,8 @@ pub fn is_record_path(p: &Path) -> bool {
 ///
 /// The same spelling rule as that one: case is folded on Windows only, where
 /// the filesystem cannot tell `GIRPR-CACHE` from `girpr-cache`, and the two are
-/// different names elsewhere.
+/// different names elsewhere. The prefix helper `has_cache_prefix` states the
+/// same comparison, so the two halves of the vocabulary cannot drift apart.
 ///
 /// **Public, and published with its counterpart.** The two rules are one
 /// vocabulary, and the crate publishes both halves of it: the answer this rule
