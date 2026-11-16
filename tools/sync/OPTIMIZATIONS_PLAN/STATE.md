@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M47
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T07:36:32Z
+last_updated: 2026-11-16T07:59:24Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1078,10 +1078,24 @@ reviews:
     result: null
     followups: []
   - batch: M47
-    status: in_progress
+    status: done
     tasks: [F280, F281, F282]
     base: 33811b74
     head: ea8c7dc6
+    result: F280 kept (fe5f2ae6); F281 kept (d3dc3ca7); F282 kept (ea8c7dc6); no fix or revert commits; 621 passed without the feature and 638 with it, 1 skipped; the reviewer deleted the builder's sort and saw the new builder case fail while the end-to-end case still passed, which is why the builder case was needed, and compared the base and head binaries' failure text, exit code and records
+    followups: [F442, F443, F444]
+  - batch: M117
+    status: pending
+    tasks: [F440, F442]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M118
+    status: pending
+    tasks: [F443, F444]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M116
@@ -2943,21 +2957,24 @@ followups:
   - id: F280
     source: F196
     description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
-    status: pending_review
+    status: completed
     batch: M47
     commits: [fe5f2ae6]
+    note: review M47 kept; the reviewer deleted the builder's sort and saw the new case fail while the end-to-end case still passed
   - id: F281
     source: F196
     description: The helper that names the copy for a plan index indexes the plan's copy list and would panic on an out-of-range index, which cannot happen today, while a borrowing form would fail loudly instead.
-    status: pending_review
+    status: completed
     batch: M47
     commits: [d3dc3ca7]
+    note: review M47 kept; the reviewer restored the panicking form and saw the new case fail, and confirmed the copy's own failure is the cause in the loud path
   - id: F282
     source: F196
     description: The new unit case hand-builds a plan whose copies are listed in alphabetical order, so it cannot tell the plan's order from the sorted order, and a fixture whose plan order was not alphabetical would make the pin sharper.
-    status: pending_review
+    status: completed
     batch: M47
     commits: [ea8c7dc6]
+    note: review M47 kept; the reviewer sorted the list inside the helper and saw the reworked case fail
   - id: F283
     source: F197
     description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
@@ -3930,10 +3947,35 @@ followups:
     commits: []
   - id: F441
     source: F280
-    description: The plan builder now carries its own test module while the rest of the plan module's cases live in the plan module's test file, so the split could be unified.
+    description: The plan builder now carries its own test module while the rest of the plan module's cases live in the plan module's test file, so the split could be unified; the new case also re-declares the file and directory helpers that the plan module's test file already has, byte for byte.
     status: pending
     batch: M116
     commits: []
+  - id: F442
+    source: F281
+    description: The loud path reads the opposite way round from the normal one, with the naming error as the message and the copy's own failure as the cause, where the normal path is the other way about, so a reader has to learn two shapes for one phase.
+    status: pending
+    batch: M117
+    commits: []
+  - id: F443
+    source: F280
+    description: The builder's path order is a plain string comparison of the relative path, so a file sorts before a directory that starts with the same name, and the new case only exercises top-level names, so a component-wise reading of path order is pinned nowhere.
+    status: pending
+    batch: M118
+    commits: []
+  - id: F444
+    source: F280
+    description: The end-to-end case's doc names the builder's case in prose, and nothing checks that the name still exists, so a rename there would leave the doc pointing at nothing.
+    status: pending
+    batch: M118
+    commits: []
+  - id: F445
+    source: F280
+    description: The new builder case re-declares the file and directory helpers the plan module's test file already has, byte for byte.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F441, whose description now carries the duplicated helpers"
 ```
 
 ## Human checklist
@@ -3965,6 +4007,11 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M47 `done`: F280, F281 and F282 all kept, no fix or revert
+  commits; follow-ups F442, F443 and F444 appended with batches `M117` and
+  `M118`, and F445 recorded as `skipped` as the same item as F441, whose
+  description now carries the duplicated helpers. F280–F282 `pending_review` →
+  `completed`.
 - 2026-11-16 — follow-up batch M47 review checkpoint opened: F280, F281 and F282
   `in_progress` → `pending_review`, commits `fe5f2ae6`, `d3dc3ca7`, `ea8c7dc6`;
   review M47 `pending` → `in_progress`, base `33811b74`, head `ea8c7dc6`.
