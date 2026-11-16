@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M39
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-15T18:36:06Z
+last_updated: 2026-11-16T00:56:49Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -757,7 +757,7 @@ reviews:
     followups: []
   - batch: M88
     status: pending
-    tasks: [F383, F384]
+    tasks: [F383, F384, F395]
     base: null
     head: null
     result: null
@@ -826,10 +826,17 @@ reviews:
     result: null
     followups: []
   - batch: M39
-    status: in_progress
+    status: done
     tasks: [F263, F264, F265]
     base: bb57d8fe
-    head: 28a1a18b
+    head: c6663a65
+    result: F263 kept (ec4566db); F264 kept (1c363bbb); F265 fixed (28a1a18b, c6663a65 replaces the claim that the other two ways out are still named, which is false for the default one-algorithm request); 613 passed without the feature and 630 with it, 1 skipped; the reviewer mutated the pass to sort by the exact src key and saw the new assert_ne fail on its own
+    followups: [F394, F395]
+  - batch: M93
+    status: pending
+    tasks: [F394]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M17
@@ -2642,21 +2649,24 @@ followups:
   - id: F263
     source: F190
     description: util::is_cache_name is pub with no caller outside the crate, the same surface question F191 raised for side_folder, though it does match the visibility of its counterpart is_record_path.
-    status: pending_review
+    status: completed
     batch: M39
     commits: [ec4566db]
+    note: review M39 kept; the reviewer confirmed the stated reason is true of the crate, including that the helper has exactly one production call site and no out-of-crate caller
   - id: F264
     source: F186
     description: The added assertion in the rename fixture sorts a vector the test itself builds, so it states the fixture property rather than the program one and can only fail if the fixture is edited.
-    status: pending_review
+    status: completed
     batch: M39
     commits: [1c363bbb]
+    note: review M39 kept; the reviewer mutated the pass to sort by the exact src key and saw the new assert_ne fail on its own
   - id: F265
     source: F190
     description: The README Gotchas bullet still says the error names the folder to run that fix on, which now holds only for a record that is a folder own cache, while the new paragraph above states the exception.
-    status: pending_review
+    status: completed
     batch: M39
-    commits: [28a1a18b]
+    commits: [28a1a18b, c6663a65]
+    note: review M39 fixed (c6663a65 replaces the claim that the other two ways out are still named, which is false for the default one-algorithm request, where only the none remedy is offered)
   - id: F266
     source: F189
     description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
@@ -3442,6 +3452,25 @@ followups:
     status: pending
     batch: M91
     commits: []
+  - id: F394
+    source: F263
+    description: The design notes' four fold sites section never mentions the exact-name rule or the repopulation rule, so that heading no longer describes every fold site the crate has.
+    status: pending
+    batch: M93
+    commits: []
+  - id: F395
+    source: F265
+    description: The bullet says the error names the paths, while the message names at most five of them in full and then a count of the rest.
+    status: pending
+    batch: M88
+    commits: []
+  - id: F396
+    source: F264
+    description: src/commands/sync/rename.rs's unit test the_rename_order_is_by_the_folded_key still sorts a vector the test itself builds and asserts the literal.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F391, already scheduled in M92"
 ```
 
 ## Human checklist
@@ -3473,6 +3502,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M39 `done`: F263 kept (ec4566db), F264 kept (1c363bbb),
+  F265 fixed (28a1a18b, c6663a65); follow-ups F394 and F395 appended with
+  batches `M93` and `M88`, and F396 recorded as `skipped` as the same item as
+  F391. F263–F265 `pending_review` → `completed`.
 - 2026-11-15 — follow-up batch M39 review checkpoint opened: F263, F264 and F265
   `in_progress` → `pending_review`, commits `ec4566db`, `1c363bbb`, `28a1a18b`;
   review M39 `pending` → `in_progress`, base `bb57d8fe`, head `28a1a18b`.
