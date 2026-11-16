@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M47
+active_batch: M48
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T07:59:24Z
 tasks:
@@ -2978,19 +2978,19 @@ followups:
   - id: F283
     source: F197
     description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
-    status: pending
+    status: in_progress
     batch: M48
     commits: []
   - id: F284
     source: F199
     description: The hashing phase's total is the planner's pending count rather than the map's size, so the case's wording that it counts only what the map kept holds only because the fixture's cache is cold.
-    status: pending
+    status: in_progress
     batch: M48
     commits: []
   - id: F285
     source: F195
     description: The heartbeat constant is now public API purely so the integration test can read the same constant, and nothing else in the crate needs it public.
-    status: pending
+    status: in_progress
     batch: M48
     commits: []
   - id: F286
@@ -4007,6 +4007,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M48 started: F283, F284 and F285 `pending` →
+  `in_progress`; `active_batch: M47` → `M48`.
 - 2026-11-16 — review M47 `done`: F280, F281 and F282 all kept, no fix or revert
   commits; follow-ups F442, F443 and F444 appended with batches `M117` and
   `M118`, and F445 recorded as `skipped` as the same item as F441, whose
