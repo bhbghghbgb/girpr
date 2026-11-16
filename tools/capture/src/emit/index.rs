@@ -288,6 +288,20 @@ pub fn rel(root: &Path, path: &Path) -> String {
         .join("/")
 }
 
+/// The passing detail for a scoped pass, stating which files were re-hashed and
+/// which digests were carried across. Kept as one function so the close-out can
+/// write the row before the published document exists and the scoped check can
+/// confirm the same words afterwards, without duplicating the claim in two
+/// literals.
+pub(crate) fn scoped_pass_detail(file_count: u64, rewritten: &[&str]) -> String {
+    let mut names: Vec<&str> = rewritten.to_vec();
+    names.sort_unstable();
+    format!(
+        "{file_count} files, every digest checked; re-hashed {} on disk, other digests carried from the first pass",
+        names.join(", ")
+    )
+}
+
 /// `verify/checksums.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checksums {
@@ -400,6 +414,51 @@ impl Checksums {
         }
     }
 
+    /// A16 for the document a close-out actually publishes: membership plus a
+    /// re-hash of the paths rewritten since the first pass.
+    ///
+    /// `close` writes `checksums.json` twice. The first document is checked by
+    /// [`Checksums::a16`], which re-hashes every file. Between the two writes
+    /// only `rewritten` is written again, and nothing else appears or vanishes —
+    /// the second pass is a `scan_reusing` of the same tree. So the exact check
+    /// of the published document has two halves:
+    ///
+    /// - membership: walk the tree and compare the path set with `entries`,
+    ///   excluding `checksums.json` itself, and check `file_count` and
+    ///   `total_bytes` against the entries — the same check, from the same
+    ///   helper, that [`Checksums::findings`] uses;
+    /// - digests: re-read and re-hash only `rewritten`, comparing with their
+    ///   entries. A rewritten path with no entry is a failure too.
+    ///
+    /// Every other entry was re-hashed by the first pass and not written since,
+    /// so it is covered transitively rather than hashed again here. That is the
+    /// cost saving this keeps. A caller that cannot assume a first pass —
+    /// `verify`, on a bundle someone else may have edited — uses
+    /// [`Checksums::a16`] instead.
+    pub fn a16_scoped(&self, root: &Path, rewritten: &[&str]) -> (bool, String) {
+        let (mut out, _) = self.membership_findings(root);
+        for path in rewritten {
+            match self.entries.iter().find(|e| e.path == *path) {
+                None => out.push(format!("{path} was rewritten but is not in checksums.json")),
+                Some(entry) => match digest_file(&root.join(path), entry.encoding) {
+                    Ok(got)
+                        if got.md5 == entry.md5
+                            && got.sha256 == entry.sha256
+                            && got.bytes == entry.bytes => {}
+                    Ok(got) => out.push(format!(
+                        "{path}: listed {} B md5 {}, on disk {} B md5 {}",
+                        entry.bytes, entry.md5, got.bytes, got.md5
+                    )),
+                    Err(io) => out.push(format!("{path}: {io}")),
+                },
+            }
+        }
+        match out.into_iter().next() {
+            Some(f) => (false, f),
+            None => (true, scoped_pass_detail(self.file_count, rewritten)),
+        }
+    }
+
     /// Every A16 failure, in a stable order.
     ///
     /// Exhaustive on purpose. A capture reports the first because it stops at the
@@ -407,6 +466,34 @@ impl Checksums {
     /// operator round a 95-file bundle once per round trip, and the second
     /// finding is usually in the same directory as the first.
     pub fn findings(&self, root: &Path) -> Vec<String> {
+        let (mut out, on_disk) = self.membership_findings(root);
+        // Only re-hash a file that still exists: a ghost above already named it,
+        // and digesting it would report the same problem a second way.
+        for e in &self.entries {
+            if !on_disk.contains(&e.path) {
+                continue;
+            }
+            match digest_file(&root.join(&e.path), e.encoding) {
+                Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
+                Ok(got) => out.push(format!(
+                    "{}: listed {} B md5 {}, on disk {} B md5 {}",
+                    e.path, e.bytes, e.md5, got.bytes, got.md5
+                )),
+                Err(io) => out.push(format!("{}: {io}", e.path)),
+            }
+        }
+        out
+    }
+
+    /// The membership and total half of [`Checksums::findings`], shared with
+    /// [`Checksums::a16_scoped`] so the two cannot disagree about what "listed"
+    /// means: the same exclusion, the same sorted walk, the same saturating
+    /// total fold. Returns the paths found on disk so `findings` can re-hash
+    /// them without a second walk.
+    fn membership_findings(
+        &self,
+        root: &Path,
+    ) -> (Vec<String>, std::collections::BTreeSet<String>) {
         let mut out = Vec::new();
         let on_disk: std::collections::BTreeSet<String> = match walk(root) {
             Ok(v) => v
@@ -416,7 +503,7 @@ impl Checksums {
                 .collect(),
             Err(e) => {
                 out.push(format!("walk {}: {e}", root.display()));
-                return out;
+                return (out, std::collections::BTreeSet::new());
             }
         };
         let listed: std::collections::BTreeSet<String> =
@@ -462,22 +549,7 @@ impl Checksums {
         } else if self.total_bytes != total {
             out.push("total_bytes disagrees with the entries".into());
         }
-        // Only re-hash a file that still exists: a ghost above already named it,
-        // and digesting it would report the same problem a second way.
-        for e in &self.entries {
-            if !on_disk.contains(&e.path) {
-                continue;
-            }
-            match digest_file(&root.join(&e.path), e.encoding) {
-                Ok(got) if got.md5 == e.md5 && got.sha256 == e.sha256 && got.bytes == e.bytes => {}
-                Ok(got) => out.push(format!(
-                    "{}: listed {} B md5 {}, on disk {} B md5 {}",
-                    e.path, e.bytes, e.md5, got.bytes, got.md5
-                )),
-                Err(io) => out.push(format!("{}: {io}", e.path)),
-            }
-        }
-        out
+        (out, on_disk)
     }
 }
 

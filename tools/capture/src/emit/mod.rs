@@ -249,10 +249,13 @@ pub fn write_checksums(root: &Path) -> std::io::Result<(String, index::Checksums
 /// **This is the second half of A16's convergence, not a shortcut around it.**
 /// `run` writes `verify/selfcheck.json` a second time to record A16's own row,
 /// which changes that one file; the re-scan therefore re-digests one file rather
-/// than the whole bundle, and `Checksums::a16` still re-reads every file from
-/// disk to prove the result. `verify` passes nothing and scans everything, which
-/// is correct: a bundle may have been tampered with since it was written, and
-/// there is no honest way to carry a digest across that.
+/// than the whole bundle. The first pass is proved by `Checksums::a16`, which
+/// re-reads every file, and the document published here is proved by
+/// `Checksums::a16_scoped`, which checks membership and re-hashes exactly the
+/// files named in `rewritten`; no digest is trusted just because it was reused.
+/// `verify` passes nothing and scans everything, which is correct: a bundle may
+/// have been tampered with since it was written, and there is no honest way to
+/// carry a digest across that.
 pub fn write_checksums_reusing(
     root: &Path,
     known: &[index::FileEntry],

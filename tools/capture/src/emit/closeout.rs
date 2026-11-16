@@ -23,6 +23,12 @@
 //! which invalidates `checksums.json`. [`close`] owns that loop. Split across
 //! callers it would be four `emit::` calls in the right order, which is the same
 //! thing said more weakly.
+//!
+//! The published `checksums.json` is then checked by
+//! [`index::Checksums::a16_scoped`]: membership plus a re-hash of the two
+//! documents the loop rewrote. The first pass's full [`index::Checksums::a16`]
+//! proves the digests carried across, so the published document is checked
+//! without a second full re-hash.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -32,6 +38,11 @@ use crate::http::ApiError;
 
 use super::index;
 use super::selfcheck::{Assertion, Selfcheck};
+
+/// The two documents rewritten after A16 is recorded. Named once so the reuse
+/// pass and the scoped check of the published document cannot name different
+/// files — and so the A16 row can state the same scope it was checked under.
+const REWRITTEN_AFTER_A16: &[&str] = &["verify/selfcheck.json", "README.md"];
 
 /// Everything the close-out needs from the orchestrator.
 ///
@@ -71,7 +82,9 @@ pub struct CloseoutInput<'a> {
 pub struct Closed {
     /// `MANIFEST.json`, as written.
     pub manifest: index::Manifest,
-    /// `verify/checksums.json`, as written by the **second** pass.
+    /// `verify/checksums.json`, as finally published. Normally the second
+    /// pass's document; if the scoped check found a late discrepancy, the
+    /// republished one.
     pub checksums: index::Checksums,
     /// `verify/selfcheck.json`, final.
     pub selfcheck: Selfcheck,
@@ -117,7 +130,9 @@ pub struct Closed {
 /// Two passes converge exactly: the second `checksums.json` is scanned after the
 /// final `selfcheck.json` and `README.md`, so what it records is what is on
 /// disk. A third pass would find nothing new, which is the proof it converged —
-/// and `two_passes_converge` is that proof, as a test.
+/// and `two_passes_converge` is that proof, as a test. A third write happens only
+/// when the scoped check of the published document finds a late discrepancy and
+/// the failing A16 row has to replace the one written before the second pass.
 ///
 /// The second pass is **unconditional.** A guard such as
 /// `if !selfcheck.by_id().contains_key("A16")` could never be false:
@@ -202,12 +217,14 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     written.push(super::write_manifest(i.dir, &manifest).map_err(|e| write_err(i.dir, e))?);
     written
         .push(super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?);
-    let (_, checksums) =
+    let (_, first_checksums) =
         super::write_checksums_reusing(i.dir, &listed, &[]).map_err(|e| write_err(i.dir, e))?;
     // The independent half of A16: re-reads every listed file from disk and
     // compares. This is deliberately **not** folded into the scan above — a
-    // re-hash that reuses the digests it is checking would be a tautology.
-    let (a16_ok, a16_detail) = checksums.a16(i.dir);
+    // re-hash that reuses the digests it is checking would be a tautology. It
+    // also establishes the transitive coverage the scoped check below relies
+    // on: every non-rewritten digest is proved here, once, not carried unchecked.
+    let (first_ok, first_detail) = first_checksums.a16(i.dir);
     written.push("verify/checksums.json".to_string());
 
     // Second pass: record A16, then re-write the two documents it changed — and
@@ -218,22 +235,62 @@ pub fn close(mut i: CloseoutInput<'_>) -> Result<Closed, Failure> {
     // `selfcheck.json` said 116. Its final size does not depend on anything the
     // second scan measures — the counts are a row tally, not a byte total — so
     // the fixpoint below is still exact rather than converging in practice.
+    //
+    // The row's detail is the scope the *published* document will be checked
+    // under, not the first pass's "every digest re-hashed": the digests it did
+    // not rehash are carried from the first pass, which proved them above.
+    let written_ok = first_ok;
+    let written_detail = if first_ok {
+        index::scoped_pass_detail(first_checksums.file_count, REWRITTEN_AFTER_A16)
+    } else {
+        first_detail.clone()
+    };
     selfcheck.assertions.push(Assertion::row(
         "A16",
         "verify/checksums.json",
         "covers every file under the artifact root, and re-hashing matches",
-        a16_ok,
-        &a16_detail,
+        written_ok,
+        &written_detail,
     ));
     selfcheck = Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
     super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
     super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?;
-    let (_, checksums) = super::write_checksums_reusing(
-        i.dir,
-        &checksums.entries,
-        &["verify/selfcheck.json", "README.md"],
-    )
-    .map_err(|e| write_err(i.dir, e))?;
+    let (_, mut checksums) =
+        super::write_checksums_reusing(i.dir, &first_checksums.entries, REWRITTEN_AFTER_A16)
+            .map_err(|e| write_err(i.dir, e))?;
+
+    // Check the document actually published, not the one the A16 row was first
+    // drafted against. Membership and the two rewritten paths are checked here;
+    // everything else was re-hashed by the first pass and not written since.
+    let (scoped_ok, scoped_detail) = checksums.a16_scoped(i.dir, REWRITTEN_AFTER_A16);
+    let a16_ok = first_ok && scoped_ok;
+    let a16_detail = if first_ok {
+        scoped_detail
+    } else {
+        first_detail
+    };
+
+    // If what we wrote before the second pass differs from what the scoped
+    // check found, the selfcheck on disk cannot stand: it would claim a pass
+    // for a document that failed, or a stale finding. Rewrite the A16 row and
+    // republish the three documents once. On the ordinary path the detail is
+    // identical and nothing is written again — no third full pass.
+    if a16_ok != written_ok || a16_detail != written_detail {
+        selfcheck.assertions.pop();
+        selfcheck.assertions.push(Assertion::row(
+            "A16",
+            "verify/checksums.json",
+            "covers every file under the artifact root, and re-hashing matches",
+            a16_ok,
+            &a16_detail,
+        ));
+        selfcheck = Selfcheck::build(selfcheck.assertions, selfcheck.matrix, &skipped);
+        super::write_selfcheck(i.dir, &selfcheck).map_err(|e| write_err(i.dir, e))?;
+        super::write_readme(i.dir, &manifest, &selfcheck).map_err(|e| write_err(i.dir, e))?;
+        checksums = super::write_checksums_reusing(i.dir, &checksums.entries, REWRITTEN_AFTER_A16)
+            .map_err(|e| write_err(i.dir, e))?
+            .1;
+    }
 
     tracing::info!(
         selfcheck = ?selfcheck.result,
