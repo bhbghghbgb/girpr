@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M45
+active_batch: M46
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T06:20:30Z
 tasks:
@@ -2887,13 +2887,13 @@ followups:
   - id: F278
     source: F197
     description: The walk's heartbeat is the one remaining progress event whose name does not say what produced it, since it is told apart by its entries field, and naming it for the walk would make the family uniform.
-    status: pending
+    status: in_progress
     batch: M46
     commits: []
   - id: F279
     source: F197
     description: The start events name their phase by operation while the done and the progress events now name it by letter, so the family uses two spellings.
-    status: pending
+    status: in_progress
     batch: M46
     commits: []
   - id: F280
@@ -3852,6 +3852,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M46 started: F278 and F279 `pending` →
+  `in_progress`; `active_batch: M45` → `M46`.
 - 2026-11-16 — review M45 `done`: F276 kept (14e67a4a), F277 fixed (de7cf1df,
   38e2a220, 8333e9ef); follow-ups F428, F429 and F430 appended with batches
   `M111`, `M112` and `M109`. F276 and F277 `pending_review` → `completed`.
