@@ -11,10 +11,10 @@ schema: 1
 project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
-phase: followups-evaluate
-active_batch: M54
+phase: followups-implement
+active_batch: M139
 spawn: openchamber session.create (no agent or model specified, use defaults), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time, returnResult true
-last_updated: 2026-11-16T12:39:03Z
+last_updated: 2026-11-16T13:10:00Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -3265,21 +3265,24 @@ followups:
   - id: F302
     source: F207
     description: The renamed indexes carry a keys suffix while the helper's own doc calls it the folded-key index, so the names do not match the wording exactly.
-    status: pending
-    batch: M55
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): naming/wording mismatch (keys suffix vs "folded-key index" doc).'
   - id: F303
     source: F207
     description: The POSIX build warns about an unused import in the sync test module, which predates this work.
-    status: pending
-    batch: M55
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): unused-import compiler warning; no incorrect behaviour.'
   - id: F304
     source: F210
     description: The new parse_any_of doc says the refusal is made there so it does not point a user who typed --hash-any-of at a flag they did not, while the message itself names --hash-all-of none as the remedy, a wording that reads as a contradiction on a quick pass.
-    status: pending
-    batch: M56
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording reads as a contradiction on a quick pass.'
   - id: F305
     source: F209
     description: The crate still spells --hash-any-of sha256 md5 with two algorithms in one occurrence in the README, the design notes, the CLI definition and the coverage remedy, a spelling the parser rejects, so the two spellings now coexist after this batch.
@@ -3297,45 +3300,52 @@ followups:
   - id: F307
     source: F213
     description: The path rule's first case could say the row's own path, so a reader does not apply it to the bare file names inside a directory row's cell, since the commands/sync/plan/ row names link.rs too.
-    status: pending
-    batch: M57
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc-clarity wording about whose path the rule covers.'
   - id: F308
     source: F214
     description: The design notes' stuck-row limit still omits the README's describing content it cannot verify clause, so the two documents agree on the repair but not quite on the symptom.
-    status: pending
-    batch: M57
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): docs-consistency: symptom clause omitted from design notes.'
   - id: F309
     source: F215
     description: Only the design notes group the limits into kinds, so the README's Gotchas list has no counterpart that has to be kept in step with them.
-    status: pending
-    batch: M57
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): docs-consistency: limit kinds grouped in one doc only.'
   - id: F310
     source: F217
     description: with_handle's closing sentence calls the shared backend the one case where several handles are alive on one cache at once, which contradicts the paragraph above it saying read-only handles on a file share the file with each other; what distinguishes the shared backend is the single counter, not the number of live handles.
-    status: pending
-    batch: M58
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): self-contradictory doc sentence; no code misbehaviour.'
   - id: F311
     source: F217
     description: The rule that one counter is shared by every handle on a path is now spelled in four places, SharedCache::reads, CacheDb::reads, entries_read_count and with_shared_reads, so a change to it has four places to edit.
-    status: pending
-    batch: M58
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): duplicated doc rule (spelled in four places).'
   - id: F312
     source: F217
     description: The field's headline and its accessor entries_read_count now describe the same number in different words, and on the shared backend only the accessor's wording is the loose one.
-    status: pending
-    batch: M58
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): wording drift between a headline and its accessor.'
   - id: F313
     source: F216
     description: The same item is now spelled two ways in the tree, crate::util::folded_keys in the phase A doc link, but plain util::folded_keys in three prose mentions, in effective/phase_a.rs, commands/sync/plan/safety.rs and commands/sync/plan/link.rs.
-    status: pending
-    batch: M59
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): path vocabulary inconsistency (crate:: vs plain).'
   - id: F314
     source: F216
     description: The workspace-wide private-items doc build still reports 16 warnings for girpr and 5 for gircap.
@@ -3346,69 +3356,80 @@ followups:
   - id: F315
     source: F219
     description: src/cache/open.rs's in-code comment says the cache's own exclusive lock is held, so no other run is in its run phase for the folder, which is false on a filesystem that cannot lock a file, where redb skips the lock entirely.
-    status: pending
-    batch: M60
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): in-code comment inaccurate on non-locking FS; no behaviour change.'
   - id: F316
     source: F219
     description: retain_copies' doc says a folder with no lock to take has the copies a live run published there protected by the records beside them instead, which holds for a legacy sled directory but not on a filesystem that cannot lock a file, where the record is a lock and there is none.
-    status: pending
-    batch: M60
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc inaccuracy on non-locking FS; no behaviour change.'
   - id: F317
     source: F219
     description: The README states the lock exclusion unconditionally in two places in the bound section, and its One cache per run bullet says a read/write open locks its file exclusively, with no mention of the filesystem that cannot lock one.
-    status: pending
-    batch: M60
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): README omits a non-locking-FS caveat; doc only.'
   - id: F318
     source: F222
     description: ensure_link_safe's own doc still says it refuses before any apply phase changes anything, which is true of the apply phases but reads as before anything changes even though the rename has already changed dst in a real run.
-    status: pending
-    batch: M61
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording ambiguity about when changes begin.'
   - id: F319
     source: F223
     description: The hard-link probe answers with the link count and the inode identity, and the identity is what credits a planned removal, so it asks how many names a file has names only the half the refusal turns on.
-    status: pending
-    batch: M61
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): probe-question wording ("names only half").'
   - id: F320
     source: F224
     description: The scan covers only safety.rs and plan/link.rs, so a direct call made from a third file of the plan module would not be seen.
-    status: pending
-    batch: M62
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): source-scan test-coverage gap (third file unseen).'
   - id: F321
     source: F224
     description: The scan knows only std::fs, crate::link and crate::hardlink as disk-reaching modules, so a direct call to a newly added disk-reaching module would not be seen.
-    status: pending
-    batch: M62
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): source-scan test-coverage gap (new module unseen).'
   - id: F322
     source: F224
     description: The test compares the file and call pairs only, so the asks prose in each entry is unchecked and can drift from the code.
-    status: pending
-    batch: M62
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage of prose ("asks" unchecked).'
   - id: F323
     source: F224
     description: The list's file field hardcodes two file names, so splitting the guards across a third file would need the field and the test's file list changed together.
-    status: pending
-    batch: M62
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test fragility: hard-coded file list.'
   - id: F324
     source: F227
     description: The list's group membership exists only in prose; DirectQuestion carries file, call and asks but nothing that says which group a question belongs to, so a machine-readable consumer cannot recover it.
-    status: pending
-    batch: M63
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API/machine-readability ergonomics (group in prose only).'
   - id: F325
     source: F227
     description: The link_ancestor_above entry says the action for the plan action it guards; it could name the planned action explicitly, as the guard does.
-    status: pending
-    batch: M63
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): wording (name the planned action explicitly).'
   - id: F326
     source: F227
     description: The check that keeps the list in step scans only safety.rs and plan/link.rs, so a direct disk call made from a third file of the plan module would not be seen.
@@ -3426,63 +3447,73 @@ followups:
   - id: F328
     source: F227
     description: The seam's own Probes::canonicalize, the canonical form of path with every link resolved, is itself a link question asked through the seam, while the Probes doc now says the link questions are asked directly and carves out only the hard-link count; the label's scope could name the dst-root resolution too.
-    status: pending
-    batch: M64
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): wording (label scope could name dst-root resolution).'
   - id: F329
     source: F228
     description: The streaming callback runs while the cache's read transaction is still open, so a callback that opened a write transaction on the same cache would block on redb's write lock; neither visit_keys doc says so.
-    status: pending
-    batch: M65
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc caveat about a hypothetical callback misuse.'
   - id: F330
     source: F228
     description: CacheWrite::load_keys now has no in-crate caller, since the prune streams instead, so it survives only as the collecting counterpart its own doc points new callers at.
-    status: pending
-    batch: M65
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): dead code: no in-crate caller left.'
   - id: F331
     source: F229
     description: The no spare capacity property is pinned by tests but still leans on collect's sizing hint; building the arm with an explicit Vec::with_capacity(len) would make it exact by construction rather than by the iterator's hint.
-    status: pending
-    batch: M66
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf micro-optimisation (explicit Vec::with_capacity).'
   - id: F332
     source: F229
     description: merge's shrink_to_fit costs one reallocation for every row carrying a foreign digest, on a path both phase A and phase C walk.
-    status: pending
-    batch: M66
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (shrink_to_fit reallocations on foreign digests).'
   - id: F333
     source: F231
     description: The mixed-case guard is what keeps the disk's own spelling out of a group in practice, and the group docs do not name it, so a reader has to re-derive why the invariant holds today.
-    status: pending
-    batch: M67
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): "reader has to re-derive" doc note.'
   - id: F338
     source: F232
     description: The design notes' Enforced by list for the digest-set invariant still names only the_resolver_folds_exactly_as_the_ascii_case_comparison_does, so the case that now pins the oracle's own classification is not listed.
-    status: pending
-    batch: M69
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc "Enforced by" list update.'
   - id: F339
     source: F234
     description: The README's alternate-case index paragraph still reads as though the whole index is built at the first exact-case miss and does not say that the folded groups are materialised only from the second lookup on.
-    status: pending
-    batch: M69
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): README wording accuracy (when groups materialise).'
   - id: F340
     source: F234
     description: The path key's rule is now stated as a comparison in a second form, std::eq_ignore_ascii_case in phase_a against util::path_key's fold, with util::ascii_case_eq covering the Windows-only sites, so a cross-platform crate-owned comparison helper could hold the three together in one place.
-    status: pending
-    batch: M70
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): refactor: consolidate a crate-owned comparison helper.'
   - id: F341
     source: F232
     description: The oracle's independence from std is a source-level property that no behavioural case can catch, and the crate has a precedent for a source-scanning case in the plan safety module.
-    status: pending
-    batch: M72
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): extra source-scan test coverage.'
   - id: F342
     source: F234
     description: The folded index's map keys are still one owned String per distinct folded key; the hash-of-the-folded-bytes route was rejected because a collision would merge two distinct folded spellings and could adopt the wrong row.
@@ -3493,111 +3524,129 @@ followups:
   - id: F343
     source: F234
     description: The index still copies the whole key set on the first miss, so a streaming first lookup would avoid that copy too, at the price of a second table pass for the prune.
-    status: pending
-    batch: M72
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (streaming first lookup to avoid key-set copy).'
   - id: F344
     source: F234
     description: The prune's key set is still an owned Vec of Strings when the index is built, one allocation per cached row for keys the index holds.
-    status: pending
-    batch: M72
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (owned Vec of Strings allocation).'
   - id: F345
     source: F236
     description: The new prose in DigestSet::merge claims a replacement allocates nothing, but extend_from_slice reallocates when the new digest is longer than the arm's buffer, and the crate's own insert_named words the same claim as when it is big enough, so the two writers' wording now drifts.
-    status: pending
-    batch: M73
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc claim about allocations inaccurate; no wrong results.'
   - id: F346
     source: F236
     description: The merge's foreign-add path is not reached by the crate's own runs, since Digests::finish fills the known slots only, so the two allocations it removes are not on a run's hot path; the allocation the merge path actually pays is the prior row's clone in merge_row.
-    status: pending
-    batch: M73
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf analysis of an untested hot path.'
   - id: F334
     source: F228
     description: The apply-phase prunes still materialise the whole key set with load_keys and remove while walking it; they could stream and keep only the rows to remove.
-    status: pending
-    batch: M71
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (stream prunes instead of materialising keys).'
   - id: F335
     source: F228
     description: The rename re-key still collects the whole key set before reading the moved rows; it needs the pairs anyway, so the win is smaller.
-    status: pending
-    batch: M71
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (rename re-key materialisation).'
   - id: F336
     source: F234
     description: The alternate-case index still owns one String per cached row whenever it is built, since it names positions in them and hands a spelling back, so the key set's per-row allocation survives a run that misses a path exactly.
-    status: pending
-    batch: M72
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (one String per cached row).'
   - id: F337
     source: F228
     description: A write handle cannot remove rows while streaming, since the callback borrows the handle; a prune-as-you-stream method would remove that collection, at the price of a cache-specific API.
-    status: pending
-    batch: M71
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API/ergonomics (prune-as-you-stream method).'
   - id: F347
     source: F240
     description: The const block's doc says the ASCII-case spelling is the one answer this block cannot hold, whereas what it cannot hold is the derived one, since a hand-written uppercase literal would fit in a const block and writing one is what this change removed.
-    status: pending
-    batch: M74
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording about what a const block cannot hold.'
   - id: F348
     source: F240
     description: HashAlg::ALL is a fixed-size array, so adding a variant to the enum does not force ALL to grow, and a variant left out of ALL would be uncovered by anything; a const assertion that the entries are in order would catch an entry replaced rather than appended.
-    status: pending
-    batch: M74
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): hypothetical future robustness (const assertion on ALL).'
   - id: F349
     source: F240
     description: hash_names_fold_ascii_case_only and from_str_is_case_insensitive_without_help still spell md5 and sha256 by hand; they read as examples rather than as coverage, but a reader could take them for coverage.
-    status: pending
-    batch: M74
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test wording (examples vs coverage).'
   - id: F350
     source: F242
     description: The scan's one pass over the entries table's keys, which the README still asserts, is no longer pinned by any case, since the converted case's read-count assertion was its only pin and pinning it that way is what made it fragile.
-    status: pending
-    batch: M75
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-coverage gap (one-pass scan unpinned).'
   - id: F351
     source: F242
     description: ScanStats::alt_lookups is returned but not logged; the effective done phase a event could carry it, which is user-visible and would need a README line.
-    status: pending
-    batch: M75
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): feature/observability addition (log alt_lookups).'
   - id: F352
     source: F242
     description: cache/db/cachedb.rs's entries_read_count seam now has no phase-A user left; the other users, cachedb's own cases and commands/sync/rename.rs, remain.
-    status: pending
-    batch: M76
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): dead code: seam has no phase-A caller left.'
   - id: F353
     source: F244
     description: The converter binary's own module doc states the same rule about a doc comment reaching --help without the multi-paragraph qualification, and should be aligned with the corrected test comment.
-    status: pending
-    batch: M78
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording alignment (converter module doc).'
   - id: F354
     source: F244
     description: without_shared_value_wording cuts every Possible values block rather than the --output one, so a future flag with its own value descriptions would have those cut too.
-    status: pending
-    batch: M78
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-helper scope for a hypothetical future flag.'
   - id: F355
     source: F243
     description: The main girsync binary also declares no version, so girsync --version is an unknown flag too, and nothing in the suite pins that; the same shape as the converter's case, in the ungated target.
-    status: pending
-    batch: M79
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): CLI feature (main binary --version); same as skipped F113.'
   - id: F356
     source: F244
     description: The pinned help still contains the default marker, which comes from the shared enum's default variant's spelling, so renaming that variant would break the converter's pin.
-    status: pending
-    batch: M78
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test fragility (default marker in pinned help).'
   - id: F357
     source: F243
     description: The no version line at all assertion checks stderr only, while a declared version would go to stdout.
@@ -3608,45 +3657,52 @@ followups:
   - id: F358
     source: F249
     description: The script's rules live outside the crate's test suite; a Rust test that runs the self-test under cargo nextest, skipping where pwsh is absent, would put them under the usual gate.
-    status: pending
-    batch: M80
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (run self-test under cargo nextest).'
   - id: F359
     source: F249
     description: "Only the feature branch is injectable: the toolchain probe and the per-member default check are still untested."
-    status: pending
-    batch: M80
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (toolchain probe / default check).'
   - id: F360
     source: F248
     description: The feature checks now build through a scriptblock, so cargo's output goes through Out-Host and the CI log shows cargo's stderr before its stdout.
-    status: pending
-    batch: M80
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): cosmetic log ordering (stderr before stdout).'
   - id: F361
     source: F247
     description: The accepted-value names are pinned by an assertion inside the help pin's case rather than in a case of its own, so a value rename is reported under the render pin's test name.
-    status: pending
-    batch: M81
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test naming (accepted-value assertion placement).'
   - id: F362
     source: F247
     description: The golden is a hand-written mirror of the bin target's derive definition, so the converter's command is now written twice and the pin is the only thing keeping the two in step.
-    status: pending
-    batch: M81
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test fragility (hand-written golden).'
   - id: F363
     source: F248
     description: The whole-set configuration exists only from three features up, since with two the pair is the whole set, which is correct but leaves that case implicit in the rules.
-    status: pending
-    batch: M82
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-coverage/wording (whole-set from three features).'
   - id: F364
     source: F249
     description: The self-test prints the rules' own FAIL lines for its negative cases, so a green CI log contains FAIL lines.
-    status: pending
-    batch: M82
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): cosmetic (FAIL lines in a green CI log).'
   - id: F365
     source: F248
     description: The pair lookup re-derived a pair's name and read an absent key as did not build.
@@ -3664,27 +3720,31 @@ followups:
   - id: F367
     source: F252
     description: The metadata reader cannot hold case-differing feature names, since ConvertFrom-Json refuses a JSON object with two keys that differ only in case, so a member declaring alpha and Alpha fails at the metadata step rather than being modelled.
-    status: pending
-    batch: M83
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): tool limitation on case-differing feature names; graceful error, not wrong results.'
   - id: F368
     source: F251
     description: The combination named beside a failing feature is the whole set, since the rules do not build the smaller combinations, so a member with many features whose failing feature needs only two of them is told about a wider configuration than it needs.
-    status: pending
-    batch: M83
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): diagnostic accuracy (wider config named than needed).'
   - id: F369
     source: F251
     description: A feature that needs two partners is failed even though the whole set builds; that is deliberate, since a feature alone is a configuration cargo allows, but it is a policy the rule states rather than a necessity.
-    status: pending
-    batch: M83
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): deliberate policy stated by the rule.'
   - id: F370
     source: F251
     description: The README's new sentence says the two-partner failure names the combination that does build it, which is the whole set of the member's features, but when the whole set itself fails nothing is named beside the feature failure, so the sentence over-states the guarantee.
-    status: pending
-    batch: M83
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc overstatement of a guarantee.'
   - id: F371
     source: F251
     description: Only singles, pairs and the whole set are built, so for a member with four or more optional features the minimal building combination is never built and cannot be named; the whole set is named instead.
@@ -3695,15 +3755,17 @@ followups:
   - id: F372
     source: F252
     description: The default-set lookup chooses the exact name default and then re-reads the value through the case-insensitive property indexer, so a features object holding both default and Default would read the wrong value; it is unreachable today, but selecting the property rather than the name would be exact.
-    status: pending
-    batch: M84
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): "unreachable today"; API exactness tweak.'
   - id: F373
     source: F252
     description: The ordinal exit-code map and the exact partner and combination containment have no self-test case, because neither a PowerShell hashtable nor the self-test's ordered dictionary can hold two feature names differing only in case.
-    status: pending
-    batch: M84
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (hashtable cannot hold case-colliding names).'
   - id: F374
     source: F252
     description: cargo metadata piped into ConvertFrom-Json refuses a features object whose keys differ only in case, although cargo accepts such a manifest, so a member declaring both default and Default kills the MSRV script at the metadata parse.
@@ -3714,81 +3776,94 @@ followups:
   - id: F375
     source: F256
     description: The toolchain-install fallback in check-msrv.ps1, installing an absent rust-version toolchain and refusing a probe failure that is not an absent toolchain, still has no committed test, since it needs a workspace whose declared rust-version is not installed.
-    status: pending
-    batch: M85
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (toolchain-install fallback).'
   - id: F376
     source: F256
     description: No committed case for a member that declares no default feature set, where every declared feature is then optional, nor for a member that declares no features at all.
-    status: pending
-    batch: M85
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (no-default / no-feature member).'
   - id: F377
     source: F257
     description: Middle subsets are never built, so a feature needing two partners is only named as building when the whole set builds; otherwise the failure says only that the feature does not build alone, with no configuration to try.
-    status: pending
-    batch: M85
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): diagnostic/policy (middle subsets never built).'
   - id: F378
     source: F257
     description: The feature failure puts the combination inside the same parentheses as the exit code, so a parser splitting the list on the features flag can mis-read the feature name.
-    status: pending
-    batch: M85
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): output format / diagnostic parsing.'
   - id: F379
     source: F255
     description: The refusal's own path has no committed case, since the flow builds every configuration of two or more features before the lookups, so only a direct call to the helper would pin that a missing entry is refused rather than read as a build that failed.
-    status: pending
-    batch: M86
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (refusal path unreachable via normal flow).'
   - id: F380
     source: F255
     description: The helper takes a configuration's name rather than the configuration, so the rule that a lookup cannot ask for a spelling the check did not build rests on the two call sites passing the configuration's own name rather than on the type.
-    status: pending
-    batch: M86
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API/type design (name vs configuration).'
   - id: F381
     source: F260
     description: Side::cache_file now has no caller in the crate, since its only one was the harness that built its own label; it is kept as documented public API, but the crate could decide to drop it and let callers join the cache prefix themselves.
-    status: pending
-    batch: M87
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): dead code: Side::cache_file has no caller.'
   - id: F382
     source: F260
     description: src/cache/open.rs's remove_cache_path still says path for a cache file, where the crate now says cache file for a side's file; the vocabulary could be aligned, or deliberately left since that function names a path it removes.
-    status: pending
-    batch: M87
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): vocabulary wording ("path" vs "cache file").'
   - id: F383
     source: F260
     description: SideRequest::label in the planner and Coverage::label still describe the label as a record or folder path, while it is now the kind word plus the side's own path.
-    status: pending
-    batch: M88
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (label description).'
   - id: F384
     source: F259
     description: tests/compare_self.rs pins the record-side wording inside a coverage message, while the folder-side wording is only pinned by the new case, so that message-level pin could be widened to both kinds.
-    status: pending
-    batch: M88
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (widen pin to both side kinds).'
   - id: F385
     source: F260
     description: The side-versus-cache-file rule is stated in the two accessors' docs and enforced by a test, but DESIGN-NOTES.md has no do-not-merge-these-two-accessors entry of the kind it gives the sibling scan_stat_only and load_record_side_from rule, so a reader deciding to fold them would re-derive the reasoning from the code.
-    status: pending
-    batch: M87
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): "reader has to re-derive" doc note.'
   - id: F386
     source: F262
     description: side_label still lives in commands while its sibling side_folder now lives in effective::side, so the two side-description rules are in two places.
-    status: pending
-    batch: M89
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): refactor (module placement of side_label).'
   - id: F387
     source: F262
     description: Coverage is not re-exported at the crate root, so Repopulate is not either; if a caller outside the crate is expected to build a Coverage by hand, both would want a root re-export.
-    status: pending
-    batch: M89
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API re-export ergonomics (conditional on outside callers).'
   - id: F388
     source: F261
     description: The README Gotchas bullet still claims the error names the folder to run the fix on, which holds only for a record that is a folder's own cache.
@@ -3799,9 +3874,10 @@ followups:
   - id: F389
     source: F261
     description: planner::fixtures and the hash_mode tests' plan() use Repopulate::NotAFolderCache for abstract synthetic sides that are neither a record nor a folder, so a fixture-triggered coverage message would say not a folder's own cache about a folder-ish side.
-    status: pending
-    batch: M90
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-fixture enum choice / message wording, not real behaviour.'
   - id: F390
     source: F262
     description: util::is_cache_name is pub with no caller outside the crate, and its only in-crate caller is now effective::side rather than commands.
@@ -3812,33 +3888,38 @@ followups:
   - id: F391
     source: F264
     description: src/commands/sync/rename.rs's unit test the_rename_order_is_by_the_folded_key has the same shape the rename finding names, sorting a vector the test itself builds and asserting the literal.
-    status: pending
-    batch: M92
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-shape duplication.'
   - id: F392
     source: F263
     description: is_record_path is public with no out-of-crate caller either; if the crate ever wants the util surface narrowed, that is the pair to decide together.
-    status: pending
-    batch: M91
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): dead code / API surface (no out-of-crate caller).'
   - id: F393
     source: F263
     description: The util module publishes helpers no outside caller uses, so a stated policy for the module's surface would settle these in one place rather than one at a time.
-    status: pending
-    batch: M91
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API-surface policy for the util module.'
   - id: F394
     source: F263
     description: The design notes' four fold sites section never mentions the exact-name rule or the repopulation rule, so that heading no longer describes every fold site the crate has.
-    status: pending
-    batch: M93
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc heading consistency (fold sites).'
   - id: F395
     source: F265
     description: The bullet says the error names the paths, while the message names at most five of them in full and then a count of the rest.
-    status: pending
-    batch: M88
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc overstatement (number of paths named).'
   - id: F396
     source: F264
     description: src/commands/sync/rename.rs's unit test the_rename_order_is_by_the_folded_key still sorts a vector the test itself builds and asserts the literal.
@@ -3849,15 +3930,17 @@ followups:
   - id: F397
     source: F266
     description: Clap's refusal for the two-values-in-one-occurrence form does not say how to ask for two; a friendlier message would have to name the repeated form.
-    status: pending
-    batch: M94
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): message ergonomics (friendlier clap refusal).'
   - id: F398
     source: F266
     description: The flags' value names render as the flag's own placeholder, so the help asks for a value named after the flag rather than an algorithm.
-    status: pending
-    batch: M94
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): help wording (value names render as flag placeholder).'
   - id: F399
     source: F266
     description: Coverage carries the algorithms in a map keyed by the algorithm, so a remedy always names them in canonical order rather than the order the user wrote them; the design notes already record that trade-off.
@@ -3868,111 +3951,129 @@ followups:
   - id: F400
     source: F266
     description: The design-notes section headed Two things that are one now holds five bolded paragraphs, so the heading understates its contents; it was already loose before this batch and the new spelling-rule paragraph adds one more.
-    status: pending
-    batch: M95
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc heading wording ("Two things" now five).'
   - id: F401
     source: F266
     description: The new design-notes sentence names three places that spell the flags, the CLI's own help, the README and the remedy a coverage error prints, while the crate spells them in several source doc comments as well, so the enumeration reads narrower than the rule it states.
-    status: pending
-    batch: M95
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc enumeration wording narrower than the rule.'
   - id: F402
     source: F266
     description: The refusal pin covers the any-of flag only, while the all-of flag's two-value form is refused by the same clap shape and nothing pins it, and the pin asserts only that the message names the second algorithm rather than that the error is clap's unknown-argument kind.
-    status: pending
-    batch: M96
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (all-of two-value form unpinned).'
   - id: F403
     source: F266
     description: The coverage remedy prints the request in canonical order rather than the order the user typed, so the remedy's any-of line does not inherit the user's tie-break preference, and the new test's comment reads as if it did.
-    status: pending
-    batch: M97
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): remedy-message ordering / test-comment accuracy; core tie-break behaviour intact.'
   - id: F404
     source: F266
     description: The why-table's row label now reads hash-any-of md5 --hash-any-of sha256, record holds only md5, which is awkward for a label that is not a command.
-    status: pending
-    batch: M96
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): wording (row label reads as a command).'
   - id: F405
     source: F268
     description: DESIGN-NOTES.md still spells the repair as an update command with a placeholder folder, the same placeholder wording the README no longer uses.
-    status: pending
-    batch: M99
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc consistency (placeholder repair wording).'
   - id: F406
     source: F267
     description: The synopsis lists the concurrency family of flags only on the sync line, though the family is on every subcommand and the README says so under Concurrency.
-    status: pending
-    batch: M98
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc (concurrency flags only on sync synopsis).'
   - id: F407
     source: F267
     description: The synopsis now shows the hash flags twice while the other repeatable flags are shown once, so the synopsis mixes two ways of writing a repeatable flag.
-    status: pending
-    batch: M98
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc consistency (hash flags shown twice).'
   - id: F408
     source: F268
     description: The compare-self section still says three ways out, all named in the error, but under the default single-algorithm request the error names only the repopulation and the none request, the same false count the Gotchas bullet had.
-    status: pending
-    batch: M88
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc false count; no code misbehaviour.'
   - id: F409
     source: F270
     description: The directory-claim case checks its second name with a suffix check and never asks for a third, so a rule change to the later directory-claim spellings would pass it.
-    status: pending
-    batch: M100
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (third spelling unchecked).'
   - id: F410
     source: F270
     description: The converter's inline case pins the first and second retry spellings but not the third, the same gap the cache's claim case had.
-    status: pending
-    batch: M100
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (third retry spelling unchecked).'
   - id: F411
     source: F269
     description: Nothing pins the claim-attempt limit itself, so no test asserts that the family of names stops at the thousandth suffix or that a claim over an exhausted family fails.
-    status: pending
-    batch: M101
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (claim-attempt limit unpinned).'
   - id: F412
     source: F269
     description: The claim-attempt limit is declared twice, in the cache and in the converter, with the same value and no shared constant, so the two families could drift apart.
-    status: pending
-    batch: M101
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): duplicated-constant consolidation.'
   - id: F413
     source: F269
     description: The case-fix placeholder is a third bounded claim family, a thousand candidates numbered from zero, and the README's step-3 description of it says nothing about the bound.
-    status: pending
-    batch: M102
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc completeness (bound not described).'
   - id: F414
     source: F269
     description: The design notes' new paragraph frames the bounded family around the published name only, while the README also lists the working partial name, which is claimed from the same bounded family.
-    status: pending
-    batch: M102
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc consistency (bounded-family framing).'
   - id: F415
     source: F273
     description: The workspace nextest config's hook list covers only the hooks the runner sets, so a reader of that file has no pointer to the crate's other test-only switches, which are named only in the crate's README.
-    status: pending
-    batch: M103
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc pointer (other test-only switches).'
   - id: F416
     source: F273
     description: The workspace nextest config's override for the hand-run bridge cases is inert under a plain test run, since its cases are ignored by design, so the filter reads as if it were live.
-    status: pending
-    batch: M103
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): config clarity (inert nextest override).'
   - id: F417
     source: F274
     description: The rename failure hook's base name is the odd one out, being the only failure hook whose name carries no suffix, so it reads as a peer of the copy and flush hooks while being the rename's before-claim stage.
-    status: pending
-    batch: M104
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): naming (hook base name is the odd one out).'
   - id: F418
     source: F273
     description: The workspace nextest config has no override entry for the other package's Unix-only skips under a Windows host.
@@ -3983,39 +4084,45 @@ followups:
   - id: F419
     source: F274
     description: The property that the rename pass aborts at the first injected failure is documented nowhere, so the design notes' separately-armable argument reads stronger than the code delivers.
-    status: pending
-    batch: M105
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc accuracy (abort-at-first-failure property).'
   - id: F420
     source: F274
     description: The design notes' list of what each stage leaves behind is loose for the step-1 stage, since the placeholder is removed by the cleanup and a directory stage leaves no placeholder at all, where the README and the code doc word it precisely.
-    status: pending
-    batch: M105
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (what each stage leaves behind).'
   - id: F421
     source: F275
     description: The new commit policy type is visible only inside the cache module while the commit limits it carries are public, so a caller outside the crate cannot name the whole policy.
-    status: pending
-    batch: M106
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API visibility ergonomics (policy type not nameable).'
   - id: F422
     source: F275
     description: The commit-limit environment variables are read for the one-off meta write too, though that write uses only the durability, so every cache open pays three environment reads it does not use.
-    status: pending
-    batch: M106
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (three unused env reads per open).'
   - id: F423
     source: F275
     description: The durability type has no equality and is marked non-exhaustive, so comparing two durabilities needs a hand-written match; a small crate-local helper would be reusable if more of the code ever compares them.
-    status: pending
-    batch: M107
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API/ergonomic helper for durability equality.'
   - id: F424
     source: F275
     description: The counters for the other test-only switches, the copy, flush, rename and gate ones, are still per-feature and ad hoc, unlike the new per-thread durability counter.
-    status: pending
-    batch: M107
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): refactor (ad hoc test-only counters).'
   - id: F425
     source: F277
     description: The walk replaces a backslash with a slash on every host, so a POSIX file whose name starts with a backslash gets a relative path that begins with a slash, and joining that onto the destination root replaces the root, so the copy would land outside the destination.
@@ -4025,51 +4132,59 @@ followups:
   - id: F426
     source: F276
     description: The gate's report only appears when the copy phase runs, so a run with nothing to copy never consults the switch and a malformed value stays silent there; reading the switch once at command start would make the report unconditional.
-    status: pending
-    batch: M110
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): validation-timing improvement for a test-only gate; no wrong results.'
   - id: F427
     source: F276
     description: The copy module has a log-capture test helper and the copy phase now has a second, smaller one, two spellings of the same helper.
-    status: pending
-    batch: M110
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): duplicated test-helper refactor.'
   - id: F428
     source: F276
     description: The crate now has two log-capture helpers, one that pins the rendered line and one that pins the event's fields, the channel a log parser reads, so the new case could assert the fields instead of substrings.
-    status: pending
-    batch: M111
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test assertion style improvement (fields vs substrings).'
   - id: F429
     source: F277
     description: On a POSIX host the gate cannot name a copy whose path holds a colon, since the split is on a colon, even though the plan can spell such a path; the README scopes the colon rule to Windows but does not state the limitation.
-    status: pending
-    batch: M112
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): documented colon-path limitation; README doc gap, not wrong results.'
   - id: F430
     source: F277
     description: The walk replaces a backslash with a slash on every host, so a POSIX file whose name holds a backslash is planned under a path that does not exist on disk.
-    status: pending
-    batch: M109
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (merged into F425): same root cause (unconditional backslash-to-slash on all hosts); the name-containing-backslash manifestation of F425.'
   - id: F431
     source: F279
     description: "A record side's phase C writes no events at all, so the family is not symmetric across side kinds: a record side has a phase A with no events and no phase C events."
-    status: pending
-    batch: M113
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): observation about event-family asymmetry.'
   - id: F432
     source: F279
     description: The walk's events are logged before the phase they belong to, since phase A walks before it logs its own start, so a reader meets the walk before the phase that does it.
-    status: pending
-    batch: M113
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): log ordering/wording.'
   - id: F433
     source: F279
     description: The apply phase's progress events sit outside the event family and have no start or done siblings; they are named for what they do, so they are a second convention.
-    status: pending
-    batch: M114
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): convention/wording (progress events without siblings).'
   - id: F434
     source: F279
     description: The alternate-lookup counter is still returned but never logged.
@@ -4080,15 +4195,17 @@ followups:
   - id: F435
     source: F279
     description: The README bullet spells phase C's three events only as the same three for phase C, so a reader looking for the exact string has to know the letter is lower case in the event names.
-    status: pending
-    batch: M113
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (letter case in event names).'
   - id: F436
     source: F278
     description: The walk's start and heartbeat are debug-level while the walk's done and all six phase events are info-level, so the renamed family still spans two levels and a console run at the default level shows only the walk's end.
-    status: pending
-    batch: M115
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): log-level observation.'
   - id: F437
     source: F279
     description: The README bullet still says each phase reports a start, a progress and a done, but a record side runs neither the reading walk nor the hashing phase and so logs none of the six events.
@@ -4106,39 +4223,45 @@ followups:
   - id: F439
     source: F280
     description: The end-to-end copy-failure case still hard-codes the first copy's name as the plan's first copy, and a runtime check would need an observable of the plan's order that is not the dry run's record order, since the plan print lists the diff buckets.
-    status: pending
-    batch: M116
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test fragility (hard-coded first copy).'
   - id: F440
     source: F281
     description: The call site's naming-error path, a disagreement between the plan and the phase, is unreachable in production, so no case covers it beyond the helper's own error.
-    status: pending
-    batch: M117
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage of a production-unreachable path.'
   - id: F441
     source: F280
     description: The plan builder now carries its own test module while the rest of the plan module's cases live in the plan module's test file, so the split could be unified; the new case also re-declares the file and directory helpers that the plan module's test file already has, byte for byte.
-    status: pending
-    batch: M116
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-module split refactor / duplicated helpers.'
   - id: F442
     source: F281
     description: The loud path reads the opposite way round from the normal one, with the naming error as the message and the copy's own failure as the cause, where the normal path is the other way about, so a reader has to learn two shapes for one phase.
-    status: pending
-    batch: M117
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): log message-shape wording.'
   - id: F443
     source: F280
     description: The builder's path order is a plain string comparison of the relative path, so a file sorts before a directory that starts with the same name, and the new case only exercises top-level names, so a component-wise reading of path order is pinned nowhere.
-    status: pending
-    batch: M118
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage (component-wise path order); no concrete failure named.'
   - id: F444
     source: F280
     description: The end-to-end case's doc names the builder's case in prose, and nothing checks that the name still exists, so a rename there would leave the doc pointing at nothing.
-    status: pending
-    batch: M118
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-doc fragility (name not checked).'
   - id: F445
     source: F280
     description: The new builder case re-declares the file and directory helpers the plan module's test file already has, byte for byte.
@@ -4149,39 +4272,45 @@ followups:
   - id: F446
     source: F284
     description: The output test's cache-hit assertion is explained with the cache having been cold, but the count is zero because the update hashes every file, so nothing is left over with a cached digest, which is true with a warm cache too.
-    status: pending
-    batch: M119
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-comment explanation accuracy; assertion itself correct.'
   - id: F447
     source: F284
     description: The hashing phase's progress event reports the plan's pending count while its done event reports the map's size, so a reader comparing the two has to know they are different quantities.
-    status: pending
-    batch: M119
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (two different quantities).'
   - id: F448
     source: F285
     description: The README's source-layout row for the walk's module does not mention that the heartbeat period is public for the test.
-    status: pending
-    batch: M120
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc completeness (heartbeat period).'
   - id: F449
     source: F283
     description: The README's folder-side bullet says each phase reports a start, a progress and a done, but the progress events are periodic, so a run over a small tree logs no progress event at all.
-    status: pending
-    batch: M120
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc overstatement (periodic progress events).'
   - id: F450
     source: F284
     description: No case pins the distinction the corrected comment now asserts, that a comparison's hashing phase has a pending count of zero while the side's map holds the file.
-    status: pending
-    batch: M121
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test-coverage gap.'
   - id: F451
     source: F284
     description: The hashing phase's progress event hard-codes a cache-hit count of zero, so only the phase's done event carries the real count and a parser reading progress events never sees one.
-    status: pending
-    batch: M121
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): observability improvement (progress event count); no wrong results.'
   - id: F452
     source: F285
     description: The commit that says the test says where it reads the constant from does not contain that note, since it landed in the preceding commit, and the mismatch cannot be repaired without rewriting history.
@@ -4192,183 +4321,213 @@ followups:
   - id: F453
     source: F287
     description: The utility module's folded-keys helper, used by the diff and the rename pass, still allocates one folded string per path per side, where the borrowed key would remove them.
-    status: pending
-    batch: M122
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (folded-key allocations).'
   - id: F454
     source: F287
     description: The plan link module's folded-keys helper clones every destination key into its index, one clone and one fold per path.
-    status: pending
-    batch: M122
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (clone/fold per path).'
   - id: F455
     source: F287
     description: The effective phase A and the plan safety module build folded indexes with the allocating path key, one fold per path.
-    status: pending
-    batch: M122
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (fold per path).'
   - id: F456
     source: F287
     description: The mixed-case key check allocates a folded string per key for its grouping.
-    status: pending
-    batch: M122
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (fold per key).'
   - id: F457
     source: F288
     description: In the on-disk lookup's slow path, a name outside ASCII, the wanted name is now folded per entry rather than once, so a prepared comparator that folds it once would restore the old cost; the path is rare.
-    status: pending
-    batch: M123
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): perf (per-entry fold on a rare path).'
   - id: F458
     source: F288
     description: The shared Unicode lowercase helper is now used only inside the utility module and could be private.
-    status: pending
-    batch: M123
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): visibility cleanup (helper could be private).'
   - id: F459
     source: F288
     description: The identity rule's doc says the on-disk spelling lookup compares with the Unicode lowercase mapping, where the lookup now reaches that mapping through the shared comparison the site actually calls.
-    status: pending
-    batch: M124
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (mapping reference).'
   - id: F460
     source: F287
     description: The design notes' sentence about the on-disk lookup and the key sharing one file reads as if the path key lives in the link module, while it lives in the utility module and the link module holds a folded index built with it.
-    status: pending
-    batch: M125
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (module location of the path key).'
   - id: F461
     source: F289
     description: The hash-list parser still says its ASCII-only fold is like the algorithm's own parser and the path key, the same conflation this batch removed from the digest set, in a module outside that file list.
-    status: pending
-    batch: M126
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc vocabulary consistency (fold conflation).'
   - id: F462
     source: F289
     description: The design notes' fold section still covers only the path folds; it never names the algorithm-name fold or the event-name fold, so a reader scanning the notes for folds meets only paths.
-    status: pending
-    batch: M127
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc completeness (fold section scope).'
   - id: F463
     source: F291
     description: On POSIX the exact-match spelling of the cache reservation is written twice, once as the prefix helper's starts-with and once as the exact-name helper's equality, where the Windows branch has one comparison for both.
-    status: pending
-    batch: M128
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): duplication (POSIX reservation spelling).'
   - id: F464
     source: F291
     description: The cache-relation entry point names the prefix helper but not the exact-name counterpart, so it is the one entry point where a reader following one rule does not meet the other.
-    status: pending
-    batch: M128
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (entry point names only one helper).'
   - id: F465
     source: F289
     description: The name resolver the digest set's fold goes through states its ASCII-only rule but never says which question it answers relative to the path folds.
-    status: pending
-    batch: M126
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (resolver''s ASCII-only rule).'
   - id: F466
     source: F289
     description: The on-disk spelling lookup is a path fold site outside the utility module, so the new wording that the crate's path folds live in the utility module is true of the three rules it names but not exhaustive.
-    status: pending
-    batch: M129
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (fold-site scope not exhaustive).'
   - id: F467
     source: F289
     description: The JSON rendering escapes a path field, so the claim that a path is rendered exactly as it was recorded holds for the text form and the value but not for the JSON bytes.
-    status: pending
-    batch: M129
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc overstatement (JSON escaping).'
   - id: F468
     source: F296
     description: The mixed-case guard is crate-private while the keying rule it uses is now public, so a caller holding a public map cannot check a collision the way the crate does; either publish it or state why it stays inside.
-    status: pending
-    batch: M130
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API visibility ergonomics.'
   - id: F469
     source: F296
     description: The identity rule's comparison is crate-private while the same-path and path-within helpers are published, the same half-published question for the identity rule.
-    status: pending
-    batch: M130
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API visibility ergonomics.'
   - id: F470
     source: F296
     description: The plan link module's own folded-keys helper shares its name with the now-public shared index of a different shape.
-    status: pending
-    batch: M131
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): naming collision with a public index.'
   - id: F471
     source: F296
     description: The alternate-index doc still says it is not the key-shaped folded-keys index one, which with that index now published could name it as the published one.
-    status: pending
-    batch: M131
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (alternate-index description).'
   - id: F472
     source: F296
     description: The utility module's doc still opens by saying it holds no girsync-specific state, though the module now publishes the crate's keying rule and the cache vocabulary.
-    status: pending
-    batch: M130
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc accuracy (module-doc opener).'
   - id: F473
     source: F296
     description: The published index's doc says the index is unambiguous, which holds only for a map the mixed-case guard has checked, so an outside caller who hands the index a map holding two spellings of one path silently gets one of them in map-iteration order.
-    status: pending
-    batch: M132
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc precondition caveat; not a code bug.'
   - id: F474
     source: F296
     description: The published borrowed form is a second implementation of the ASCII-only fold in the public surface, and the outside case pins only the path key's fold, so making the borrowed form's equality Unicode leaves the outside case green.
-    status: pending
-    batch: M132
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage/robustness of a public fold.'
   - id: F475
     source: F296
     description: The published borrowed form has no Debug, Clone or Copy, so a caller cannot compare or print a key it builds, nor reuse one without re-deriving it.
-    status: pending
-    batch: M132
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): API ergonomics (traits on borrowed form).'
   - id: F476
     source: F296
     description: The new utility module-doc section is headed The published surface but lists only the rules, while the module also publishes other helpers.
-    status: pending
-    batch: M132
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc section wording.'
   - id: F477
     source: F296
     description: The remaining mentions of the now-public items in public docs are still code spans rather than links, so a reader cannot jump to them.
-    status: pending
-    batch: M132
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): rustdoc link improvement.'
   - id: F478
     source: F295
     description: Three production sites still spell the same ASCII-only rule through the standard library's own comparison, the effective phase A's group scan and the hash module's two parsers, so the claim that the crate has one ASCII-case comparison overstates the tree.
-    status: pending
-    batch: M133
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc overstatement ("one ASCII-case comparison").'
   - id: F479
     source: F297
     description: The Kelvin-sign pair is the other non-ASCII pair where the ASCII-only rule and the shared mapping disagree, the mapping merging a pair the disk keeps apart, and it is pinned at neither site.
-    status: pending
-    batch: M134
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test coverage of an intentional fold disagreement.'
   - id: F480
     source: F295
     description: The digest-set module doc still says the crate's ASCII-case comparison states the cache reservation's comparison, which now understates it, since it states the crate's comparison and the reservation is one user of it.
-    status: pending
-    batch: M133
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (what the comparison states).'
   - id: F481
     source: F295
     description: Now that the oracle is production code, an edit that delegated the crate's comparison back to the standard library would change no behaviour yet silently void the resolver case, so the oracle's independence rests on the doc comment alone.
-    status: pending
-    batch: M135
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test robustness / source-level property.'
   - id: F482
     source: F297
     description: The new case's assertion about the path key repeating the utility module's case repeats a pin that already holds on every platform, so the cross-platform pin still has to live in the utility module.
-    status: pending
-    batch: M135
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test redundancy (cross-platform pin misplaced).'
   - id: F483
     source: F295
     description: The crate's ASCII-case comparison is now its only written-out one, but three production sites still spell the same rule through the standard library's helper.
@@ -4379,21 +4538,24 @@ followups:
   - id: F484
     source: F301
     description: The identity rule's doc still names the shared mapping in plain code, and it cannot become a link, since that doc is compiled on every platform while the mapping is Windows-only and a link would break the POSIX doc build.
-    status: pending
-    batch: M136
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): rustdoc link limitation; doc only.'
   - id: F485
     source: F298
     description: The shared mapping's doc names the on-disk lookup without pointing at it, and it cannot be linked, since the lookup's module is private and not nameable from the utility module, so the plain name has to stay.
-    status: pending
-    batch: M136
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): rustdoc link limitation; doc only.'
   - id: F486
     source: F298
     description: The two case-fold comparison docs state the boundary with the path key's rule from opposite directions, so a reader arriving at either one has to walk to the other; one shared statement of the boundary would serve both.
-    status: pending
-    batch: M136
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording consolidation.'
   - id: F487
     source: F301
     description: The body of the commit that linked the on-disk lookup says the lookup's doc named the comparison and the mapping in plain code, while the mapping was not named in that file before the change; the correction belongs in the review record only, since history may not be rewritten.
@@ -4411,9 +4573,10 @@ followups:
   - id: F489
     source: F300
     description: Two code doc comments in the utility module carry the same historical contrast the notes paragraph had, saying the mapping and the rule are written once rather than twice in two modules.
-    status: pending
-    batch: M137
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (historical contrast in comments).'
   - id: F490
     source: F299
     description: The on-disk lookup's doc says one implementation for two questions, not one rule, which is present-tense and accurate; it is noted only because the notes now use the same pairing of words.
@@ -4424,21 +4587,24 @@ followups:
   - id: F491
     source: F300
     description: The design notes' cache-bound section still compares the present to a crate state it is not in, saying the copies are published and reclaimed as they were before a record existed, the same shape this batch removed from the fold section.
-    status: pending
-    batch: M138
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (stale comparison to a past crate state).'
   - id: F492
     source: F299
     description: The fold section says the on-disk lookup compares Unicode-lowercased names without saying that is Windows-only, since on POSIX the lookup returns the name unchanged and the mapping and its comparison are not compiled there.
-    status: pending
-    batch: M138
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): doc wording (Windows-only caveat missing).'
   - id: F493
     source: F299
     description: The fold section's enforcing list names the case that compares the two sites without noting that it is gated to Windows, so it does not run on a POSIX host, while the notes flag platform gating for the link cases.
-    status: pending
-    batch: M138
+    status: skipped
+    batch: null
     commits: []
+    note: 'skipped at rollout close (generic improvement, not an actual problem): test gating / doc note (case gated to Windows).'
   - id: F494
     source: F300
     description: The doc comment on the shared mapping still says the mapping is written once here rather than twice in two modules.
@@ -4477,6 +4643,12 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up evaluation for rollout close: 165 pending items
+  `skipped` as generic/non-blocking improvements, F430 `skipped` as a duplicate
+  merged into F425, and F425 kept as the one actual correctness bug (POSIX
+  backslash-in-filename can place a copy outside the destination root). Phase
+  `followups-evaluate` → `followups-implement`, `active_batch: M54` → `M139`
+  for the single F425 fix.
 - 2026-11-16 — rollout closing: phase `followups-implement` → `followups-evaluate`
   to prune/merge the 167 pending follow-ups before finalization.
 - 2026-11-16 — review M54 `done`: F299 kept (c5ef8081), F300 kept (4060cffb); no
