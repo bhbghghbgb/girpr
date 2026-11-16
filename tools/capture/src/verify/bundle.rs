@@ -233,13 +233,16 @@ fn read_patchmaps(root: &Path) -> Result<BTreeMap<String, PatchMap>, String> {
 
 /// Refuse a bundle whose own documents name a path that leaves it.
 ///
-/// Three fields become filesystem joins inside the offline commands:
+/// These fields become filesystem joins inside the offline commands:
 ///
 /// - `chunks/index.json`'s `stored_path` is read by A6 and by every chunk
 ///   decode;
 /// - `chunks/index.json`'s `references[].path` and `patchmaps/*.json`'s `path`
 ///   key the rebuild, and `materialize` turns the rebuilt path back into
 ///   `--out/<tree>/<path>`;
+/// - `patchmaps/*.json`'s `expectations.result_path` names where the rebuilt
+///   bytes end up, under the bundle's `expected/` tree. Its tail is the game's
+///   own path, so it follows the logical rule and may name a device component;
 /// - `MANIFEST.json`'s `capture.id` names the default `materialize` output when
 ///   the artifact itself is a filesystem root.
 ///
@@ -287,6 +290,20 @@ fn validate_document_paths(
     for map in patchmaps.values() {
         if let Some(problem) = crate::paths::logical_path_problem(&map.path) {
             return Err(format!("patchmaps/{}.json path {problem}", map.capture_id));
+        }
+        // `result_path` carries the `expected/` tree, but its tail is written
+        // from the game's own path (`expected/<path>`), so it uses the logical
+        // rule: a device component there is legitimate and escaped on disk,
+        // while an escape, a drive, a backslash or an empty component is not a
+        // path the writer could have produced and cannot point inside the
+        // bundle.
+        if let Some(result_path) = map.expectations.result_path.as_deref()
+            && let Some(problem) = crate::paths::logical_path_problem(result_path)
+        {
+            return Err(format!(
+                "patchmaps/{}.json expectations.result_path {problem}",
+                map.capture_id
+            ));
         }
     }
     for row in &error_responses.responses {
