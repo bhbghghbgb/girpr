@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M51
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T10:25:39Z
+last_updated: 2026-11-16T10:39:45Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1239,10 +1239,17 @@ reviews:
     result: F200 kept (7e40bfb6); F201 kept (b8b98771); F202 kept (c64275cf); F203 kept (cb20bfea); F204 kept (6b15098a); no fix or revert commits; 596 passed, 1 skipped; the reviewer confirmed all three fold sites keep their own rule and that nothing in the repo links to the retitled heading
     followups: [F291, F292]
   - batch: M51
-    status: in_progress
+    status: done
     tasks: [F294, F296]
     base: efdf302e
     head: b78aa1a3
+    result: F294 kept (51660f8f); F296 kept (0671b2d8, b78aa1a3); no fix or revert commits; 624 passed without the feature and 641 with it, 1 skipped; the reviewer made the published fold Unicode and saw the outside case fail, and made the borrowed form's fold Unicode and saw the in-crate case fail while the outside case stayed green; the only code changes are visibility and one tuple field
+    followups: [F473, F474, F475, F476, F477]
+  - batch: M132
+    status: pending
+    tasks: [F473, F474, F475, F476, F477]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M130
@@ -3153,9 +3160,10 @@ followups:
   - id: F294
     source: F207
     description: The plan-safety module still names its folded index as if it held keys, though it maps a folded key to a value rather than being the key-shaped index the other modules name.
-    status: pending_review
+    status: completed
     batch: M51
     commits: [51660f8f]
+    note: review M51 kept; the reviewer confirmed the rename touched only identifier names, and that the other index in the same module really is the key-shaped one
   - id: F295
     source: F206
     description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
@@ -3165,9 +3173,10 @@ followups:
   - id: F296
     source: F206
     description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
-    status: pending_review
+    status: completed
     batch: M51
     commits: [0671b2d8, b78aa1a3]
+    note: review M51 kept; the reviewer confirmed the publication follows the crate's own rule, that the identity rule stays unreachable, and that the new case is an integration test that really sees the crate as an outside caller
   - id: F297
     source: F208
     description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
@@ -4245,6 +4254,36 @@ followups:
     status: pending
     batch: M130
     commits: []
+  - id: F473
+    source: F296
+    description: The published index's doc says the index is unambiguous, which holds only for a map the mixed-case guard has checked, so an outside caller who hands the index a map holding two spellings of one path silently gets one of them in map-iteration order.
+    status: pending
+    batch: M132
+    commits: []
+  - id: F474
+    source: F296
+    description: The published borrowed form is a second implementation of the ASCII-only fold in the public surface, and the outside case pins only the path key's fold, so making the borrowed form's equality Unicode leaves the outside case green.
+    status: pending
+    batch: M132
+    commits: []
+  - id: F475
+    source: F296
+    description: The published borrowed form has no Debug, Clone or Copy, so a caller cannot compare or print a key it builds, nor reuse one without re-deriving it.
+    status: pending
+    batch: M132
+    commits: []
+  - id: F476
+    source: F296
+    description: The new utility module-doc section is headed The published surface but lists only the rules, while the module also publishes other helpers.
+    status: pending
+    batch: M132
+    commits: []
+  - id: F477
+    source: F296
+    description: The remaining mentions of the now-public items in public docs are still code spans rather than links, so a reader cannot jump to them.
+    status: pending
+    batch: M132
+    commits: []
 ```
 
 ## Human checklist
@@ -4276,6 +4315,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M51 `done`: F294 kept (51660f8f), F296 kept (0671b2d8,
+  b78aa1a3); no fix or revert commits; follow-ups F473–F477 appended with batch
+  `M132`. F294 and F296 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M51 review checkpoint opened: F294 and F296
   `in_progress` → `pending_review`, commits `51660f8f`, `0671b2d8`, `b78aa1a3`;
   review M51 `pending` → `in_progress`, base `efdf302e`, head `b78aa1a3`.
