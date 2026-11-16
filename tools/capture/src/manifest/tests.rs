@@ -338,6 +338,42 @@ fn a_folder_entry_is_not_counted_as_a_byte_level_violation() {
     assert!(d.structure.clean(), "{:?}", d.structure);
 }
 
+/// A file that declares bytes but carries no chunks claims bytes it cannot
+/// account for, so it is a size mismatch. A genuinely empty file (declared size
+/// zero) is legitimate and stays clean, and a folder's `size` is not a byte
+/// claim at all. With no chunks there is no tiling to violate, so only the one
+/// counter fires.
+#[test]
+fn an_empty_chunk_list_is_a_size_mismatch_only_when_size_is_declared() {
+    let claimed = decode_counts(&[file("claimed", vec![], 12)]);
+    assert_eq!(claimed.structure.violations(), vec!["size_mismatch_files"]);
+    assert_eq!(claimed.structure.size_mismatch_files, 1);
+    assert_eq!(claimed.structure.non_gapless_files, 0);
+    assert_eq!(claimed.structure.unsorted_chunk_offsets, 0);
+    // The totals are unchanged by the byte-level check.
+    assert_eq!(
+        (claimed.files, claimed.folders, claimed.total_chunks),
+        (1, 0, 0)
+    );
+    assert_eq!(claimed.total_file_bytes, 12);
+
+    let empty = decode_counts(&[file("empty", vec![], 0)]);
+    assert!(empty.structure.clean(), "{:?}", empty.structure);
+    assert_eq!(empty.structure.size_mismatch_files, 0);
+
+    // A folder with a nonzero declared size is still out of the byte checks.
+    let folder = SophonChunkFile {
+        file: "dir".into(),
+        chunks: vec![],
+        is_folder: true,
+        size: 12,
+        md5: String::new(),
+    };
+    let d = decode_counts(&[folder]);
+    assert_eq!((d.files, d.folders), (0, 1));
+    assert!(d.structure.clean(), "{:?}", d.structure);
+}
+
 #[test]
 fn the_largest_chunk_is_recorded_across_every_entry() {
     let mut big = chunk(0, 10);
