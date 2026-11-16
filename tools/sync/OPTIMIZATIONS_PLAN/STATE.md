@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M41
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T02:05:54Z
+last_updated: 2026-11-16T02:20:21Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -757,7 +757,7 @@ reviews:
     followups: []
   - batch: M88
     status: pending
-    tasks: [F383, F384, F395]
+    tasks: [F383, F384, F395, F408]
     base: null
     head: null
     result: null
@@ -882,12 +882,12 @@ reviews:
     result: null
     followups: []
   - batch: M41
-    status: in_progress
+    status: done
     tasks: [F267, F268]
     base: d53d952c
     head: 1f950a9a
-    result: null
-    followups: []
+    result: F267 kept (a6850a91); F268 kept (1f950a9a); no fix or revert commits; 616 passed without the feature and 633 with it, 1 skipped; the reviewer ran every synopsis line with the placeholders filled and saw all of them parse, reproduced the README walkthrough end to end, and confirmed the default request is one algorithm alone
+    followups: [F408]
   - batch: M98
     status: pending
     tasks: [F406, F407]
@@ -2719,15 +2719,17 @@ followups:
   - id: F267
     source: F189
     description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
-    status: pending_review
+    status: completed
     batch: M41
     commits: [a6850a91]
+    note: review M41 kept; the reviewer ran every synopsis line with the placeholders filled and saw them all parse
   - id: F268
     source: F189
     description: The README update command names a placeholder where a real path would go, so it is prose rather than a runnable example, unlike the rest of the block it sits in.
-    status: pending_review
+    status: completed
     batch: M41
     commits: [1f950a9a]
+    note: review M41 kept; the reviewer reproduced the walkthrough end to end and confirmed the README's folder names are the ones the rest of the README uses
   - id: F269
     source: F192
     description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
@@ -3581,6 +3583,12 @@ followups:
     status: pending
     batch: M98
     commits: []
+  - id: F408
+    source: F268
+    description: The compare-self section still says three ways out, all named in the error, but under the default single-algorithm request the error names only the repopulation and the none request, the same false count the Gotchas bullet had.
+    status: pending
+    batch: M88
+    commits: []
 ```
 
 ## Human checklist
@@ -3612,6 +3620,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M41 `done`: F267 kept (a6850a91), F268 kept (1f950a9a); no fix
+  or revert commits; follow-up F408 appended with batch `M88`. F267 and F268
+  `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M41 review checkpoint opened: F267 and F268
   `in_progress` → `pending_review`, commits `a6850a91`, `1f950a9a`; review M41
   `pending` → `in_progress`, base `d53d952c`, head `1f950a9a`.
