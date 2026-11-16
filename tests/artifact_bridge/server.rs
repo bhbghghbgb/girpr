@@ -637,20 +637,20 @@ impl Served {
     fn build_response(&self, tag: Option<&str>) -> Response {
         let tag = tag.unwrap_or(&self.bundle.new_tag);
         let Some(body) = self.builds.get(tag) else {
-            return self.error_shape("getbuild_unknown_tag", "", None);
+            return self.error_shape("getbuild_unknown_tag", "");
         };
         Response::ok_json(body.clone())
     }
 
     fn manifest_response(&self, path: &str) -> Response {
         let Some((build_id, id)) = last_two(path) else {
-            return self.error_shape("blob_missing", path, None);
+            return self.error_shape("blob_missing", path);
         };
         match self.manifest_index.get(&(build_id, id.clone())) {
             Some(e) => match &e.archive {
                 Some(archive) => Response::octet_stream(manifest_bytes(archive)),
                 // Declared by the build, absent from the bundle.
-                None => self.error_shape("blob_missing", path, None),
+                None => self.error_shape("blob_missing", path),
             },
             None => {
                 // `docs/06` §4.1: the id is declared by some build, but not by
@@ -668,7 +668,6 @@ impl Served {
                         "blob_missing"
                     },
                     path,
-                    None,
                 )
             }
         }
@@ -676,18 +675,18 @@ impl Served {
 
     fn chunk_response(&self, path: &str) -> Response {
         let Some((build_id, id)) = last_two(path) else {
-            return self.error_shape("chunk_missing", path, None);
+            return self.error_shape("chunk_missing", path);
         };
         // Every chunk download goes to the latest build's prefix
         // (`repair::manifest::fetch_latest`), so any other build id is wrong by
         // construction — and a shim that crossed the two blob prefixes would
         // produce exactly that.
         if build_id != self.bundle.new_build {
-            return self.error_shape("blob_wrong_build", path, None);
+            return self.error_shape("blob_wrong_build", path);
         }
         match self.bundle.chunk_blob(&id) {
             Some(blob) => Response::chunk(std::fs::read(blob).expect("read chunk blob")),
-            None => self.error_shape("chunk_missing", path, None),
+            None => self.error_shape("chunk_missing", path),
         }
     }
 
@@ -702,7 +701,7 @@ impl Served {
     /// instead, and [`Bridge::shapes_synthesized`] says so, so the bridge can
     /// report that those assertions were skipped for lack of evidence rather
     /// than inventing a status it has no record of.
-    fn error_shape(&self, id: &str, path: &str, extra: Option<&str>) -> Response {
+    fn error_shape(&self, id: &str, path: &str) -> Response {
         let key = path.trim_start_matches('/');
         let Some(shape) = self.shapes.as_ref().and_then(|s| s.get(id)) else {
             return Response {
@@ -716,7 +715,6 @@ impl Served {
         for (tag, value) in [("Key", key), ("RequestId", request_id.as_str())] {
             body = replace_element(&body, tag, value);
         }
-        let _ = extra;
         Response {
             status: shape.status,
             content_type: shape.content_type.clone(),
