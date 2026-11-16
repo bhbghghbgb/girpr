@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M47
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T07:12:45Z
+last_updated: 2026-11-16T07:36:32Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1078,8 +1078,22 @@ reviews:
     result: null
     followups: []
   - batch: M47
-    status: pending
+    status: in_progress
     tasks: [F280, F281, F282]
+    base: 33811b74
+    head: ea8c7dc6
+    result: null
+    followups: []
+  - batch: M116
+    status: pending
+    tasks: [F439, F441]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M117
+    status: pending
+    tasks: [F440]
     base: null
     head: null
     result: null
@@ -2929,21 +2943,21 @@ followups:
   - id: F280
     source: F196
     description: The end-to-end copy-failure case assumes the plan's copy list is sorted by path, which the plan builder does, but nothing pins that ordering rule itself.
-    status: in_progress
+    status: pending_review
     batch: M47
-    commits: []
+    commits: [fe5f2ae6]
   - id: F281
     source: F196
     description: The helper that names the copy for a plan index indexes the plan's copy list and would panic on an out-of-range index, which cannot happen today, while a borrowing form would fail loudly instead.
-    status: in_progress
+    status: pending_review
     batch: M47
-    commits: []
+    commits: [d3dc3ca7]
   - id: F282
     source: F196
     description: The new unit case hand-builds a plan whose copies are listed in alphabetical order, so it cannot tell the plan's order from the sorted order, and a fixture whose plan order was not alphabetical would make the pin sharper.
-    status: in_progress
+    status: pending_review
     batch: M47
-    commits: []
+    commits: [ea8c7dc6]
   - id: F283
     source: F197
     description: The README bullet says a side's map, but a record side runs neither the reading walk nor the hashing phase and so logs no done event at all.
@@ -3902,6 +3916,24 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F284, already scheduled in M48"
+  - id: F439
+    source: F280
+    description: The end-to-end copy-failure case still hard-codes the first copy's name as the plan's first copy, and a runtime check would need an observable of the plan's order that is not the dry run's record order, since the plan print lists the diff buckets.
+    status: pending
+    batch: M116
+    commits: []
+  - id: F440
+    source: F281
+    description: The call site's naming-error path, a disagreement between the plan and the phase, is unreachable in production, so no case covers it beyond the helper's own error.
+    status: pending
+    batch: M117
+    commits: []
+  - id: F441
+    source: F280
+    description: The plan builder now carries its own test module while the rest of the plan module's cases live in the plan module's test file, so the split could be unified.
+    status: pending
+    batch: M116
+    commits: []
 ```
 
 ## Human checklist
@@ -3933,6 +3965,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M47 review checkpoint opened: F280, F281 and F282
+  `in_progress` → `pending_review`, commits `fe5f2ae6`, `d3dc3ca7`, `ea8c7dc6`;
+  review M47 `pending` → `in_progress`, base `33811b74`, head `ea8c7dc6`.
 - 2026-11-16 — follow-up batch M47 started: F280, F281 and F282 `pending` →
   `in_progress`; `active_batch: M46` → `M47`.
 - 2026-11-16 — review M46 `done`: F278 kept (f217e1ca), F279 kept (f92d995e); no
