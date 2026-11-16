@@ -344,18 +344,19 @@ fn write_patchmap(root: &Path, map: &crate::assemble::PatchMap) {
     .expect("writes the patchmap");
 }
 
-/// The walk treats a directory with a manifest it cannot read as a bundle and
-/// stops there, so a bundle nested below it is invisible from above. The child
-/// is a real, openable bundle to make the hiding unambiguous.
+/// A directory with a manifest that is not a bundle is not a boundary: the
+/// walk descends through it, so a bundle nested beneath a half-written one is
+/// still in the inventory. The child is a real, openable bundle to make the
+/// result unambiguous.
 #[test]
-fn currently_a_non_bundle_directory_hides_a_nested_bundle_from_list() {
-    let d = girpr_tempdir::TempDir::new("gircap-list-nested", "nested_hide");
+fn a_non_bundle_directory_does_not_hide_a_nested_bundle_from_list() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-nested", "nested_found");
     let outer = d.join("outer");
     let nested = outer.join("nested");
     std::fs::create_dir_all(&nested).expect("makes the directories");
 
-    // A malformed manifest: the probe reports NotABundle, which is a stop, not a
-    // descent, and Bundle::open is tried (and fails) at this level.
+    // A malformed manifest: the probe reports NotABundle, which is stepped over
+    // and descended into, not a boundary.
     std::fs::write(outer.join("MANIFEST.json"), b"{ not json").expect("writes it");
     // The child opens on its own, so it is a bundle the inventory ought to hold.
     write_minimal_bundle(&nested, "nested_capture");
@@ -363,15 +364,82 @@ fn currently_a_non_bundle_directory_hides_a_nested_bundle_from_list() {
     assert_eq!(direct.bundles.len(), 1, "{direct:?}");
     assert_eq!(direct.bundles[0].capture_id, "nested_capture");
 
-    // From the root the walk stops at `outer`, so the child is never seen.
+    // From the root the walk descends through `outer` and finds the child.
+    let index = list(&d).expect("lists");
+    assert_eq!(index.bundles.len(), 1, "{index:?}");
+    assert_eq!(index.bundles[0].path, "outer/nested", "{index:?}");
+    assert_eq!(index.bundles[0].capture_id, "nested_capture");
+    assert!(
+        index.unreadable.is_empty(),
+        "a non-bundle directory is not named as unreadable: {index:?}"
+    );
+}
+
+/// A manifest that parses as JSON but declares no `schema_version` is
+/// `NotABundle` too, so the walk descends through it exactly as it does for
+/// unparseable JSON.
+#[test]
+fn a_manifest_without_a_schema_version_does_not_hide_a_nested_bundle() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-no-version", "nested_no_version");
+    let outer = d.join("outer");
+    let nested = outer.join("nested");
+    std::fs::create_dir_all(&nested).expect("makes the directories");
+
+    std::fs::write(outer.join("MANIFEST.json"), b"{}").expect("writes it");
+    write_minimal_bundle(&nested, "nested_capture");
+
+    let index = list(&d).expect("lists");
+    assert_eq!(index.bundles.len(), 1, "{index:?}");
+    assert_eq!(index.bundles[0].path, "outer/nested", "{index:?}");
+    assert_eq!(index.bundles[0].capture_id, "nested_capture");
+    assert!(index.unreadable.is_empty(), "{index:?}");
+}
+
+/// A directory that *is* a bundle is a real boundary: the walk lists it and
+/// does not descend, so a second valid bundle nested inside it is not listed
+/// again.
+#[test]
+fn a_valid_bundle_stops_descent_into_a_nested_bundle() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-boundary", "bundle_boundary");
+    write_minimal_bundle(&d, "outer_capture");
+    write_minimal_bundle(&d.join("nested"), "nested_capture");
+
+    let index = list(&d).expect("lists");
+    assert_eq!(
+        index.bundles.len(),
+        1,
+        "only the outer bundle is listed: {index:?}"
+    );
+    assert_eq!(index.bundles[0].capture_id, "outer_capture");
+    assert_eq!(index.bundles[0].path, ".", "{index:?}");
+    assert!(index.unreadable.is_empty(), "{index:?}");
+}
+
+/// A manifest declaring a version this build refuses is a boundary even though
+/// `Bundle::open` fails: the directory is named as unreadable and the walk does
+/// not descend, so a bundle nested beneath it is not listed.
+#[test]
+fn a_bundle_that_fails_to_open_stops_descent_without_listing_the_nested_bundle() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-bad-boundary", "bad_boundary");
+    let outer = d.join("outer");
+    let nested = outer.join("nested");
+    std::fs::create_dir_all(&nested).expect("makes the directories");
+
+    // Version 1 is a readable version, so the probe says Version and the walk
+    // treats `outer` as a bundle boundary — one this build refuses to open.
+    std::fs::write(outer.join("MANIFEST.json"), br#"{"schema_version": 1}"#).expect("writes it");
+    write_minimal_bundle(&nested, "nested_capture");
+
     let index = list(&d).expect("lists");
     assert!(
         index.bundles.is_empty(),
-        "the nested bundle is hidden from the walk: {index:?}"
+        "the nested bundle is behind a boundary: {index:?}"
     );
+    assert_eq!(index.unreadable.len(), 1, "{index:?}");
+    assert_eq!(index.unreadable[0].path, "outer", "{index:?}");
     assert!(
-        index.unreadable.is_empty(),
-        "and not even named as unreadable: {index:?}"
+        index.unreadable[0].reason.contains("schema version 1"),
+        "{index:?}"
     );
 }
 
