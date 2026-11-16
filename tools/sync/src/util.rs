@@ -218,15 +218,7 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
         if a == b {
             return true;
         }
-        // The usual case: two different ASCII spellings, compared without
-        // allocating. Non-ASCII and non-UTF-8 names keep the Unicode fold.
-        if let (Some(a), Some(b)) = (a.to_str(), b.to_str())
-            && a.is_ascii()
-            && b.is_ascii()
-        {
-            return a.eq_ignore_ascii_case(b);
-        }
-        unicode_lowercase(a) == unicode_lowercase(b)
+        unicode_case_eq(a, b)
     }
     #[cfg(not(windows))]
     {
@@ -236,6 +228,9 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
 
 /// The Unicode lowercase mapping the **identity** rule's fallback and the
 /// **on-disk spelling** lookup's comparison share.
+///
+/// The comparison that uses it is [`unicode_case_eq`], so the two sites share
+/// the mapping *and* the way they compare with it.
 ///
 /// **A shared implementation, not a shared rule.** The two sites ask different
 /// questions, and each keeps its own statement of which: the identity rule
@@ -268,6 +263,36 @@ fn component_eq(a: Component<'_>, b: Component<'_>) -> bool {
 #[cfg(windows)]
 pub(crate) fn unicode_lowercase(s: &OsStr) -> String {
     s.to_string_lossy().to_lowercase()
+}
+
+/// The Unicode lowercase comparison: are these two names the same under the
+/// mapping [`unicode_lowercase`] applies?
+///
+/// **The comparison the two sites that share the mapping ask it with.** The
+/// identity rule's fallback and the on-disk spelling lookup both ask whether
+/// two spellings are one under that mapping, and they ask it here, so the
+/// rule is written once rather than twice in two modules.
+///
+/// **The ASCII fast path.** Two ASCII names are compared without allocating:
+/// the mapping folds ASCII letters and leaves every other byte alone, so
+/// `eq_ignore_ascii_case` answers exactly what the mapping would. A name
+/// outside ASCII — or one that is not UTF-8 at all — keeps the Unicode fold,
+/// because that mapping is not a per-character rule: the final sigma depends
+/// on the letters around it, so two names cannot be compared letter by letter
+/// without answering a different question.
+///
+/// It is deliberately **not** the path key's comparison. The key folds ASCII
+/// case only and answers which bucket of a run's map a path belongs to; this
+/// one asks whether two spellings name the same place on disk.
+#[cfg(windows)]
+pub(crate) fn unicode_case_eq(a: &OsStr, b: &OsStr) -> bool {
+    if let (Some(a), Some(b)) = (a.to_str(), b.to_str())
+        && a.is_ascii()
+        && b.is_ascii()
+    {
+        return a.eq_ignore_ascii_case(b);
+    }
+    unicode_lowercase(a) == unicode_lowercase(b)
 }
 
 /// The key a case-insensitive path comparison uses when two spellings may name

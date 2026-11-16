@@ -30,7 +30,7 @@ use crate::effective::EffRec;
 use crate::link::try_is_link;
 use crate::util::path_key;
 #[cfg(windows)]
-use crate::util::unicode_lowercase;
+use crate::util::unicode_case_eq;
 
 /// The shortest prefix of `rel` (itself included) that `dm` reports as a link.
 ///
@@ -223,8 +223,8 @@ pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 /// question — which directory entry the OS would open — and the OS's own table
 /// is a Unicode one, so the comparison folds Unicode case.
 ///
-/// The comparison is `crate::util::unicode_lowercase`, the mapping the
-/// identity rule's fallback compares with as well: one implementation for two
+/// The comparison is `crate::util::unicode_case_eq`, the comparison the
+/// identity rule's fallback uses as well: one implementation for two
 /// questions, not one rule.
 ///
 /// POSIX names are case-sensitive, so `name` already is the entry's spelling and
@@ -234,10 +234,6 @@ pub(super) fn alias_target(cur_alias: &str, target: &Path) -> Option<String> {
 #[cfg(windows)]
 pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsString>> {
     let mut folded = None;
-    // The wanted name's fold, folded once: the name does not change while the
-    // listing is read, so folding it again per entry would buy the same
-    // answer with an allocation per entry.
-    let wanted = unicode_lowercase(name);
     let entries =
         std::fs::read_dir(parent).with_context(|| format!("list {}", parent.display()))?;
     for entry in entries {
@@ -246,7 +242,7 @@ pub(super) fn on_disk_name(parent: &Path, name: &OsStr) -> Result<Option<OsStrin
         if candidate == name {
             return Ok(Some(candidate));
         }
-        if unicode_lowercase(&candidate) == wanted {
+        if unicode_case_eq(&candidate, name) {
             // A directory can be case-sensitive per directory on Windows; two
             // case-only names then make "the" entry ambiguous, and the name the
             // OS would open is the exact one that is not there.
