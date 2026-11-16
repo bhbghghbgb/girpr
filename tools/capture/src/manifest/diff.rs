@@ -228,14 +228,6 @@ pub struct PathDiff {
     pub new_chunks_reusable_at_all: u64,
 }
 
-impl PathDiff {
-    /// Whether the pair was interesting at all: something added, removed or
-    /// changed.
-    pub fn is_a_real_upgrade(&self) -> bool {
-        self.counts.added > 0 || self.counts.removed > 0 || self.counts.changed > 0
-    }
-}
-
 /// `diff/reuse_pool.json` — the cost of same-file-only reuse (spec §10).
 ///
 /// Recorded because it bounds a deliberate simplification in the tool under test.
