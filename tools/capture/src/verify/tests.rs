@@ -333,6 +333,73 @@ fn an_overflowing_fetch_cost_fails_a20_instead_of_aborting() {
     );
 }
 
+/// A patchmap can be arithmetically sound on its own while describing a patch
+/// that the bundle's own index cannot produce. Re-deriving the arithmetic from
+/// the patchmap alone cannot see that: today it hands back a single green row.
+#[test]
+fn currently_a_self_consistent_plan_passes_when_the_index_names_another_patch() {
+    use crate::blobs::IndexedBlob;
+    use crate::blobs::chunks::{Reference, Set};
+    use crate::blobs::props::BlobProps;
+
+    // The plan: totals and expectations are the honest sum of its one FETCH, and
+    // must_not_fetch agrees with its (empty) REUSE set.
+    let map = arithmetic_map(&[10]);
+    let plan = map.plan.as_ref().expect("a plan");
+    assert_eq!(plan.len(), 1);
+    let planned_id = plan[0].chunk_id.as_str();
+
+    // The index describes a different patch for the same capture and path: one
+    // blob, referenced at an offset, whose id is not the one the plan names.
+    let indexed_id = "the-index-names-a-different-chunk";
+    let index = ChunkIndex::build(vec![(
+        IndexedBlob {
+            props: BlobProps::unmeasured(&crate::manifest::proto::SophonChunk {
+                id: indexed_id.into(),
+                uncompressed_md5: "22".repeat(16),
+                offset: 0,
+                compressed_size: 7,
+                uncompressed_size: 1,
+                unknown_field6: 0,
+                compressed_md5: "33".repeat(16),
+            }),
+            referenced_by: vec![Reference {
+                tag: "7.1.0".into(),
+                build_id: Some("new-build".into()),
+                capture_id: map.capture_id.clone(),
+                path: map.path.clone(),
+                role: Set::MaterializeNew,
+                offset: 0,
+            }],
+            sets: vec![Set::MaterializeNew],
+        },
+        vec![Set::MaterializeNew],
+    )]);
+
+    // The index's only reference for this capture/path names a chunk the plan
+    // does not, so the index cannot produce this plan.
+    let indexed: Vec<&str> = index
+        .blobs
+        .iter()
+        .filter(|b| {
+            b.referenced_by
+                .iter()
+                .any(|r| r.capture_id == map.capture_id && r.path == map.path)
+        })
+        .map(|b| b.props.chunk_id.as_str())
+        .collect();
+    assert_eq!(indexed, vec![indexed_id]);
+    assert!(!indexed.contains(&planned_id), "the two disagree");
+
+    // And yet the arithmetic check, which never looks at the index, passes.
+    let rows = check_patchmap_arithmetic(&map);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(
+        rows[0].ok,
+        "today a self-consistent plan passes even though the index names another patch: {rows:?}"
+    );
+}
+
 /// The set is deliberately smaller than the seventeen.
 #[test]
 fn assertions_needing_the_api_are_not_claimed_as_re_derived() {
