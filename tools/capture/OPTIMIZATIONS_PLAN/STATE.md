@@ -33,7 +33,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-16 | Blob diagnostic fixes (A15, A16) | completed | 6021ebc5 7fb61599 0b8b45e7 | |
 | P1-17 | Numeric and tag-length honesty (A17, D4) | completed | 38ff3525 9bbccabc cabe7dfc | |
 | P1-18 | Summary log and escaped keys (A18, A19) | completed | 4686a977 24d6b608 d58b1c73 | |
-| P2-01 | Separate scoring rank from admission rank (B1) | todo | | |
+| P2-01 | Separate scoring rank from admission rank (B1) | in_progress | | |
 | P2-02 | Reconcile `budget_cost` semantics (B2) | todo | | |
 | P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | todo | | |
 | P2-04 | Capture-id uniqueness invariant (B5) | todo | | |
