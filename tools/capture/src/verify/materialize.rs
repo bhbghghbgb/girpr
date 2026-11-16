@@ -182,6 +182,12 @@ impl<'i> ChunksByFile<'i> {
 /// The layout is checked before any byte is placed (A11), so a closure set with
 /// a hole produces an error naming the hole rather than a short file.
 ///
+/// `declared_size` is the patchmap side's declared byte count. It is supplied
+/// by the caller rather than derived from the index, so A11's size check is
+/// independent: a side whose declared size disagrees with the chunk lengths is
+/// refused here instead of producing a file that merely happens to weigh what
+/// the chunks do.
+///
 /// `root` is not a parameter: where the blobs live is already inside `src`,
 /// and taking it would only discard it.
 pub fn rebuild(
@@ -191,7 +197,14 @@ pub fn rebuild(
     capture_id: &str,
     path: &str,
     role: Set,
+    declared_size: i64,
 ) -> Result<Rebuilt, String> {
+    let label = format!("{tag} {path} ({role})");
+    if declared_size < 0 {
+        return Err(format!(
+            "{label}: declares a negative size {declared_size} B"
+        ));
+    }
     let chunks = by_file.get(tag, capture_id, path, role)?;
     if chunks.is_empty() {
         return Err(format!(
@@ -203,9 +216,8 @@ pub fn rebuild(
     // through `Bundle::open`'s validation, so the arithmetic is checked here as
     // well: a crafted `offset: i64::MAX` must be a typed error naming the values,
     // never an abort in the layout check.
-    let label = format!("{tag} {path} ({role})");
     let mut parts: Vec<(i64, i64)> = Vec::with_capacity(chunks.len());
-    let mut declared_size: i64 = 0;
+    let mut chunk_sum: i64 = 0;
     for (id, offset) in &chunks {
         let len = by_file.size(id);
         if *offset < 0 {
@@ -223,10 +235,10 @@ pub fn rebuild(
                 "{label}: chunk {id} at offset {offset} + length {len} overflows i64"
             ));
         }
-        declared_size = declared_size.checked_add(len).ok_or_else(|| {
+        chunk_sum = chunk_sum.checked_add(len).ok_or_else(|| {
             format!(
                 "{label}: the chunk lengths overflow i64 at chunk {id} \
-                 (length {len}, running total {declared_size} B)"
+                 (length {len}, running total {chunk_sum} B)"
             )
         })?;
         parts.push((*offset, len));
@@ -323,7 +335,7 @@ fn rebuild_side(
     let Some(side) = side else {
         return Ok(None);
     };
-    let r = rebuild(by_file, src, &side.tag, capture_id, path, role)?;
+    let r = rebuild(by_file, src, &side.tag, capture_id, path, role, side.size)?;
     if r.nchunks != side.nchunks {
         return Err(format!(
             "{capture_id}: the index names {} {role} chunks, the patchmap says {}",
@@ -365,6 +377,9 @@ mod tests {
     use crate::manifest::proto::SophonChunk;
 
     const DLL: &str = "GenshinImpact_Data/Plugins/HoYoChannel.dll";
+    /// Each side's chunks are 64 + 128 + 32 B, which is what the patchmap
+    /// declares for them.
+    const SIDE_SIZE: i64 = 224;
 
     /// A chunk and the compressed bytes a real bundle would hold for it.
     ///
@@ -520,6 +535,7 @@ mod tests {
                 } else {
                     Set::MaterializeNew
                 },
+                SIDE_SIZE,
             )
             .expect("rebuilds");
             r.bytes
@@ -590,15 +606,31 @@ mod tests {
     fn both_sides_rebuild_from_the_blobs_alone() {
         let f = Fixture::build("rebuild");
         let src = f.source();
-        let old =
-            rebuild(&f.by_file(), &src, "7.0.0", "c", DLL, Set::MaterializeOld).expect("old side");
+        let old = rebuild(
+            &f.by_file(),
+            &src,
+            "7.0.0",
+            "c",
+            DLL,
+            Set::MaterializeOld,
+            SIDE_SIZE,
+        )
+        .expect("old side");
         assert_eq!(old.bytes.len(), 224, "64 + 128 + 32");
         assert_eq!(old.md5, hash::md5_hex(&old.bytes));
         assert_eq!(old.nchunks, 3);
         assert!(old.layout.is_clean());
         assert_eq!(old.layout.ranges[1], Range::at(64, 128));
-        let new =
-            rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).expect("new side");
+        let new = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .expect("new side");
         assert_eq!(new.bytes.len(), 224, "the same three ranges");
         // Offset 0 now holds different content, which is the whole point: a
         // rebuild that ignored the new chunk would still be 224 B and would
@@ -630,6 +662,7 @@ mod tests {
                 } else {
                     Set::MaterializeNew
                 },
+                SIDE_SIZE,
             )
             .unwrap();
             let disk = std::fs::read(&shipped).unwrap();
@@ -674,6 +707,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("decodes to md5"), "{e}");
@@ -689,6 +723,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("not a decodable zstd blob"), "{e}");
@@ -705,6 +740,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains("references no chunks"), "{e}");
@@ -747,6 +783,7 @@ mod tests {
             "c",
             DLL,
             Set::MaterializeOld,
+            SIDE_SIZE,
         )
         .unwrap_err();
         assert!(e.contains(&victim), "{e}");
@@ -885,41 +922,27 @@ mod tests {
 
     /// Fixture shape: `Fixture::build` is a four-blob bundle whose old side's
     /// chunks sum to 224 B. The patchmap declares 999 B with the right chunk
-    /// count, so the rebuild succeeds and only the size comparison in
-    /// `check_pair` disagrees.
+    /// count, so the rebuild must refuse the side rather than produce bytes
+    /// that only the A7 size row later disagrees with.
     #[test]
-    fn currently_a_wrong_patchmap_side_size_only_fails_the_a7_size_row() {
+    fn a_wrong_patchmap_side_size_is_refused_by_the_rebuild() {
         let f = Fixture::build("wrong-size");
-        let mut map = side_map(Some(("7.0.0", 999, 3)), Some(("7.1.0", 224, 3)));
-        let mut maps = BTreeMap::new();
-        maps.insert("c".to_string(), map.clone());
-        let pairs = rebuild_all(
+        let maps = BTreeMap::from([(
+            "c".to_string(),
+            side_map(Some(("7.0.0", 999, 3)), Some(("7.1.0", 224, 3))),
+        )]);
+        let e = rebuild_all(
             &f.root,
             &f.index,
             &maps,
             crate::hash::DEFAULT_MAX_DECOMPRESSED_BYTES,
         )
-        .expect("the chunk count agrees, so nothing refuses the rebuild");
-        assert_eq!(pairs[0].old.as_ref().unwrap().bytes.len(), 224);
-
-        // Keep the declared md5 in step with the rebuilt bytes so the size row
-        // is the only disagreement on this side.
-        map.old.as_mut().unwrap().md5 = pairs[0].old.as_ref().unwrap().md5.clone();
-        let rows = crate::verify::checks::check_pair(&f.root, &pairs[0], &map);
-        let size_row = rows
-            .iter()
-            .find(|r| r.subject.ends_with(" (size)"))
-            .expect("a size row");
-        assert_eq!(size_row.id, "A7");
-        assert_eq!(
-            size_row.assertion,
-            "assemble(materialize_old) has md5 == old entry.md5"
+        .unwrap_err();
+        assert!(e.contains("A11"), "reports the layout check: {e}");
+        assert!(
+            e.contains("224") && e.contains("999"),
+            "names both the chunk sum and the declared size: {e}"
         );
-        assert_eq!(size_row.subject, format!("game/{DLL} (size)"));
-        assert_eq!(size_row.expected, "999 B");
-        assert_eq!(size_row.actual, "224 B");
-        assert!(!size_row.ok);
-        let _ = std::fs::remove_dir_all(&f.root);
     }
 
     /// `added` and `removed` are one-sided and must rebuild the side they have,
@@ -992,7 +1015,16 @@ mod tests {
             }
         }
         let src = f.source();
-        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        let e = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .unwrap_err();
         assert!(
             e.contains("overflows i64") && e.contains(&i64::MAX.to_string()),
             "names the arithmetic and the value: {e}"
@@ -1012,7 +1044,16 @@ mod tests {
             }
         }
         let src = f.source();
-        let e = rebuild(&f.by_file(), &src, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap_err();
+        let e = rebuild(
+            &f.by_file(),
+            &src,
+            "7.1.0",
+            "c",
+            DLL,
+            Set::MaterializeNew,
+            SIDE_SIZE,
+        )
+        .unwrap_err();
         assert!(
             e.contains("length -1") && e.contains("does not fit i64"),
             "names the cast and the value: {e}"

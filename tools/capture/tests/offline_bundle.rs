@@ -979,6 +979,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
     // The rebuild must agree with what `materialize::rebuild` says, not with
     // itself: a second implementation of the same wrong thing is not a check.
     let index: ChunkIndex = read_json(&b.root.join("chunks/index.json"));
+    let map: PatchMap = read_json(&b.root.join(format!("patchmaps/{CAPTURE}.json")));
     let direct = materialize::rebuild(
         &materialize::ChunksByFile::build(&index),
         &gircap::assemble::ChunkSource::from_index(
@@ -990,6 +991,7 @@ fn the_two_sides_of_the_fixture_really_do_differ() {
         CAPTURE,
         DLL,
         Set::MaterializeOld,
+        map.old.as_ref().expect("an old side").size,
     )
     .expect("rebuilds");
     assert_eq!(&direct.bytes, o);
