@@ -1652,15 +1652,14 @@ never in its value, so every failure hook's value stays a plain relative path.
 **The gate's value is split on the first colon**, and the two halves are paths
 inside the mirror — the `<rel>` shape above, spelled the way the plan spells a
 path: relative to the mirror's root, `/`-separated, and made of ordinary
-names, so no parent component, no trailing separator and no separator but `/`.
-A colon is the drive separator's character and is illegal in a name on
-Windows, so a path inside the mirror holds none there; and the rule is
-checked where the value is read on every host, so a half that carries one
-anyway is not a path. A value that is not two such paths — an empty half, an
-absolute one, a parent component, a trailing separator, or a second colon —
-asks for no gate at all, and **the log says so**: the value and the fact that
-it names no copy are in a warning, so a typo in a gated test is visible
-rather than silent.
+names — each of them non-empty, neither a dot nor a parent component, and
+holding no separator but `/`. A colon is the drive separator's character and
+is illegal in a name on Windows, so a path inside the mirror holds none there;
+and the rule is checked where the value is read on every host, so a half that
+carries one anyway is not a path. A value that is not two such paths asks for
+no gate at all, and **the log says so**: the value and the fact that it names
+no copy are in a warning, so a typo in a gated test is visible rather than
+silent.
 
 Each switch is read where it belongs, and the answer cannot change under a
 run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the

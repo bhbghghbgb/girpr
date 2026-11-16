@@ -458,9 +458,8 @@ const GATE_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 ///
 /// **Both names are relative paths inside the mirror**, and that is what makes
 /// the colon split unambiguous: the rule is checked where the value is read,
-/// so a half that holds a colon of its own is not a path. A value that is not
-/// two such paths asks for no gate — and says so — see
-/// [`CopyGate::from_env`].
+/// and it refuses a half that carries a colon of its own. A value that is not
+/// two such paths asks for no gate — and says so — see [`CopyGate::from_env`].
 ///
 /// The release happens when the failure has been **recorded**, so a copy
 /// waiting on it is released only once the failure it waits for is already
@@ -575,13 +574,12 @@ fn gate_from_spec(spec: &str) -> Option<Arc<CopyGate>> {
 /// The two paths a gate specification names, or `None` when it names none.
 ///
 /// The specification is `<wait>:<on>`, split on the **first** colon, and the
-/// two halves are the two paths — a half that holds a colon of its own is
-/// refused, so there is never a second one for the split to be ambiguous
-/// about.
+/// two halves are the two paths. The split is unambiguous because the shape
+/// [`is_relative_path`] states refuses a colon as well: there is never a
+/// second one for the split to be ambiguous about.
 ///
-/// A half that is not a path inside the mirror — empty, absolute, holding a
-/// parent component, a trailing separator or a colon of its own — names no
-/// copy a run can produce, so the whole specification asks for no gate.
+/// A half that is not such a path names no copy a run can produce, so the
+/// whole specification asks for no gate.
 fn gate_paths(spec: &str) -> Option<(&str, &str)> {
     let (wait, on) = spec.split_once(':')?;
     if !is_relative_path(wait) || !is_relative_path(on) {
@@ -611,12 +609,13 @@ fn gate_paths(spec: &str) -> Option<(&str, &str)> {
 /// copy waiting on it would sit on the guard until it timed out, and then
 /// fail for a reason the specification never stated. So a value of another
 /// shape is refused rather than accepted.
+///
+/// **And a half holds no colon.** That is the one rule here that is about the
+/// specification rather than about the path: the specification is split on a
+/// colon, and a colon is the drive separator's character, so a half that
+/// carries one is not a path but the tail of a longer specification.
 fn is_relative_path(path: &str) -> bool {
-    // The colon is excluded for the reason the split relies on: it is the
-    // separator the specification is split on, so a half that carries a second
-    // colon is not a path but the tail of a longer specification. It is also
-    // the drive separator's character, so a half that carries one is not a
-    // path under the mirror's root either.
+    // The empty path is no path; the colon is refused for the split's sake.
     if path.is_empty() || path.contains(':') {
         return false;
     }
@@ -882,11 +881,11 @@ mod tests {
     /// asks for no gate.**
     ///
     /// The value is split on the first colon, and the split is unambiguous
-    /// because the rule is checked on the parsing: a half that is empty, that
-    /// is absolute, that holds a parent component or a trailing separator, or
-    /// that carries a colon of its own names no copy a run can produce — and
-    /// the copy waiting on it would sit on the guard until it timed out,
-    /// rather than learn at once that it waits for nothing.
+    /// because the rule is checked on the parsing: a half that is not a path
+    /// inside the mirror — the shape [`is_relative_path`] states — names no
+    /// copy a run can produce, and the copy waiting on it would sit on the
+    /// guard until it timed out, rather than learn at once that it waits for
+    /// nothing.
     ///
     /// The rule is pinned on the parsing, so the case says what a
     /// specification means rather than how it is read.
@@ -979,9 +978,8 @@ mod tests {
         for path in [
             // Empty: no path at all.
             "",
-            // The root itself, and a drive: neither is under the mirror's.
+            // The root itself: not under the mirror's.
             "/aaa.bin",
-            "C:aaa.bin",
             // A parent component: the plan spells no copy's path with one.
             "..",
             "../aaa.bin",
@@ -995,6 +993,10 @@ mod tests {
             // A separator other than `/`: the plan spells a path with `/`.
             r"\aaa.bin",
             r"dir\aaa.bin",
+            // A colon: the specification is split on one, and it is the
+            // drive separator's character.
+            "C:aaa.bin",
+            "dir/a:aaa.bin",
         ] {
             assert!(!is_relative_path(path), "`{path}` names no copy");
         }
