@@ -41,7 +41,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P3-02 | Bridge server correctness and locking (C8, E4-E6) | completed | 791f0b24 f6184c5a f8520b74 | |
 | P3-04 | Reuse retention per pair (C2) | pending_review | e46b6657 22939ee2 | |
 | P3-05 | Avoid assembly copy-through (C6) | pending_review | a3b81a8e 9ca856c0 efc3c694 | |
-| P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | todo | | |
+| P3-06 | Build `ChunksByFile` once and use `HashMap` (C5) | in_progress | | |
 | P3-07 | Early A16 exit and larger digest buffer (C3, C4) | todo | | |
 | P3-08 | Symlink containment and termination (C9) | todo | | |
 | P3-09 | One definition of A12 (C7) | todo | | |
