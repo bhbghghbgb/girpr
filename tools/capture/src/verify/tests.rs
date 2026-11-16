@@ -211,6 +211,208 @@ fn a_walk_that_cannot_stat_one_entry_names_it() {
     assert!(e.contains("vanished"), "the path is named: {e}");
 }
 
+/// The smallest directory `Bundle::open` accepts, written with the crate's own
+/// value shapes so a reader change cannot leave a stale hand-rolled fixture.
+/// There are no blobs and no captures: `list` only needs a bundle that opens.
+fn write_minimal_bundle(root: &Path, capture_id: &str) {
+    use crate::emit::index::Checksums;
+    use crate::emit::selfcheck::{Counts, Result_, Selfcheck};
+    use crate::http::ErrorResponses;
+    use crate::http::probe::ErrorShapes;
+    use crate::pathmap::PathMapDocument;
+    use crate::rejections::RejectionsDocument;
+
+    let write = |rel: &str, value: serde_json::Value| {
+        let path = root.join(rel);
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("makes dirs");
+        std::fs::write(&path, serde_json::to_vec(&value).expect("serializes")).expect("writes");
+    };
+    let v = crate::SCHEMA_VERSION;
+    write(
+        "MANIFEST.json",
+        serde_json::json!({
+            "schema_version": v,
+            "tool": { "name": "gircap", "version": "test" },
+            "capture": {
+                "id": capture_id,
+                "captured_at": "20260101T000000Z",
+                "host_os": "test",
+                "tool_argv": [],
+                "tool_argv_raw": [],
+                "complete": true,
+            },
+            "biz": {
+                "id": "biz", "launcher_id": "", "game_id": "", "channel": "",
+                "sub_channel": "", "cps": "", "hyp_base": "", "sophon_base": "",
+            },
+            "versions": {
+                "new": { "tag": "2.0.0", "build_id": "new-build", "source": "test" },
+                "old": { "tag": "1.0.0", "build_id": "old-build", "source": "test" },
+                "diff_tags": [],
+            },
+            "field": "game",
+            "audio": [],
+            "gzip_threshold": 0,
+            "max_decompressed_bytes": 0,
+            "selection_pool": { "fields": [], "manifest_entries": {}, "note": "" },
+            "totals": {
+                "files_captured": 0, "chunks_blobs": 0,
+                "bytes_downloaded": 0, "bytes_on_disk": 0,
+            },
+            "matrix": [],
+            "files": [],
+            "totals_by_set": {},
+        }),
+    );
+    write(
+        "chunks/index.json",
+        serde_json::to_value(ChunkIndex::build(vec![])).expect("serializes"),
+    );
+    write(
+        "verify/checksums.json",
+        serde_json::to_value(Checksums {
+            schema_version: v,
+            algorithm: "sha256".into(),
+            entries: vec![],
+            file_count: 0,
+            total_bytes: 0,
+        })
+        .expect("serializes"),
+    );
+    write(
+        "verify/selfcheck.json",
+        serde_json::to_value(Selfcheck {
+            schema_version: v,
+            result: Result_::Pass,
+            counts: Counts {
+                total: 0,
+                passed: 0,
+                failed: 0,
+            },
+            assertions: vec![],
+            matrix: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "api/error_shapes.json",
+        serde_json::to_value(ErrorShapes {
+            schema_version: v,
+            shapes: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "api/error_responses.json",
+        serde_json::to_value(ErrorResponses {
+            schema_version: v,
+            budget_bytes: 0,
+            total_retained_bytes: 0,
+            responses: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "diagnostics/rejections.json",
+        serde_json::to_value(RejectionsDocument {
+            schema_version: v,
+            cap_bytes: 0,
+            total: 0,
+            omitted: 0,
+            rejections: vec![],
+        })
+        .expect("serializes"),
+    );
+    write(
+        "diagnostics/path_map.json",
+        serde_json::to_value(PathMapDocument {
+            schema_version: v,
+            entries: vec![],
+        })
+        .expect("serializes"),
+    );
+}
+
+/// The walk treats a directory with a manifest it cannot read as a bundle and
+/// stops there, so a bundle nested below it is invisible from above. The child
+/// is a real, openable bundle to make the hiding unambiguous.
+#[test]
+fn currently_a_non_bundle_directory_hides_a_nested_bundle_from_list() {
+    let d = girpr_tempdir::TempDir::new("gircap-list-nested", "nested_hide");
+    let outer = d.join("outer");
+    let nested = outer.join("nested");
+    std::fs::create_dir_all(&nested).expect("makes the directories");
+
+    // A malformed manifest: the probe reports NotABundle, which is a stop, not a
+    // descent, and Bundle::open is tried (and fails) at this level.
+    std::fs::write(outer.join("MANIFEST.json"), b"{ not json").expect("writes it");
+    // The child opens on its own, so it is a bundle the inventory ought to hold.
+    write_minimal_bundle(&nested, "nested_capture");
+    let direct = list(&nested).expect("the nested bundle lists on its own");
+    assert_eq!(direct.bundles.len(), 1, "{direct:?}");
+    assert_eq!(direct.bundles[0].capture_id, "nested_capture");
+
+    // From the root the walk stops at `outer`, so the child is never seen.
+    let index = list(&d).expect("lists");
+    assert!(
+        index.bundles.is_empty(),
+        "the nested bundle is hidden from the walk: {index:?}"
+    );
+    assert!(
+        index.unreadable.is_empty(),
+        "and not even named as unreadable: {index:?}"
+    );
+}
+
+/// The manifest version is checked on its own first, but every secondary
+/// document is still read back through the type that wrote it. A malformed one
+/// is refused by name, which is how `list` comes to name the bundle as
+/// unreadable instead of listing it.
+#[test]
+fn currently_a_malformed_secondary_document_is_refused_at_open() {
+    let d = girpr_tempdir::TempDir::new("gircap-malformed-doc", "bad_secondary");
+    write_minimal_bundle(&d, "c");
+    Bundle::open(&d).expect("opens while every document is well formed");
+
+    std::fs::write(d.join("api/error_shapes.json"), b"{ not json").expect("writes it");
+    let e = Bundle::open(&d).unwrap_err();
+    assert!(e.contains("error_shapes.json"), "{e}");
+
+    let index = list(&d).expect("lists");
+    assert!(index.bundles.is_empty(), "{index:?}");
+    assert_eq!(index.unreadable.len(), 1, "{index:?}");
+    assert!(
+        index.unreadable[0].reason.contains("error_shapes.json"),
+        "{index:?}"
+    );
+}
+
+/// Nothing on the open path inspects `expectations.result_path`, so a patchmap
+/// that points the result outside the bundle is accepted as-is today.
+#[test]
+fn currently_an_escaping_result_path_is_accepted_at_open() {
+    let d = girpr_tempdir::TempDir::new("gircap-result-path", "escape");
+    write_minimal_bundle(&d, "c");
+    let mut map = arithmetic_map(&[0]);
+    map.expectations.result_path = Some("../escaped/result".into());
+    let p = d.join("patchmaps");
+    std::fs::create_dir_all(&p).expect("patchmaps dir");
+    std::fs::write(
+        p.join(format!("{}.json", map.capture_id)),
+        serde_json::to_vec(&map).expect("serializes"),
+    )
+    .expect("writes the patchmap");
+
+    let bundle = Bundle::open(&d).expect("opens with the escaping path");
+    assert_eq!(
+        bundle.patchmaps[&map.capture_id]
+            .expectations
+            .result_path
+            .as_deref(),
+        Some("../escaped/result")
+    );
+}
+
 /// `REDERIVED` and the spec's own list must not overlap, or "re-derived"
 /// would be claiming an assertion this command never looked at.
 #[test]
