@@ -412,17 +412,14 @@ impl Assembled {
             // subset of, and nothing to be disjoint from.
             return true;
         };
-        let fetched: Vec<&str> = plan
-            .iter()
-            .filter(|e| e.decision == Decision::Fetch)
-            .map(|e| e.chunk_id.as_str())
-            .collect();
-        let reused: Vec<&str> = plan
-            .iter()
-            .filter(|e| e.decision == Decision::Reuse)
-            .map(|e| e.chunk_id.as_str())
-            .collect();
-        fetched.iter().all(|f| !reused.contains(f))
+        crate::blobs::chunks::fetch_is_disjoint_from_reuse(
+            plan.iter()
+                .filter(|e| e.decision == Decision::Fetch)
+                .map(|e| e.chunk_id.as_str()),
+            plan.iter()
+                .filter(|e| e.decision == Decision::Reuse)
+                .map(|e| e.chunk_id.as_str()),
+        )
     }
 }
 
