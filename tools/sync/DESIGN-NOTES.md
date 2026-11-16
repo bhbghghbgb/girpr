@@ -111,7 +111,9 @@ fold maps the Kelvin sign `K` onto `k`, and Windows keeps those two spellings
 apart, so the fold would pair two files that are not one. The rule is "fold
 ASCII case, compare every other byte exactly", so a non-ASCII case variant is
 a distinct key — deliberately distinct even where the filesystem would have
-merged the two spellings.
+merged the two spellings. `util::FoldedKey` is that same rule as a key that
+borrows the path it folds, so an index built from it holds the paths it
+indexes rather than a folded copy of each.
 
 **Path identity is not the path key.** `util::component_eq`, behind
 `util::same_path` and `util::path_within`, keeps a Unicode lowercase
@@ -133,12 +135,13 @@ different questions.
 
 **One mapping, two questions.** The Unicode lowercase mapping the on-disk
 lookup compares with is the one the identity rule's fallback compares with
-(`util::unicode_lowercase`), so the value is written once rather than twice in
-two modules. What is shared is the mapping, not the question: the identity
-rule is an equality relation between two spellings, and the lookup is a choice
-among the entries of one directory — an exact match wins, and two entries that
-fold together are ambiguous rather than equal. Each site says which question
-it asks, and the ASCII-only path key stays a rule of its own.
+(`util::unicode_lowercase`, through the comparison `util::unicode_case_eq`),
+so the value is written once rather than twice in two modules. What is shared
+is the mapping, not the question: the identity rule is an equality relation
+between two spellings, and the lookup is a choice among the entries of one
+directory — an exact match wins, and two entries that fold together are
+ambiguous rather than equal. Each site says which question it asks, and the
+ASCII-only path key stays a rule of its own.
 
 **The cache reservation is a fourth site, and it folds the path key's way.**
 `util::has_cache_prefix` asks a narrower question than any of the three above:
