@@ -1742,6 +1742,12 @@ fn a_failed_flush_aborts_before_the_copy_is_cached() {
 /// phase that reported the first failure to finish would name `mmm.bin`; the
 /// plan's order says `aaa.bin`, and that is what has to be reported.
 ///
+/// **The plan lists its copies in path order**, so the copy that comes first
+/// in the plan is the one whose path sorts first: `aaa.bin`. That order is
+/// the plan builder's rule — pinned by the builder's own case,
+/// `the_copy_list_is_in_path_order` — and this case leans on it, so it is
+/// said here rather than left for a reader to infer from the fixture.
+///
 /// **The order the two failures are recorded in is put in place by a barrier,
 /// not by a race.** `aaa.bin` waits at a gate until `mmm.bin` has failed, so
 /// the recording order is the opposite of the plan's whatever the workers
