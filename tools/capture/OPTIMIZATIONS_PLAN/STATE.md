@@ -27,12 +27,12 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-10 | Explicit folder policy (A3) | completed | 8a44db22 988d4b9c 36ae4d8f | |
 | P1-11 | Duplicate-path TSV truth (A4) | completed | 3bb0786b 0aeb530f | |
 | P1-12 | `decode_counts` empty-chunk non-folders (B3) | completed | 45a3f8e2 886a650b | |
-| P1-13 | Record repeated response headers (A12) | pending_review | 424e385d 34cb81b4 | |
-| P1-14 | Reserve error-body budget before reading (A13) | pending_review | 831c6601 a190e31d | |
-| P1-15 | Deterministic rejection cap (A14) | pending_review | 00fe91aa d4b97a04 | |
-| P1-16 | Blob diagnostic fixes (A15, A16) | pending_review | 6021ebc5 7fb61599 0b8b45e7 | |
-| P1-17 | Numeric and tag-length honesty (A17, D4) | pending_review | 38ff3525 9bbccabc cabe7dfc | |
-| P1-18 | Summary log and escaped keys (A18, A19) | pending_review | 4686a977 24d6b608 d58b1c73 | |
+| P1-13 | Record repeated response headers (A12) | completed | 424e385d 34cb81b4 | |
+| P1-14 | Reserve error-body budget before reading (A13) | completed | 831c6601 a190e31d | |
+| P1-15 | Deterministic rejection cap (A14) | completed | 00fe91aa d4b97a04 | |
+| P1-16 | Blob diagnostic fixes (A15, A16) | completed | 6021ebc5 7fb61599 0b8b45e7 | |
+| P1-17 | Numeric and tag-length honesty (A17, D4) | completed | 38ff3525 9bbccabc cabe7dfc | |
+| P1-18 | Summary log and escaped keys (A18, A19) | completed | 4686a977 24d6b608 d58b1c73 | |
 | P2-01 | Separate scoring rank from admission rank (B1) | todo | | |
 | P2-02 | Reconcile `budget_cost` semantics (B2) | todo | | |
 | P2-03 | Reuse or remove `is_a_real_upgrade` (B4) | todo | | |
@@ -57,7 +57,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | RC-1 | P0-01..P0-03 | done | | |
 | RC-2 | P1-01..P1-06 | done | | |
 | RC-3 | P1-07..P1-12 | done | | |
-| RC-4 | P1-13..P1-18 | in_progress | | |
+| RC-4 | P1-13..P1-18 | done | | |
 | RC-5 | P2-01..P2-04 | pending | | |
 | RC-6 | P3-01..P3-02 | pending | | |
 | RC-7 | P3-04..P3-09 | pending | | |
