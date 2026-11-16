@@ -104,16 +104,17 @@ sides **different bytes at the same length** or it tests nothing.
 ### Four fold sites, and the questions each one answers
 
 **The path key folds ASCII case only.** `util::path_key` is the key every
-relative-path index uses — the mixed-case guard, the planner's pairing, the
-diff's pairing, the rename pass, and the plan-time lookups — so the fold is
-stated once and every index agrees on it. ASCII-only is deliberate: a Unicode
-fold maps the Kelvin sign `K` onto `k`, and Windows keeps those two spellings
-apart, so the fold would pair two files that are not one. The rule is "fold
-ASCII case, compare every other byte exactly", so a non-ASCII case variant is
-a distinct key — deliberately distinct even where the filesystem would have
-merged the two spellings. `util::FoldedKey` is that same rule as a key that
-borrows the path it folds, so an index built from it holds the paths it
-indexes rather than a folded copy of each.
+relative-path index uses — the mixed-case guard, the diff's pairing, the
+rename pass, and the plan-time lookups — so the fold is stated once and every
+index agrees on it. ASCII-only is deliberate: a Unicode fold maps the Kelvin
+sign `K` onto `k`, and Windows keeps those two spellings apart, so the fold
+would pair two files that are not one. The rule is "fold ASCII case, compare
+every other byte exactly", so a non-ASCII case variant is a distinct key —
+deliberately distinct even where the filesystem would have merged the two
+spellings. The planner's pairing is the one index that holds the key in its
+borrowed form, `util::FoldedKey`: the same rule, as a key that borrows the
+path it folds, so the index holds the paths it indexes rather than a folded
+copy of each.
 
 **Path identity is not the path key.** `util::component_eq`, behind
 `util::same_path` and `util::path_within`, keeps a Unicode lowercase
@@ -133,15 +134,16 @@ not about how a run keys its map, and it follows neither rule above. The same
 file holds both — the on-disk lookup and the key, side by side, answering two
 different questions.
 
-**One mapping, two questions.** The Unicode lowercase mapping the on-disk
-lookup compares with is the one the identity rule's fallback compares with
-(`util::unicode_lowercase`, through the comparison `util::unicode_case_eq`),
-so the value is written once rather than twice in two modules. What is shared
-is the mapping, not the question: the identity rule is an equality relation
-between two spellings, and the lookup is a choice among the entries of one
-directory — an exact match wins, and two entries that fold together are
-ambiguous rather than equal. Each site says which question it asks, and the
-ASCII-only path key stays a rule of its own.
+**One mapping, one comparison, two questions.** The Unicode lowercase mapping
+the on-disk lookup compares with is the one the identity rule's fallback
+compares with (`util::unicode_lowercase`, through the comparison
+`util::unicode_case_eq`), so the mapping and the comparison that applies it
+are written once rather than twice in two modules. What is shared is the
+mapping and the comparison, not the question: the identity rule is an equality
+relation between two spellings, and the lookup is a choice among the entries
+of one directory — an exact match wins, and two entries that fold together
+are ambiguous rather than equal. Each site says which question it asks, and
+the ASCII-only path key stays a rule of its own.
 
 **The cache reservation is a fourth site, and it folds the path key's way.**
 `util::has_cache_prefix` asks a narrower question than any of the three above:
@@ -154,7 +156,10 @@ spellings are distinct entries, so the reservation is an exact prefix match
 and `GIRPR-CACHE` is ordinary content.
 
 **Enforced by:** `util::tests::path_key_folds_ascii_case_only` and
-`util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key;
+`util::tests::mixed_case_check_groups_by_the_ascii_only_key` for the key, and
+`util::tests::the_borrowed_folded_key_is_the_path_key_s_rule` and
+`util::tests::a_borrowed_folded_key_is_found_under_another_spelling` for the
+borrowed form of it;
 `util::tests::component_equality_folds_ascii_and_non_ascii_case` and
 `util::tests::path_identity_ignores_case_on_windows` for identity;
 `util::tests::the_path_key_and_the_identity_rule_disagree_deliberately` for
