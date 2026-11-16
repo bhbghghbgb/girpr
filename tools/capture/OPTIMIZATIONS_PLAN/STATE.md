@@ -107,3 +107,7 @@ Filled in by the follow-up batching session, then executed batch by batch.
 - Review checkpoints and batch sizes are defined in `INDEX.md`.
 - `completed` means the task and its review batch are done.
 - `reverted` means the original work was undone and a rework row was added.
+- Final validation (clean tree): `cargo nextest run -p gircap -p girpr` → 1574
+  passed, 12 skipped (pre-existing Windows platform-gated symlink/junction
+  tests). `cargo nextest run -p girpr --run-ignored only -E 'binary(artifact_bridge)'`
+  → 6 passed.
