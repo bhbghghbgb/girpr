@@ -69,7 +69,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use serde_json::Value;
 
@@ -839,17 +839,30 @@ fn last_two(path: &str) -> Option<(String, String)> {
 /// What the cache saves is the **read**, not the request: each of the four
 /// archives is read from disk once per process instead of once per request,
 /// and every run asks for all four.
-static MANIFEST_CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
+///
+/// The lock is only ever held to look up or insert an `Arc`, never across the
+/// disk read itself. A read lock serves concurrent hits, and a miss reads the
+/// archive with no lock held before taking the write lock to insert — so
+/// concurrent first requests do not serialize their IO.
+static MANIFEST_CACHE: OnceLock<RwLock<HashMap<PathBuf, Arc<Vec<u8>>>>> = OnceLock::new();
 
 fn manifest_bytes(path: &Path) -> Arc<Vec<u8>> {
-    let cache = MANIFEST_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().expect("manifest cache");
-    if let Some(b) = guard.get(path) {
-        return b.clone();
+    let cache = MANIFEST_CACHE.get_or_init(|| RwLock::new(HashMap::new()));
+    // A read lock is enough for a hit, and readers do not block one another.
+    if let Some(bytes) = cache.read().expect("manifest cache").get(path) {
+        return bytes.clone();
     }
+    // A miss: read the archive with no lock held, so concurrent first
+    // requests do not serialize their disk IO.
     let bytes = Arc::new(std::fs::read(path).expect("read manifest archive"));
-    guard.insert(path.to_path_buf(), bytes.clone());
-    bytes
+    // Insert only if another thread has not already done so, and return
+    // whichever `Arc` is in the map now.
+    cache
+        .write()
+        .expect("manifest cache")
+        .entry(path.to_path_buf())
+        .or_insert(bytes)
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
