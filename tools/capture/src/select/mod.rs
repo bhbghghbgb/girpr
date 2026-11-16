@@ -154,6 +154,26 @@ impl MatrixStatus {
         }
     }
 
+    /// Parse a wire spelling back into a status — the inverse of
+    /// [`MatrixStatus::id`].
+    ///
+    /// This is the one place the matrix's text vocabulary is written down.
+    /// `id()` spells each variant out and `parse` reads those same four strings
+    /// back, so a reader of `MANIFEST.json` and A17's checker cannot drift
+    /// apart: `coveredby` and `overbudget` are rejected, not silently accepted.
+    /// If a fifth state is added later, only `select` changes — add its variant,
+    /// its `id()` spelling and its `parse` arm here, and both the writer and
+    /// every consumer (including `ok_status`) follow.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "captured" => Some(MatrixStatus::Captured),
+            "covered_by" => Some(MatrixStatus::CoveredBy),
+            "over_budget" => Some(MatrixStatus::OverBudget),
+            "unavailable" => Some(MatrixStatus::Unavailable),
+            _ => None,
+        }
+    }
+
     /// Whether A17 accepts this state.
     ///
     /// **All four.** A17 is about the matrix being *complete*: every class has
