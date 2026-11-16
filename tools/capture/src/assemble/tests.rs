@@ -749,6 +749,47 @@ fn an_added_file_has_no_old_side_and_nothing_to_reuse() {
 }
 
 #[test]
+fn a12_is_false_exactly_when_a_chunk_is_both_fetched_and_reused() {
+    let a = assemble_pair(&same_offset_pair()).expect("assembles");
+    let plan = a.map.plan.as_ref().expect("a plan");
+    assert!(plan.iter().any(|e| e.decision == Decision::Reuse));
+    assert!(a.a12_holds(), "a real, disjoint plan");
+
+    // Force an overlap: a FETCH entry whose id is also REUSEd. The boolean must
+    // flip and nothing else about the plan matters.
+    let mut overlapping = a.clone();
+    let plan = overlapping.map.plan.as_mut().expect("a plan");
+    let reused_id = plan
+        .iter()
+        .find(|e| e.decision == Decision::Reuse)
+        .expect("a reused chunk")
+        .chunk_id
+        .clone();
+    let mut collide = plan[0].clone();
+    collide.decision = Decision::Fetch;
+    collide.chunk_id = reused_id;
+    plan.push(collide);
+    assert!(!overlapping.a12_holds());
+}
+
+#[test]
+fn a12_holds_with_no_plan() {
+    let a = assemble_pair(&FilePair {
+        capture_id: "removed".into(),
+        path: "gone.blk".into(),
+        old: Some(OldFile {
+            tag: "7.0.0".into(),
+            build_id: "3XnPviMfoILi".into(),
+            entry: file("gone.blk", vec![chunk(5, 0, 32)]),
+        }),
+        new: None,
+    })
+    .expect("assembles");
+    assert!(a.map.plan.is_none());
+    assert!(a.a12_holds(), "no plan: nothing to reuse or fetch");
+}
+
+#[test]
 fn a_removed_file_has_a_new_side_nothing_to_patch_to() {
     let old = file("gone.blk", vec![chunk(5, 0, 32)]);
     let a = assemble_pair(&FilePair {

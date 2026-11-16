@@ -604,6 +604,35 @@ mod tests {
         }
     }
 
+    /// The shared predicate must agree with the quadratic spelling, on a plan
+    /// large enough that a scan of reuse per fetched id would be conspicuous.
+    #[test]
+    fn fetch_is_disjoint_from_reuse_agrees_with_the_quadratic_form() {
+        let fetch: Vec<String> = (0..512).map(|i| format!("fetch-{i}")).collect();
+        let reuse: Vec<String> = (0..512).map(|i| format!("reuse-{i}")).collect();
+
+        let quadratic =
+            |fetch: &[String], reuse: &[String]| fetch.iter().all(|f| !reuse.contains(f));
+        let shared = |fetch: &[String], reuse: &[String]| {
+            fetch_is_disjoint_from_reuse(
+                fetch.iter().map(String::as_str),
+                reuse.iter().map(String::as_str),
+            )
+        };
+
+        assert!(quadratic(&fetch, &reuse));
+        assert_eq!(shared(&fetch, &reuse), quadratic(&fetch, &reuse));
+
+        // Make the last fetch collide with the first reuse id.
+        let mut overlapping = reuse.clone();
+        overlapping[0] = fetch.last().unwrap().clone();
+        assert!(!quadratic(&fetch, &overlapping));
+        assert_eq!(
+            shared(&fetch, &overlapping),
+            quadratic(&fetch, &overlapping)
+        );
+    }
+
     /// Reuse is by *content*, not by chunk id — which is why the old and new
     /// builds here hand out different ids for different bytes at the same
     /// offset, and the same id only where the bytes really agree.
