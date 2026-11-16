@@ -39,23 +39,23 @@ pub struct Rebuilt {
     pub layout: Layout,
 }
 
-/// The chunks the index says make up one file on one side.
+/// The chunks the index says make up one file on one side, as owned ids.
 ///
 /// `(chunk_id, offset)`, ordered by offset so the caller's layout check and the
 /// assembly both see the file the way a reader would.
 ///
-/// **One file's worth of [`ChunksByFile`].** This is a convenience over the
-/// index that every caller inside [`rebuild_all`] shares — asking it separately
-/// means rebuilding the grouping, which is the work the grouping exists to do
-/// once. Nothing outside this module needs it.
+/// A thin convenience over [`ChunksByFile::get`] for callers that need owned
+/// `(id, offset)` pairs. The grouping is supplied by the caller, so this never
+/// rebuilds the index: build [`ChunksByFile`] once and ask it about as many files
+/// as needed. Nothing outside this module needs it.
 pub fn chunks_for(
-    index: &ChunkIndex,
+    by_file: &ChunksByFile<'_>,
     tag: &str,
     capture_id: &str,
     path: &str,
     role: Set,
 ) -> Result<Vec<(String, i64)>, String> {
-    Ok(ChunksByFile::build(index)
+    Ok(by_file
         .get(tag, capture_id, path, role)?
         .into_iter()
         .map(|(id, offset)| (id.to_string(), offset))
@@ -81,11 +81,11 @@ impl Ref<'_> {
 
 /// Every reference in the index, grouped by the file it places bytes into.
 ///
-/// [`chunks_for`] answered one question by walking **every** blob's entire
-/// `referenced_by` vector, and then [`rebuild`] built a fresh map of **every**
-/// blob's size — per side, and `rebuild_all` calls it twice per capture. On the
-/// reference bundle that is 38 blobs and 66 references scanned sixteen times to
-/// answer sixteen questions, and sixteen maps of 38 entries thrown away.
+/// Answering one file's question by walking **every** blob's entire
+/// `referenced_by` vector, and rebuilding a fresh map of **every** blob's size
+/// per side, used to cost a full index scan per file. On the reference bundle
+/// that is 38 blobs and 66 references scanned sixteen times to answer sixteen
+/// questions, and sixteen maps of 38 entries thrown away.
 ///
 /// Built once instead, and sorted, so a lookup is a binary search and a walk of
 /// the (short) run of rows that share the key. Nothing is cloned: the rows
@@ -568,14 +568,15 @@ mod tests {
     #[test]
     fn the_index_names_every_chunk_of_a_side_with_its_offset() {
         let f = Fixture::build("index");
-        let old = chunks_for(&f.index, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap();
+        let by_file = f.by_file();
+        let old = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld).unwrap();
         assert_eq!(old.len(), 3);
         assert_eq!(
             old.iter().map(|(_, o)| *o).collect::<Vec<_>>(),
             vec![0, 64, 192],
             "ordered by offset, the way a reader walks a file"
         );
-        let new = chunks_for(&f.index, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap();
+        let new = chunks_for(&by_file, "7.1.0", "c", DLL, Set::MaterializeNew).unwrap();
         assert_eq!(new.len(), 3);
         assert_eq!(
             new.iter().map(|(_, o)| *o).collect::<Vec<_>>(),
@@ -583,7 +584,7 @@ mod tests {
             "same layout, different content at offset 0"
         );
         assert_eq!(
-            chunks_for(&f.index, "7.1.0", "c", DLL, Set::PatchFetch)
+            chunks_for(&by_file, "7.1.0", "c", DLL, Set::PatchFetch)
                 .unwrap()
                 .len(),
             1
@@ -605,7 +606,7 @@ mod tests {
             ("7.1.0", Set::PatchFetch, 1),
         ] {
             let one = by_file.get(tag, "c", DLL, role).unwrap();
-            let many = chunks_for(&f.index, tag, "c", DLL, role).unwrap();
+            let many = chunks_for(&by_file, tag, "c", DLL, role).unwrap();
             assert_eq!(one.len(), want, "{tag} {role}");
             assert_eq!(
                 one.iter()
@@ -782,7 +783,8 @@ mod tests {
         index.blobs[1]
             .referenced_by
             .push(reference("7.0.0", "c", DLL, Set::MaterializeOld, 999));
-        let hits = chunks_for(&index, "7.0.0", "c", DLL, Set::MaterializeOld).expect("both");
+        let by_file = ChunksByFile::build(&index);
+        let hits = chunks_for(&by_file, "7.0.0", "c", DLL, Set::MaterializeOld).expect("both");
         let offsets: Vec<i64> = hits.iter().map(|(_, o)| *o).collect();
         assert_eq!(offsets, vec![0, 64, 192, 999], "every offset is kept");
         assert_eq!(
