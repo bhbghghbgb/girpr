@@ -820,6 +820,47 @@ mod tests {
         validate_fixture(&mut c).expect("the mock is self-consistent");
     }
 
+    /// The view validation returns is the same decode the raw bodies yield, so
+    /// the run can use it without reading a body a second time. Comparing the
+    /// full JSON values catches a view that was rebuilt rather than carried.
+    #[test]
+    fn validation_returns_the_once_parsed_builds_and_params() {
+        let mut c = mock_captured();
+        let raw_new: GetBuild = c.build_new.data().expect("the new body parses");
+        let raw_old: GetBuild = c.build_old.data().expect("the old body parses");
+        let raw_params = c.branch_params().expect("the branch body parses");
+
+        let parsed = validate_fixture(&mut c).expect("the mock is self-consistent");
+
+        assert_eq!(
+            serde_json::to_value(&parsed.new_build).unwrap(),
+            serde_json::to_value(&raw_new).unwrap(),
+            "the returned new build is the decode of its raw body"
+        );
+        assert_eq!(
+            serde_json::to_value(&parsed.old_build).unwrap(),
+            serde_json::to_value(&raw_old).unwrap(),
+            "the returned old build is the decode of its raw body"
+        );
+        assert_eq!(parsed.params, raw_params);
+        assert_eq!(c.versions.new.build_id, raw_new.build_id);
+        assert_eq!(c.versions.old.build_id, raw_old.build_id);
+    }
+
+    /// Handing the parsed view to the run must not replace the evidence: the raw
+    /// bodies survive byte-for-byte, so `emit::write_api` still writes the bytes
+    /// the server sent.
+    #[test]
+    fn validation_leaves_the_raw_bodies_untouched() {
+        let mut c = mock_captured();
+        let bodies: Vec<Vec<u8>> = c.bodies().iter().map(|b| b.bytes.clone()).collect();
+
+        validate_fixture(&mut c).expect("the mock is self-consistent");
+
+        let after: Vec<Vec<u8>> = c.bodies().iter().map(|b| b.bytes.clone()).collect();
+        assert_eq!(after, bodies, "every one of the six bodies is unchanged");
+    }
+
     /// The one failure mode that would make every URL in the bundle right and the
     /// bundle wrong.
     #[test]
