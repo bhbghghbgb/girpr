@@ -175,23 +175,83 @@ fn the_pool_is_built_from_every_row_with_its_shape_and_classes() {
     );
 }
 
-/// `removed` has no new side and `added` has to be fetched whole. Charging
-/// `total_cost` to both would make `removed` free and `added` cost nothing.
+/// An added path is charged the compressed bytes a fetch downloads, not its
+/// declared size on the new side.
 #[test]
-fn a_one_sided_path_is_charged_its_own_size() {
+fn an_added_path_is_charged_its_compressed_download_size() {
+    let pool = candidates(&[field(
+        "game",
+        vec![PathRow {
+            path: "x/fresh".into(),
+            state: State::Added,
+            size: 1_000,
+            download_bytes: Some(100),
+            score: None,
+            is_folder: false,
+        }],
+    )]);
+    assert_eq!(pool[0].budget_cost(), 100);
+}
+
+/// A removed path has no new side to fetch: its charge is still the bytes it
+/// occupies in `game/`.
+#[test]
+fn a_removed_path_is_still_charged_its_old_size() {
     let pool = all_six();
-    let g = pool.iter().find(|c| c.candidate.path == "j/added").unwrap();
     let h = pool
         .iter()
         .find(|c| c.candidate.path == "k/removed")
         .unwrap();
+    assert_eq!(h.budget_cost(), 1_730_000);
+}
+
+/// A common path still charges `total_cost`, not either side's own size.
+#[test]
+fn a_common_path_is_still_charged_total_cost() {
+    let pool = all_six();
     let d = pool
         .iter()
         .find(|c| c.candidate.path == "d/in_place")
         .unwrap();
-    assert_eq!(g.budget_cost(), 114_000);
-    assert_eq!(h.budget_cost(), 1_730_000);
-    assert_eq!(d.budget_cost(), 1_826_067, "a common path is old + new");
+    assert_eq!(d.budget_cost(), 1_826_067);
+}
+
+/// A byte ceiling admits an added path by the compressed download cost, not by
+/// its declared size — whichever of the two the ceiling sits between.
+#[test]
+fn a_budget_admits_an_added_path_by_compressed_size_not_declared_size() {
+    let pool = |declared: i64, download: u64| {
+        candidates(&[field(
+            "game",
+            vec![PathRow {
+                path: "x/fresh".into(),
+                state: State::Added,
+                size: declared,
+                download_bytes: Some(download),
+                score: None,
+                is_folder: false,
+            }],
+        )])
+    };
+
+    // Declared bigger than the ceiling, download under it: admitted.
+    let s = select(&pool(1_000, 100), 1, Budget::capped(100), &[]);
+    assert_eq!(s.paths(), vec!["x/fresh"]);
+    assert_eq!(s.bytes_admitted, 100);
+
+    // One byte below the download cost: refused, and the reason names 100.
+    let s = select(&pool(1_000, 100), 1, Budget::capped(99), &[]);
+    assert!(s.admitted.is_empty());
+    let r = s.rejected.iter().find(|r| r.path == "x/fresh").unwrap();
+    assert_eq!(r.budget_cost, 100);
+    assert!(r.reason.contains("100"), "the reason names the charge");
+
+    // Reverse the two numbers: a large download under a small declared size is
+    // refused even though the declared size would have fitted.
+    let s = select(&pool(100, 1_000), 1, Budget::capped(100), &[]);
+    assert!(s.admitted.is_empty());
+    let r = s.rejected.iter().find(|r| r.path == "x/fresh").unwrap();
+    assert_eq!(r.budget_cost, 1_000);
 }
 
 #[test]

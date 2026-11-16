@@ -922,6 +922,63 @@ mod tests {
         );
     }
 
+    /// An added path carries the compressed bytes a fetch downloads, not the
+    /// declared uncompressed size. The candidate is charged the download bytes.
+    #[test]
+    fn an_added_row_carries_its_compressed_download_size() {
+        let old = manifest("7.0.0", vec![]);
+        let new = manifest(
+            "7.1.0",
+            vec![file(
+                "fresh",
+                "md5-fresh",
+                vec![chunk("a", "aa", 0, 700, 60), chunk("b", "bb", 700, 300, 40)],
+            )],
+        );
+        let d = diff_field(&old, &new).unwrap();
+        let row = d.rows.iter().find(|r| r.path == "fresh").unwrap();
+        assert_eq!(row.size, 1_000, "the declared, uncompressed size");
+        assert_eq!(row.download_bytes, Some(100), "60 + 40 compressed bytes");
+
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        let c = pool.iter().find(|c| c.candidate.path == "fresh").unwrap();
+        assert_eq!(c.budget_cost(), 100);
+    }
+
+    /// The download sum uses the saturating, `max(0)` convention of the other
+    /// byte totals: a negative `compressed_size` contributes nothing, and a
+    /// file with no chunks downloads nothing.
+    #[test]
+    fn an_added_download_size_saturates_negatives_and_empty_files_to_zero() {
+        let old = manifest("7.0.0", vec![]);
+        let new = manifest(
+            "7.1.0",
+            vec![
+                file(
+                    "mixed",
+                    "md5-mixed",
+                    vec![chunk("a", "aa", 0, 10, -5), chunk("b", "bb", 10, 10, 30)],
+                ),
+                file("empty", "md5-empty", vec![]),
+            ],
+        );
+        let d = diff_field(&old, &new).unwrap();
+        let by_path: BTreeMap<&str, &PathRow> =
+            d.rows.iter().map(|r| (r.path.as_str(), r)).collect();
+        assert_eq!(by_path["mixed"].download_bytes, Some(30));
+        assert_eq!(by_path["empty"].download_bytes, Some(0));
+
+        let pool = crate::select::candidates(std::slice::from_ref(&d));
+        let cost = |path: &str| {
+            pool.iter()
+                .find(|c| c.candidate.path == path)
+                .unwrap()
+                .budget_cost()
+        };
+        assert_eq!(cost("mixed"), 30);
+        assert_eq!(cost("empty"), 0, "a zero-chunk added file costs nothing");
+    }
+
     /// Fixture shape: one common file whose whole-file md5 differs between the
     /// two tags, plus one folder entry that exists only in the new tag.
     /// The folder stays an `added` diff row so the counts remain truthful, but
