@@ -181,7 +181,11 @@ impl Captured {
     ///
     /// The returned [`ValidatedCapture`] is the single decoded copy of the branch
     /// body and both builds; callers use it instead of re-parsing the raw bodies.
-    pub fn validate(&self) -> Result<ValidatedCapture, ApiError> {
+    ///
+    /// `params` is the branch body parsed once by the fetcher and passed through
+    /// so this method does not decode it a second time. The build ids are
+    /// attached to `versions` here, from the same parse that the checks use.
+    pub fn validate(&mut self, params: BranchParams) -> Result<ValidatedCapture, ApiError> {
         let configs = self.game_configs()?;
         configs.require_chunk_mode()?;
         // Fail here rather than at the fixture write: the scan directory is a
@@ -190,7 +194,6 @@ impl Captured {
         // costs no network work and no artifact directory.
         configs.audio_pkg_scan_dir()?;
 
-        let params = self.branch_params()?;
         let new = self.new_build()?;
         if new.tag != self.versions.new.tag {
             return Err(ApiError::shape(
@@ -224,6 +227,8 @@ impl Captured {
                     .require_zstd_plaintext(&format!("{which} chunk_download"))?;
             }
         }
+
+        self.versions.attach_build_ids(&new.build_id, &old.build_id);
         Ok(ValidatedCapture {
             params,
             old_build: old,
@@ -302,7 +307,13 @@ impl<'a> HypClient<'a> {
         })
     }
 
-    /// Fetch all six bodies and resolve the version pair.
+    /// Fetch all six bodies and resolve the version pair, returning the branch
+    /// parameters alongside the raw bundle.
+    ///
+    /// The branch body is parsed here to build the `getBuild` URLs and select the
+    /// pair; the parsed [`BranchParams`] is returned rather than parsed again by
+    /// the caller. The `getBuild` bodies are left for [`Captured::validate`] to
+    /// decode once, which also attaches their build ids to `versions`.
     ///
     /// **Six bodies, two round trips.** A sequential `.await` per body would be
     /// the entire network cost of a `--no-chunk-blobs` metadata run. The
@@ -324,7 +335,7 @@ impl<'a> HypClient<'a> {
         new: NewTagSelector<'_>,
         old: OldTagSelector<'_>,
         jobs: usize,
-    ) -> Result<Captured, ApiError> {
+    ) -> Result<(Captured, BranchParams), ApiError> {
         // The four bodies whose URL needs nothing but `biz`. Also the answer key:
         // `map_concurrently` returns input order, so the reads below are
         // positional and each one is named by the `PLAIN` entry above it.
@@ -396,7 +407,7 @@ impl<'a> HypClient<'a> {
 
         let params = BranchParams::from_branches(&branches.bytes)?;
 
-        let mut versions = VersionPair::select(&params, new, old)
+        let versions = VersionPair::select(&params, new, old)
             .map_err(|m| ApiError::shape("version pair", m))?;
 
         // The two `getBuild`s depend on `params` and on nothing each other. Their URLs
@@ -437,20 +448,18 @@ impl<'a> HypClient<'a> {
                 .ok_or_else(|| err("getBuild", "the old tag returned no body".into()))?,
         )?;
 
-        versions.attach_build_ids(
-            &build_new.data::<GetBuild>()?.build_id,
-            &build_old.data::<GetBuild>()?.build_id,
-        );
-
-        Ok(Captured {
-            configs,
-            branches,
-            deprecated,
-            packages,
-            build_new,
-            build_old,
-            versions,
-        })
+        Ok((
+            Captured {
+                configs,
+                branches,
+                deprecated,
+                packages,
+                build_new,
+                build_old,
+                versions,
+            },
+            params,
+        ))
     }
 }
 
@@ -695,6 +704,13 @@ mod tests {
         BranchParams::from_branches(branch_body().as_bytes()).unwrap()
     }
 
+    /// Validate a hand-built fixture, deriving its params the way the fetcher
+    /// does, so the test does not need to thread a parsed view through.
+    fn validate_fixture(c: &mut Captured) -> Result<ValidatedCapture, ApiError> {
+        let params = c.branch_params().unwrap();
+        c.validate(params)
+    }
+
     fn mock_captured() -> Captured {
         let mut captured = Captured {
             configs: CapturedBody {
@@ -800,9 +816,8 @@ mod tests {
 
     #[test]
     fn a_good_capture_validates() {
-        mock_captured()
-            .validate()
-            .expect("the mock is self-consistent");
+        let mut c = mock_captured();
+        validate_fixture(&mut c).expect("the mock is self-consistent");
     }
 
     /// The one failure mode that would make every URL in the bundle right and the
@@ -811,7 +826,7 @@ mod tests {
     fn a_build_that_echoes_another_tag_is_refused() {
         let mut c = mock_captured();
         c.build_new.bytes = build_body("7.0.0", "newBUILD").into_bytes();
-        let e = c.validate().unwrap_err();
+        let e = validate_fixture(&mut c).unwrap_err();
         assert!(e.to_string().contains("7.1.0"), "{e}");
         assert!(e.to_string().contains("7.0.0"), "{e}");
     }
@@ -820,7 +835,7 @@ mod tests {
     fn a_non_chunk_launcher_is_refused_before_a_blob_is_fetched() {
         let mut c = mock_captured();
         c.configs.bytes = br#"{"retcode":0,"data":{"launch_configs":[{"default_download_mode":"DOWNLOAD_MODE_LDIFF"}]}}"#.to_vec();
-        let e = c.validate().unwrap_err();
+        let e = validate_fixture(&mut c).unwrap_err();
         assert!(e.to_string().contains("DOWNLOAD_MODE_LDIFF"), "{e}");
         assert!(e.to_string().contains("DOWNLOAD_MODE_CHUNK"), "{e}");
     }
@@ -832,7 +847,7 @@ mod tests {
         c.build_new.bytes = s
             .replacen("\"compression\":1", "\"compression\":0", 1)
             .into_bytes();
-        let e = c.validate().unwrap_err();
+        let e = validate_fixture(&mut c).unwrap_err();
         assert!(e.to_string().contains("compression"), "{e}");
     }
 
@@ -861,10 +876,13 @@ mod tests {
             Biz::resolve(crate::cli::Biz::Hk4eGlobal),
             &fetcher,
         );
-        let captured = client
+        let (mut captured, params) = client
             .capture_all(NewTagSelector::BranchHead, OldTagSelector::FirstDiffTag, 4)
             .await
             .expect("all six answered");
+        // The build ids are attached by validation, from the same parse whose
+        // result the run carries forward.
+        captured.validate(params).expect("self-consistent");
 
         assert_eq!(captured.bodies().len(), 6);
         assert_eq!(captured.versions.new.tag, "7.1.0");

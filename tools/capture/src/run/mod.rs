@@ -84,16 +84,17 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     // carries the `package_id` every `getBuild` URL is built from, so a caller
     // that fetched them out of order would request a URL with no package in it.
     let client = hyp::HypClient::new(endpoints.clone(), biz, &fetcher);
-    let mut captured = client
+    let (mut captured, params) = client
         .capture_all(plan.new_selector(), plan.old_selector(), plan.jobs)
         .await
         .map_err(|e| apierr("metadata capture", &e))?;
 
     // Assert what the capture depends on, before a blob is fetched: the launcher
     // must be on chunk delivery, both builds must echo the tags they were asked
-    // for, and every published manifest must be storable.
-    captured
-        .validate()
+    // for, and every published manifest must be storable. This decode is the one
+    // that produces the view the rest of the run acts on.
+    let validated = captured
+        .validate(params)
         .map_err(|e| assertion("validate the capture", &e))?;
 
     // Each body now knows which request produced it, so that `emit::write_api`
@@ -106,9 +107,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     hyp::attach_seq(&log, &mut captured.bodies_mut());
 
     let versions = &captured.versions;
-    let params = captured
-        .branch_params()
-        .map_err(|e| apierr("re-read the captured branch", &e))?;
+    let params = &validated.params;
     tracing::info!(
         biz = biz.as_str(),
         package_id = %params.package_id,
@@ -139,7 +138,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let probe = probe::probe_tags(
         &fetcher,
         endpoints.sophon,
-        &params,
+        params,
         &tags,
         &params.diff_tags,
         &known,
@@ -155,14 +154,9 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     //     by the position it finished in. See `manifest::fetch` for why the order a
     //     download completes in cannot be allowed to reach the bundle.
     let fields = selection_fields(&plan);
-    let old_build = captured
-        .old_build()
-        .map_err(|e| apierr("re-read the captured old build", &e))?;
-    let new_build = captured
-        .new_build()
-        .map_err(|e| apierr("re-read the captured new build", &e))?;
-    let manifest_wants =
-        manifest::fetch::wants(&fields, &old_tag, &new_tag, &old_build, &new_build);
+    let old_build = &validated.old_build;
+    let new_build = &validated.new_build;
+    let manifest_wants = manifest::fetch::wants(&fields, &old_tag, &new_tag, old_build, new_build);
     // Every value a shape rule refuses during the run lands here. The store is
     // created before the manifests are fetched because that is the first place
     // an untrusted value reaches a write decision; the document is written with
@@ -223,7 +217,7 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
         &fetcher,
         &endpoints,
         &biz,
-        &params,
+        params,
         &probe::ErrorProbes {
             manifest_prefix: &new_game.meta.declared.manifest_download.url_prefix,
             chunk_prefix: new_game.chunk_url_prefix(),
