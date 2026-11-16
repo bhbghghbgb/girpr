@@ -402,7 +402,7 @@ impl Checksums {
     /// between the two passes; a byte count is not. The total is one field read
     /// away in the document it describes.
     pub fn a16(&self, root: &Path) -> (bool, String) {
-        match self.findings(root).into_iter().next() {
+        match self.findings_up_to(root, 1).into_iter().next() {
             Some(f) => (false, f),
             None => (
                 true,
@@ -461,15 +461,36 @@ impl Checksums {
 
     /// Every A16 failure, in a stable order.
     ///
-    /// Exhaustive on purpose. A capture reports the first because it stops at the
-    /// first anyway; a *verifier* that reported only the first would send an
-    /// operator round a 95-file bundle once per round trip, and the second
-    /// finding is usually in the same directory as the first.
+    /// Exhaustive on purpose. A capture reports only the first (through
+    /// [`Checksums::a16`], which stops as soon as it has one); a *verifier* that
+    /// reported only the first would send an operator round a 95-file bundle
+    /// once per round trip, and the second finding is usually in the same
+    /// directory as the first.
     pub fn findings(&self, root: &Path) -> Vec<String> {
+        self.findings_up_to(root, usize::MAX)
+    }
+
+    /// The first `limit` A16 failures, in the same stable order as
+    /// [`Checksums::findings`].
+    ///
+    /// Membership findings (extras, ghosts, count/total) are collected first and
+    /// the per-entry re-hash loop stops as soon as `limit` is reached, so a
+    /// caller wanting one finding — the capture path — does not re-hash the rest
+    /// of the tree. Passing `usize::MAX` keeps the exhaustive behavior, and the
+    /// order is unchanged: the first item here is the first item the full list
+    /// would produce.
+    fn findings_up_to(&self, root: &Path, limit: usize) -> Vec<String> {
         let (mut out, on_disk) = self.membership_findings(root);
+        if out.len() >= limit {
+            out.truncate(limit);
+            return out;
+        }
         // Only re-hash a file that still exists: a ghost above already named it,
         // and digesting it would report the same problem a second way.
         for e in &self.entries {
+            if out.len() >= limit {
+                break;
+            }
             if !on_disk.contains(&e.path) {
                 continue;
             }
