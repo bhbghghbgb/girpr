@@ -854,7 +854,7 @@ pub fn select(
         "the admitted sum and the charged budget must be the same number"
     );
 
-    Selection {
+    let selection = Selection {
         bytes_admitted,
         admitted,
         rejected,
@@ -862,7 +862,19 @@ pub fn select(
         forced_unscored,
         matrix,
         budget: final_budget,
+    };
+
+    // A debug assertion, not a refusal: a degenerate manifest may still yield
+    // a usable bundle, so release builds keep the old behaviour. The guard is
+    // a runtime `cfg!` rather than a `debug_assert!` so the check (and the two
+    // sets it builds) is not merely compiled out but never runs in release.
+    if cfg!(debug_assertions)
+        && let Err(message) = debug_validate_unique_ids(&selection)
+    {
+        panic!("capture-id invariant violated: {message}");
     }
+
+    selection
 }
 
 /// Debug-only invariant for the ids that become `patchmaps/<id>.json` stems.
