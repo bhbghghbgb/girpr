@@ -208,15 +208,22 @@ repair binary and with `gircap` — one set of rules, so a script that learned
   this one. It is a one-shot migration, and a migration that fails should
   leave a record of how far it got.
 - **The log events name what produced them.** The walk reports itself in
-  `scan start`, `scan progress: walk` and `scan done`. A side's effective map
-  is built in two phases — one that walks the tree and consults the cache, one
-  that hashes what the plan asked for — and each phase reports a start, a
-  progress and a done, all named for the map and for the phase they came
-  from: `effective start: phase a`, `effective progress: phase a` and
+  `scan start`, `scan progress: walk` and `scan done`. A **folder** side's
+  effective map is built in two phases — one that walks the tree and consults
+  the cache, one that hashes what the plan asked for — and each phase reports a
+  start, a progress and a done, all named for the map and for the phase they
+  came from: `effective start: phase a`, `effective progress: phase a` and
   `effective done: phase a`, and the same three for phase C. Every event of a
   phase names the phase by its letter, so a reader — or a parser — never has
   to know which fields an event carries to say where it came from, and a grep
   for `effective done` finds both phases' done events.
+- **A record side reports neither the walk nor the phases.** It has no
+  filesystem to walk and no bytes to hash, so it runs neither phase: it logs
+  `record side loaded` — carrying the number of rows it read — and no `scan`
+  event and no `effective` event at all. (`compare` also names the load
+  itself, with `load record side`; `compare-self` opens the record read-only
+  instead, with `cache opened read-only`.) So a grep for `effective done`
+  finds a folder side's two done events and a record side's none.
 
 The `--rw-threads*` family is on **every** subcommand, not just `sync` — see
 [Concurrency](#concurrency).
