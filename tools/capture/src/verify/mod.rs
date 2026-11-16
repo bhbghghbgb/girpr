@@ -67,7 +67,7 @@ use crate::hash;
 #[cfg(test)]
 use bundle::probe_manifest;
 #[cfg(test)]
-use checks::{A20, A20_ID, check_blobs, check_patchmap_arithmetic};
+use checks::{A20, A20_ID, check_blobs, check_patchmap_arithmetic, check_plan_against_index};
 #[cfg(test)]
 use list::{child_dirs, list_with};
 #[cfg(test)]

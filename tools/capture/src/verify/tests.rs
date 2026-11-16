@@ -654,17 +654,24 @@ fn an_overflowing_fetch_cost_fails_a20_instead_of_aborting() {
 }
 
 /// A patchmap can be arithmetically sound on its own while describing a patch
-/// that the bundle's own index cannot produce. Re-deriving the arithmetic from
-/// the patchmap alone cannot see that: today it hands back a single green row.
+/// that the bundle's own index cannot produce. The arithmetic check cannot see
+/// that; the plan/index cross-check must, and name the chunk that disagrees.
 #[test]
-fn currently_a_self_consistent_plan_passes_when_the_index_names_another_patch() {
+fn a_self_consistent_plan_fails_when_the_index_names_another_patch() {
+    use crate::assemble::Side;
     use crate::blobs::IndexedBlob;
     use crate::blobs::chunks::{Reference, Set};
     use crate::blobs::props::BlobProps;
 
     // The plan: totals and expectations are the honest sum of its one FETCH, and
     // must_not_fetch agrees with its (empty) REUSE set.
-    let map = arithmetic_map(&[10]);
+    let mut map = arithmetic_map(&[10]);
+    map.new = Some(Side {
+        tag: "7.1.0".into(),
+        size: 1,
+        md5: "00".repeat(16),
+        nchunks: 1,
+    });
     let plan = map.plan.as_ref().expect("a plan");
     assert_eq!(plan.len(), 1);
     let planned_id = plan[0].chunk_id.as_str();
@@ -711,12 +718,320 @@ fn currently_a_self_consistent_plan_passes_when_the_index_names_another_patch() 
     assert_eq!(indexed, vec![indexed_id]);
     assert!(!indexed.contains(&planned_id), "the two disagree");
 
-    // And yet the arithmetic check, which never looks at the index, passes.
-    let rows = check_patchmap_arithmetic(&map);
-    assert_eq!(rows.len(), 1, "{rows:?}");
+    // The arithmetic still agrees with itself, as it must - that is why the
+    // two checks are separate.
+    assert!(check_patchmap_arithmetic(&map).iter().all(|r| r.ok));
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
     assert!(
-        rows[0].ok,
-        "today a self-consistent plan passes even though the index names another patch: {rows:?}"
+        rows.iter().any(|r| !r.ok && r.actual.contains(planned_id)),
+        "the plan's chunk id is named as disagreeing with the index: {rows:?}"
+    );
+}
+
+/// A two-side fixture whose plan and index describe exactly the same patch.
+///
+/// Old side: `a` at 0, `b` at 64, `c` at 192. New side: `d` at 0 (fetched),
+/// `b` at 64 and `c` at 192 (reused from those same old offsets). The blobs are
+/// measured so the sizes the plan declares are the sizes the index holds.
+fn plan_index_fixture() -> (crate::assemble::PatchMap, ChunkIndex) {
+    use crate::assemble::ranges::Range;
+    use crate::assemble::{Decision, Expectations, PatchMap, PlanEntry, Side, Totals};
+    use crate::blobs::IndexedBlob;
+    use crate::blobs::chunks::{Reference, Set};
+    use crate::blobs::props::BlobProps;
+    use crate::manifest::proto::SophonChunk;
+
+    let chunk = |seed: u8, len: usize, prefix: u64, offset: i64| -> (SophonChunk, Vec<u8>) {
+        let body: Vec<u8> = (0..len)
+            .map(|i| seed.wrapping_mul(31).wrapping_add(i as u8))
+            .collect();
+        let raw = zstd::encode_all(body.as_slice(), 1).expect("encode");
+        let c = SophonChunk {
+            id: format!("{prefix:016x}_{}", hash::md5_hex(&body)),
+            uncompressed_md5: hash::md5_hex(&body),
+            offset,
+            compressed_size: raw.len() as i64,
+            uncompressed_size: len as i64,
+            unknown_field6: 0,
+            compressed_md5: hash::md5_hex(&raw),
+        };
+        (c, raw)
+    };
+    let (a, ar) = chunk(1, 64, 0x1111_1111_1111_1111, 0);
+    let (b, br) = chunk(2, 128, 0x2222_2222_2222_2222, 64);
+    let (c, cr) = chunk(3, 32, 0x3333_3333_3333_3333, 192);
+    let (d, dr) = chunk(4, 64, 0x4444_4444_4444_4444, 0);
+
+    let reference = |tag: &str, role: Set, offset: i64| Reference {
+        tag: tag.into(),
+        build_id: None,
+        capture_id: "c".into(),
+        path: "dll".into(),
+        role,
+        offset,
+    };
+    let entry = |ch: &SophonChunk, raw: Vec<u8>, refs: Vec<Reference>, sets: Vec<Set>| {
+        let mut props = BlobProps::measure(&raw, ch).expect("measure");
+        props.set_stored(BlobProps::stored_path_for(&ch.id));
+        (
+            IndexedBlob {
+                props,
+                referenced_by: refs,
+                sets: sets.clone(),
+            },
+            sets,
+        )
+    };
+    let index = ChunkIndex::build(vec![
+        entry(
+            &a,
+            ar,
+            vec![reference("7.0.0", Set::MaterializeOld, 0)],
+            vec![Set::MaterializeOld],
+        ),
+        entry(
+            &b,
+            br,
+            vec![
+                reference("7.0.0", Set::MaterializeOld, 64),
+                reference("7.1.0", Set::MaterializeNew, 64),
+            ],
+            vec![Set::MaterializeOld, Set::MaterializeNew],
+        ),
+        entry(
+            &c,
+            cr,
+            vec![
+                reference("7.0.0", Set::MaterializeOld, 192),
+                reference("7.1.0", Set::MaterializeNew, 192),
+            ],
+            vec![Set::MaterializeOld, Set::MaterializeNew],
+        ),
+        entry(
+            &d,
+            dr,
+            vec![
+                reference("7.1.0", Set::MaterializeNew, 0),
+                reference("7.1.0", Set::PatchFetch, 0),
+            ],
+            vec![Set::MaterializeNew, Set::PatchFetch],
+        ),
+    ]);
+
+    let fetch = PlanEntry {
+        i: 0,
+        decision: Decision::Fetch,
+        target_range: Range::at(0, 64),
+        source_range: None,
+        chunk_id: d.id.clone(),
+        url: Some(format!("https://cdn.test/chunks/{}{}", d.id, "?token=x")),
+        compressed_size: d.compressed_size,
+        uncompressed_size: d.uncompressed_size,
+        uncompressed_md5: d.uncompressed_md5.clone(),
+        note: None,
+    };
+    let reuse = |i, offset: i64, end: i64, ch: &SophonChunk| PlanEntry {
+        i,
+        decision: Decision::Reuse,
+        target_range: Range::at(offset, ch.uncompressed_size),
+        source_range: Some(crate::assemble::SourceRange {
+            start: offset,
+            end,
+            file_tag: "7.0.0".into(),
+        }),
+        chunk_id: ch.id.clone(),
+        url: None,
+        compressed_size: ch.compressed_size,
+        uncompressed_size: ch.uncompressed_size,
+        uncompressed_md5: ch.uncompressed_md5.clone(),
+        note: None,
+    };
+    let plan = vec![fetch, reuse(1, 64, 192, &b), reuse(2, 192, 224, &c)];
+    let map = PatchMap {
+        schema_version: crate::SCHEMA_VERSION,
+        capture_id: "c".into(),
+        path: "dll".into(),
+        matching_field: "game".into(),
+        classes: Vec::new(),
+        old: Some(Side {
+            tag: "7.0.0".into(),
+            size: 224,
+            md5: "00".repeat(16),
+            nchunks: 3,
+        }),
+        new: Some(Side {
+            tag: "7.1.0".into(),
+            size: 224,
+            md5: "00".repeat(16),
+            nchunks: 3,
+        }),
+        plan: Some(plan),
+        totals: Some(Totals {
+            chunks: 3,
+            reuse: 2,
+            fetch: 1,
+            moved: 0,
+            download_bytes: d.compressed_size,
+            materialize_old_bytes: 0,
+            materialize_new_bytes: 0,
+        }),
+        expectations: Expectations {
+            result_path: None,
+            result_md5: None,
+            absent_after: false,
+            download_bytes: d.compressed_size,
+            must_not_fetch: vec![b.id.clone(), c.id.clone()],
+        },
+    };
+    (map, index)
+}
+
+#[test]
+fn a_correct_plan_passes_the_index_cross_check() {
+    let (map, index) = plan_index_fixture();
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert!(rows[0].ok, "{rows:?}");
+}
+
+#[test]
+fn a_plan_chunk_id_that_disagrees_with_the_index_fails() {
+    let (mut map, index) = plan_index_fixture();
+    map.plan.as_mut().unwrap()[0].chunk_id = "a-different-chunk".into();
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter().any(|r| {
+            !r.ok && r.subject.contains("[plan 0]") && r.actual.contains("a-different-chunk")
+        }),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_plan_target_offset_that_disagrees_with_the_index_fails() {
+    use crate::assemble::ranges::Range;
+    let (mut map, index) = plan_index_fixture();
+    // Offset 1 is target to no new-side reference. The index's chunk at 0 is
+    // also left out of the plan, so the converse must speak up as well.
+    map.plan.as_mut().unwrap()[0].target_range = Range::at(1, 64);
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter().any(|r| !r.ok && r.actual.contains("offset 1")),
+        "the invented offset is named: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| !r.ok && r.subject.contains("new-side coverage")),
+        "and the omitted reference is named: {rows:?}"
+    );
+}
+
+#[test]
+fn a_fetch_with_a_source_range_or_a_reuse_without_one_fails() {
+    use crate::assemble::SourceRange;
+    use crate::assemble::ranges::Range;
+    let (mut map, index) = plan_index_fixture();
+    {
+        let plan = map.plan.as_mut().unwrap();
+        plan[0].source_range = Some(SourceRange {
+            start: 0,
+            end: 64,
+            file_tag: "7.0.0".into(),
+        });
+        plan[1].source_range = None;
+    }
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter().any(|r| {
+            !r.ok && r.subject.contains("[plan 0] (source_range)") && r.expected.contains("FETCH")
+        }),
+        "the FETCH's source range is red: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| {
+            !r.ok && r.subject.contains("[plan 1] (source_range)") && r.actual.contains("no source")
+        }),
+        "the REUSE without one is red: {rows:?}"
+    );
+    // A wrong decision is caught even when its other fields are tidy.
+    {
+        let plan = map.plan.as_mut().unwrap();
+        plan[0].source_range = None;
+        plan[0].decision = crate::assemble::Decision::Reuse;
+        plan[0].target_range = Range::at(0, 64);
+    }
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter()
+            .any(|r| !r.ok && r.actual.contains("patch_fetch reference at 0")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_plan_that_omits_or_invents_a_chunk_fails() {
+    let (mut map, index) = plan_index_fixture();
+    let by_file = materialize::ChunksByFile::build(&index);
+
+    // Drop the last entry: the index's reference at 192 has no plan entry.
+    map.plan.as_mut().unwrap().pop();
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter().any(|r| {
+            !r.ok && r.subject.contains("new-side coverage") && r.expected.contains("offset 192")
+        }),
+        "the omitted reference is named: {rows:?}"
+    );
+
+    // Now invent one at an offset no index reference uses.
+    let (mut map, index) = plan_index_fixture();
+    let mut invented = map.plan.as_ref().unwrap()[0].clone();
+    invented.i = 99;
+    invented.target_range = crate::assemble::ranges::Range::at(999, 64);
+    invented.chunk_id = "a-chunk-the-index-never-places".into();
+    map.plan.as_mut().unwrap().push(invented);
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter()
+            .any(|r| !r.ok && r.actual.contains("offset 999")),
+        "the invented chunk is named: {rows:?}"
+    );
+}
+
+#[test]
+fn two_plan_entries_with_one_target_offset_fail() {
+    use crate::assemble::ranges::Range;
+    let (mut map, index) = plan_index_fixture();
+    {
+        let plan = map.plan.as_mut().unwrap();
+        plan[2].target_range = Range::at(64, 32);
+    }
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter().any(|r| {
+            !r.ok && r.subject.contains("target_range.start") && r.actual.contains("plan entry 1")
+        }),
+        "the second entry is named as the duplicate: {rows:?}"
+    );
+}
+
+#[test]
+fn a_plan_size_that_disagrees_with_the_index_blob_fails() {
+    let (mut map, index) = plan_index_fixture();
+    map.plan.as_mut().unwrap()[0].compressed_size += 1;
+    let by_file = materialize::ChunksByFile::build(&index);
+    let rows = check_plan_against_index(&map, &by_file, &index);
+    assert!(
+        rows.iter()
+            .any(|r| !r.ok && r.subject.contains("compressed_size")),
+        "{rows:?}"
     );
 }
 
