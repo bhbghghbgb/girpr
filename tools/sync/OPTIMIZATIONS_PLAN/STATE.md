@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M54
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:42:30Z
+last_updated: 2026-11-16T11:46:56Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1320,8 +1320,15 @@ reviews:
     tasks: [F299, F300]
     base: bb4e11e5
     head: 4060cffb
-    result: F299 kept (c5ef8081); F300 kept (4060cffb); no fix or revert commits; 625 passed, 1 skipped; both commits touch only the design notes, and the reviewer also reworded the same stale claim in the section's enforcing list
-    followups: [F489]
+    result: F299 kept (c5ef8081); F300 kept (4060cffb); no fix or revert commits; 625 passed, 1 skipped; the reviewer checked all eighteen names in the fold section's enforcing list against the tree, and confirmed the notes no longer claim two rules share a file
+    followups: [F491, F492, F493]
+  - batch: M138
+    status: pending
+    tasks: [F491, F492, F493]
+    base: null
+    head: null
+    result: null
+    followups: []
   - batch: M137
     status: pending
     tasks: [F489]
@@ -4414,6 +4421,31 @@ followups:
     batch: null
     commits: []
     note: "skipped: accurate as it stands, and noted only for consistency if either wording is reworded"
+  - id: F491
+    source: F300
+    description: The design notes' cache-bound section still compares the present to a crate state it is not in, saying the copies are published and reclaimed as they were before a record existed, the same shape this batch removed from the fold section.
+    status: pending
+    batch: M138
+    commits: []
+  - id: F492
+    source: F299
+    description: The fold section says the on-disk lookup compares Unicode-lowercased names without saying that is Windows-only, since on POSIX the lookup returns the name unchanged and the mapping and its comparison are not compiled there.
+    status: pending
+    batch: M138
+    commits: []
+  - id: F493
+    source: F299
+    description: The fold section's enforcing list names the case that compares the two sites without noting that it is gated to Windows, so it does not run on a POSIX host, while the notes flag platform gating for the link cases.
+    status: pending
+    batch: M138
+    commits: []
+  - id: F494
+    source: F300
+    description: The doc comment on the shared mapping still says the mapping is written once here rather than twice in two modules.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F489, whose description covers the two code doc comments"
 ```
 
 ## Human checklist
@@ -4445,6 +4477,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M54 `done`: F299 kept (c5ef8081), F300 kept (4060cffb); no
+  fix or revert commits; follow-ups F491, F492 and F493 appended with batch
+  `M138`, and F494 recorded as `skipped` as the same item as F489. F299 and F300
+  `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M54 review checkpoint opened: F299 and F300
   `in_progress` → `pending_review`, commits `c5ef8081`, `4060cffb`; review M54
   `pending` → `in_progress`, base `bb4e11e5`, head `4060cffb`.
