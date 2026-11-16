@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M40
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T00:56:49Z
+last_updated: 2026-11-16T01:22:59Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -847,8 +847,15 @@ reviews:
     result: F185 kept (f0cd71f7); F186 kept (a2bb2324); F187 kept (4c48b5cb); F188 kept (4d91eca7); F190 fixed (6c23cb4b corrects the two docs that still asserted the removed rule); F191 kept (4d91eca7); 594 passed without the feature and 609 with it, 1 skipped
     followups: [F263, F264, F265]
   - batch: M40
-    status: pending
+    status: in_progress
     tasks: [F266]
+    base: ee8a10a8
+    head: a17b7270
+    result: null
+    followups: []
+  - batch: M94
+    status: pending
+    tasks: [F397, F398]
     base: null
     head: null
     result: null
@@ -2670,9 +2677,9 @@ followups:
   - id: F266
     source: F189
     description: The hash-any-of flag is spelled with two algorithms as one occurrence in the README, the design notes, the CLI definition and the coverage remedy, but the parser rejects the second value, so only the repeated form parses; the coverage remedy in particular prints a command the user cannot paste, and the flag-order tie-break works correctly only with the repeated form.
-    status: in_progress
+    status: pending_review
     batch: M40
-    commits: []
+    commits: [a4740687, 4719ce4f, a17b7270]
   - id: F267
     source: F189
     description: The README synopsis block lists the hash flags with one value per occurrence, which reads consistently with the CLI but not with the prose above it; the wording depends on which way the two-value form is settled.
@@ -3471,6 +3478,25 @@ followups:
     batch: null
     commits: []
     note: "skipped: the same item as F391, already scheduled in M92"
+  - id: F397
+    source: F266
+    description: Clap's refusal for the two-values-in-one-occurrence form does not say how to ask for two; a friendlier message would have to name the repeated form.
+    status: pending
+    batch: M94
+    commits: []
+  - id: F398
+    source: F266
+    description: The flags' value names render as the flag's own placeholder, so the help asks for a value named after the flag rather than an algorithm.
+    status: pending
+    batch: M94
+    commits: []
+  - id: F399
+    source: F266
+    description: Coverage carries the algorithms in a map keyed by the algorithm, so a remedy always names them in canonical order rather than the order the user wrote them; the design notes already record that trade-off.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the trade-off is already recorded in the design notes"
 ```
 
 ## Human checklist
@@ -3502,6 +3528,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M40 review checkpoint opened: F266 `in_progress` →
+  `pending_review`, commits `a4740687`, `4719ce4f`, `a17b7270`; review M40
+  `pending` → `in_progress`, base `ee8a10a8`, head `a17b7270`.
 - 2026-11-16 — follow-up batch M40 started: F266 `pending` → `in_progress`;
   `active_batch: M39` → `M40`.
 - 2026-11-16 — review M39 `done`: F263 kept (ec4566db), F264 kept (1c363bbb),
