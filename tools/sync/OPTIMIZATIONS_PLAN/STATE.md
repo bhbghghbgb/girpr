@@ -12,7 +12,7 @@ project: girsync
 plan_dir: tools/sync/OPTIMIZATIONS_PLAN
 report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
-active_batch: M53
+active_batch: M54
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
 last_updated: 2026-11-16T11:36:42Z
 tasks:
@@ -3230,13 +3230,13 @@ followups:
   - id: F299
     source: F208
     description: The design notes' fold section still says the on-disk lookup and the key sit side by side in one file, though the path key itself lives in the utility module.
-    status: pending
+    status: in_progress
     batch: M54
     commits: []
   - id: F300
     source: F208
     description: The new notes paragraph says the value is written once rather than twice in two modules, a comparison with the old state that the notes own rule against recording changes discourages.
-    status: pending
+    status: in_progress
     batch: M54
     commits: []
   - id: F301
@@ -4423,6 +4423,8 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M54 started: F299 and F300 `pending` →
+  `in_progress`; `active_batch: M53` → `M54`.
 - 2026-11-16 — review M53 `done`: F298 kept (d821f722), F301 kept (3dc6d002); no
   fix or revert commits; follow-up F487 recorded as `skipped` because the defect
   is in a commit message and history must not be rewritten, and F488 recorded as
