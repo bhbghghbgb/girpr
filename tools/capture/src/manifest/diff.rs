@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde::Serialize;
 
 use crate::manifest::CapturedManifest;
-use crate::manifest::proto::SophonChunkFile;
+use crate::manifest::proto::{SophonChunk, SophonChunkFile};
 
 /// One path's state in the diff.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -134,6 +134,11 @@ pub struct PathRow {
     /// numbers the row displays — a second lookup is a second chance to read a
     /// different size than the one printed.
     pub size: i64,
+    /// For an `added` path, `Σ compressed_size` over its chunks: the bytes a
+    /// fetch must download, and the charge against `--max-download-bytes`.
+    /// `None` for a common or removed path, whose budget charge comes from
+    /// their score's `total_cost` / their old `size`.
+    pub download_bytes: Option<u64>,
     /// The score, absent for a one-sided path.
     pub score: Option<PathScore>,
     /// Whether the manifest entry is a folder rather than a file.
@@ -333,6 +338,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                     path: e.file.clone(),
                     state,
                     size: e.size,
+                    download_bytes: None,
                     score: score.clone(),
                     is_folder: e.is_folder,
                 });
@@ -346,6 +352,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                     path: e.file.clone(),
                     state: State::Added,
                     size: e.size,
+                    download_bytes: Some(download_bytes(&e.chunks)),
                     score: None,
                     is_folder: e.is_folder,
                 });
@@ -361,6 +368,7 @@ pub fn diff_field(old: &CapturedManifest, new: &CapturedManifest) -> Result<Fiel
                 path: e.file.clone(),
                 state: State::Removed,
                 size: e.size,
+                download_bytes: None,
                 score: None,
                 is_folder: e.is_folder,
             });
@@ -429,6 +437,18 @@ fn index_file(e: &SophonChunkFile) -> OldFileIndex<'_> {
         sources,
         compressed_bytes,
     }
+}
+
+/// `Σ compressed_size` over a path's chunks: the bytes a fetch must download.
+///
+/// Saturating, with a negative declared size treated as zero — the same
+/// convention `index_file` and `score` use for their byte totals, so a hostile
+/// `compressed_size` cannot abort a diff that is only measuring it. An empty
+/// chunk list sums to zero: a file with no chunks downloads nothing.
+fn download_bytes(chunks: &[SophonChunk]) -> u64 {
+    chunks.iter().fold(0_u64, |total, c| {
+        total.saturating_add(c.compressed_size.max(0) as u64)
+    })
 }
 
 /// Old manifest-wide set of MD5s that appear anywhere.

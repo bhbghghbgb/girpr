@@ -137,6 +137,7 @@ mod tests {
                 path: "a/one.bin".to_string(),
                 state: crate::manifest::diff::State::Changed,
                 size: 2_000,
+                download_bytes: None,
                 score: Some(score("a/one.bin")),
                 is_folder: false,
             }],

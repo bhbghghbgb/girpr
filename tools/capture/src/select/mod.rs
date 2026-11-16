@@ -47,8 +47,9 @@ pub struct Candidate {
     pub path: String,
     /// Common / one-sided.
     pub state: State,
-    /// `old_bytes + new_bytes`. Zero for a one-sided path, which is charged by
-    /// its own size — see [`SizedCandidate::budget_cost`].
+    /// `old_bytes + new_bytes`. Zero for a one-sided path, whose budget charge
+    /// comes from [`SizedCandidate`]'s `size` / `download_bytes` — see
+    /// [`SizedCandidate::budget_cost`].
     pub total_cost: u64,
     /// `Σ compressed_size` a patch would fetch. Zero for a one-sided path.
     pub patch_bytes: u64,
@@ -74,31 +75,47 @@ impl Candidate {
     }
 }
 
-/// A candidate plus the size a one-sided row needs to be charged for.
+/// A candidate plus the numbers its one-sided rows are charged for.
 ///
-/// A pair rather than a field, because the size is only consulted when the row
-/// is one-sided — and a `Candidate` carrying a `size` it ignores nine times out
-/// of ten is a field someone will eventually read on a common path and trust.
+/// A pair rather than fields on [`Candidate`], because these numbers are only
+/// consulted when the row is one-sided — and a `Candidate` carrying a `size` it
+/// ignores nine times out of ten is a field someone will eventually read on a
+/// common path and trust.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SizedCandidate {
     /// The candidate.
     pub candidate: Candidate,
     /// The file's declared size on whichever side exists.
+    ///
+    /// The budget charge for a `removed` path: the bytes it occupies in `game/`.
     pub size: u64,
+    /// `Σ compressed_size` over an `added` path's chunks: the bytes a fetch must
+    /// download, and its budget charge. Zero for a common or removed path,
+    /// which are charged by `total_cost` / `size`.
+    pub download_bytes: u64,
 }
 
 impl SizedCandidate {
     /// What this capture costs against `--max-download-bytes`.
     ///
-    /// `total_cost` for a common path, and **the file's own size** for a
-    /// one-sided one. A `removed` path has no new side to materialize, so its
-    /// cost is the bytes it occupies in `game/`; an `added` path has to be
-    /// fetched whole, so its cost is its compressed size. Charging `total_cost`
-    /// to both would make `removed` free and `added` cost nothing, which is
-    /// backwards.
+    /// The exact rule, by state:
+    ///
+    /// - a **common** path (identical / changed) charges `total_cost` — the
+    ///   compressed bytes of both sides, because the old file must be
+    ///   materialized in full for the fixture to be real;
+    /// - an **`added`** path charges `download_bytes` — the compressed bytes a
+    ///   fetch must download, since the whole new file has to be fetched;
+    /// - a **`removed`** path charges `size` — the bytes it occupies in `game/`,
+    ///   which is what admitting its removal frees.
+    ///
+    /// Charging `total_cost` to a one-sided path would make `removed` free and
+    /// `added` cost nothing, which is backwards; charging `added` its declared
+    /// `size` overstates the bytes on the wire, which is not what the flag
+    /// measures.
     pub fn budget_cost(&self) -> u64 {
         match self.candidate.state {
-            State::Added | State::Removed => self.size,
+            State::Added => self.download_bytes,
+            State::Removed => self.size,
             _ => self.candidate.total_cost,
         }
     }
@@ -420,6 +437,7 @@ pub fn candidates(diffs: &[FieldDiff]) -> Vec<SizedCandidate> {
                     classes: Class::all_satisfied_by(shape),
                 },
                 size: row.size.max(0) as u64,
+                download_bytes: row.download_bytes.unwrap_or(0),
             });
         }
     }

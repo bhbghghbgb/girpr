@@ -562,7 +562,9 @@ mod m5_matrix {
         (
             Class::Added,
             Some("GenshinImpact_Data/Plugins/libHttpClient.GDK.dll"),
-            116_800,
+            // The declared size is 116 800 B; the budget charges the 114 000 B
+            // of compressed bytes a fetch actually downloads.
+            114_000,
         ),
         (
             Class::Removed,
@@ -801,8 +803,9 @@ mod m5_matrix {
         // the second `added` (00000002.blk) that `--per-class 2` asks for.
         assert_eq!(everything.admitted.len(), 10);
         assert_eq!(
-            everything.bytes_admitted, 5_011_990,
-            "the ten rows above, summed"
+            everything.bytes_admitted, 5_897_674,
+            "the ten rows above, summed — the second `added` path is charged \
+             its compressed size (1 776 356 B), not its declared size"
         );
     }
 

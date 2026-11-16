@@ -64,6 +64,11 @@ fn row(path: &str, state: State, s: Option<PathScore>, size: i64) -> PathRow {
         path: path.into(),
         state,
         size,
+        // These fixtures carry no chunks, so for an added row `size` stands in
+        // for the compressed charge the real diff would read off its chunks.
+        // The dedicated cost tests below spell out a compressed size that
+        // differs from the declared one.
+        download_bytes: (state == State::Added).then(|| size.max(0) as u64),
         score: s,
         is_folder: false,
     }
@@ -966,6 +971,7 @@ fn capture_ids_are_the_class_then_the_ordinal() {
     let c = SizedCandidate {
         candidate: all_six()[0].candidate.clone(),
         size: 54,
+        download_bytes: 0,
     };
     assert_eq!(c.candidate.capture_id(Class::Identical, 0), "identical");
     assert_eq!(c.candidate.capture_id(Class::Identical, 2), "identical+2");
