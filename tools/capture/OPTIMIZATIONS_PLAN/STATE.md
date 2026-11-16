@@ -29,7 +29,7 @@ See `ORCHESTRATION.md` for the transition rules.
 | P1-12 | `decode_counts` empty-chunk non-folders (B3) | completed | 45a3f8e2 886a650b | |
 | P1-13 | Record repeated response headers (A12) | pending_review | 424e385d 34cb81b4 | |
 | P1-14 | Reserve error-body budget before reading (A13) | pending_review | 831c6601 a190e31d | |
-| P1-15 | Deterministic rejection cap (A14) | in_progress | | |
+| P1-15 | Deterministic rejection cap (A14) | pending_review | 00fe91aa d4b97a04 | |
 | P1-16 | Blob diagnostic fixes (A15, A16) | todo | | |
 | P1-17 | Numeric and tag-length honesty (A17, D4) | todo | | |
 | P1-18 | Summary log and escaped keys (A18, A19) | todo | | |
