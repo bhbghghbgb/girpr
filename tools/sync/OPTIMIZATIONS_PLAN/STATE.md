@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M44
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T04:48:45Z
+last_updated: 2026-11-16T05:13:08Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -973,8 +973,22 @@ reviews:
     result: null
     followups: []
   - batch: M44
-    status: pending
+    status: in_progress
     tasks: [F275]
+    base: fb1fef37
+    head: f6878407
+    result: null
+    followups: []
+  - batch: M106
+    status: pending
+    tasks: [F421, F422]
+    base: null
+    head: null
+    result: null
+    followups: []
+  - batch: M107
+    status: pending
+    tasks: [F423, F424]
     base: null
     head: null
     result: null
@@ -2817,9 +2831,9 @@ followups:
   - id: F275
     source: F193
     description: The commit-policy overrides are read once per cache write handle while the durability switch is read once per transaction, so two sibling switches have different granularities.
-    status: in_progress
+    status: pending_review
     batch: M44
-    commits: []
+    commits: [819da84b, f6878407]
   - id: F276
     source: F194
     description: A malformed copy-gate value now degrades silently to no gate, and the crate already has a precedent for a parsed test-only value, which reports an unparseable limit in the log, so the same value could be made visible instead of leaving a gated test racy.
@@ -3709,6 +3723,30 @@ followups:
     status: pending
     batch: M105
     commits: []
+  - id: F421
+    source: F275
+    description: The new commit policy type is visible only inside the cache module while the commit limits it carries are public, so a caller outside the crate cannot name the whole policy.
+    status: pending
+    batch: M106
+    commits: []
+  - id: F422
+    source: F275
+    description: The commit-limit environment variables are read for the one-off meta write too, though that write uses only the durability, so every cache open pays three environment reads it does not use.
+    status: pending
+    batch: M106
+    commits: []
+  - id: F423
+    source: F275
+    description: The durability type has no equality and is marked non-exhaustive, so comparing two durabilities needs a hand-written match; a small crate-local helper would be reusable if more of the code ever compares them.
+    status: pending
+    batch: M107
+    commits: []
+  - id: F424
+    source: F275
+    description: The counters for the other test-only switches, the copy, flush, rename and gate ones, are still per-feature and ad hoc, unlike the new per-thread durability counter.
+    status: pending
+    batch: M107
+    commits: []
 ```
 
 ## Human checklist
@@ -3740,6 +3778,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — follow-up batch M44 review checkpoint opened: F275 `in_progress` →
+  `pending_review`, commits `819da84b`, `f6878407`; review M44 `pending` →
+  `in_progress`, base `fb1fef37`, head `f6878407`.
 - 2026-11-16 — follow-up batch M44 started: F275 `pending` → `in_progress`;
   `active_batch: M43` → `M44`.
 - 2026-11-16 — review M43 `done`: F273 kept (c582a5b5), F274 kept (df01aaf7); no
