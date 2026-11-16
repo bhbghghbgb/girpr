@@ -474,7 +474,7 @@ fn aggregation_keeps_the_counts_and_names_the_field() {
         "only what a patch would actually fetch"
     );
     assert_eq!(agg.new_chunks_reusable_at_all, 14);
-    assert!(agg.is_a_real_upgrade());
+    assert!(agg.counts.added > 0 || agg.counts.removed > 0 || agg.counts.changed > 0);
 }
 
 /// `paths.tsv` is the file a reader greps, so its header and its arithmetic

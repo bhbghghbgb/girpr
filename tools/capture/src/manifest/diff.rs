@@ -788,6 +788,10 @@ mod tests {
     use super::*;
     use crate::manifest::proto::SophonChunk;
 
+    fn something_changed(c: &Counts) -> bool {
+        c.added > 0 || c.removed > 0 || c.changed > 0
+    }
+
     fn chunk(id: &str, md5: &str, offset: i64, usize_: i64, csize: i64) -> SophonChunk {
         SophonChunk {
             id: format!("{id}_{md5}"),
@@ -1333,7 +1337,8 @@ mod tests {
         assert_eq!(d.counts.common, 0);
         assert!(d.scores.is_empty() && d.rows.is_empty());
         assert_eq!(d.pool.new_chunks_total, 0);
-        assert!(!aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d)).is_a_real_upgrade());
+        let agg = aggregate("7.0.0", "7.1.0", std::slice::from_ref(&d));
+        assert!(!something_changed(&agg.counts));
     }
 
     // ------------------------------------------------------------- ordering
@@ -1494,17 +1499,18 @@ mod tests {
         );
         assert!(diff.added.contains(&"game:fresh".to_string()));
         assert!(diff.added.contains(&"en-us:fresh".to_string()));
-        assert!(diff.is_a_real_upgrade());
+        assert!(something_changed(&diff.counts));
     }
 
     #[test]
-    fn a_pair_of_identical_manifests_is_not_an_upgrade() {
+    fn identical_content_with_different_tags_changes_nothing() {
         let same = manifest(
             "7.1.0",
             vec![file("a", "m", vec![chunk("x", "xx", 0, 1, 1)])],
         );
         let d = diff_field(&same, &same).unwrap();
-        assert!(!aggregate("7.0.0", "7.1.0", &[d]).is_a_real_upgrade());
+        let agg = aggregate("7.0.0", "7.1.0", &[d]);
+        assert!(!something_changed(&agg.counts));
     }
 
     /// **K1.** Sizes in a manifest are untrusted totals. Two `i64::MAX` costs
