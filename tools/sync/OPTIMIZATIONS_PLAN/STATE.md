@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M52
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T11:03:25Z
+last_updated: 2026-11-16T11:19:59Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -1267,10 +1267,17 @@ reviews:
     result: null
     followups: []
   - batch: M52
-    status: in_progress
+    status: done
     tasks: [F295, F297]
     base: 0bb18fb1
     head: 0aedd172
+    result: F295 kept (7d4e184b); F297 kept (0aedd172); no fix or revert commits; 625 passed without the feature and 642 with it, 1 skipped, and the POSIX target still compiles; the reviewer mutated both halves of the resolver case and saw it fail each way, confirmed the written-out rule is equivalent to the standard library's over 400,000 random pairs, and saw the new case fail when either of the two sites it compares stopped folding
+    followups: [F481, F482]
+  - batch: M135
+    status: pending
+    tasks: [F481, F482]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M133
@@ -3181,9 +3188,10 @@ followups:
   - id: F295
     source: F206
     description: The hash test module has its own second spelling of the ASCII-case comparison, harmless but a second spelling of the same rule.
-    status: pending_review
+    status: completed
     batch: M52
     commits: [7d4e184b]
+    note: review M52 kept; the reviewer mutated both halves of the resolver case and saw it fail each way, and confirmed the written-out rule is equivalent to the standard library's over 400,000 random pairs
   - id: F296
     source: F206
     description: The utility module's public surface is asymmetric, with the same-path and the path-within helpers public while the path key and the folded-keys helper are crate-private.
@@ -3194,9 +3202,10 @@ followups:
   - id: F297
     source: F208
     description: No case pins that the identity rule and the on-disk lookup agree on a non-ASCII spelling now that they share one mapping, although the two sites are covered separately.
-    status: pending_review
+    status: completed
     batch: M52
     commits: [0aedd172]
+    note: review M52 kept; the reviewer made either of the two sites stop folding and saw the new case fail at the matching assertion
   - id: F298
     source: F208
     description: The shared mapping's doc still says it is the approximation the identity rule has always made, naming only one of its two users now that it serves both.
@@ -4300,7 +4309,7 @@ followups:
     commits: []
   - id: F478
     source: F295
-    description: The effective phase A's group scan and the hash-list parser still spell the ASCII-case comparison as the standard library's own comparison rather than asking the crate's one comparison.
+    description: Three production sites still spell the same ASCII-only rule through the standard library's own comparison, the effective phase A's group scan and the hash module's two parsers, so the claim that the crate has one ASCII-case comparison overstates the tree.
     status: pending
     batch: M133
     commits: []
@@ -4316,6 +4325,25 @@ followups:
     status: pending
     batch: M133
     commits: []
+  - id: F481
+    source: F295
+    description: Now that the oracle is production code, an edit that delegated the crate's comparison back to the standard library would change no behaviour yet silently void the resolver case, so the oracle's independence rests on the doc comment alone.
+    status: pending
+    batch: M135
+    commits: []
+  - id: F482
+    source: F297
+    description: The new case's assertion about the path key repeating the utility module's case repeats a pin that already holds on every platform, so the cross-platform pin still has to live in the utility module.
+    status: pending
+    batch: M135
+    commits: []
+  - id: F483
+    source: F295
+    description: The crate's ASCII-case comparison is now its only written-out one, but three production sites still spell the same rule through the standard library's helper.
+    status: skipped
+    batch: null
+    commits: []
+    note: "skipped: the same item as F478, whose description now names the three sites"
 ```
 
 ## Human checklist
@@ -4347,6 +4375,10 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M52 `done`: F295 kept (7d4e184b), F297 kept (0aedd172); no
+  fix or revert commits; follow-ups F481 and F482 appended with batch `M135`, and
+  F483 recorded as `skipped` as the same item as F478, whose description now
+  names the three sites. F295 and F297 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M52 review checkpoint opened: F295 and F297
   `in_progress` → `pending_review`, commits `7d4e184b`, `0aedd172`; review M52
   `pending` → `in_progress`, base `0bb18fb1`, head `0aedd172`.
