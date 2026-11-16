@@ -14,7 +14,7 @@ report: tools/sync/OPTIMIZATIONS_REPORT.md
 phase: followups-implement
 active_batch: M42
 spawn: openchamber session.create (agent build, model opencode/minimax-m3.1-flash-free), working dir = repo root E:\hoccode\hocrust\girpr, one session at a time
-last_updated: 2026-11-16T02:43:16Z
+last_updated: 2026-11-16T02:59:08Z
 tasks:
   - id: T01
     title: By-name digest lookup and its test
@@ -903,10 +903,17 @@ reviews:
     result: null
     followups: []
   - batch: M42
-    status: in_progress
+    status: done
     tasks: [F269, F270, F271]
     base: 0ab89862
-    head: 0ac9ccee
+    head: 8966a091
+    result: F269 kept (0ac9ccee); F270 fixed (8a81858d, 8966a091 changes the test comment's run of names to the family of names, since run means an execution of the tool in these documents); F271 kept (afe44b2e); 616 passed without the feature and 633 with it, 1 skipped; the reviewer mutated the candidate name so the third suffix became a padded spelling while the second was kept, and the case failed where the old two-name case would have passed
+    followups: [F413, F414]
+  - batch: M102
+    status: pending
+    tasks: [F413, F414]
+    base: null
+    head: null
     result: null
     followups: []
   - batch: M100
@@ -2747,21 +2754,24 @@ followups:
   - id: F269
     source: F192
     description: The retry family is bounded by the claim-attempt limit at the thousandth suffix, but neither the README nor the design notes says that the run of names is bounded.
-    status: pending_review
+    status: completed
     batch: M42
     commits: [0ac9ccee]
+    note: review M42 kept; the reviewer checked the bound in all five places and confirmed both places that have a limit use the same value, though it is declared twice
   - id: F270
     source: F192
     description: The inline case pins the second suffix exactly but not the third, so a rule change that kept the second and altered the later suffixes would pass it.
-    status: pending_review
+    status: completed
     batch: M42
-    commits: [8a81858d]
+    commits: [8a81858d, 8966a091]
+    note: review M42 fixed (8966a091 corrects the test comment's phrase, which collided with the crate's sense of run as an execution of the tool)
   - id: F271
     source: F192
     description: The README bullet reads the retry list in the singular while the other two places read it in the plural.
-    status: pending_review
+    status: completed
     batch: M42
     commits: [afe44b2e]
+    note: review M42 kept; the plural is right in all three places, since the list has more than one member
   - id: F272
     source: F189
     description: The commit message of the example-command fix claims every other README example command parses, which is false because of the two-value hash flag; the message is part of the history and cannot be corrected without rewriting it.
@@ -3627,6 +3637,18 @@ followups:
     status: pending
     batch: M101
     commits: []
+  - id: F413
+    source: F269
+    description: The case-fix placeholder is a third bounded claim family, a thousand candidates numbered from zero, and the README's step-3 description of it says nothing about the bound.
+    status: pending
+    batch: M102
+    commits: []
+  - id: F414
+    source: F269
+    description: The design notes' new paragraph frames the bounded family around the published name only, while the README also lists the working partial name, which is claimed from the same bounded family.
+    status: pending
+    batch: M102
+    commits: []
 ```
 
 ## Human checklist
@@ -3658,6 +3680,9 @@ followups:
 Newest first. One line per committed state change: date, task/review, from → to,
 commit.
 
+- 2026-11-16 — review M42 `done`: F269 kept (0ac9ccee), F270 fixed (8a81858d,
+  8966a091), F271 kept (afe44b2e); follow-ups F413 and F414 appended with batch
+  `M102`. F269–F271 `pending_review` → `completed`.
 - 2026-11-16 — follow-up batch M42 review checkpoint opened: F269, F270 and F271
   `in_progress` → `pending_review`, commits `0ac9ccee`, `8a81858d`, `afe44b2e`;
   review M42 `pending` → `in_progress`, base `0ab89862`, head `0ac9ccee`.
