@@ -994,3 +994,16 @@ not produce could not be compared at all, and a request beside the set would be
 a second spelling of the same thing waiting to drift. Nothing on that path
 depends on the order the user typed, so a disagreement is named in canonical
 order — as the diff's `digest-differs` tag already names it.
+
+**The commit thresholds and the durability are one policy.** A cache write
+resolves both when it starts — a batched write handle when it is opened, the
+open's own one-off `meta` write when it runs — and keeps them for as long as
+the write lasts. They are two test-only switches and they look like two
+independent knobs; they are not, because a write that committed some of its
+batches one way and the rest another would leave a run's own cache half
+durable and half not, which is the opposite of what the durability switch is
+for. The thresholds exist so that a small fixture can make a commit
+observable, and the durability exists so that a whole suite's commits are
+cheap; neither is for changing a policy half way through a write. So one
+function reads both, at one moment, and a handle's later transactions take the
+policy it opened with rather than asking the environment again.

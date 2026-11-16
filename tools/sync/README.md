@@ -1631,7 +1631,7 @@ opts in by naming it.
 | `GIRSYNC_TEST_COMMIT_OPS=<n>` | the cache commits after `n` operations instead of the default batch of 50 |
 | `GIRSYNC_TEST_COMMIT_BYTES=<n>` | the cache commits after `n` bytes of `put` content instead of the default 256 MiB |
 | `GIRSYNC_TEST_COMMIT_INTERVAL_MS=<n>` | the cache commits after `n` milliseconds since the last commit instead of the default 5 s |
-| `GIRSYNC_TEST_DURABILITY=none` | a cache write transaction skips its per-commit fsync — the runner sets it for the whole suite |
+| `GIRSYNC_TEST_DURABILITY=none` | a cache write commits without its per-commit fsync — the runner sets it for the whole suite |
 
 `<rel>` is the path **inside the mirror**: `/`-separated, relative to the root,
 never absolute. The copy and flush hooks name the path the plan copies — with
@@ -1662,8 +1662,11 @@ run. `GIRSYNC_TEST_CACHE` is resolved **once, at command start**, and the
 run's options carry the answer from there — so a subprocess suite sets it on
 the child process and the child uses it for every cache it opens, while a
 caller that builds the options itself gets exactly what it asked for. The
-failure and gate hooks are read once per process, the commit limits when a
-cache write handle is opened, and the durability once per transaction.
+failure and gate hooks are read once per process, and the **commit policy** —
+the commit limits and the durability together — is read **once, when a cache
+write starts**: a batched write handle resolves it when it is opened and
+keeps it, so every transaction it commits commits the same way, and the
+open's own one-off `meta` write resolves a policy of its own when it runs.
 
 A value that is not the one named means the production behaviour: the real
 cache file, a durable commit, the default commit thresholds, and no injected
