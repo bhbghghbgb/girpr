@@ -224,8 +224,8 @@ fn convert_into(sled_dir: &Path, temp: &Path) -> Result<Converted> {
             },
         ));
     }
-    // Release the sled lock before creating the destination next to it.
-    old.flush().ok();
+    // The iteration above is read-only, so sled has nothing to flush; `drop`
+    // releases the lock before the destination is created next to it.
     drop(old);
 
     let cache = girsync::cache::open_db(
