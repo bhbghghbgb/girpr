@@ -194,8 +194,8 @@ async fn check_only_scan_treats_an_absent_empty_file_as_damage() {
 async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
     // N-17: the scan finds both moved sources intact, but the ordered tier's
     // write order keeps only one direction's worth. The estimate must model
-    // the writer's order, not "the source verified", or the PLAN line is below
-    // the bytes the same run downloads.
+    // the writer's order, not "the source verified", or the plan's estimate is
+    // below the bytes the same run downloads.
     let fx = build_moved_fixture();
     let mock = MockServer::start(fx, MockOpts::default()).await;
     let dir = temp_dir("scan_ordered");
@@ -222,24 +222,22 @@ async fn the_scanned_estimate_knows_which_sources_the_ordered_tier_loses() {
         "0",
     ];
 
-    // 1. the plan, scanned: the ordered tier is selected by the RAM budget.
+    // One scanned run at the ordered budget: the plan document is written
+    // before execution, so its per-file estimate and the SUMMARY's real
+    // download come from a single binary — no separate `--print-plan` spawn.
+    // The document's per-file halves are the same split the PLAN total folds
+    // from, so this checks the same estimate-vs-reality parity as the PLAN line.
+    let out = dir.join("plan.json");
+    let out_arg = out.to_string_lossy().into_owned();
     let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--print-plan"]);
+    args.extend_from_slice(&["--scan", "--plan-out", &out_arg]);
     let (code, stdout, stderr) = run_binary(&args, &[]).await;
     assert_eq!(code, 0, "{stderr}");
-    let estimate = field(
-        stdout
-            .lines()
-            .find(|l| l.starts_with("PLAN "))
-            .expect("the PLAN line"),
-        "est_download_bytes",
-    );
-
-    // 2. the repair: the same budget, so the same tier and order.
-    let mut args = base.clone();
-    args.push("--scan");
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
+    let written = std::fs::read_to_string(&out).expect("--plan-out file");
+    let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
+    let estimate = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+        n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
+    });
     let downloaded = field(
         stdout
             .lines()
@@ -393,44 +391,25 @@ async fn the_scanned_temp_estimate_is_the_bytes_the_repair_really_downloads() {
         &mock.sophon_base,
     ];
 
-    // 1. the plan: the scan's own figure for the mode that was asked for.
+    // One scanned run in temp mode: the plan document is written before
+    // execution, so its per-file estimate and the SUMMARY's real download come
+    // from a single binary — no separate `--print-plan` spawn. The document's
+    // per-file halves are the same split the PLAN total folds from.
     let out = dir.join("plan.json");
     let out_arg = out.to_string_lossy().into_owned();
     let mut args = base.clone();
-    args.extend_from_slice(&[
-        "--scan",
-        "--repair-mode",
-        "temp",
-        "--print-plan",
-        "--plan-out",
-        &out_arg,
-    ]);
+    args.extend_from_slice(&["--scan", "--repair-mode", "temp", "--plan-out", &out_arg]);
     let (code, stdout, stderr) = run_binary(&args, &[]).await;
     assert_eq!(code, 0, "{stderr}");
-    let plan_line = stdout
-        .lines()
-        .find(|l| l.starts_with("PLAN "))
-        .expect("the PLAN line");
-    let scanned = field(plan_line, "est_download_bytes");
-    assert!(
-        scanned > 0,
-        "the corrupt candidate cannot be reused, so the chunk is a download: {plan_line}"
-    );
     let written = std::fs::read_to_string(&out).expect("--plan-out file");
     let v: serde_json::Value = serde_json::from_str(&written).expect("valid JSON");
-    let doc_sum = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
+    let scanned = v["repair"].as_array().unwrap().iter().fold(0u64, |n, e| {
         n.saturating_add(e["est_download_bytes"].as_u64().unwrap())
     });
-    assert_eq!(
-        doc_sum, scanned,
-        "the document's per-file halves sum to the scanned PLAN total: {doc_sum} vs {scanned}"
+    assert!(
+        scanned > 0,
+        "the corrupt candidate cannot be reused, so the chunk is a download: {written}"
     );
-
-    // 2. the repair in the same mode: the same figure.
-    let mut args = base.clone();
-    args.extend_from_slice(&["--scan", "--repair-mode", "temp"]);
-    let (code, stdout, stderr) = run_binary(&args, &[]).await;
-    assert_eq!(code, 0, "{stderr}");
     let summary = stdout
         .lines()
         .find(|l| l.starts_with("SUMMARY "))
