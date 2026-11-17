@@ -10,15 +10,15 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: **follow-up batching phase** (ORCHESTRATION.md §5). All 13 tasks
-  terminal and all 5 checkpoints `done`. Spawn a review session first to decide
-  how to batch the surviving follow-ups (F01,F03,F09,F11,F12,F20); it may add or
-  delete follow-ups. Record the resulting batches in STATE.md, then implement
-  and review one batch at a time with the same separate state commits. After no
-  actionable follow-ups remain, make the final cleanup commit (delete
-  OPTIMIZATIONS_PLAN/ and docs/08-test-suite-reduction-audit.md, verify no refs).
-* Active batch: none. Phase: follow-ups. CP1–CP5 all `done`.
-* Active checkpoint: none (`done`). Status: all tasks terminal.
+* Next action: spawn one implementing session for **Batch B** (F11, F12) with the
+  scope/pointers recorded in the Follow-up batches table, then a review session
+  for it. Run batches in order B → C → A (small/concrete first, largest last).
+  After all batches are `done` and no actionable follow-ups remain, make the
+  final cleanup commit (delete OPTIMIZATIONS_PLAN/ and
+  docs/08-test-suite-reduction-audit.md, verify no implementation file refers
+  to either).
+* Active batch: **Batch B** (`in_progress`). Phase: follow-ups (§5). CP1–CP5 all `done`.
+* Active checkpoint: none (`done`). Status: all 13 tasks terminal.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -90,18 +90,18 @@ effect) so the final follow-up phase is meaningful.
 
 | ID | Description | Source | Status | Note |
 |---|---|---|---|---|
-| F01 | Extract the byte-identical `tests/common/mod.rs` shared by `tools/sync` and `tools/sled2redb` into the `girpr-tempdir` crate (report cross-cutting, L226–233). Saves maintenance, not test count. | report | proposed | Test-only refactor; LOW–MEDIUM risk. |
+| F01 | Extract the byte-identical `tests/common/mod.rs` shared by `tools/sync` and `tools/sled2redb` into the `girpr-tempdir` crate (report cross-cutting, L226–233). Saves maintenance, not test count. | report | scheduled | Batch A. Batching review confirmed still byte-identical (SHA-256 D3394032…, 27,348 bytes each). Largest refactor, run last. |
 | F02 | ~~Remove the stale doc note in `tools/sync/DESIGN-NOTES.md:907` referencing an ignored test that no longer exists (report cross-cutting, L239–240).~~ | report | removed | CP4 reviewer pruned: one-line stale doc note too trivial to track through the final phase. |
-| F03 | Drop the two redundant full binary conversions in `tools/sled2redb/tests/convert.rs:515` (report cross-cutting, L248–250). Saves runtime, not test count. | report | proposed | LOW risk. |
+| F03 | ~~Drop the two redundant full binary conversions in `tools/sled2redb/tests/convert.rs:515`.~~ | report | removed | Batching review deleted as a NO-OP: after T06's rewrite the two conversions assert distinct properties (end-to-end flag-before-path spelling; `--output=json` vs `--output json` byte-equality) the JSON-record test cannot provide. Report premise stale; T06 kept them deliberately. |
 | F04 | ~~Consider merging the measured-fixture logic-name duplicates in `tools/capture/tests/measured_fixture.rs` (§E.5, L192–199) — only if an explicit size target exists; report recommends KEEP.~~ | report | removed | CP1 reviewer pruned: conditional on a non-existent size target, MEDIUM risk, report recommends KEEP; idea stays in report §E.5. |
 | F05 | ~~If later tasks add more `catch_unwind` assertions in other integration-test binaries, move the `panic_message` helper into `tests/common/mod.rs`.~~ | T01 implementer | removed | CP3 reviewer pruned: `panic_message` exists in only one binary and other `catch_unwind` sites don't use it; no duplication to fix. |
 | F06 | ~~Audit remaining `#[should_panic]` tests in other root integration-test files for single-helper clusters that could be folded into tables the same way.~~ | T01 implementer | removed | CP3 reviewer pruned: vague, no concrete remaining target, overlaps T09/T10 and F11. |
 | F07 | ~~Fold `the_runtime_keeps_a_worker_beyond_every_file_window` (main.rs) into T03's `worker_threads_arithmetic` table using exact-value rows; saves one test.~~ | T03 implementer | removed | CP2 reviewer pruned: saves only 1 test while replacing a general `> jobs` headroom invariant (already covered by exact-value + saturation rows) with exact examples; runaway risk. |
 | F08 | ~~If more sled2redb usage-error shapes with distinct assertions are added later, replace the parametrized test's `is_version` boolean with a per-row assertion closure.~~ | T06 implementer | removed | CP3 reviewer pruned: purely conditional on hypothetical future shapes; speculative. |
-| F09 | Consider an additional `--release` test run for `girpr-log` in CI: dev-profile `cargo test`/nextest only exercises the debug (no-file) branch of the surviving default-file policy test, so the release (timestamped default) branch is never run. | T07 implementer | proposed | CP3 reviewer kept: genuine, non-speculative coverage gap. Test-config/CI, not a test-count reduction. |
+| F09 | Add a `cargo nextest run --release -p girpr-log` line to the documented test gate so the release branch of the default-file policy test is exercised (batch C). | T07 implementer | scheduled | Batching review re-scoped: there is NO CI config in this repo; the real gate is the documented command list in README.md:437-456, which already has `--release` nextest invocations. Genuine untested branch. |
 | F10 | ~~Add a brief note to the surviving log policy test that `default_file_is_written()` is an intentional branch selector, not the assertion under test.~~ | T07 implementer | removed | CP3 reviewer pruned: trivial one-line doc note; marginal. |
-| F11 | Factor the repeated 'branch call was issued / no getBuild followed / no config bump' checks in `repair_offline.rs` into a shared assertion helper. | T08 implementer | proposed | CP3 reviewer kept: real duplication, concrete refactor; does not merge complementary cases. |
-| F12 | Re-examine whether the `audio_langs=en-us` process-level assertion in the merged plan test is redundant with the `REPORT` unit tests in `src/report/`; if so, narrow the binary-level check to the no-scope case. | T08 implementer | proposed | CP3 reviewer kept: concrete question raised by the reviewed merge (assertion now applied to all three scopes). |
+| F11 | Factor the repeated 'branch call was issued / no getBuild followed / no config bump' checks in `repair_offline.rs` into a shared assertion helper. | T08 implementer | scheduled | Batch B. Batching review confirmed duplication at repair_offline.rs:506/587/632/724 and 509/645/728; allow per-case omissions. |
+| F12 | Narrow the `audio_langs=en-us` process-level assertion in the merged repair_plan test to the no-scope case, leaving scope-specific assertions for all cases. | T08 implementer | scheduled | Batch B. Batching review: src/report/tests.rs:407-460 tests formatting only, so the process check isn't fully redundant - but repeating it per scope is. |
 | F13 | ~~In `repair_offline.rs:514/560`, derive the `expect_no_branch_endpoint_in_text` flag from `case.failure == BranchFailure::terminal(-1001)` instead of storing it per row.~~ | T08 implementer | removed | CP3 reviewer pruned: micro-refactor within T08's table; feasible but not worth tracking. |
 | F14 | ~~Add a shared test-only argv builder for the repeated `["--game-path", ..., "--biz", "hk4e_global"]` shape in the two consolidated CLI-heavy run_lock tests.~~ | T09 implementer | removed | CP4 reviewer pruned: explicit argv spellings are the assertion under test; a builder would hide them and re-churn the just-consolidated file. |
 | F15 | ~~Split `tests/common/run_lock.rs` into per-consumer modules to remove the `#[allow(dead_code)]` on `mode_takes_lock`.~~ | T09 implementer | removed | CP4 reviewer pruned: LOW-need test-support refactor outside scope. |
@@ -109,7 +109,7 @@ effect) so the final follow-up phase is meaningful.
 | F17 | ~~Doc-comment notes on `cached_keys_classify_every_keep_rule`: visibility computation only in scope tests; group 'everything else purges' rows under a provenance comment.~~ | T10 implementer | removed | CP4 reviewer pruned: already done by commit `564b341b` (provenance comment at lines 853–857 plus per-group comments). |
 | F18 | ~~Document which `tools/sync/tests/migration_lock.rs` tests are deliberately file-backend-specific despite the file's backend-agnostic header.~~ | T11 implementer | removed | CP5 reviewer pruned: cosmetic doc note only; no coverage/test-count value. |
 | F19 | ~~Pin process-level stdout-empty into a neighbouring test, then delete `a_bad_log_level_is_refused_by_the_parser`.~~ | T12 implementer | removed | CP5 reviewer resolved: implemented as fix commit `edc1d76d`, T12 now complete. |
-| F20 | Consider restoring a compact synthetic self-test proving `check_golden` REJECTS bad event sequences - T13 removed the only such test (real goldens only exercise the happy path). | T13 implementer | proposed | CP5 reviewer kept (low priority): real gap in test-helper mutation coverage. Adds a test back; batching review to judge. |
+| F20 | Restore a compact synthetic self-test proving `check_golden` REJECTS bad event sequences (reorder, duplicate terminal, misplaced progress, renamed event) - T13 removed the only such test (batch C). | T13 implementer | scheduled | Batching review kept (low priority): real gap in test-helper mutation coverage; real goldens only hit the happy path. |
 | F21 | ~~Strengthen gircap/girsync env-prefix assertions to verify `girpr_log::env_options` reads those exact names end-to-end.~~ | T13 implementer | removed | CP5 reviewer pruned: tautological strengthening needing racy env mutation; env_options covered generically in crates/log. |
 | F22 | ~~Remove the now-unused `default_log_path()` wrappers in girpr and girsync after T13's unit-duplicate removals.~~ | T13 implementer | removed | CP5 reviewer pruned: minor dead-code cleanup, no coverage/test-count value; girpr wrapper tied to an intra-doc link. |
 
@@ -123,6 +123,9 @@ the same separate state commits as the task/checkpoint loop. Statuses: `open` �
 
 | Batch | Follow-ups | Status | Commit range | Verdict | Scope / pointers | Notes |
 |---|---|---|---|---|---|---|
+| B | F11, F12 | in_progress | — | — | Root repair integration cleanup: `tests/repair_offline.rs` shared assertion helper for repeated branch-issued / no-getBuild / no-config-bump checks (allow per-case omissions); `tests/repair_plan.rs` narrow `audio_langs=en-us` assertion to the no-scope case. Pointers: report §C kept L143-148, `OPTIMIZATIONS_PLAN/tasks/T08-root-integration-optional-merges.md`, `tests/repair_offline.rs:470-733`, `tests/repair_plan.rs:150-205`, `src/report/tests.rs:405-460`. No case merges, no coverage loss, no product code. | Run first (small/concrete). |
+| C | F09, F20 | open | — | — | Coverage hardening: add `cargo nextest run --release -p girpr-log` to the documented gate in `README.md:437-456` (no CI config exists - do not create one; skip if no appropriate place); restore a compact synthetic `check_golden` rejection self-test in `tests/cli_contract.rs` (reorder, duplicate terminal, misplaced progress, renamed event => Err). Pointers: report §F.4 L218-220, T07/T13 task files, `crates/log/src/plan.rs:273-297,420-443`, `README.md:430-456`, `.config/nextest.toml`, `tests/cli_contract.rs:1702-1770`. Note F20 adds a test back (low priority). | Run second. |
+| A | F01 | open | — | — | Shared tempdir helper extraction: move the verbatim `tests/common/mod.rs` from `tools/sync` and `tools/sled2redb` into the existing `girpr-tempdir` crate; rewire both test targets; leave root/capture `common/mod.rs` separate. Pointers: report cross-cutting L226-233, `tools/sync/tests/common/mod.rs`, `tools/sled2redb/tests/common/mod.rs`, `crates/tempdir/src/lib.rs`. F01 targets `common/mod.rs`, not T06's rewritten `convert.rs`. Test-only; preserve all helper behavior. | Run last (largest refactor, single item). |
 
 ## Known constraints from the report (persistent)
 
@@ -157,3 +160,7 @@ chronological change log.
   revisit unless the code changes; whole-target deletion is HIGH risk.
 * Watch (not a coverage issue): `migration_lock.rs` `cache_snapshot` compares
   mtime and is filesystem-timing-sensitive; note only if it flakes in CI.
+* Follow-up batching review: F03 deleted (NO-OP - T06's two sled2redb conversions
+  assert distinct properties, report premise stale); F09 re-scoped from "in CI"
+  to the documented README.md test gate (no CI config exists in this repo).
+  Surviving follow-ups batched B (F11,F12) -> C (F09,F20) -> A (F01), independent.
