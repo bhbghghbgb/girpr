@@ -1068,24 +1068,15 @@ mod tests {
 
     /// An inspection failure other than `NotFound`/`NotADirectory` is returned
     /// to the caller rather than being discarded in favour of a missing-path
-    /// answer. An embedded NUL makes the metadata call fail with
-    /// `InvalidInput` on every supported platform.
-    #[test]
-    fn game_dir_inspection_errors_are_not_reported_as_missing() {
-        let err = game_dir_refusal(Path::new("bad\0path"))
-            .expect_err("a path that cannot be inspected must be an error");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{err}");
-    }
-
-    /// The `NotFound` arm surfaces a failed game-dir inspection with the name
-    /// of the path it could not inspect, and keeps the I/O error's kind so the
-    /// caller can still tell a permission failure from a malformed path. A NUL
-    /// makes `symlink_metadata` fail with `InvalidInput` on every supported
-    /// platform, so the inspection failure comes from the real syscall
-    /// boundary; the context is applied exactly as the caller applies it.
-    /// A NUL read fails with `InvalidInput` before `write_config_ini` reaches
-    /// the `NotFound` arm, so the private helper is driven directly here: there
-    /// is no call-site path that can reach that arm with an unreadable path.
+    /// answer, and the `NotFound` caller surfaces it with the path's name and
+    /// the I/O error's kind intact so a caller can still tell a permission
+    /// failure from a malformed path. An embedded NUL makes `symlink_metadata`
+    /// fail with `InvalidInput` on every supported platform, so the failure
+    /// comes from the real syscall boundary. A NUL read fails with
+    /// `InvalidInput` before `write_config_ini` reaches that arm, so the
+    /// private helpers are driven directly here: there is no call-site path
+    /// that can reach it with an unreadable path. The context below is applied
+    /// exactly as the caller applies it.
     #[test]
     fn a_failed_game_dir_inspection_keeps_its_kind_and_names_the_path() {
         let game_dir = Path::new("uninspected\0game-dir");
@@ -1093,7 +1084,7 @@ mod tests {
         assert_eq!(
             inspection.kind(),
             std::io::ErrorKind::InvalidInput,
-            "{inspection}"
+            "inspection errors are not reported as missing: {inspection}"
         );
 
         let err = inspect_game_dir_error(game_dir, inspection);
