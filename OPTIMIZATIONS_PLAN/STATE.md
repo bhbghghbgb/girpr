@@ -10,11 +10,10 @@ commit ranges (the functional review handoff data) only.
 
 ## Current position
 
-* Next action: spawn implementing session for **T01** (first `todo`), handing its
-  task-file path, its Pointers block and the "Implementing session" section of
-  `ORCHESTRATION.md`.
+* Next action: wait for the **T01** implementing session to finish, then apply
+  its result (commit range / skip) per the per-task loop.
 * Active batch: none. Phase: implementation (P0 tasks).
-* Active checkpoint: CP1 (`open`). Status: no task started yet.
+* Active checkpoint: CP1 (`open`). Status: T01 `in_progress`.
 * Blocked on user: no.
 
 ## Status vocabulary
@@ -32,7 +31,7 @@ Seeded order: P0 safe merges/removes first, then P1 verification-required work.
 
 | ID | Title | Status | Priority | Checkpoint | Notes |
 |---|---|---|---|---|---|
-| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | todo | P0 | CP1 | |
+| T01 | Merge `cli_contract.rs` helper/layout/parser self-tests | in_progress | P0 | CP1 | |
 | T02 | Remove duplicated fixture-helper meta-tests | todo | P0 | CP1 | |
 | T03 | Consolidate remaining low-risk root-unit cases | todo | P0 | CP2 | |
 | T04 | Table-drive sync hash dedup/order asserts | todo | P0 | CP2 | |
