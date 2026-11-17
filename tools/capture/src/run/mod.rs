@@ -15,7 +15,7 @@ use crate::biz::{Biz, Endpoints};
 use crate::config::{CapturePlan, MaterializePlan, VerifyPlan, artifact_dir};
 use crate::emit::selfcheck::Selfcheck;
 use crate::exit::ExitCode;
-use crate::http::{Fetcher, RequestLog, Transport, negative, probe};
+use crate::http::{Fetcher, RequestLog, Transport, ZeroSleep, negative, probe};
 use crate::manifest::CapturedManifest;
 use crate::manifest::diff;
 use crate::report::{self, OutputFormat, Record};
@@ -28,6 +28,18 @@ use crate::{blobs, emit, hyp, manifest, select};
 pub use crate::failure::{
     Failure, Outcome, apierr, assertion, failure_summary, failure_summary_detail, usage, write_err,
 };
+
+/// Whether this capture should use a zero-delay retry sleeper.
+///
+/// The test-only `GIRCAP_TEST_ZERO_BACKOFF` hook lets a spawned capture child
+/// exercise a real retry (and record it) without paying the production 500 ms
+/// backoff. It is deliberately not `cfg(test)`: the integration tests spawn the
+/// real binary and set the variable on the child. An unset or non-`1` value is
+/// default-off, so production always uses [`crate::http::RealSleep`] and the
+/// 500 ms [`crate::http::RetryPolicy::new`] base delay is untouched.
+fn zero_backoff() -> bool {
+    std::env::var("GIRCAP_TEST_ZERO_BACKOFF").as_deref() == Ok("1")
+}
 
 /// `gircap capture` — fetch from the live APIs and write a bundle.
 ///
@@ -46,14 +58,16 @@ pub async fn capture(plan: CapturePlan) -> Result<Outcome, Failure> {
     let started = chrono::Utc::now();
     let biz = Biz::resolve(plan.biz);
     let log = RequestLog::new();
-    let fetcher = Fetcher::new(
-        Transport {
-            retries: plan.retries,
-            timeout: plan.timeout,
-            max_response_bytes: plan.max_response_bytes,
-        },
-        log.clone(),
-    )
+    let transport = Transport {
+        retries: plan.retries,
+        timeout: plan.timeout,
+        max_response_bytes: plan.max_response_bytes,
+    };
+    let fetcher = if zero_backoff() {
+        Fetcher::with_sleeper(transport, log.clone(), std::sync::Arc::new(ZeroSleep))
+    } else {
+        Fetcher::new(transport, log.clone())
+    }
     .map_err(|e| apierr("build the http client", &e))?;
 
     // A testing seam, and the only thing that redirects a capture: the ids still

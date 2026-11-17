@@ -88,6 +88,22 @@ impl Sleep for RealSleep {
     }
 }
 
+/// A sleeper that never waits.
+///
+/// Test-only, selected by the `GIRCAP_TEST_ZERO_BACKOFF` hook in [`crate::run`]
+/// so a spawned capture child can exercise a real retry without paying its
+/// production backoff. Unlike [`RecordingSleep`] it records nothing — the child
+/// process cannot hand a delay log back to the test, so an empty future is all
+/// that is needed. Production never selects this; it uses [`RealSleep`].
+#[derive(Debug, Default)]
+pub struct ZeroSleep;
+
+impl Sleep for ZeroSleep {
+    fn sleep(&self, _d: Duration) -> SleepFuture {
+        Box::pin(async {})
+    }
+}
+
 /// Records what it was asked to wait for and returns immediately.
 #[derive(Debug, Default)]
 pub struct RecordingSleep(Mutex<Vec<Duration>>);
