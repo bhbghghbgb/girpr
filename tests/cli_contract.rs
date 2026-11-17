@@ -848,6 +848,12 @@ fn an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure() {
     // be refused while the flag is being checked — named as a usage error, not
     // surfaced later as "failed to start runtime" (exit 1 either way, but the
     // latter reads like an environment problem and does not name the flag).
+    //
+    // This is the one jobs-boundary case kept as a real spawn: it pins the exact
+    // stderr text, including the `usage error: ` prefix that main.rs adds and
+    // `into_ctx` (hence `usage_rejection`) does not, and that the runtime is
+    // never built. The other boundary cases classify in process via
+    // `usage_rejection`, since the ceiling text itself is unit-tested in cli.rs.
     let (code, _, stderr) = run(&[
         "--game-path",
         ".",
@@ -872,42 +878,39 @@ fn the_io_threads_alias_validates_at_the_same_jobs_ceiling() {
     // The ceiling is checked before `--audio`, so a bad audio value after the
     // jobs flag shows which check the run reached. At 1024 the alias passes
     // jobs validation and fails on the audio; at 1025 it fails on the jobs
-    // ceiling first, with the same usage error `--jobs` produces. Neither case
-    // builds the runtime or touches a game directory.
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1024",
-        "--audio",
-        "fr-fr",
-    ]);
-    assert_eq!(code, 1, "{stderr}");
+    // ceiling first, with the same usage error `--jobs` produces. Both are
+    // post-parse usage errors (exit 1); the ceiling text is unit-tested in
+    // cli.rs and the exact stderr is pinned by the retained spawn in
+    // `an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure`, so classify
+    // them in process here rather than spawning for each boundary value.
+    let rejection = |jobs: &str| {
+        usage_rejection(&[
+            "--game-path",
+            ".",
+            "--biz",
+            "hk4e_global",
+            "--io-threads",
+            jobs,
+            "--audio",
+            "fr-fr",
+        ])
+        .unwrap_or_else(|| panic!("--io-threads {jobs} should be a usage error"))
+    };
+
+    let at_ceiling = rejection("1024");
     assert!(
-        stderr.contains("usage error: unknown audio lang"),
-        "the alias accepted the ceiling and reached the next check:\n{stderr}"
+        at_ceiling.contains("unknown audio lang"),
+        "the alias accepted the ceiling and reached the next check:\n{at_ceiling}"
     );
     assert!(
-        !stderr.contains("--jobs must be <="),
-        "the ceiling itself must not be rejected:\n{stderr}"
+        !at_ceiling.contains("--jobs must be <="),
+        "the ceiling itself must not be rejected:\n{at_ceiling}"
     );
 
-    let (code, _, stderr) = run(&[
-        "--game-path",
-        ".",
-        "--biz",
-        "hk4e_global",
-        "--io-threads",
-        "1025",
-        "--audio",
-        "fr-fr",
-    ]);
-    assert_eq!(code, 1, "{stderr}");
+    let past_ceiling = rejection("1025");
     assert!(
-        stderr.contains("usage error: --jobs must be <= 1024"),
-        "one past the ceiling is the same usage error through the alias:\n{stderr}"
+        past_ceiling.contains("--jobs must be <= 1024"),
+        "one past the ceiling is the same usage error through the alias:\n{past_ceiling}"
     );
 }
 
@@ -917,44 +920,46 @@ fn the_jobs_flag_is_validated_at_the_same_process_level_ceiling_as_the_alias() {
     // 1024 passes jobs validation and fails on the next check (a bad
     // `--audio`), while 1025 fails the jobs ceiling first. Each value runs
     // through both spellings so the pair is compared rather than only pinned.
-    let run_boundary = |flag: &str, value: &str| {
-        run(&[
+    // These are post-parse usage errors (exit 1); the ceiling text is
+    // unit-tested in cli.rs and the exact stderr is pinned by the retained
+    // spawn in `an_oversized_jobs_is_exit_one_instead_of_a_runtime_failure`, so
+    // classify them in process instead of spawning per value per spelling.
+    let rejection = |flag: &str, jobs: &str| {
+        usage_rejection(&[
             "--game-path",
             ".",
             "--biz",
             "hk4e_global",
             flag,
-            value,
+            jobs,
             "--audio",
             "fr-fr",
         ])
+        .unwrap_or_else(|| panic!("{flag} {jobs} should be a usage error"))
     };
     let cases = [
-        ("1024", "usage error: unknown audio lang", false),
-        ("1025", "usage error: --jobs must be <= 1024", true),
+        ("1024", "unknown audio lang", false),
+        ("1025", "--jobs must be <= 1024", true),
     ];
     for (value, expected, ceiling_reported) in cases {
-        let (jobs_code, jobs_stdout, jobs_stderr) = run_boundary("--jobs", value);
-        let (alias_code, alias_stdout, alias_stderr) = run_boundary("--io-threads", value);
-        assert_eq!(jobs_code, 1, "--jobs {value}: {jobs_stderr}");
-        assert_eq!(alias_code, 1, "--io-threads {value}: {alias_stderr}");
+        let jobs_rejection = rejection("--jobs", value);
+        let alias_rejection = rejection("--io-threads", value);
         assert_eq!(
-            jobs_code, alias_code,
+            jobs_rejection, alias_rejection,
             "--jobs and --io-threads disagree at {value}"
         );
-        assert_eq!(jobs_stdout, alias_stdout, "--jobs {value} changed stdout");
         assert!(
-            jobs_stderr.contains(expected),
-            "--jobs {value} stopped at the wrong check:\n{jobs_stderr}"
+            jobs_rejection.contains(expected),
+            "--jobs {value} stopped at the wrong check:\n{jobs_rejection}"
         );
         assert!(
-            alias_stderr.contains(expected),
-            "--io-threads {value} stopped at the wrong check:\n{alias_stderr}"
+            alias_rejection.contains(expected),
+            "--io-threads {value} stopped at the wrong check:\n{alias_rejection}"
         );
         assert_eq!(
-            jobs_stderr.contains("--jobs must be <="),
+            jobs_rejection.contains("--jobs must be <="),
             ceiling_reported,
-            "--jobs {value} reported the ceiling at the wrong step:\n{jobs_stderr}"
+            "--jobs {value} reported the ceiling at the wrong step:\n{jobs_rejection}"
         );
     }
 }
