@@ -198,86 +198,14 @@ fn help_entry<'a>(help: &'a str, flag: &str) -> &'a str {
     &help[start..]
 }
 
-#[test]
-fn help_description_indent_is_the_option_indent_plus_four_spaces() {
-    // The fixtures below build descriptions from this indent on the strength of
-    // the layout the documentation above claims. Pin the claim itself, so the
-    // two constants cannot be edited apart from one another.
-    assert_eq!(
-        HELP_DESCRIPTION_INDENT,
-        format!("{HELP_OPTION_INDENT}    "),
-        "a description continues four columns past the option's flag column"
-    );
-}
-
-#[test]
-fn help_entry_does_not_borrow_a_neighbours_annotations() {
-    let help = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--other\n\
-         {HELP_DESCRIPTION_INDENT}[default: 4]\n"
-    );
-    assert!(
-        !help_entry(&help, "--jobs").contains("[default: 4]"),
-        "the block ended before the next option"
-    );
-    assert!(help_entry(&help, "--other").contains("[default: 4]"));
-}
-
-#[test]
-fn help_entry_requires_a_boundary_after_the_flag() {
-    // `--jobs` is a prefix of `--jobs-extra`, but they are different options.
-    // `--jobs` is the first entry, so the first line that carries a newline
-    // before it is `--jobs-extra`: a search for the newline-marked form of
-    // `--jobs` lands there, and only the space after the flag tells them apart.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--jobs-extra <N>\n\
-         {HELP_DESCRIPTION_INDENT}different option\n"
-    );
-    let jobs = help_entry(&help, "--jobs");
-    assert_eq!(
-        jobs,
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"),
-        "the block belongs to --jobs, not the option whose name it prefixes"
-    );
-    assert!(!jobs.contains("different option"));
-    // The boundary is also a newline (a flag with no value) or the end of the
-    // text, not only the space before a value.
-    let boolean = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n");
-    assert_eq!(
-        help_entry(&boolean, "--dry-run"),
-        format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n")
-    );
-    assert_eq!(
-        help_entry(&format!("{HELP_OPTION_INDENT}--dry-run"), "--dry-run"),
-        format!("{HELP_OPTION_INDENT}--dry-run")
-    );
-}
-
-#[test]
-#[should_panic(
-    expected = "help has no --absent entry as an option line (`      --absent` or `  -x, --absent`)"
-)]
-fn help_entry_panic_names_both_option_shapes() {
-    // A missing flag says which two line shapes it looked for, so a layout
-    // change reads as a layout change rather than as a broken option.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n"
-    );
-    let _ = help_entry(&help, "--absent");
-}
-
-/// The message from the panic [`option_body`] must raise for `line`.
+/// The message from a panic a layout helper raises for input it cannot read.
 ///
-/// A short-alias line outside the pinned shape has to be reported, not read as
-/// "no option here": `None` would let a neighbouring entry swallow the line.
-fn short_alias_layout_panic(line: &str) -> String {
-    let panic = std::panic::catch_unwind(|| option_body(line))
-        .expect_err("a short-alias line outside the pinned shape must be reported");
+/// A helper that spots a layout change panics instead of returning `None`, so a
+/// neighbouring entry cannot swallow the bad line. Catching the panic keeps the
+/// message assertable inside a table-driven test — the same cases used to be
+/// separate `#[should_panic]` functions.
+fn panic_message(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
+    let panic = std::panic::catch_unwind(f).expect_err("the helper must panic");
     panic
         .downcast_ref::<String>()
         .map(String::as_str)
@@ -287,30 +215,215 @@ fn short_alias_layout_panic(line: &str) -> String {
 }
 
 #[test]
-fn option_body_reports_a_short_alias_line_with_an_unexpected_separator() {
-    // clap writes `-j, --jobs`: the alias, the pinned separator, the long
-    // flag. If clap changes the punctuation between them, the long flag is no
-    // longer behind the separator. The line must be named as a layout change,
-    // not skipped: a skipped line would be swallowed by the preceding entry
-    // instead of ending it.
-    let line = format!("{HELP_SHORT_OPTION_INDENT}-j --jobs <JOBS>");
-    let message = short_alias_layout_panic(&line);
-    assert!(
-        message.contains(&line),
-        "the report names the line it could not read: {message}"
+fn help_entry_extracts_the_right_block() {
+    // The fixtures below build descriptions from this indent on the strength
+    // of the layout the documentation above claims. Pin the claim itself, so
+    // the two constants cannot be edited apart from one another.
+    assert_eq!(
+        HELP_DESCRIPTION_INDENT,
+        format!("{HELP_OPTION_INDENT}    "),
+        "a description continues four columns past the option's flag column"
     );
-    assert!(
-        message.contains("short option line"),
-        "the report says the short-option layout changed: {message}"
+
+    let jobs = format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n");
+    let dry_run = format!("{HELP_OPTION_INDENT}--dry-run\n{HELP_DESCRIPTION_INDENT}no value\n");
+    let dry_run_help = dry_run.clone();
+    let at_end = format!("{HELP_OPTION_INDENT}--dry-run");
+
+    let neighbours = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
+         {HELP_OPTION_INDENT}--other\n\
+         {HELP_DESCRIPTION_INDENT}[default: 4]\n"
     );
+    // `--jobs` is a prefix of `--jobs-extra`, but they are different options:
+    // only the space after the flag tells them apart.
+    let prefix = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
+         {HELP_OPTION_INDENT}--jobs-extra <N>\n\
+         {HELP_DESCRIPTION_INDENT}different option\n"
+    );
+    // The wanted entry is not the first line, so its start comes from the
+    // newline before it rather than from the start of the text.
+    let after_preceding = format!(
+        "{HELP_OPTION_INDENT}--first\n\
+         {HELP_DESCRIPTION_INDENT}first text\n\n\
+         {HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
+         {HELP_OPTION_INDENT}--last\n\
+         {HELP_DESCRIPTION_INDENT}last text\n"
+    );
+    assert!(!after_preceding.starts_with(&format!("{HELP_OPTION_INDENT}--jobs")));
+    // clap puts an option's short spelling in its own column, so the long flag
+    // is no longer the first token on the line; the entry must start there and
+    // stop before the next entry's short-alias line.
+    let behind_alias = format!(
+        "{HELP_OPTION_INDENT}--first\n\
+         {HELP_DESCRIPTION_INDENT}first text\n\n\
+         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
+         {HELP_OPTION_INDENT}--last\n\
+         {HELP_DESCRIPTION_INDENT}last text\n"
+    );
+    let before_alias = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
+         {HELP_SHORT_OPTION_INDENT}-h, --help\n\
+         {HELP_DESCRIPTION_INDENT}Print help\n"
+    );
+
+    // A Windows-console capture ends its lines with `\r\n`; the flag's token
+    // boundary is then the `\r`, and the block keeps the same text as the LF
+    // capture's (without the blank separator's stray `\r`).
+    let crlf = format!(
+        "{HELP_OPTION_INDENT}--jobs <JOBS>\r\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
+         {HELP_OPTION_INDENT}--dry-run\r\n\
+         {HELP_DESCRIPTION_INDENT}no value\r\n"
+    );
+    let crlf_alias = format!(
+        "{HELP_OPTION_INDENT}--first\r\n\
+         {HELP_DESCRIPTION_INDENT}first text\r\n\r\n\
+         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n\
+         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
+         {HELP_OPTION_INDENT}--last\r\n\
+         {HELP_DESCRIPTION_INDENT}last text\r\n"
+    );
+
+    // Every case is (label, help text, flag, exact block). Exact equality is
+    // stronger than the old `contains`/`!contains` assertions: an entry that
+    // borrowed a neighbour's annotation or swallowed a following option no
+    // longer matches its block.
+    let cases = [
+        (
+            "a neighbour's annotation is not borrowed",
+            neighbours.clone(),
+            "--jobs",
+            jobs.clone(),
+        ),
+        (
+            "the neighbour keeps its own annotation",
+            neighbours,
+            "--other",
+            format!("{HELP_OPTION_INDENT}--other\n{HELP_DESCRIPTION_INDENT}[default: 4]\n"),
+        ),
+        (
+            "--jobs is a whole token, not a prefix",
+            prefix,
+            "--jobs",
+            jobs.clone(),
+        ),
+        (
+            "a flag's newline is a boundary",
+            dry_run_help,
+            "--dry-run",
+            dry_run.clone(),
+        ),
+        (
+            "the end of the text is a boundary",
+            at_end.clone(),
+            "--dry-run",
+            at_end,
+        ),
+        (
+            "the entry after a preceding option",
+            after_preceding,
+            "--jobs",
+            jobs.clone(),
+        ),
+        (
+            "an entry behind a short alias",
+            behind_alias,
+            "--jobs",
+            format!(
+                "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"
+            ),
+        ),
+        (
+            "a preceding entry stops before a short alias",
+            before_alias,
+            "--jobs",
+            jobs.clone(),
+        ),
+        (
+            "CRLF --jobs",
+            crlf.clone(),
+            "--jobs",
+            format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"),
+        ),
+        (
+            "CRLF boolean flag",
+            crlf,
+            "--dry-run",
+            format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_DESCRIPTION_INDENT}no value\r\n"),
+        ),
+        (
+            "CRLF behind a short alias",
+            crlf_alias.clone(),
+            "--jobs",
+            format!(
+                "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"
+            ),
+        ),
+    ];
+    for (name, help, flag, expected) in &cases {
+        assert_eq!(help_entry(help, flag), expected.as_str(), "{name}");
+    }
+
+    // The CRLF alias case also pins that its first line is read as an option
+    // body and that the block ends on a line feed, not a stray `\r`.
+    let crlf_alias_entry = help_entry(&crlf_alias, "--jobs");
+    assert_eq!(
+        option_body(
+            crlf_alias_entry
+                .lines()
+                .next()
+                .expect("the entry has a line")
+        ),
+        Some("--jobs <JOBS>"),
+        "the entry starts at the long flag behind its short alias"
+    );
+    assert_eq!(
+        crlf_alias_entry.as_bytes().last(),
+        Some(&b'\n'),
+        "the entry ends on a line feed, not a stray carriage return"
+    );
+
+    // The real help renders its one short alias as `  -h, --help`, and its
+    // entry is found by the long flag behind it.
+    let help_option = help_entry(real_help(), "--help");
+    assert!(
+        help_option.starts_with(&format!("{HELP_SHORT_OPTION_INDENT}-h, --help")),
+        "the --help entry starts at its short-alias line:\n{help_option}"
+    );
+    assert!(help_option.contains("Print help"), "{help_option}");
 }
 
 #[test]
-fn option_body_reports_every_other_short_alias_line_outside_the_pinned_shape() {
-    // The rest of the ways a line that carries a short alias can stop matching
-    // the pinned shape. Each must be named for the same reason: `None` would
-    // read as "not an option line" and let the preceding entry run past it.
+fn layout_helpers_name_the_bad_layout_in_their_panic() {
+    // A missing flag names both shapes it looked for, so a layout change reads
+    // as a layout change rather than as a broken option.
+    let absent = format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n");
+    let message = panic_message(|| {
+        help_entry(&absent, "--absent");
+    });
+    assert!(
+        message.contains(
+            "help has no --absent entry as an option line (`      --absent` or `  -x, --absent`)"
+        ),
+        "a missing flag names both shapes it looked for: {message}"
+    );
+
+    // A short-alias line outside the pinned shape has to be reported, not read
+    // as "no option here": `None` would let the preceding entry run past it.
+    // Each row is one way the shape can break; the message must name both the
+    // line and what is wrong with it.
     let cases = [
+        (
+            format!("{HELP_SHORT_OPTION_INDENT}-j --jobs <JOBS>"),
+            "short option line",
+        ),
         (
             format!("{HELP_OPTION_INDENT}-j{HELP_SHORT_ALIAS_SEPARATOR}--jobs <JOBS>"),
             "wrong indent",
@@ -324,87 +437,19 @@ fn option_body_reports_every_other_short_alias_line_outside_the_pinned_shape() {
             "long flag",
         ),
     ];
-    for (line, expected) in cases {
-        let message = short_alias_layout_panic(&line);
+    for (line, expected) in &cases {
+        let message = panic_message(|| {
+            option_body(line);
+        });
         assert!(
-            message.contains(&line),
-            "the report names the line it could not read: {message}"
+            message.contains(line),
+            "the report names the line: {message}"
         );
         assert!(
             message.contains(expected),
             "the report names what is wrong with `{line}`: {message}"
         );
     }
-}
-
-#[test]
-fn help_entry_finds_an_entry_after_a_preceding_option() {
-    // The desired entry is not the first line of the help, so its start comes
-    // from the newline before it rather than from the start of the text.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--first\n\
-         {HELP_DESCRIPTION_INDENT}first text\n\n\
-         {HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--last\n\
-         {HELP_DESCRIPTION_INDENT}last text\n"
-    );
-    assert!(!help.starts_with(&format!("{HELP_OPTION_INDENT}--jobs")));
-    assert_eq!(
-        help_entry(&help, "--jobs"),
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"),
-        "the block runs from --jobs to the next option"
-    );
-}
-
-#[test]
-fn help_entry_finds_an_entry_behind_a_short_alias() {
-    // clap puts an option's short spelling in its own column, so the long flag
-    // is no longer the first token on the line.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--first\n\
-         {HELP_DESCRIPTION_INDENT}first text\n\n\
-         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_OPTION_INDENT}--last\n\
-         {HELP_DESCRIPTION_INDENT}last text\n"
-    );
-    assert_eq!(
-        help_entry(&help, "--jobs"),
-        format!(
-            "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n"
-        ),
-        "the block starts at the alias's line, not the long-only indent"
-    );
-}
-
-#[test]
-fn help_entry_stops_before_an_entry_with_a_short_alias() {
-    // `-h, --help` is the real help's last option, and its line starts at the
-    // short-alias indent rather than the long-only one.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\n\n\
-         {HELP_SHORT_OPTION_INDENT}-h, --help\n\
-         {HELP_DESCRIPTION_INDENT}Print help\n"
-    );
-    let jobs = help_entry(&help, "--jobs");
-    assert_eq!(
-        jobs,
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\n{HELP_DESCRIPTION_INDENT}jobs text\n")
-    );
-    assert!(!jobs.contains("Print help"));
-}
-
-#[test]
-fn help_entry_finds_the_help_option_behind_its_short_alias() {
-    // The real help renders the one short alias it has as `  -h, --help`.
-    let help = help_entry(real_help(), "--help");
-    assert!(
-        help.starts_with(&format!("{HELP_SHORT_OPTION_INDENT}-h, --help")),
-        "the --help entry starts at its short-alias line:\n{help}"
-    );
-    assert!(help.contains("Print help"), "{help}");
 }
 
 /// The binary's file name, which clap uses as the displayed program name in
@@ -464,160 +509,81 @@ fn indent_width(line: &str) -> usize {
     line.len() - line.trim_start_matches(' ').len()
 }
 
-/// The short-alias indent is clap's, and this is where clap puts it.
+/// A selector for the real-help line a layout claim is about.
+type LineFinder = for<'a> fn(&'a str) -> Option<&'a str>;
+
+/// Each of clap's help columns is a claim pinned against the real render.
 ///
-/// [`HELP_SHORT_OPTION_INDENT`] says where a line that begins with a short
-/// alias starts. The fixture tests build their text from the constant, so
-/// they cannot tell a right constant from a wrong one — they only show that
-/// the suite agrees with itself. This reads the real help, where clap puts
-/// its one short alias (`-h, --help`) in its own column, and pins the column
-/// to the constant: a clap upgrade that moves it fails here, as the layout
-/// change it is, instead of passing on the fixtures' word.
+/// The fixtures build their text *from* the indent constants, so they cannot
+/// tell a right constant from a wrong one — they only show the suite agrees
+/// with itself. Reading the real help asks whether clap actually puts each
+/// line where the constants say: a clap upgrade that moves a column fails here
+/// as the layout change it is, instead of passing on the fixtures' word. The
+/// measured width is compared as well as the prefix, so a line carrying *more*
+/// indent than the constant says is a failure and not a match.
 #[test]
-fn the_real_help_puts_its_short_option_line_at_the_short_option_indent() {
+fn the_real_help_puts_every_line_at_its_pinned_indent() {
     let help = real_help();
-    let short_lines: Vec<&str> = help
-        .lines()
-        .filter(|line| line.trim_start().starts_with("-h,"))
-        .collect();
-    assert_eq!(
-        short_lines.len(),
-        1,
-        "the real help has exactly one short-option line:\n{help}"
-    );
-    let line = short_lines[0];
-    assert_eq!(
-        line.trim_start(),
-        format!("-h{HELP_SHORT_ALIAS_SEPARATOR}--help"),
-        "the short-option line is the help flag's own:\n{help}"
-    );
-    assert!(
-        line.starts_with(HELP_SHORT_OPTION_INDENT),
-        "the short option starts at the pinned indent:\n{line:?}"
-    );
-    assert_eq!(
-        indent_width(line),
-        HELP_SHORT_OPTION_INDENT.len(),
-        "the short option's column moved:\n{help}"
-    );
-}
-
-/// The option indent is clap's, and this is where clap puts it.
-///
-/// The same claim as above, for the long-only shape: a line that begins with
-/// a long flag starts at [`HELP_OPTION_INDENT`]. The measured width is
-/// compared as well as the prefix, so a line that carries *more* indent than
-/// the constant says is a failure and not a match.
-#[test]
-fn the_real_help_puts_an_option_line_at_the_option_indent() {
-    let help = real_help();
-    let line = help
-        .lines()
-        .find(|line| line.trim_start().starts_with("--"))
-        .expect("the real help has a long option line");
-    assert!(
-        line.trim_start().starts_with("--game-path"),
-        "the first long option line is the game path's:\n{line}"
-    );
-    assert!(
-        line.starts_with(HELP_OPTION_INDENT),
-        "the option starts at the pinned indent:\n{line:?}"
-    );
-    assert_eq!(
-        indent_width(line),
-        HELP_OPTION_INDENT.len(),
-        "the option's column moved:\n{help}"
-    );
-}
-
-/// The description indent is clap's, and this is where clap puts it.
-///
-/// A description follows its option on the next line, in clap's own column.
-/// The fixtures build their descriptions from [`HELP_DESCRIPTION_INDENT`], so
-/// nothing so far has asked whether that column is where clap puts one. This
-/// reads the real help: the line after an option line is that option's
-/// description, and it starts at the pinned indent.
-#[test]
-fn the_real_help_puts_a_description_line_at_the_description_indent() {
-    let help = real_help();
-    let lines: Vec<&str> = help.lines().collect();
-    let at = lines
-        .iter()
-        .position(|line| line.trim_start().starts_with("--game-path"))
-        .expect("the real help has a --game-path entry");
-    let description = lines
-        .get(at + 1)
-        .expect("an option line is followed by its description");
-    assert!(
-        description
-            .trim_start()
-            .starts_with("Game install directory"),
-        "the line after the option is its description:\n{description}"
-    );
-    assert!(
-        description.starts_with(HELP_DESCRIPTION_INDENT),
-        "the description starts at the pinned indent:\n{description:?}"
-    );
-    assert_eq!(
-        indent_width(description),
-        HELP_DESCRIPTION_INDENT.len(),
-        "the description's column moved:\n{help}"
-    );
-}
-
-#[test]
-fn help_entry_reads_a_crlf_capture() {
-    // A Windows-console capture ends its lines with `\r\n`; the flag's token
-    // boundary is then the `\r`, and the entry keeps the same text as the LF
-    // capture's.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--jobs <JOBS>\r\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
-         {HELP_OPTION_INDENT}--dry-run\r\n\
-         {HELP_DESCRIPTION_INDENT}no value\r\n"
-    );
-    assert_eq!(
-        help_entry(&help, "--jobs"),
-        format!("{HELP_OPTION_INDENT}--jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n")
-    );
-    assert_eq!(
-        help_entry(&help, "--dry-run"),
-        format!("{HELP_OPTION_INDENT}--dry-run\r\n{HELP_DESCRIPTION_INDENT}no value\r\n")
-    );
-}
-
-#[test]
-fn help_entry_reads_a_crlf_capture_behind_a_short_alias() {
-    // Both shapes at once: the long flag sits behind `-j, ` and every line
-    // ends `\r\n`. The flag's boundary is the space, and the entry must stop
-    // at its own line end rather than keeping the blank separator's `\r`.
-    let help = format!(
-        "{HELP_OPTION_INDENT}--first\r\n\
-         {HELP_DESCRIPTION_INDENT}first text\r\n\r\n\
-         {HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n\
-         {HELP_DESCRIPTION_INDENT}jobs text\r\n\r\n\
-         {HELP_OPTION_INDENT}--last\r\n\
-         {HELP_DESCRIPTION_INDENT}last text\r\n"
-    );
-    let jobs = help_entry(&help, "--jobs");
-    let first_line = jobs.lines().next().expect("the entry has a line");
-    assert_eq!(
-        option_body(first_line),
-        Some("--jobs <JOBS>"),
-        "the entry starts at the long flag behind its short alias"
-    );
-    assert_eq!(
-        jobs,
-        format!(
-            "{HELP_SHORT_OPTION_INDENT}-j, --jobs <JOBS>\r\n{HELP_DESCRIPTION_INDENT}jobs text\r\n"
+    let cases: [(&str, &str, &str, bool, LineFinder); 3] = [
+        (
+            "short option",
+            HELP_SHORT_OPTION_INDENT,
+            "-h, --help",
+            true,
+            |help| {
+                let mut lines = help
+                    .lines()
+                    .filter(|line| line.trim_start().starts_with("-h,"));
+                let line = lines.next()?;
+                assert!(
+                    lines.next().is_none(),
+                    "the real help has exactly one short-option line:\n{help}"
+                );
+                Some(line)
+            },
         ),
-        "the entry ends at its own line, without the separator's stray \\r"
-    );
-    assert_eq!(
-        jobs.as_bytes().last(),
-        Some(&b'\n'),
-        "the entry ends on a line feed, not a stray carriage return"
-    );
+        ("option", HELP_OPTION_INDENT, "--game-path", false, |help| {
+            help.lines()
+                .find(|line| line.trim_start().starts_with("--"))
+        }),
+        (
+            "description",
+            HELP_DESCRIPTION_INDENT,
+            "Game install directory",
+            false,
+            |help| {
+                let lines: Vec<&str> = help.lines().collect();
+                let at = lines
+                    .iter()
+                    .position(|line| line.trim_start().starts_with("--game-path"))?;
+                lines.get(at + 1).copied()
+            },
+        ),
+    ];
+    for (name, indent, expected, exact, find) in cases {
+        let line = find(help).unwrap_or_else(|| panic!("the real help has a {name} line:\n{help}"));
+        if exact {
+            assert_eq!(
+                line.trim_start(),
+                expected,
+                "the {name} line is the pinned one:\n{help}"
+            );
+        } else {
+            assert!(
+                line.trim_start().starts_with(expected),
+                "the {name} line is the pinned one:\n{line}"
+            );
+        }
+        assert!(
+            line.starts_with(indent),
+            "the {name} starts at the pinned indent:\n{line:?}"
+        );
+        assert_eq!(
+            indent_width(line),
+            indent.len(),
+            "the {name}'s column moved:\n{help}"
+        );
+    }
 }
 
 #[test]
@@ -1693,77 +1659,69 @@ fn is_record_key(event: &str, key: &str) -> bool {
     }
 }
 
-/// A value with a space is one field, not two: `exe=Genshin Impact.exe` must
-/// contribute `exe` and rejoin to exactly that value, not just that key.
-#[test]
-fn text_records_keeps_a_key_whose_value_contains_a_space() {
-    let (event, fields) =
-        text_record("REPORT local_version=none exe=Genshin Impact.exe branch=main");
-    assert_eq!(event, "report");
-    let fields: Vec<(&str, &str)> = fields
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect();
-    assert_eq!(
-        fields,
-        vec![
-            ("local_version", "none"),
-            ("exe", "Genshin Impact.exe"),
-            ("branch", "main"),
-        ]
-    );
-}
+/// One text-parser case: the line, its expected `(key, value)` pairs, and why.
+type TextRecordCase<'a> = (&'a str, &'a [(&'a str, &'a str)], &'a str);
 
-/// A key-shaped word inside a value is value text, not a new field: `word=.`
-/// is not a `REPORT` key, so `exe` keeps it and its spaces.
+/// The text-plane parser's edge cases, in one table.
 #[test]
-fn text_records_keeps_a_key_shaped_word_inside_a_value() {
-    let (event, fields) = text_record("REPORT local_version=none exe=Some word=.exe branch=main");
-    assert_eq!(event, "report");
-    let fields: Vec<(&str, &str)> = fields
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect();
-    assert_eq!(
-        fields,
-        vec![
-            ("local_version", "none"),
-            ("exe", "Some word=.exe"),
-            ("branch", "main"),
-        ]
-    );
-}
+fn text_record_parser_cases() {
+    let cases: &[TextRecordCase<'_>] = &[
+        (
+            // A value with a space is one field, not two: `Genshin Impact.exe`
+            // must stay whole instead of contributing only its key.
+            "REPORT local_version=none exe=Genshin Impact.exe branch=main",
+            &[
+                ("local_version", "none"),
+                ("exe", "Genshin Impact.exe"),
+                ("branch", "main"),
+            ],
+            "a value with a space stays one field",
+        ),
+        (
+            // `word=.` is not a REPORT key, so a key-shaped word inside a
+            // value is value text, not a new field.
+            "REPORT local_version=none exe=Some word=.exe branch=main",
+            &[
+                ("local_version", "none"),
+                ("exe", "Some word=.exe"),
+                ("branch", "main"),
+            ],
+            "a key-shaped word inside a value is value text",
+        ),
+        (
+            // `branch=` *is* one of the event's own keys, so this is the known
+            // limit of the bare grammar: the value is split at that token.
+            // Pinning it keeps a parser change from silently reinterpreting
+            // the same line; the JSON plane is the unambiguous alternative.
+            "REPORT local_version=none exe=Some branch=main.exe",
+            &[
+                ("local_version", "none"),
+                ("exe", "Some"),
+                ("branch", "main.exe"),
+            ],
+            "a value containing `branch=` is split at that token, not kept whole",
+        ),
+    ];
+    for (line, expected, note) in cases {
+        let (event, fields) = text_record(line);
+        assert_eq!(event, "report");
+        let fields: Vec<(&str, &str)> = fields
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        assert_eq!(fields.as_slice(), *expected, "{note}");
+    }
 
-/// A value carrying one of its event's own key tokens is the known limit of the
-/// bare text grammar: it is read as the next field. The renderer neither quotes
-/// nor escapes values, so the text plane cannot tell the two apart; the JSON
-/// plane is the unambiguous alternative. Pinning this keeps a parser change
-/// from silently reinterpreting the same line.
-#[test]
-fn text_records_reads_an_embedded_key_token_as_the_next_field() {
-    let (event, fields) = text_record("REPORT local_version=none exe=Some branch=main.exe");
-    assert_eq!(event, "report");
-    let fields: Vec<(&str, &str)> = fields
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect();
-    assert_eq!(
-        fields,
-        vec![
-            ("local_version", "none"),
-            ("exe", "Some"),
-            ("branch", "main.exe"),
-        ],
-        "a value containing `branch=` is split at that token, not kept whole"
+    // A token cannot precede the first field: there is no previous value for
+    // it to continue, so the record is rejected instead of silently gaining a
+    // field. Catch the panic so this case lives with its non-panicking peers.
+    let message = panic_message(|| {
+        text_records("REPORT junk total=0\n");
+    });
+    assert!(
+        message.contains("text record has a token before its first field"),
+        "a token before the first field is rejected: {message}"
     );
-}
-
-/// A token cannot precede the first field: there is no previous value for it to
-/// continue, so the record is rejected instead of silently gaining a field.
-#[test]
-#[should_panic(expected = "text record has a token before its first field")]
-fn text_records_rejects_a_token_before_the_first_field() {
-    let _ = text_records("REPORT junk total=0\n");
 }
 
 /// Check a run against a golden sequence of `(event, field keys)`.
